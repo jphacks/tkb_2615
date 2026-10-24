@@ -22,6 +22,7 @@ from pydantic import (
 from sheltersim.contracts.extensions import validate_scenario_extensions
 from sheltersim.contracts.policies import selected_models
 from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
+from sheltersim.domain.facility_awareness import canonical_facility_awareness_config
 from sheltersim.domain.infrastructure import (
     INFRASTRUCTURE_COMPLETION_EVENT_TYPES,
     INFRASTRUCTURE_MAX_ROUTE_SHIPMENTS,
@@ -420,6 +421,23 @@ class ScenarioSpec(ContractModel):
                     )
             if infrastructure_config.dependency_edges and not dependency_nodes:
                 raise ValueError("infrastructure dependency graph cannot be empty")
+        facility_awareness_config: dict[str, Any] | None = None
+        if "facility_awareness" in self.model_configs:
+            try:
+                facility_awareness_config = canonical_facility_awareness_config(
+                    self.model_configs["facility_awareness"]
+                )
+            except ValueError as exc:
+                raise ValueError(f"invalid facility_awareness config: {exc}") from exc
+            facility_ids = {item.id for item in self.facilities}
+            unknown_facility_ids = (
+                set(facility_awareness_config["initial_known_facility_ids"]) - facility_ids
+            )
+            if unknown_facility_ids:
+                raise ValueError(
+                    "facility_awareness.initial_known_facility_ids references unknown "
+                    f"facilities: {sorted(unknown_facility_ids)[:5]}"
+                )
         canonical_model_configs = dict(self.model_configs)
         if "information_spread" in canonical_model_configs:
             canonical_model_configs["information_spread"] = information_config.to_dict()
@@ -431,6 +449,8 @@ class ScenarioSpec(ContractModel):
             canonical_model_configs["zone_environment"] = zone_environment_config.model_dump(
                 mode="json"
             )
+        if facility_awareness_config is not None:
+            canonical_model_configs["facility_awareness"] = facility_awareness_config
         if canonical_model_configs != self.model_configs:
             object.__setattr__(self, "model_configs", canonical_model_configs)
         shipments: dict[str, PlannedEventSpec] = {}

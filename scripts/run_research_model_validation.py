@@ -101,6 +101,17 @@ def _scenario(
         else "expressiveness-channel-openness-v1",
         "information": "sparse-information-contact-v1" if is_legacy else "evidence-aware-rumor-v1",
     }
+    document["model_configs"]["facility_awareness"] = {
+        "schema_version": 1,
+        "initial_known_facility_ids": sorted(
+            facility["id"]
+            for facility in document["facilities"]
+            if "toilet" in facility["kind"].casefold()
+        ),
+        "discover_co_located_facilities_on_arrival": True,
+        "source_type": "assumption",
+        "source_id": "ASM-FACILITY-ENTRY-ORIENTATION-V1",
+    }
     rumor_due = 0
     correction_due = min(60, document["duration_minutes"] - 1)
     document["scheduled_events"] = [

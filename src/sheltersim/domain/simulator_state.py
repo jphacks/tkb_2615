@@ -28,6 +28,10 @@ from sheltersim.domain.common_operations import (
     create_shared_operations_state,
     validate_shared_operations_state,
 )
+from sheltersim.domain.facility_awareness import (
+    FACILITY_AWARENESS_POLICY_VERSION,
+    canonical_facility_awareness_config,
+)
 from sheltersim.domain.facility_queues import (
     FACILITY_QUEUES_LEGACY_MODE_KEY,
     FACILITY_QUEUES_POLICY_VERSION,
@@ -117,6 +121,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         and "staff_operations" not in configs
         and "staff_dynamics" not in configs
         and "shared_operations" not in configs
+        and "facility_awareness" not in configs
         and not body_policy_enabled
     ):
         standalone = {
@@ -186,6 +191,17 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
         environment = ScenarioZoneEnvironmentConfig.model_validate(configs["zone_environment"])
         signatures["operator:zone_environment"] = f"{environment.policy_version}@1:state1"
+    if "facility_awareness" in configs:
+        import hashlib
+        import json
+
+        awareness = canonical_facility_awareness_config(configs["facility_awareness"])
+        awareness_hash = hashlib.sha256(
+            json.dumps(awareness, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        signatures["operator:facility_awareness"] = (
+            f"{FACILITY_AWARENESS_POLICY_VERSION}@1:{awareness_hash}"
+        )
     if proximity is not None:
         signatures["operator:social_proximity"] = (
             f"{PROXIMITY_CONTACT_POLICY_VERSION}@1:state1:"
@@ -235,6 +251,7 @@ def initialize_simulator_extensions(world: WorldState) -> None:
         and "staff_operations" not in world.model_configs
         and "staff_dynamics" not in world.model_configs
         and "shared_operations" not in world.model_configs
+        and "facility_awareness" not in world.model_configs
         and not body_policy_enabled
     ):
         return

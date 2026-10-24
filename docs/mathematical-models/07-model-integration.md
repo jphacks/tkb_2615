@@ -18,6 +18,8 @@ flowchart TD
   MOVE --> NEED
   MOVE --> SOCIAL
   MOVE --> INFO
+  AWARE[施設認知: 入所案内・実到着時の発見] --> CHOICE
+  MOVE --> AWARE
 ```
 
 `mean-reverting-life-state-v1` は平均回帰と既存のbody/affect状態を合成する明示的policyです。既存の `mean-reverting-distress-v1` と `life-state-feedback-v1` の意味は変更しません。false claimを信じることは不確実性へ入り、受容した訂正が信念状態を変え、訂正eventはbody stateに一度だけ反映されます。
@@ -56,8 +58,8 @@ Scenario profiles、容量、route、施設、予定event、policy versions、se
 ## 1 tickの責任・更新順序
 
 1. due eventsを処理します。rumor/correction、サービス完了、資源配布、支援、移動等を適用し、受容された訂正のbody state変化はここで一度記録します。
-2. 必要なroute/arrival更新を行い、movementを1分進めます。
-3. 更新前のAgent・設備・body・information beliefを参照する `WorldView` を生成します。統合版用のfalse-claim pressureは現在信じているfalse主張から算出し、message ID、origin event、belief event、sourceを保持します。
+2. 必要なroute/arrival更新を行い、movementを1分進めます。認知済み施設への実到着は `learn_facility` に渡し、設定が有効なら同zoneの施設を認知状態へ追加します。
+3. 更新前のAgent・設備・body・information belief・施設認知を参照する `WorldView` を生成します。統合版用のfalse-claim pressureは現在信じているfalse主張から算出し、message ID、origin event、belief event、sourceを保持します。
 4. 心理Policyがニーズ・queue・support・環境および選択policyに応じたbody/uncertainty inputを計算します。平均回帰policyでは自然回復と定係数外力の解析積分を一度適用し、最終stressをclipします。
 5. 有効なsocial policyは同じtick開始snapshotの近隣stressを使ってsigned同調差分を計算し、心理値へ一度適用します。心理Traceに心理差分・clip差分・社会差分・実適用差分を分けて記録し、social Traceにはpair式を記録します。
 6. オンライン高負荷時間monitorはpost-social心理値から軽量なepisode/recovery指標を更新します。これは心理状態を変えません。daily latent accumulatorもpost-social値を一度受け取ります。
@@ -89,3 +91,7 @@ Scenario profiles、容量、route、施設、予定event、policy versions、se
 ## 再現性・互換性
 
 同seed・同Scenario・同モデル設定はkeyed RNGと安定した順序により再現します。Trace ON/OFFは状態更新や乱数消費を変えません。model ID、設定、seed、source provenance、signatureはrun artifactへ記録します。従来の `stress` APIと旧policy IDを保持します。情報runtime stateはv1入力を検証でき、更新時のv2移行を用意します。
+
+施設認知は心理Policyとは別のScenarioモデルです。明示設定があると、入所案内と到着後のzone内発見を施設ID単位でcheckpointに保持し、設定signatureもRunへ記録します。設定のない旧Scenarioは旧来の全施設候補動作を維持します。Summary Traceでは `psychology_contributions_hourly.jsonl` にAgent×時刻（UTCではなくシミュレーション時間）の平均stress、閾値以上の分数、自然回復・need・待機・環境・life-state等の寄与合計を記録します。分単位の因果Traceは既存 `psychology_contributions.jsonl` に残し、時間集計のために元Traceを削りません。
+
+追加ファイルとmanifest件数を識別するため、新規Runの `artifact_schema_version` は2です。既存のversion 1成果物はそのまま読み、時間別ファイルがない場合は「未出力」と解釈します。Checkpoint schemaやWorldStateの保存形式はこのTrace要約追加では変更しません。

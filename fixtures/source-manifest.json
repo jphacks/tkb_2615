@@ -53,6 +53,93 @@
   ],
   "assumptions": [
     {
+      "id": "ASM-RESEARCH-OPERATIONAL-CONDITIONS-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/research_operational_100_7d.json",
+      "model_version": "research-operational-100-7d-v1",
+      "values": {
+        "seed": 2026,
+        "synthetic_agents": 100,
+        "duration_minutes": 10080,
+        "initial_water_ml": 5000000,
+        "initial_food_meal_units": 120,
+        "daily_delivery_from_minute_1440": {
+          "water_ml": 2000000,
+          "food_meal_units": 1000
+        },
+        "working_toilet_units": 4,
+        "support_staff": 5,
+        "resource_service_minutes": 5,
+        "toilet_service_minutes": "discrete uniform inclusive 4..8",
+        "psychology_policy": "mean-reverting-life-state-v1"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic operational software scenario; not empirically calibrated",
+      "notes": "Synthetic balanced profiles and explicit entry orientation exercise the integrated service-to-need-to-psychology paths. Daily delivery starts at simulated minute 1440. Counts, initial stocks, delivery schedule, service times, staffing, and coefficients are test conditions, not estimates for a real shelter."
+    },
+    {
+      "id": "ASM-RESEARCH-SHORTAGE-CONDITIONS-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/research_shortage_100_7d.json",
+      "model_version": "research-shortage-100-7d-v1",
+      "values": {
+        "seed": 2026,
+        "synthetic_agents": 100,
+        "duration_minutes": 10080,
+        "initial_water_ml": 100000,
+        "initial_food_meal_units": 20,
+        "daily_delivery_from_minute_1440": {
+          "water_ml": 200000,
+          "food_meal_units": 100
+        },
+        "working_toilet_units": 2,
+        "unavailable_facilities": ["toilet_3", "toilet_4"],
+        "psychology_policy": "mean-reverting-life-state-v1"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic shortage stress-test; not empirically calibrated",
+      "notes": "This paired synthetic scenario retains the operational scenario's profiles, routes, staff, awareness, and service policies while lowering initial stocks, daily deliveries, and available toilet capacity. These intervention magnitudes define a software stress test, not a forecast or measured shortage."
+    },
+    {
+      "id": "ASM-RESEARCH-SHOCK-RECOVERY-V1",
+      "source_type": "assumption",
+      "target": "short internal heat-stressor recovery experiment in docs/mathematical-models/09-internal-validation.md",
+      "model_version": "mean-reverting-distress-v1 with infrastructure stressor lifecycle",
+      "values": {
+        "seed": "inherited from scenario_100_agents.json",
+        "agent_count": 1,
+        "initial_needs": 0,
+        "heat_stress_per_minute": 0.002,
+        "stressor_start_minute": 20,
+        "stressor_end_minute": 60,
+        "event_source_id": "ASM-C-SHOCK-TEST-V1",
+        "natural_recovery_rate_per_minute": 0.01,
+        "duration_minutes": 180
+      },
+      "context_sources": [],
+      "calibration_status": "isolated synthetic mechanism check; not empirically calibrated",
+      "notes": "Only one temporary environmental stressor is enabled; need pressure, social propagation, support-wait stress and information effects are disabled. The run checks the implemented exponential post-stressor decay against its expected recurrence and makes no claim about realistic heat exposure or human response."
+    },
+    {
+      "id": "ASM-FACILITY-ENTRY-ORIENTATION-V1",
+      "source_type": "assumption",
+      "target": "facility_awareness model config and agent_dynamics_v1",
+      "model_version": "entry-orientation-and-arrival-discovery-v1",
+      "values": {
+        "initial_known_facility_ids": "Scenario-specific facility IDs supplied by entry orientation",
+        "discover_co_located_facilities_on_arrival": true
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated scenario information-access rule",
+      "notes": "Only facilities named by a Scenario's entry orientation and facilities in the Agent's current zone are initially known. Arrival at a known facility can reveal co-located facilities in that zone. No information-acquisition probability is inferred."
+    },
+    {
       "id": "ASM-MEAN-REVERTING-LIFE-STATE-V1",
       "source_type": "assumption",
       "target": "IntegratedDistressLifeStatePolicy and mean-reverting-life-state-v1",

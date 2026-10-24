@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sheltersim.core.world import WorldState
+from sheltersim.domain.facility_awareness import FacilityAwarenessConfig
 from sheltersim.policies.behavior import ActionProposal
 
 AGENT_DYNAMICS_STATE_KEY = "agent_dynamics_v1"
@@ -17,19 +18,8 @@ def create_agent_dynamics_state(world: WorldState) -> dict[str, Any]:
         "schema_version": 1,
         "policy_version": AGENT_DYNAMICS_POLICY_VERSION,
         "agents": {
-            agent_id: {
-                "known_facility_ids": sorted(
-                    facility.id
-                    for facility in world.facilities.values()
-                    if facility.zone_id == agent.zone_id
-                ),
-                "last_action": None,
-                "last_target_id": None,
-                "last_decision_minute": None,
-                "decision_due_minute": agent.next_decision_at,
-                "decision_reason": None,
-            }
-            for agent_id, agent in sorted(world.agents.items())
+            agent_id: _new_agent_dynamics_record(world, agent_id)
+            for agent_id in sorted(world.agents)
         },
     }
 
@@ -90,23 +80,41 @@ def record_proposal(
 
 
 def agent_knows_facility(world: WorldState, agent_id: str, facility_id: str) -> bool:
-    """Use only facilities recorded as locally known for this Agent."""
-    state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
-    if state is None:
+    """Apply explicit awareness only when the Scenario selected that model."""
+    if "facility_awareness" not in world.model_configs:
+        # Older Scenarios had no knowledge gate. Keep their behavior independent
+        # of whether a psychology policy happens to create autonomy memory.
         return True
-    record = state["agents"].get(agent_id)
+    state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
+    if not isinstance(state, dict):
+        return False
+    record = state.get("agents", {}).get(agent_id)
     return record is not None and facility_id in record["known_facility_ids"]
 
 
 def learn_facility(world: WorldState, agent_id: str, facility_id: str) -> None:
-    """Record knowledge acquired through an actual arrival or staff interaction."""
+    """Record a facility and visible co-located facilities after actual arrival."""
     state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
-    if state is None or facility_id not in world.facilities:
+    facility = world.facilities.get(facility_id)
+    if not isinstance(state, dict) or facility is None:
         return
     record = state["agents"].get(agent_id)
-    if record is not None and facility_id not in record["known_facility_ids"]:
-        record["known_facility_ids"].append(facility_id)
-        record["known_facility_ids"].sort()
+    if record is None:
+        return
+    config_document = world.model_configs.get("facility_awareness")
+    config = (
+        FacilityAwarenessConfig.model_validate(config_document)
+        if isinstance(config_document, dict)
+        else None
+    )
+    discovered_ids = {facility_id}
+    if config is not None and config.discover_co_located_facilities_on_arrival:
+        discovered_ids.update(
+            item.id for item in world.facilities.values() if item.zone_id == facility.zone_id
+        )
+    record["known_facility_ids"] = sorted(
+        set(record["known_facility_ids"]) | discovered_ids
+    )
 
 
 def add_agent(world: WorldState, agent_id: str) -> None:
@@ -115,17 +123,7 @@ def add_agent(world: WorldState, agent_id: str) -> None:
     agent = world.agents.get(agent_id)
     if state is None or agent is None:
         return
-    state["agents"][agent_id] = {
-        "known_facility_ids": sorted(
-            facility.id for facility in world.facilities.values()
-            if facility.zone_id == agent.zone_id
-        ),
-        "last_action": None,
-        "last_target_id": None,
-        "last_decision_minute": None,
-        "decision_due_minute": agent.next_decision_at,
-        "decision_reason": None,
-    }
+    state["agents"][agent_id] = _new_agent_dynamics_record(world, agent_id)
 
 
 def remove_agent(world: WorldState, agent_id: str) -> dict[str, Any] | None:
@@ -138,3 +136,24 @@ def _state(world: WorldState) -> dict[str, Any]:
     if AGENT_DYNAMICS_STATE_KEY not in world.model_state:
         world.model_state[AGENT_DYNAMICS_STATE_KEY] = create_agent_dynamics_state(world)
     return world.model_state[AGENT_DYNAMICS_STATE_KEY]
+
+
+def _new_agent_dynamics_record(world: WorldState, agent_id: str) -> dict[str, Any]:
+    agent = world.agents[agent_id]
+    known_facility_ids = {
+        facility.id
+        for facility in world.facilities.values()
+        if facility.zone_id == agent.zone_id
+    }
+    config_document = world.model_configs.get("facility_awareness")
+    if isinstance(config_document, dict):
+        config = FacilityAwarenessConfig.model_validate(config_document)
+        known_facility_ids.update(config.initial_known_facility_ids)
+    return {
+        "known_facility_ids": sorted(known_facility_ids),
+        "last_action": None,
+        "last_target_id": None,
+        "last_decision_minute": None,
+        "decision_due_minute": agent.next_decision_at,
+        "decision_reason": None,
+    }

@@ -1202,6 +1202,10 @@ def _apply_selected_policy_parameter_overrides(
 
     simulator_models = simulator_signatures(model_configs)
     active_simulator_model_ids: list[str] = []
+    if "operator:facility_awareness" in simulator_models:
+        from sheltersim.domain.facility_awareness import FACILITY_AWARENESS_POLICY_VERSION
+
+        active_simulator_model_ids.append(FACILITY_AWARENESS_POLICY_VERSION)
     if "simulator:movement_v1" in simulator_models:
         from sheltersim.domain.movement import MOVEMENT_POLICY_VERSION
 

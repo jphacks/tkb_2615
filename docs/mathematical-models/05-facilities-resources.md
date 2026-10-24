@@ -4,6 +4,12 @@
 
 既存のFIFO queue、イベント完了、設備capacity、resource ledgerを保ちます。M/M/c近似へ全面置換していません。内閣府『避難所におけるトイレの確保・管理ガイドライン』は設備計画上の目安に使います。施設数比は個人の行動確率ではありません。
 
+## Agentの施設認知
+
+施設の物理的な存在とAgentが施設を知っているかは別の状態です。`model_configs.facility_awareness` を明示したScenarioでは、`initial_known_facility_ids` に列挙された施設を入所時の案内で知っているものとし、既にいるzone内の施設も認知します。知っている施設への実際の到着時に `discover_co_located_facilities_on_arrival=true` なら、そのzoneの施設を追加で学習します。行動選択・経路探索・待ち行列・稼働unit・サービス完了の検査は従来どおり続きます。認知設定を空にすると初期案内による発見を止められますが、同zone到着による発見は独立して切り替えられます。
+
+施設認知は心理Policyから独立したScenario設定です。`facility_awareness` のない旧Scenarioでは、旧データの意味を変えない互換動作として全施設を候補にします。認知を記録するために心理Policyを選んだだけで、zone限定の認知ゲートが暗黙に有効になることはありません。案内対象、情報獲得確率、施設マップの利用率について実測根拠はなく、これらは明示的な未校正仮定です。
+
 ## 待ち行列・サービス
 
 FIFO位置、待ち開始、サービス中、完了をイベントで記録します。有限期間で到着率 \(\lambda\)、平均滞在数 \(L\)、平均待ち時間 \(W\) のLittle関係 \(L=\lambda W\) は集計窓で点検できますが、開始・終了境界を含む非定常短窓では厳密一致を要求しません。
@@ -21,3 +27,7 @@ FIFO位置、待ち開始、サービス中、完了をイベントで記録し�
 ## 内部検証と限界
 
 既存 `tests/test_facility_queues.py`, `test_resource_service.py`, `test_resources.py` 等はFIFO、capacity、予約/在庫保存、失敗/取消、状態不変条件を検査します。新しい診断は稼働unitと初期/長期目安の計算を検査します。外部の到着率・便器利用時間・必要在庫の実測データはありません。
+
+`tests/test_facility_awareness.py` は初期案内からのトイレ選択、移動、到着時の同zone施設発見、待ち、完了による排泄欲求の減少をScenarioで確認します。心理Policyを変えても同じ認知条件が維持されること、認知なしの挙動、Checkpoint復元、未知の施設IDの拒否も確認します。
+
+通常運営と不足条件の統合Scenarioは `fixtures/scenarios/research_operational_100_7d.json` と `research_shortage_100_7d.json` です。両者はseed 2026・合成Agent 100人・10,080分・同じ初期profile、5人のstaff、同じ行動/資源サービス/心理設定を使います。両方とも初期案内で全施設を知り、同じrouteを使います。通常運営は稼働トイレ4基、初期水5,000,000 ml・食事120単位、分1440以降は毎日水2,000,000 ml・食事1,000単位を配送します。不足条件は稼働トイレ2基、初期水100,000 ml・食事20単位、同じ時点から毎日水200,000 ml・食事100単位を配送します。資源サービスは1回5分、配水250 ml、配食1単位です。トイレ所要時間は両方とも未校正の4–8分離散一様です。社会伝播はScenario設定で無効、情報伝播は `InformationSpreadConfig` の既定 `enabled=false` です。数量と配送時刻はサービス・不足経路を検査する合成介入で、実際の避難所需要・供給計画ではありません。根拠IDは `fixtures/source-manifest.json` の各Scenario仮定を参照してください。
