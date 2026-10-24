@@ -23,6 +23,14 @@ Anthropicへ接続するのはsrc/sheltersim/llm/anthropic_adapter.pyだけで�
 
 検証器は、Pydanticが生成するschemaで使う構文（`$ref`/`$defs`、`oneOf`、`const`、schemaとして与えた`additionalProperties`、数値・文字列の上下限、`pattern`）を扱います。以前は`$ref`を解決できず、Webの自由文読み取り（region-scenario-extraction-v1）は応答の内容にかかわらず必ず不合格になっていました。
 
+### 分析用の予備枠
+
+runtimeの呼出しは、Run（CLIでは1回のrun）の利用枠の上限から3回を残したところで止まります（`ANALYSIS_RESERVED_CALLS`）。残した3回は、終了後のreportと結果質問のための予備です。Projectでは、runtime・report・結果質問・介入の変換がすべて同じRunの利用枠を共有しています。この予備がないと、長いRunではruntimeが上限を使い切り、reportが生成されませんでした。
+
+- 予備を超えたruntimeの依頼は`runtime_call_share_exhausted`としてfallbackし、fallback集計と警告に表示されます。
+- 上限が小さい利用枠では、予備は「上限−1」回までです。上限1回の利用枠には予備がありません。
+- 予備は呼出し回数だけを確保し、予算額は確保しません。
+
 ### 出典候補・report・結果質問の扱い
 
 - 地域情報の公式ドメイン検索は、応答本文の引用に加えて、web searchが返した検索結果そのもの（URLとタイトル）を出典候補にします。JSONだけを返す応答には引用がほとんど付かず、以前は検索が成功しても候補が常に0件でした。候補は許可ドメイン（go.jp、lg.jp）に限り、重複を除いて最大25件です。ページ本文は取得・照合しません。
