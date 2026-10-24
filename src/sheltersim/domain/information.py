@@ -90,8 +90,6 @@ def validate_information_runtime_state(
             belief = AgentInformationState.from_dict(raw_belief)
             if message_id not in messages or belief.message_id != message_id:
                 raise ValueError("Agent information belief references an unknown message")
-            if belief.belief is InformationBeliefStatus.UNKNOWN:
-                raise ValueError("unknown beliefs must be represented by absence")
             if belief.last_contact >= duration_minutes:
                 raise ValueError("information contact time is outside the scenario")
             if not isinstance(agent_id, str):
@@ -185,23 +183,52 @@ def information_spread_summary(state: Mapping[str, Any], *, agent_count: int) ->
     """Compute explainable reach/correction rates from persisted Agent-message beliefs."""
     messages = state["messages"]
     beliefs = state["beliefs"]
-    reached = sum(len(agent_beliefs) for agent_beliefs in beliefs.values())
-    corrected = sum(
-        1
-        for agent_beliefs in beliefs.values()
-        for belief in agent_beliefs.values()
-        if belief["belief"] in {"verified", "rejected"}
+    exposed_states = [
+        belief for agent_beliefs in beliefs.values() for belief in agent_beliefs.values()
+    ]
+    reached = sum(
+        1 for belief in exposed_states
+        if AgentInformationState.from_dict(belief).belief is not InformationBeliefStatus.UNKNOWN
     )
+    exposed = len(exposed_states)
+    correction_exposures = sum(
+        1
+        for raw_belief in exposed_states
+        if AgentInformationState.from_dict(raw_belief).correction_exposed
+    )
+    correction_acceptances = sum(
+        1
+        for raw_belief in exposed_states
+        if AgentInformationState.from_dict(raw_belief).correction_accepted
+    )
+    wrong_beliefs = 0
+    for agent_beliefs in beliefs.values():
+        for raw_belief in agent_beliefs.values():
+            belief = AgentInformationState.from_dict(raw_belief)
+            message = TypedMessage.from_dict(messages[belief.message_id])
+            if (
+                message.truth_status.value == "true" and belief.belief_strength < 0.5
+            ) or (
+                message.truth_status.value == "false" and belief.belief_strength > 0.5
+            ):
+                wrong_beliefs += 1
     possible_pairs = agent_count * len(messages)
     reach_rate = reached / possible_pairs if possible_pairs else 0.0
-    correction_rate = corrected / reached if reached else 0.0
+    correction_rate = correction_acceptances / reached if reached else 0.0
     return {
         "message_count": len(messages),
+        "exposure_count": exposed,
         "agent_message_reach_count": reached,
         "possible_agent_message_pairs": possible_pairs,
         "reach_rate": reach_rate,
-        "correction_count": corrected,
+        "correction_count": correction_acceptances,
+        "correction_exposures": correction_exposures,
+        "correction_acceptances": correction_acceptances,
+        "wrong_belief_count": wrong_beliefs,
         "correction_rate": correction_rate,
+        "correction_acceptance_rate": (
+            correction_acceptances / correction_exposures if correction_exposures else 0.0
+        ),
         "support_requests": state["counters"]["support_requests"],
         "counters": dict(state["counters"]),
     }

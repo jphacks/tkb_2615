@@ -337,3 +337,47 @@ def test_false_rumor_is_rejected_by_a_causal_correction(tmp_path: Path) -> None:
     assert all(
         beliefs["claim-water-1"]["belief"] == "rejected" for beliefs in info["beliefs"].values()
     )
+
+
+def test_evidence_aware_correction_tracks_exposure_and_probabilistic_acceptance(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(
+        duration=6,
+        profile_count=100,
+        truth_status="false",
+        config=_information_config(
+            correction_acceptance_probability=0.5,
+            correction_trust_sensitivity=0.0,
+            correction_source_sensitivity=0.0,
+            share_propensity_decay_per_minute=0.2,
+            forgetting_rate_per_minute=0.3,
+        ),
+    )
+    document = scenario.model_dump(mode="json")
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "information": "evidence-aware-rumor-v1",
+    }
+    scenario = ScenarioSpec.model_validate(document)
+
+    first = run_scenario(scenario, tmp_path / "evidence-aware-1")
+    second = run_scenario(scenario, tmp_path / "evidence-aware-2")
+    first_state = first.model_state[INFORMATION_SPREAD_STATE_KEY]
+    second_state = second.model_state[INFORMATION_SPREAD_STATE_KEY]
+    records = [
+        beliefs["claim-water-1"]
+        for beliefs in first_state["beliefs"].values()
+        if "claim-water-1" in beliefs
+    ]
+
+    assert records
+    assert all(record["exposed"] for record in records)
+    assert any(record["belief_strength"] == 0.0 for record in records)
+    assert any(record["belief_strength"] == 1.0 for record in records)
+    assert all(record["correction_exposed"] for record in records)
+    assert any(record["correction_accepted"] for record in records)
+    assert any(not record["correction_accepted"] for record in records)
+    assert any(record["belief"] == "unknown" for record in records)
+    assert any(record["share_propensity"] == 0.0 for record in records)
+    assert first_state == second_state
