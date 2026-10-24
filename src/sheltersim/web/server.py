@@ -398,6 +398,9 @@ def _handler_for(
                 self.wfile.write(payload)
                 return
             names = {
+                "/demo-v2": "demo-v2.html",
+                "/demo-v2.css": "demo-v2.css",
+                "/demo-v2.js": "demo-v2.js",
                 "/index.html": "index.html",
                 "/project.js": "project.js",
                 "/project-round3.js": "project-round3.js",

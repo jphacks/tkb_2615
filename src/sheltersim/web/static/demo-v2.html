@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath fill=%22%230878ff%22 d=%22M16 1L1 12v19h30V12z%22/%3E%3C/svg%3E"
+    />
+    <title>避難所IF！ | 避難所の「もしも」を、考えよう。</title>
+    <link rel="stylesheet" href="/demo-v2.css" />
+    <script src="/demo-v2.js" defer></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="/demo-v2"
+        ><span class="brand-mark" aria-hidden="true">⌂</span
+        ><strong>避難所<span>IF！</span></strong></a
+      ><span class="tagline">避難所の「もしも」を、考えよう。</span>
+      <div class="header-scenario">
+        <small>シナリオ</small
+        ><select id="saved-runs" aria-label="保存したシナリオ">
+          <option value="">新しいシナリオ</option>
+        </select>
+      </div>
+      <div class="clock">
+        <small>シミュレーション時刻</small><strong id="clock">開始前</strong>
+      </div>
+      <label class="speed-label"
+        >再生速度<select id="speed">
+          <option value="1">1×</option>
+          <option value="5">5×</option>
+          <option value="15">15×</option>
+          <option value="60">60×</option>
+        </select></label
+      ><button id="play" class="primary" disabled>▶ 再生</button>
+    </header>
+    <aside class="sidebar">
+      <nav aria-label="メインナビゲーション">
+        <button class="nav-item active" data-page="scenario">
+          <span>▤</span>シナリオ設定</button
+        ><button class="nav-item" data-page="simulation">
+          <span>◉</span>シミュレーション</button
+        ><button class="nav-item" data-page="comparison">
+          <span>⑂</span>分岐比較</button
+        ><button class="nav-item" data-page="report">
+          <span>▥</span>レポート・対話
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="shelter-picture" aria-hidden="true">
+          <span>⌂</span><i></i>
+        </div>
+        <div class="current-scenario">
+          <small>現在のシナリオ</small
+          ><strong id="scenario-name">避難所の「もしも」</strong>
+          <p id="scenario-summary">
+            条件を入力して<br />シミュレーションを始めましょう。
+          </p>
+          <hr />
+          <span id="mode-badge" class="badge">接続確認中</span>
+          <p class="fine">
+            合成人物によるモデル実験<br />実際の安全性・医療結果の予測ではありません。
+          </p>
+        </div>
+        <a href="/demo">従来のデモ ↗</a>
+      </div>
+    </aside>
+    <main>
+      <div id="notice" class="notice" role="status" aria-live="polite">
+        条件を入力し、プレビューで出典と仮定を確認してください。
+      </div>
+      <section
+        id="page-scenario"
+        class="page active"
+        aria-labelledby="scenario-heading"
+      >
+        <h1 id="scenario-heading" class="sr-only">
+          シナリオ設定・AIプレビュー
+        </h1>
+        <div class="steps">
+          <div class="step current">
+            <b>1</b>
+            <div>
+              <strong>シナリオ入力</strong
+              ><small>災害と避難所の条件を設定</small>
+            </div>
+          </div>
+          <span class="step-line"></span>
+          <div class="step" id="preview-step">
+            <b>2</b>
+            <div>
+              <strong>AIプレビュー確認</strong
+              ><small>補完された条件・出典を確認</small>
+            </div>
+          </div>
+          <span class="step-line"></span>
+          <div class="step" id="start-step">
+            <b>3</b>
+            <div>
+              <strong>実行開始</strong><small>明示承認してRunを作成</small>
+            </div>
+          </div>
+        </div>
+        <div class="scenario-grid">
+          <article class="panel input-panel">
+            <div class="panel-title">
+              <h2><span class="number">1</span>シナリオを入力しましょう</h2>
+              <button id="example" class="compact">例文を使う</button>
+            </div>
+            <p class="muted">
+              自然な文章でも、項目からでも。必要な条件を一緒に整理します。
+            </p>
+            <form id="scenario-form">
+              <label for="scenario-text">自然言語で条件を入力</label
+              ><textarea
+                id="scenario-text"
+                rows="4"
+                maxlength="4000"
+                placeholder="例：墨田区で地震が発生。避難者100人、7日間。高齢者や子ども連れの支援ニーズも見たい。"
+              ></textarea>
+              <h3>または、項目を入力する</h3>
+              <p class="fine">
+                入力欄を優先します。未入力の基本条件は文章から読み取ります。
+              </p>
+              <div class="form-grid">
+                <label
+                  >📍 自治体<input
+                    id="municipality"
+                    placeholder="例：墨田区"
+                    maxlength="160" /></label
+                ><label
+                  >⚑ 災害種別<select id="disaster">
+                    <option value="">文章から読み取る</option>
+                    <option>地震</option>
+                    <option>洪水</option>
+                    <option>台風</option>
+                    <option>津波</option>
+                  </select></label
+                ><label
+                  >♟ 避難者数<input
+                    id="evacuees"
+                    type="number"
+                    min="1"
+                    max="10000"
+                    step="1"
+                    placeholder="例：100人" /></label
+                ><label
+                  >◷ 期間（日）<input
+                    id="duration"
+                    type="number"
+                    min="0.001"
+                    max="90"
+                    step="any"
+                    placeholder="未入力：既存の補完値" /></label
+                ><label class="wide"
+                  >▥ 施設種別<select id="facility-type">
+                    <option value="">未指定（合成施設）</option>
+                    <option>学校（体育館）</option>
+                    <option>公民館</option>
+                    <option>地域施設</option>
+                  </select></label
+                >
+              </div>
+              <details>
+                <summary>任意の施設条件・資源</summary>
+                <div class="form-grid">
+                  <label
+                    >スタッフ人数<input
+                      id="staff-count"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1" /></label
+                  ><label
+                    >延床面積（m²）<input
+                      id="area"
+                      type="number"
+                      min="1"
+                      max="100000"
+                      step="any" /></label
+                  ><label
+                    >車いす対応トイレ基数<input
+                      id="toilets"
+                      type="number"
+                      min="0"
+                      max="20"
+                      step="1" /></label
+                  ><label
+                    >初期食料（食）<input
+                      id="food"
+                      type="number"
+                      min="0"
+                      step="1" /></label
+                  ><label
+                    >初期飲料水（L）<input
+                      id="water"
+                      type="number"
+                      min="0"
+                      step="any"
+                  /></label>
+                </div>
+                <p class="fine">
+                  食料・水は初期在庫です。1日あたりの供給量や施設数からは推定しません。一般トイレ数は生成仮定としてプレビューに表示します。
+                </p>
+              </details>
+              <button id="preview" class="primary full" type="submit">
+                次へ · 条件をプレビュー →
+              </button>
+            </form>
+          </article>
+          <article class="panel preview-panel">
+            <h2>
+              <span class="number">2</span>AIによるプレビューを確認しましょう
+            </h2>
+            <div id="preview-empty" class="empty">
+              <div class="empty-icon">✧</div>
+              <h3>「もしも」の条件を、見える形に。</h3>
+              <p>
+                入力内容から構造化した設定、施設、人口構成、<br />確認が必要な仮定と出典をここに表示します。
+              </p>
+              <span class="badge">プレビューだけでは実行されません</span>
+            </div>
+            <div id="preview-result" hidden>
+              <div class="subcard">
+                <h3>
+                  シナリオの概要 <span id="preview-mode" class="badge"></span>
+                </h3>
+                <p id="preview-summary"></p>
+                <div id="condition-chips" class="chips"></div>
+              </div>
+              <h3>施設・人口構成</h3>
+              <div class="preview-visual">
+                <canvas
+                  id="preview-map"
+                  aria-label="生成施設の形状プレビュー"
+                ></canvas
+                ><canvas
+                  id="population-chart"
+                  aria-label="生成された年齢構成"
+                ></canvas>
+              </div>
+              <div id="facility-summary" class="stats-mini"></div>
+              <details>
+                <summary>入力値と補完値</summary>
+                <div id="input-origins"></div>
+              </details>
+              <details>
+                <summary>出典・基準値・モデルの仮定</summary>
+                <div id="preview-sources"></div>
+              </details>
+              <details>
+                <summary>構造化された設定を確認</summary>
+                <pre id="scenario-json"></pre>
+              </details>
+              <p class="fine">
+                施設は合成の平面モデルです。実建物の形状や公的基準への適合を確認したものではありません。
+              </p>
+            </div>
+          </article>
+          <aside class="scenario-side">
+            <article class="panel">
+              <h2>☀ このシナリオでわかること</h2>
+              <ul class="check-list">
+                <li>時間ごとの避難者の状態と混雑</li>
+                <li>トイレの待機時間とストレスの推移</li>
+                <li>高齢者・子どもを含む支援ニーズ</li>
+                <li>スタッフの負荷と対応の状況</li>
+                <li>介入による分岐結果の違い</li>
+              </ul>
+              <h3>シミュレーションの規模</h3>
+              <div id="scale-summary" class="stats-mini">
+                <div>人数<strong>—</strong></div>
+                <div>期間<strong>—</strong></div>
+              </div>
+              <p class="fine">
+                実行時間・費用は未計測です。再生速度は計算速度とは異なります。
+              </p>
+            </article>
+            <article class="panel warning-panel">
+              <h2>! 未確認の設定・要確認事項</h2>
+              <div id="blockers">
+                <p class="muted">プレビュー後に確認事項を表示します。</p>
+              </div>
+              <details>
+                <summary>警告をすべて見る</summary>
+                <div id="warnings"></div>
+              </details>
+            </article>
+            <article class="panel approval-panel">
+              <label class="checkbox"
+                ><input
+                  id="scenario-check"
+                  type="checkbox"
+                  disabled
+                />入力・補完値・出典・仮定を確認し、この条件での実行を承認します。</label
+              ><button id="approve" class="primary full" disabled>
+                ▶ 承認してシミュレーション開始
+              </button>
+              <p class="fine">承認したプレビューに結び付くRunを保存します。</p>
+            </article>
+          </aside>
+        </div>
+      </section>
+      <section
+        id="page-simulation"
+        class="page"
+        aria-labelledby="simulation-heading"
+      >
+        <div class="page-heading">
+          <div>
+            <small>SIMULATION / 記録された世界をたどる</small>
+            <h1 id="simulation-heading">避難所のいまを、見てみよう。</h1>
+          </div>
+          <label
+            >表示する分岐<select id="branch-select" disabled></select
+          ></label>
+        </div>
+        <div id="sim-kpis" class="kpi-grid"></div>
+        <div class="simulation-grid">
+          <article class="panel map-panel">
+            <div class="panel-title">
+              <h2>避難所マップ <small id="map-location">合成施設</small></h2>
+              <div class="map-options">
+                <label
+                  >表示レイヤー<select id="layer">
+                    <option value="normal">通常</option>
+                    <option value="stress">ストレス</option>
+                    <option value="crowd">混雑</option>
+                    <option value="health">健康・ニーズ</option>
+                    <option value="operations">運営</option>
+                  </select></label
+                >
+              </div>
+            </div>
+            <div class="map-wrap">
+              <canvas
+                id="simulation-map"
+                aria-label="記録された施設と人物の位置。人物をクリックして詳細表示"
+              ></canvas>
+              <div class="map-tools">
+                <span>N ↑</span
+                ><button data-zoom="in" aria-label="拡大">＋</button
+                ><button data-zoom="out" aria-label="縮小">−</button
+                ><button data-zoom="reset" aria-label="表示をリセット">
+                  ⌖
+                </button>
+              </div>
+              <span class="map-caption">合成施設 / 記録位置に基づく表示</span>
+            </div>
+            <div class="map-legend">
+              <span>● 移動・行動中</span><span>● 待機中</span
+              ><span>◆ スタッフ</span
+              ><span id="position-note"
+                >同一座標の人物は人数をまとめて表示</span
+              >
+            </div>
+          </article>
+          <aside class="simulation-side">
+            <article class="panel">
+              <h2>! 発生中の事象・支援上の課題</h2>
+              <div id="issues"></div>
+            </article>
+            <article class="panel">
+              <h2>⑂ ここから別の「もしも」を試す</h2>
+              <p class="fine">
+                計算済みの任意時刻へ戻り、作用を確認してから分岐します。
+              </p>
+              <label for="intervention-text">介入の指示</label
+              ><textarea
+                id="intervention-text"
+                rows="3"
+                maxlength="4000"
+                placeholder="例：トイレを2基追加する"
+              ></textarea
+              ><button id="intervention-preview" class="primary full" disabled>
+                介入の作用をプレビュー →
+              </button>
+              <div id="intervention-result"></div>
+              <label class="checkbox"
+                ><input
+                  id="intervention-check"
+                  type="checkbox"
+                  disabled
+                />作用・対象・時刻・検証結果を確認し、分岐作成を承認します。</label
+              ><button id="intervention-apply" class="teal full" disabled>
+                承認して新しい分岐を作成
+              </button>
+            </article>
+            <article class="panel">
+              <h2>♟ 避難者・スタッフの状態</h2>
+              <div id="person-detail">
+                <p class="muted">
+                  マップの人物をクリックすると、記録された状態を表示します。
+                </p>
+              </div>
+              <div id="people-list" class="people-list"></div>
+            </article>
+          </aside>
+        </div>
+        <article class="panel timeline-panel">
+          <div class="panel-title">
+            <h2>
+              イベントタイムライン <small>直近の記録を同種・同時刻で集約</small>
+            </h2>
+            <span id="computed-label" class="badge">未計算</span>
+          </div>
+          <div class="playback">
+            <button id="timeline-play" disabled>▶ 再生</button
+            ><input
+              id="seek"
+              type="range"
+              min="0"
+              max="0"
+              value="0"
+              aria-label="計算済み時刻に移動"
+              disabled
+            /><output id="seek-label">開始前</output>
+          </div>
+          <div id="events" class="events"></div>
+          <div class="compute-controls">
+            <label
+              >計算を進める時刻（経過分）<input
+                id="target"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="例：60" /></label
+            ><button id="compute" class="primary" disabled>
+              ▶ この時刻まで計算</button
+            ><button id="compute-end" disabled>終了まで計算</button
+            ><button id="cancel" class="danger" disabled>計算を停止</button
+            ><progress
+              id="progress"
+              max="1"
+              value="0"
+              aria-label="計算進捗"
+            ></progress
+            ><span id="compute-status" class="fine"
+              >計算と再生は別の操作です。</span
+            >
+          </div>
+        </article>
+      </section>
+      <section
+        id="page-comparison"
+        class="page"
+        aria-labelledby="comparison-heading"
+      >
+        <div class="page-heading">
+          <div>
+            <small>BRANCH COMPARISON / 同じ時刻で、違いを見る</small>
+            <h1 id="comparison-heading">その一手で、何が変わる？</h1>
+          </div>
+          <button id="compare-refresh" class="primary" disabled>
+            共通の計算済み時刻で比較
+          </button>
+        </div>
+        <article class="panel comparison-intro">
+          <div>
+            <span class="branch-letter">⑂</span><strong>介入の記録</strong>
+            <p id="comparison-instruction">
+              シミュレーション画面で介入をプレビュー・承認してください。
+            </p>
+          </div>
+          <div id="comparison-effect">
+            <p class="muted">実行可能な作用と検証結果を表示します。</p>
+          </div>
+          <div>
+            <label
+              >比較する分岐B<select id="compare-branch" disabled></select
+            ></label>
+            <p id="comparison-range" class="fine">2つの分岐が必要です。</p>
+          </div>
+        </article>
+        <div class="compare-controls">
+          <label
+            >レイヤー<select id="compare-layer">
+              <option value="normal">通常</option>
+              <option value="stress">ストレス</option>
+              <option value="crowd">混雑</option>
+              <option value="health">健康・ニーズ</option>
+              <option value="operations">運営</option>
+            </select></label
+          ><button data-zoom="in">＋ 両マップ拡大</button
+          ><button data-zoom="out">− 両マップ縮小</button
+          ><button data-zoom="reset">⌖ リセット</button
+          ><label class="compare-seek"
+            >共通時刻<input
+              id="compare-seek"
+              type="range"
+              min="0"
+              max="0"
+              disabled /></label
+          ><output id="compare-time">—</output
+          ><label
+            >計算目標（経過分）<input
+              id="compare-target"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="終了までの範囲" /></label
+          ><button id="compute-pair" disabled>目標まで両分岐を計算</button>
+        </div>
+        <div class="comparison-grid">
+          <article class="panel">
+            <div class="branch-heading">
+              <b class="branch-letter">A</b>
+              <h2 id="branch-a-name">元の分岐</h2>
+              <span class="badge">比較基準</span>
+            </div>
+            <canvas
+              id="compare-map-a"
+              class="comparison-map"
+              aria-label="元の分岐Aの施設マップ"
+            ></canvas>
+            <p id="compare-conditions-a" class="fine"></p>
+            <div id="compare-kpis-a" class="branch-kpis"></div>
+          </article>
+          <article class="panel">
+            <div class="branch-heading candidate">
+              <b class="branch-letter">B</b>
+              <h2 id="branch-b-name">介入後の分岐</h2>
+              <span class="badge teal-badge">介入あり</span>
+            </div>
+            <canvas
+              id="compare-map-b"
+              class="comparison-map"
+              aria-label="介入後の分岐Bの施設マップ"
+            ></canvas>
+            <p id="compare-conditions-b" class="fine"></p>
+            <div id="compare-kpis-b" class="branch-kpis"></div>
+          </article>
+        </div>
+        <article class="panel">
+          <h2>差分の要約 <small>正式KPIによるモデル内比較</small></h2>
+          <div id="difference-summary" class="difference-grid">
+            <p class="muted">
+              同じ時刻のAPI結果を取得すると、改善・悪化を表示します。
+            </p>
+          </div>
+          <p class="fine">
+            緑：指標の減少 /
+            赤：増加。介入の改善を保証するものではありません。同一起点の記述的比較であり、現実の因果効果を証明しません。
+          </p>
+          <details>
+            <summary>分岐とCheckpointの根拠</summary>
+            <pre id="comparison-provenance"></pre>
+          </details>
+        </article>
+      </section>
+      <section id="page-report" class="page" aria-labelledby="report-heading">
+        <div class="page-heading">
+          <div>
+            <small>RESULTS / 記録から、次の備えへ</small>
+            <h1 id="report-heading">シミュレーション結果レポート</h1>
+          </div>
+          <div class="button-row">
+            <span id="report-status" class="badge">未生成</span
+            ><button id="report-refresh" disabled>↻ 結果を更新</button
+            ><button id="save-report" disabled>↓ レポート保存</button>
+          </div>
+        </div>
+        <div id="report-kpis" class="kpi-grid"></div>
+        <div class="report-grid">
+          <div class="report-main">
+            <div class="report-top">
+              <article class="panel chart-panel">
+                <h2>主要指標の推移</h2>
+                <label
+                  >表示する指標<select id="chart-metric">
+                    <option value="stress_mean">平均ストレス</option>
+                    <option value="toilet_wait_max_minutes">
+                      最大トイレ待機時間
+                    </option>
+                    <option value="staff_load_ratio">スタッフ負荷</option>
+                    <option value="unresolved_support_request_count">
+                      未解決支援要請
+                    </option>
+                  </select></label
+                ><canvas
+                  id="history-chart"
+                  aria-label="記録されたKPI時系列折れ線グラフ"
+                ></canvas>
+                <p id="history-note" class="fine">
+                  記録を取得すると表示します。
+                </p>
+              </article>
+              <article class="panel">
+                <h2>参照時点の避難所マップ</h2>
+                <span id="report-minute" class="badge">—</span
+                ><canvas
+                  id="report-map"
+                  aria-label="レポート参照時点の施設マップ"
+                ></canvas>
+              </article>
+            </div>
+            <div class="report-bottom">
+              <article class="panel">
+                <h2>レポートサマリー</h2>
+                <div id="report-summary"></div>
+                <details>
+                  <summary>Branch reportの原文・生成状態</summary>
+                  <pre id="report-raw"></pre>
+                </details>
+                <details>
+                  <summary>出典・採用モデル・仮定と限界</summary>
+                  <pre id="report-evidence"></pre>
+                </details>
+              </article>
+              <article class="panel">
+                <h2>代表的な避難者・スタッフの記録</h2>
+                <p class="fine">
+                  記録ID順の代表例です。人物の発言は生成しません。
+                </p>
+                <div id="report-people"></div>
+                <h3>記録イベント</h3>
+                <div id="report-events"></div>
+              </article>
+            </div>
+          </div>
+          <aside class="panel chat-panel">
+            <h2>✧ 結果について質問する</h2>
+            <p class="fine">
+              記録された根拠と、AIによる解釈を区別して表示します。
+            </p>
+            <div id="chat" class="chat">
+              <div class="chat-intro">
+                気になったことを、記録から確かめよう。
+                <p>
+                  「なぜトイレが混雑したのか」<br />「どの介入が有効だったか」
+                </p>
+                <span class="badge">offline時はAI回答を生成しません</span>
+              </div>
+            </div>
+            <form id="question-form">
+              <label class="sr-only" for="question">結果への質問</label>
+              <div class="chat-input">
+                <textarea
+                  id="question"
+                  rows="2"
+                  maxlength="2000"
+                  placeholder="結果について、何でも質問してください…"
+                ></textarea
+                ><button
+                  id="ask"
+                  class="primary"
+                  disabled
+                  aria-label="質問を送信"
+                >
+                  ➤
+                </button>
+              </div>
+            </form>
+            <div class="suggestions">
+              <button data-question="なぜトイレが混雑したのか">
+                トイレ混雑の理由</button
+              ><button data-question="どの介入が有効だったか">
+                介入の違い
+              </button>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <footer class="sr-only">避難所IF！ JPHACKS 2026 · バックアップUI</footer>
+  </body>
+</html>

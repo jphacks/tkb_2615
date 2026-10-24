@@ -15,6 +15,7 @@ SHELTERSIM_LLM_MODE=offline sheltersim web \
 次のURLを開きます。
 
 - http://127.0.0.1:8765/demo: Project workspaceとoffline demo。
+- http://127.0.0.1:8765/demo-v2: 独立した4画面の「避難所IF！」バックアップUI（[操作・API対応・検証](ui-backup.md)）。
 - http://127.0.0.1:8765/admin: 保存Runの参照画面。
 
 このserverはローカル用途で、loginを持ちません。別途確認済みのaccess controlがない限りloopbackにbindしてください。

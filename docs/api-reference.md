@@ -61,7 +61,7 @@ Project APIはasset、確認済みfacility geometry、draft、evaluation、datas
 - timeline frameは指定tickの直前境界を表します。未計算・利用不可の履歴を推定値で返さず、要求を失敗させます。Branch比較は共通の計算済み時刻を使います。出力はsimulation上の記述で、外部データによる因果証拠ではありません。
 - Branchへの質問は保存Run/Branchの証拠を読むだけで、simulation stateを変更しません。詳細はproject-persistence.md、adaptive-event-compiler.md、effect-program.mdを参照してください。
 
-ブラウザーrouteは /demo と /admin です。root routeは /demo へredirectします。serverは既定で127.0.0.1にbindし、認証機能を持ちません。信頼できないnetworkへ公開しないでください。
+ブラウザーrouteは /demo、/admin、および独立したバックアップUIの /demo-v2 です。/demo-v2 は同じProject APIと承認契約を利用します（[対応表](ui-backup.md)）。root routeは /demo へredirectします。serverは既定で127.0.0.1にbindし、認証機能を持ちません。信頼できないnetworkへ公開しないでください。
 
 POSTはsame-origin確認、JSON content type、request size上限、厳密なfield allowlistを使います。正確な上限とvalidatorはsource契約および回帰testで管理します。
 
