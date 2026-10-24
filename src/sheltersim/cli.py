@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sys
+import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -27,8 +28,9 @@ from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.report import review_saved_run
 
 
-def _cli_account_id() -> str:
-    return "cli-default"
+def _new_cli_account_id(scope: str) -> str:
+    """Open a fresh ledger account so one exhausted allowance never silences later runs."""
+    return f"cli-{scope}-{uuid.uuid4().hex}"
 
 
 def _cli_usage_account_path(run_path: Path) -> Path:
@@ -248,12 +250,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if isinstance(existing_calls, list):
                     generation_calls = existing_calls
             if arguments.generate_scenario:
-                account_id = _cli_account_id()
+                account_id = _new_cli_account_id("prepare")
                 router = _cli_accounted_router(LLMSettings.from_env(), operation="prepare", account_id=account_id)
                 scenario, generation_manifest = generate_scenario_draft(scenario, router)
                 generated_scenario = json.loads(scenario.canonical_json())
             if arguments.generate_initial_needs:
-                account_id = _cli_account_id()
+                account_id = _new_cli_account_id("prepare")
                 router = _cli_accounted_router(LLMSettings.from_env(), operation="prepare", account_id=account_id)
                 scenario = generate_initial_needs(scenario, router)
                 generation_manifest = scenario.provenance.get("llm_initial_needs")
@@ -301,10 +303,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 settings = replace(settings, mode=LLMMode.OFFLINE)
             elif arguments.llm_mode is not None:
                 settings = replace(settings, mode=LLMMode(arguments.llm_mode))
-            source_document = json.loads(arguments.scenario.read_text(encoding="utf-8"))
-            account_id = source_document.get("llm_usage_account_id") if isinstance(source_document, dict) else None
-            if not isinstance(account_id, str) or not account_id.startswith("cli-"):
-                account_id = _cli_account_id()
+            # Each Run gets its own allowance under the current settings; the shared
+            # campaign ledger still bounds total spending across all accounts.
+            account_id = _new_cli_account_id("run")
             llm_router = _cli_accounted_router(settings, operation="runtime", account_id=account_id, branch_id="main")
             _write_atomic(_cli_usage_account_path(arguments.output), _json_text({"schema_version": 1, "account_id": account_id}) + "\n")
             comparison_report = (
@@ -351,7 +352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             account_document = json.loads(account_path.read_text(encoding="utf-8")) if account_path.exists() else {}
             account_id = account_document.get("account_id") if isinstance(account_document, dict) else None
             if not isinstance(account_id, str) or not account_id.startswith("cli-"):
-                account_id = _cli_account_id()
+                account_id = _new_cli_account_id("review")
             router = _cli_accounted_router(settings, operation="review", account_id=account_id, branch_id="main")
             comparison_report = (
                 _read_json_object(arguments.comparison_report)

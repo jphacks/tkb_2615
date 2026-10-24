@@ -17,6 +17,7 @@
       "behavior": "utility-softmax-v1",
       "event_triggered_social_limits": "event-triggered-social-v2",
       "event_triggered_social_interactions": "event-triggered-social-v2",
+      "event_triggered_support_priority_limits": "support-priority-v2",
       "inspector_zone_projection": "inspector-zone-grid-v1",
       "profile_generation": "counter-rng-profile-generator-v1",
       "psychology": "causal-stress-v1",

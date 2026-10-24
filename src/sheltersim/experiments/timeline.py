@@ -99,6 +99,10 @@ class RecordedRouter(LLMRouter):
         self.spent_usd = start["spent_usd"]
         self.mode = LLMMode(start["mode"])
 
+    def history_records(self) -> tuple[Any, ...]:
+        # The full recorded history, including calls after the replay position.
+        return (*self._future_records, *self.records[len(self._future_records):])
+
     def complete(self, task: LLMTask) -> str:
         if len(self.records) >= len(self._future_records):
             raise TimelineError("missing recorded LLM decision; history cannot call a provider")

@@ -40,7 +40,10 @@ from sheltersim.llm.outcomes import summarize_call_outcomes
 from sheltersim.llm.runtime import (
     SOCIAL_INTERACTIONS_SOURCE_ID,
     SOCIAL_LIMITS_SOURCE_ID,
+    SUPPORT_PRIORITY_LIMITS_SOURCE_ID,
+    SUPPORT_PRIORITY_POLICY_VERSION,
     SocialRuntimeLimits,
+    SupportPriorityLimits,
 )
 from sheltersim.policies.behavior import (
     ActionProposal,
@@ -661,6 +664,13 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
             "policy_version": "event-triggered-social-v2",
             "enabled": execution_mode != "offline",
             "values": limits,
+        },
+        "event_triggered_support_priority_limits": {
+            "source_type": "assumption",
+            "source_id": SUPPORT_PRIORITY_LIMITS_SOURCE_ID,
+            "policy_version": SUPPORT_PRIORITY_POLICY_VERSION,
+            "enabled": execution_mode != "offline",
+            "values": asdict(SupportPriorityLimits()),
         },
         "event_triggered_social_interactions": {
             "source_type": "assumption",

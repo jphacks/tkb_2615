@@ -158,6 +158,19 @@ def test_non_search_tape_identity_remains_compatible_with_prior_cache_keys() -> 
     assert task.cache_key("claude-opus-5") == expected
 
 
+def test_tape_snapshot_is_json_native_for_project_checkpoints() -> None:
+    from sheltersim.storage.projects import safe_document
+
+    tape = ResponseTape()
+    tape.put("key", ProviderResponse(text="{}", model_id="claude-haiku-5-5", input_tokens=1,
+                                     output_tokens=1, elapsed_ms=0.0))
+    document = tape.to_dict()
+
+    # Project storage rejects a Checkpoint whose sanitized copy differs from it.
+    assert safe_document(document) == document
+    assert ResponseTape.from_dict(document).get("key").citations == ()
+
+
 def test_replay_cache_key_changes_when_state_or_prompt_changes() -> None:
     provider = FakeProvider()
     tape = ResponseTape()

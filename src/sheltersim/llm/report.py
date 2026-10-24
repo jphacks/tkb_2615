@@ -38,6 +38,9 @@ _ASSUMPTION_LABELS = {
     "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1": (
         "Stress trigger, cooldown and daily caps bound optional LLM proposals."
     ),
+    "ASM-SUPPORT-PRIORITY-LIMITS-V1": (
+        "Stress trigger and daily cap bound optional LLM support-priority requests."
+    ),
     "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1": (
         "Typed complaint, cooperation and information-verification effects are uncalibrated."
     ),
@@ -500,6 +503,8 @@ def scenario_assumption_ids(scenario: ScenarioSpec) -> list[str]:
     if isinstance(information_config, dict) and information_config.get("enabled") is True:
         ids.append("ASM-INFORMATION-SPREAD-V1")
     ids.append("ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1")
+    if scenario.staff:
+        ids.append("ASM-SUPPORT-PRIORITY-LIMITS-V1")
     ids.append("ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1")
     if any(
         event.event_type == "facility_outage"

@@ -25,6 +25,11 @@ from sheltersim.llm.schemas import SOCIAL_ACTION_SCHEMA, social_interaction_prop
 SOCIAL_MODEL_STATE_KEY = "social_runtime_v1"
 SOCIAL_LIMITS_SOURCE_ID = "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1"
 SOCIAL_INTERACTIONS_SOURCE_ID = "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1"
+SUPPORT_PRIORITY_STATE_KEY = "support_priority_runtime_v1"
+SUPPORT_PRIORITY_LIMITS_SOURCE_ID = "ASM-SUPPORT-PRIORITY-LIMITS-V1"
+SUPPORT_PRIORITY_POLICY_VERSION = "support-priority-v2"
+# Runs recorded before the v2 trigger limits asked about every pending request.
+LEGACY_SUPPORT_PRIORITY_POLICY_VERSION = "support-priority-v1"
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,51 @@ class SocialRuntimeLimits:
             raise ValueError("social cooldown must be non-negative and delays positive")
         if self.per_agent_per_day <= 0 or self.global_per_day <= 0:
             raise ValueError("social daily request caps must be positive")
+
+
+@dataclass(frozen=True)
+class SupportPriorityLimits:
+    """Bound support-priority requests so they cannot exhaust a Run's call allowance."""
+
+    stress_threshold: float = 0.65
+    global_per_day: int = 4
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.stress_threshold <= 1.0:
+            raise ValueError("support priority stress threshold must be in 0..1")
+        if self.global_per_day <= 0:
+            raise ValueError("support priority daily cap must be positive")
+
+
+def support_priority_policy_version(router: LLMRouter) -> str:
+    """Keep histories recorded under v1 on v1 so their saved responses replay exactly."""
+    if any(
+        record.prompt_version == LEGACY_SUPPORT_PRIORITY_POLICY_VERSION
+        for record in router.history_records()
+    ):
+        return LEGACY_SUPPORT_PRIORITY_POLICY_VERSION
+    return SUPPORT_PRIORITY_POLICY_VERSION
+
+
+def support_priority_runtime(world: WorldState) -> dict[str, Any]:
+    """Return the lazily created attempt and skip counters for support-priority v2."""
+    runtime = world.model_state.setdefault(
+        SUPPORT_PRIORITY_STATE_KEY,
+        {"schema_version": 1, "attempts_by_day": {}, "skipped_by_reason": {}},
+    )
+    if (
+        not isinstance(runtime, dict)
+        or set(runtime) != {"schema_version", "attempts_by_day", "skipped_by_reason"}
+        or runtime["schema_version"] != 1
+    ):
+        raise ValueError("saved support priority runtime state is incompatible")
+    for key in ("attempts_by_day", "skipped_by_reason"):
+        if not isinstance(runtime[key], dict) or not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in runtime[key].values()
+        ):
+            raise ValueError(f"saved support priority runtime {key} must map to integers")
+    return runtime
 
 
 class EventTriggeredSocialPolicy:

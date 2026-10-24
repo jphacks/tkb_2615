@@ -173,6 +173,19 @@
       "notes": "These limits select and bound optional model proposals. They are not a claim that a stress score of 0.65 has a validated real-world interpretation."
     },
     {
+      "id": "ASM-SUPPORT-PRIORITY-LIMITS-V1",
+      "source_type": "assumption",
+      "target": "SupportPriorityLimits for optional Haiku staff-queue priority requests",
+      "model_version": "support-priority-v2",
+      "values": {
+        "stress_threshold": 0.65,
+        "global_per_day": 4
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated model/API-call budget controls",
+      "notes": "Units: stress score 0..1 and requests per simulated day. Requests below the threshold or over the daily cap keep the rule priority 0 without a provider call. The threshold reuses the social-proposal value for consistency; it is not a validated real-world urgency cutoff. support-priority-v1 histories keep their original every-request behavior for exact replay."
+    },
+    {
       "id": "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
       "source_type": "assumption",
       "target": "Typed event effects for complaint response, same-group cooperation and information verification",

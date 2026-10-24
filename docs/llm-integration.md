@@ -11,6 +11,8 @@ Anthropicへ接続するのはsrc/sheltersim/llm/anthropic_adapter.pyだけで�
 - 準備段階では合成Scenarioやprofile案を作れます。結果はpreviewであり、利用者が確認して同じhashを明示承認します。
 - event解釈では導入済みprimitiveからEffectProgramを作成できます。previewまたは適用前に、現在Branch、対象ID、導入Policy、範囲、時系列に照らして検証します。
 - runtimeでは設定済みのtriggerで少数の型付き提案を依頼する場合があります。毎tick・全員についてProviderを呼ぶ設計ではありません。
+  - 支援要請の優先度判定（support-priority-v2）は、stress閾値と1日あたりの上限の範囲でだけ問い合わせます（model-validation.md参照）。以前のv1は依頼ごとに問い合わせていたため、既定の呼出し上限を開始直後に使い切り、social提案まで届きませんでした。v1の記録を含む履歴はv1のまま再生します。
+  - v2のpromptはrationaleを80文字以内の短い句にするよう明示します。schemaの上限（160文字）を超えた応答は不正形式としてfallbackになります。
 - reviewは保存Runの証拠を要約します。結果質問は記録された事実を根拠にするread-only操作で、ScenarioやBranchを変更できません。
 
 利用可能な介入operatorはeffect-program.mdを参照してください。未導入機構が必要な要求は拒否するか、制限を示した近似として扱います。model responseはoperatorを追加したり、KPIを直接変更したり、Python/JavaScriptを実行したり、承認を迂回したりできません。
@@ -53,5 +55,7 @@ API keyはprocess環境変数から読みます。.env.exampleは設定名の参
 ## 利用記録とlive連携test
 
 CLI usage commandと/api/v1/usage/runtimeは上限付きusage receiptを表示します。Project RunにもRun単位の会計情報と操作recordが保存されます。
+
+CLIはprepareとrunのたびに新しい利用枠（cli-prepare-…、cli-run-…）を作り、その時点の設定を上限として固定します。reviewは対象Runの利用枠を引き継ぎます。以前は全CLI実行が固定の cli-default を共有していました。一度使い切ると、それ以降はAPIを呼ばずに全taskがfallbackしていました。既存の cli-default は使われなくなるだけで、記録は残ります。Run間の合計は、引き続き累積50ドルのledgerで制限されます。
 
 live連携testは標準testとは別です。ANTHROPIC_API_KEYとSHELTERSIM_ALLOW_LIVE_API_TESTS=1の両方が必要です。既定値は2 call、test budgetは0.01ドルです。実行前に実効上限を確認し、その時点でのオーナー承認を得てください。今回の移管では有料APIを呼んでいません。offline test結果はtesting.mdを参照してください。
