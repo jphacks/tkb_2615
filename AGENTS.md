@@ -1,32 +1,55 @@
-# ShelterSim基盤repositoryの開発規則
+# ShelterSim プロジェクト規則
 
-このrepositoryはsimulation coreとpipelineの作業用骨格です。製品全体の仕様はREADMEとdocsを参照し、製品側の実装と契約の整合性を保ってください。
+この規則は、すべての開発者とコーディングエージェントに適用します。機能要件と技術仕様はREADMEおよび`docs/`を参照してください。
+
+## 設計原則
+
+- Scenario、seed、モデル版、記録済みProvider応答が同じなら、シミュレーション結果も再現可能にします。
+- シミュレーションコアをHTTP、永続化、実時間時計、LLM Providerから独立させます。
+- 状態変更は型付き・上限付きにし、検証と出典情報を残します。
+- 適用可能な実測根拠が出典台帳にないモデル係数は、仮定として扱います。
+- 合意なく既存アーキテクチャやUIフレームワークを置き換えず、目的に絞って変更します。
+
+## モジュールの責務
+
+- `core`はWorldState、シミュレーション時刻、決定的乱数、tick順序、Checkpointの保存と状態検証を担います。
+- `domain`は避難所の実体と運営規則を、`events`は予定イベント・結果・型付きEffectProgramの実行を担います。
+- `policies`は行動、ニーズ、移動、心理、社会、情報のモデルを担います。Policyは型付き結果を提案・計算し、状態への適用はコントローラーが検証します。
+- `experiments`はScenario、Run、Branch、時系列、比較、評価、指標を担います。
+- `region`は外部データ接続、出典情報、施設形状、図面取込の検証を担います。
+- `llm`はProvider接続、スキーマ、予算、利用記録、応答テープ、fallbackを担います。WorldStateの所有・変更は禁止です。
+- `storage`はProject、Run、asset、Checkpointのローカル永続化を、`web`はHTTPアダプター、表示用projection、ブラウザー機能を担います。
 
 ## 不変条件
 
-- 同じScenario、seed、モデル版、記録済み入力には、同じstateとevent順を返します。
-- 時刻は整数分とし、tickのphase順を固定します。結果の決定にwall-clockやmodule-global乱数を使いません。
-- 乱数はseedと明示的な安定keyから計算し、他のAgentの実行順で変化させません。
-- read-onlyなtraceやCheckpoint取得でsimulation stateを変更しません。
-- Checkpointはschema版とstate hashを持ち、復元時に改変を検出します。
-- 入力検証、state初期化、simulation、保存を分離し、外部接続をcoreへ入れません。
-- 新しい永続fieldには版管理と復元testを追加します。
+- 時刻は整数分です。イベント順と同順位の解決順は、辞書順序や実時間に左右されない安定した規則に従います。
+- WorldState、予定イベントキュー、乱数状態、ID採番状態、モデル状態、記録済みProvider応答から、対応するCheckpointを復元できるようにします。
+- Branchごとに変更可能な状態を分離します。却下された操作で元Branchや兄弟Branchを変えてはいけません。
+- ログ表示やread-only参照はWorldStateを変えず、乱数も消費しません。過去時点の参照でProviderを暗黙に呼び出してはいけません。
+- 永続データに項目を追加する場合は、スキーマ版、互換処理、Checkpoint・再生テストを更新します。既存データを暗黙に読み替えません。
+- Scenario、モデル、イベント、判断、外部出典のprovenanceを、Run成果物と対応する参照画面に残します。
+- LLM出力は信頼しない入力です。厳密なスキーマと意味検証を通し、ScenarioやBranchの状態を変える前に利用者の明示承認を求めます。生成コードを実行してはいけません。
+- 個人記録、認証情報、非公開の生プロンプト、未確認の位置データをProviderへ送ったり、Gitに登録したりしません。
 
-## 責務
+## モデル・データの変更
 
-- core/clock.py: 整数分の時計。
-- core/rng.py: keyed deterministic RNG。
-- core/world.py: 最小state契約。製品の避難所domain modelではありません。
-- core/engine.py: tick phaseの順序と時計の所有。
-- core/checkpoint.py: 最小Checkpointの生成、hash検証、復元。
-- core/pipeline.py: validate、initialize、execute、checkpoint hookを接続。
+- 新しい係数には、根拠、仮定、単位、上限、適用範囲を記録し、`fixtures/source-manifest.json`と関連モデル文書を更新します。
+- 実測、文献、聞き取り、合成入力、仮定を区別します。課題の背景を示す出典を、数値係数の校正根拠として扱いません。
+- 表示KPIを直接変更して望む結果を作ってはいけません。効果は導入済みのドメイン機構と記録イベントを通して生じる必要があります。
+- スキーマとモデル版は交換可能な形にします。古いCheckpointを保持するか、テスト付きの明示的な移行を追加します。
+- 根拠のない入力から実際の建物形状、地域の気象適用性、医療結果、避難者同士の関係を推測しません。
 
-製品固有のPolicy、facility、Agent、event handler、storage、HTTP、LLMをこの骨格へ不用意に持ち込まないでください。契約変更が必要なら本体との互換性を確認し、該当文書とtestを更新します。
+## テストと文書
 
-## テストとチーム作業
+- 動作変更にはofflineテストを追加・更新し、通常の実行は`SHELTERSIM_LLM_MODE=offline`にします。
+- 標準pytestとCIから有料APIを呼びません。ライブAPIテストには、別途明示的な環境ゲートと、その時点で承認された予算が必要です。
+- 実装中に関連テストを実行し、レビュー依頼前には該当範囲のofflineテストを実行します。実施していない確認を成功したと報告してはいけません。
+- 動作や公開契約を変えたら、READMEまたは関連する設計・API・モデル・LLM・デモ・テスト文書を同じ変更で更新します。
+- テストやofflineデモで参照する合成fixtureは保持します。生成Run、認証情報、cache、PC固有ファイルはGitに登録しません。
 
-- testはofflineで実行し、外部APIや個人データを使いません。
-- 動作変更には回帰testを追加します。実行していないcheckをpassと報告しません。
-- feature branchとPull Requestで変更を共有し、mainへ直接実装commitをpushしません。
-- schema、Checkpoint、pipeline境界の変更は、該当箇所に詳しい担当者のレビューを受けます。
-- secret、実在避難者記録、ローカルRun成果物をGitへ登録しません。
+## チーム開発とコーディングエージェント
+
+- featureブランチで開発し、`main`へはPull Requestを通して統合します。`main`へ直接実装commitをpushしません。
+- 変更はレビュー可能な範囲に絞ります。状態・スキーマ、Provider境界、永続化、公開HTTP契約の変更は、その領域に詳しいチームメイトのレビューを受けます。
+- エージェントは関連コードとテストを先に確認し、この文書に従い、実行した確認を明記します。利用者が所有する未commit変更を上書きしてはいけません。
+- 通常の実装でリポジトリ設定、branch protection、CIトリガー、外部サービスを変更しません。依頼で明示された場合に限ります。

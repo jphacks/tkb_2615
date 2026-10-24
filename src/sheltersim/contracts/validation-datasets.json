@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {
+      "id": "SYNTHETIC-STRESS-BOUNDS-V1",
+      "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+      "evidence_grade": "C",
+      "classification": "synthetic_internal_invariant",
+      "metric": "stress_mean",
+      "unit": "normalized_0_1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "applicability": {},
+      "limits": "Software range check only. Contains no observed shelter outcomes or external validity evidence."
+    }
+  ],
+  "external_observations": [],
+  "limits": "No matched empirical outcome dataset is currently registered. Literature supports concepts and operational context, not fitted psychological coefficients."
+}

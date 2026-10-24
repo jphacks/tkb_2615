@@ -1,0 +1,11 @@
+{
+  "branch_id": "plan-d86b41a4101e122b5fefd45b9a6523f1",
+  "fork_at_minute": 5160,
+  "parent_branch_id": "baseline",
+  "scenario_id": "baseline_100_7d",
+  "schema_version": 1,
+  "seed": 2026,
+  "source_branch_id": "baseline",
+  "source_checkpoint_id": "baseline-cp-0002",
+  "state_hash": "83c7cf5a28389da42adcd984d2ddcf43f1fa0a3a4dfb964a988c34e27b82f3e5"
+}

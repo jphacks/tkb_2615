@@ -1,0 +1,18 @@
+# Zone環境と需要の変更
+
+zone_environment設定をScenarioのmodel_configsにopt-inすると、EffectProgramで次の上限付きoperatorを利用できます。
+
+- set_ambient_noise: Zoneごとに正規化した0–1のproxyを時間指定で設定します。
+- modify_demand_rate: Zone内の対応actionに対する相対選択確率を変えます。rest/sleepの次回decision間隔も任意で倍率を設定できます。
+
+設定はstrictでimmutableです。Scenarioには正準値を保存し、既定の仮定sourceはASM-H19-ZONE-ENVIRONMENT-V1です。noise_rest_efficiency_loss係数は0–0.9（既定0.5）、probability倍率の範囲、rest decision間隔の上下限、Zoneごとのmodifier数上限16を設定します。設定を省けばPolicyは無効になり、既定WorldStateのserializationと動作は変わりません。
+
+## 因果経路と限界
+
+Zone内で有効な正規化noiseの最大値をn、設定損失率をlとすると、休息・睡眠中の疲労回復倍率はmax(0.1, 1 - n*l)です。既存心理Policyによる回復だけをZone内の休息・睡眠中Agentに対して調整します。noiseはstressを増やさず、KPIを直接変更せず、子供・ペット・工事・医療・音響状態を新たに作りません。その後の行動差は既存ニーズに応じたaction選択を通じて発生します。
+
+対象actionの確率倍率は有効modifierを乗算し、Scenario設定範囲内にclampしてsoftmax選択weightに適用します。modifierは安定IDでsortします。duration倍率はrest/sleepのみ0.5–2.0にclampし、Policyのdecision間隔を設定済みminute範囲内で変更します。物理的な睡眠やサービス時間を変えるという主張ではありません。fetch_waterとcollect_mealにはH02 resource-service modelの導入も必要です。
+
+各operatorは既存Zoneを対象とし、Scenario終了前の期限が必要です。開始と期限は安定modifier ID、source/仮定provenance、開始と期限のcausal linkを持つ型付きeventです。false guardなら有効化も期限処理も抑止し、active stateを残しません。Checkpointはactive modifierと未処理期限を保存します。Zoneごとに重複できるmodifierは最大16件で、上限超過planはBranch変更前に拒否します。
+
+noise levelはデシベルではなく、probability倍率は校正済み行動率でもなく、decision intervalは実測睡眠時間でもありません。施設固有需要、照明、温度、移動費用、連続群集物理、医療、個人心理予測は対象外です。traceには係数を仮定として記録し、modifier event IDを保持します。offline compiler fixtureは異なる文章が同じ導入operatorに対応できることを示すだけで、live Opusの精度は測定しません。

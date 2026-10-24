@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "description": "Offline recorded Opus-shaped compiler responses for H19 environmental stories. The fixture tests schema/domain acceptance; it does not call a live model or claim model accuracy.",
+  "cases": [
+    {
+      "id": "child-crying-at-night",
+      "story": "夜間に子どもが泣くため、寝室の騒音が上がり休息行動を増やす。",
+      "expected_operators": ["set_ambient_noise", "modify_demand_rate"],
+      "compiler_response": {
+        "status": "compiled",
+        "support_mode": "composed",
+        "mechanism_summary": "騒音水準と睡眠行動の相対選択確率をZone単位で調整します。",
+        "effects": [
+          {
+            "op": "set_ambient_noise",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {"level": 0.8}
+          },
+          {
+            "op": "modify_demand_rate",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {
+              "action": "sleep",
+              "probability_multiplier": 1.3,
+              "duration_multiplier": 1.2
+            }
+          }
+        ],
+        "assumptions": [],
+        "limitations": ["係数は未校正の仮定です。子どもの状態や医学的影響は計算しません。"],
+        "questions": [],
+        "choices": []
+      }
+    },
+    {
+      "id": "noisy-pet",
+      "story": "ペットが騒いで居住区がうるさくなり、睡眠を取りにくくなる。",
+      "expected_operators": ["set_ambient_noise", "modify_demand_rate"],
+      "compiler_response": {
+        "status": "compiled",
+        "support_mode": "composed",
+        "mechanism_summary": "騒音水準と睡眠行動の相対選択確率をZone単位で調整します。",
+        "effects": [
+          {
+            "op": "set_ambient_noise",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {"level": 0.8}
+          },
+          {
+            "op": "modify_demand_rate",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {
+              "action": "sleep",
+              "probability_multiplier": 1.3,
+              "duration_multiplier": 1.2
+            }
+          }
+        ],
+        "assumptions": [],
+        "limitations": ["係数は未校正の仮定です。動物の行動や医学的影響は計算しません。"],
+        "questions": [],
+        "choices": []
+      }
+    },
+    {
+      "id": "night-construction",
+      "story": "夜間工事の騒音で寝室の休息効率が落ち、睡眠需要が変わる。",
+      "expected_operators": ["set_ambient_noise", "modify_demand_rate"],
+      "compiler_response": {
+        "status": "compiled",
+        "support_mode": "composed",
+        "mechanism_summary": "騒音水準と睡眠行動の相対選択確率をZone単位で調整します。",
+        "effects": [
+          {
+            "op": "set_ambient_noise",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {"level": 0.8}
+          },
+          {
+            "op": "modify_demand_rate",
+            "target_kind": "zone",
+            "target_id": "sleeping",
+            "start_minute": 1,
+            "end_minute": 15,
+            "parameters": {
+              "action": "sleep",
+              "probability_multiplier": 1.3,
+              "duration_multiplier": 1.2
+            }
+          }
+        ],
+        "assumptions": [],
+        "limitations": ["係数は未校正の仮定です。工事の物理的な音響影響は計算しません。"],
+        "questions": [],
+        "choices": []
+      }
+    }
+  ]
+}

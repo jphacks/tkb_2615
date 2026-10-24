@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "evaluation_protocol": "h20-held-out-recorded-v1",
+  "description": "Held-out Japanese narratives with fixed offline compiler responses. These fixtures test the installed primitive boundary and domain validation; they are not live Opus samples or an accuracy estimate.",
+  "cases": [
+    {
+      "id": "physical-toilet-outage",
+      "category": "physical",
+      "story": "Day 3の12時から15時まで、toilet-1を1基使えなくしてください。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["facility_outage"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存トイレの稼働ユニットを指定時間だけ減らします。", "effects": [{"op": "facility_outage", "target_kind": "facility", "target_id": "toilet_1", "start_minute": 3600, "end_minute": 3780, "parameters": {"units": 1}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "metric", "field": "toilet_working_units", "before": 4, "after": 3},
+      "kpi_delta": {"toilet_working_units": -1, "stress_mean": 0}
+    },
+    {
+      "id": "physical-add-toilet",
+      "category": "physical",
+      "story": "Day 4の朝、toilet zoneに仮設トイレを1基追加します。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["add_toilet"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存のZoneに単位トイレ設備を追加します。", "effects": [{"op": "add_toilet", "target_kind": "zone", "target_id": "toilet", "start_minute": 4320, "parameters": {"count": 1}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "metric", "field": "toilet_working_units", "before": 4, "after": 5},
+      "kpi_delta": {"toilet_working_units": 1, "stress_mean": 0}
+    },
+    {
+      "id": "physical-composed-outage-response",
+      "category": "physical",
+      "story": "Day 5の8時、toilet_1の故障と同時に支援スタッフを1人増やす比較案を作ってください。",
+      "expected": {"status": "compiled", "support_mode": "composed", "operators": ["facility_outage", "add_staff"]},
+      "recorded_response": {"status": "compiled", "support_mode": "composed", "mechanism_summary": "設備停止と通常の支援スタッフ追加を同じ時刻に適用します。", "effects": [{"op": "facility_outage", "target_kind": "facility", "target_id": "toilet_1", "start_minute": 5760, "end_minute": 5880, "parameters": {"units": 1}, "assumption_indexes": []}, {"op": "add_staff", "target_kind": "zone", "target_id": "toilet", "start_minute": 5760, "parameters": {"count": 1}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "metric", "field": "toilet_working_units", "before": 4, "after": 3},
+      "kpi_delta": {"toilet_working_units": -1, "stress_mean": 0}
+    },
+    {
+      "id": "resource-water-delivery",
+      "category": "resource",
+      "story": "Day 2の8時に、倉庫へ飲料水を200リットル搬入してください。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["deliver_resource"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存のResourceLedgerに水量を1回の搬入として記録します。", "effects": [{"op": "deliver_resource", "target_kind": "resource", "target_id": "water_ml", "start_minute": 1920, "parameters": {"warehouse_id": "warehouse-h20", "resource_id": "water_ml", "quantity": 200000}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "resource_metric", "field": "water_ml_remaining", "before": 1000, "after": 201000},
+      "kpi_delta": {"water_ml_delivered": 200000, "water_ml_remaining": 200000, "stress_mean": 0}
+    },
+    {
+      "id": "resource-delay-shipment",
+      "category": "resource",
+      "story": "Day 6の0時に、Day 7の6時着予定の給水便をDay 8の0時着に遅らせてください。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["modify_supply_schedule"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存の未着給水便の予定時刻だけを更新します。", "effects": [{"op": "modify_supply_schedule", "target_kind": "shipment", "target_id": "shipment-h20", "start_minute": 7200, "parameters": {"shipment_id": "shipment-h20", "to_minute": 10080}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "shipment_due_minute", "target": "shipment-h20", "before": 9000, "after": 10080},
+      "kpi_delta": {"water_ml_remaining": 0, "stress_mean": 0}
+    },
+    {
+      "id": "resource-water-station-outage",
+      "category": "resource",
+      "story": "Day 6の0時から3時まで、water-station-h20の給水を止めてください。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["water_outage"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存の給水停止・復旧ハンドラーを施設に適用します。", "effects": [{"op": "water_outage", "target_kind": "facility", "target_id": "water-station-h20", "start_minute": 7200, "end_minute": 7380, "parameters": {"outage": true}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "water_service_blocked", "target": "water-station-h20", "before": false, "after": true},
+      "kpi_delta": {"water_ml_remaining": 0, "stress_mean": 0}
+    },
+    {
+      "id": "environment-ventilation-noise",
+      "category": "environment",
+      "story": "Day 6の4時から10時、換気設備の音がsleeping zoneで上がるケースを近似してください。",
+      "expected": {"status": "compiled", "support_mode": "approximate", "operators": ["set_ambient_noise"]},
+      "recorded_response": {"status": "compiled", "support_mode": "approximate", "mechanism_summary": "sleeping Zoneの正規化騒音proxyが休息中の疲労回復率を下げる近似です。", "effects": [{"op": "set_ambient_noise", "target_kind": "zone", "target_id": "sleeping", "start_minute": 7440, "end_minute": 7800, "parameters": {"level": 0.7}, "assumption_indexes": [0]}], "assumptions": [{"description": "環境音は正規化proxyで、既存の休息疲労回復だけに作用します。", "units": "normalized_noise_0_1", "value": "0.7"}], "limitations": ["デシベル、音響伝播、医学的睡眠影響は計算しません。"], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "zone_noise_recovery", "target": "sleeping", "before": 1.0, "after": 0.65},
+      "kpi_delta": {"toilet_working_units": 0, "stress_mean": 0}
+    },
+    {
+      "id": "environment-sleep-demand",
+      "category": "environment",
+      "story": "夜勤の翌朝、Day 6の睡眠行動を4時間だけ選びやすくする仮説を見たいです。",
+      "expected": {"status": "compiled", "support_mode": "approximate", "operators": ["modify_demand_rate"]},
+      "recorded_response": {"status": "compiled", "support_mode": "approximate", "mechanism_summary": "sleeping Zoneでsleepの相対選択率と次の意思決定間隔を変える仮説proxyです。", "effects": [{"op": "modify_demand_rate", "target_kind": "zone", "target_id": "sleeping", "start_minute": 7200, "end_minute": 7440, "parameters": {"action": "sleep", "probability_multiplier": 1.3, "duration_multiplier": 1.2}, "assumption_indexes": [0]}], "assumptions": [{"description": "sleep選択と意思決定間隔を調整する未校正の相対倍率です。", "units": "relative_action_rate", "value": "1.3 / 1.2"}], "limitations": ["生理的睡眠時間、睡眠の質、健康状態は予測しません。"], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "zone_demand_probability", "target": "sleeping", "action": "sleep", "before": null, "after": 1.3},
+      "kpi_delta": {"toilet_working_units": 0, "stress_mean": 0}
+    },
+    {
+      "id": "environment-temperature-unsupported",
+      "category": "environment",
+      "story": "Day 6に体育館を5度まで冷やし、低体温症の発生数を予測してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "温度と低体温症の因果モデルがありません。", "effects": [], "assumptions": [], "limitations": ["温度制御と医療・低体温症モデルが未実装のため、発生数や予後は計算できません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "crowd-water-queue-proxy",
+      "category": "crowd",
+      "story": "水場に人が集中する場面を、Day 5の14時から16時に既存避難者の給水行動が増える近似で見てください。",
+      "expected": {"status": "compiled", "support_mode": "approximate", "operators": ["modify_demand_rate"]},
+      "recorded_response": {"status": "compiled", "support_mode": "approximate", "mechanism_summary": "toilet Zone内で既存Agentのfetch_water選択率を調整する限定proxyです。", "effects": [{"op": "modify_demand_rate", "target_kind": "zone", "target_id": "toilet", "start_minute": 6600, "end_minute": 6720, "parameters": {"action": "fetch_water", "probability_multiplier": 1.25}, "assumption_indexes": [0]}], "assumptions": [{"description": "給水行動の相対選択率を上げる未校正の倍率です。", "units": "relative_action_rate", "value": "1.25"}], "limitations": ["新しい来場者、連続的な人流、群衆圧力や移動時間は計算しません。"], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "zone_demand_probability", "target": "toilet", "action": "fetch_water", "before": null, "after": 1.25},
+      "kpi_delta": {"toilet_working_units": 0, "water_ml_remaining": 0, "stress_mean": 0}
+    },
+    {
+      "id": "crowd-crush-unsupported",
+      "category": "crowd",
+      "story": "出口が詰まり、避難者が押し合って転倒する人数を計算してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "連続人流と転倒リスクの作用が実装されていません。", "effects": [], "assumptions": [], "limitations": ["群衆圧力や負傷リスクを計算するモデルはありません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "crowd-external-arrivals-unsupported",
+      "category": "crowd",
+      "story": "人気配信者の訪問をきっかけに外部から新しい来場者が波状に集まる様子を予測してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "外部来場者の生成・誘引・連続移動モデルがありません。", "effects": [], "assumptions": [], "limitations": ["既存AgentのZone内行動proxyは外部来場者数や群衆形成を表しません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "behavior-staff-absence",
+      "category": "behavior",
+      "story": "Day 3の朝からDay 4までS01が勤務できない条件にしてください。",
+      "expected": {"status": "compiled", "support_mode": "native", "operators": ["set_staff_availability"]},
+      "recorded_response": {"status": "compiled", "support_mode": "native", "mechanism_summary": "既存のスタッフ欠勤・復帰ライフサイクルを使います。", "effects": [{"op": "set_staff_availability", "target_kind": "staff", "target_id": "S01", "start_minute": 2880, "end_minute": 4320, "parameters": {"available": false}, "assumption_indexes": []}], "assumptions": [], "limitations": [], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "staff_available", "target": "S01", "before": true, "after": false},
+      "kpi_delta": {"staff_load_ratio": 0, "stress_mean": 0}
+    },
+    {
+      "id": "behavior-rest-demand-proxy",
+      "category": "behavior",
+      "story": "Day 5の23時、館内放送後に休息行動を長めに取る人が増える仮説を比較してください。",
+      "expected": {"status": "compiled", "support_mode": "approximate", "operators": ["modify_demand_rate"]},
+      "recorded_response": {"status": "compiled", "support_mode": "approximate", "mechanism_summary": "sleeping Zoneでrestの選択率と意思決定間隔を変える限定proxyです。", "effects": [{"op": "modify_demand_rate", "target_kind": "zone", "target_id": "sleeping", "start_minute": 7140, "end_minute": 7200, "parameters": {"action": "rest", "probability_multiplier": 1.2, "duration_multiplier": 1.2}, "assumption_indexes": [0]}], "assumptions": [{"description": "rest選択率と決定間隔を変える未校正の相対倍率です。", "units": "relative_action_rate", "value": "1.2"}], "limitations": ["実際の睡眠時間、放送の反応、健康効果は予測しません。"], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "zone_demand_probability", "target": "sleeping", "action": "rest", "before": null, "after": 1.2},
+      "kpi_delta": {"toilet_working_units": 0, "stress_mean": 0}
+    },
+    {
+      "id": "behavior-line-cutting-unsupported",
+      "category": "behavior",
+      "story": "Day 4の食事列で割り込みが起きるので、誰が先に配給されるか予測してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "列の優先順位や割り込み行動の機構がありません。", "effects": [], "assumptions": [], "limitations": ["配給列の公平性と個別の割り込み判断はモデル化されていません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "social-rumor-unsupported",
+      "category": "social",
+      "story": "掲示された断水予告を信じた人が、別のZoneの家族にも広める影響を見せてください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "このCompiler contextには情報接触・信念・伝播primitiveがありません。", "effects": [], "assumptions": [], "limitations": ["噂の発生、信念、家族間の情報伝播を計算できません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "social-meal-sharing-unsupported",
+      "category": "social",
+      "story": "近所の人どうしで食事を分け合い、関係が深まる経過を比較してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "食事共有・協力関係の社会作用が実装されていません。", "effects": [], "assumptions": [], "limitations": ["共同配給や社会関係の変化を推定しません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "social-complaint-support-proxy",
+      "category": "social",
+      "story": "トイレ待ちが長いとスタッフへの問い合わせが増える仮説を短時間だけ近似してください。",
+      "expected": {"status": "compiled", "support_mode": "approximate", "operators": ["modify_demand_rate"]},
+      "recorded_response": {"status": "compiled", "support_mode": "approximate", "mechanism_summary": "toilet Zone内の既存Agentによるseek_help選択率を変える運用proxyです。", "effects": [{"op": "modify_demand_rate", "target_kind": "zone", "target_id": "toilet", "start_minute": 5000, "end_minute": 5060, "parameters": {"action": "seek_help", "probability_multiplier": 1.4}, "assumption_indexes": [0]}], "assumptions": [{"description": "問い合わせ行動の相対選択率を変える未校正の倍率です。", "units": "relative_action_rate", "value": "1.4"}], "limitations": ["実際の苦情、対話、スタッフ応答件数は計算しません。"], "questions": [], "choices": []},
+      "runtime_observation": {"kind": "zone_demand_probability", "target": "toilet", "action": "seek_help", "before": null, "after": 1.4},
+      "kpi_delta": {"toilet_working_units": 0, "staff_load_ratio": 0, "stress_mean": 0}
+    },
+    {
+      "id": "unknown-medical-outcome",
+      "category": "unknown",
+      "story": "住民が倒れました。脱水症か診断し、治療後の予後を数字で出してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "臨床診断・治療・予後モデルはありません。", "effects": [], "assumptions": [], "limitations": ["医療診断や個人の健康予測は行えません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "unknown-stock-ambiguity",
+      "category": "unknown",
+      "story": "Day 4に誰かが備蓄を持ち出した。どうすればいいですか。",
+      "expected": {"status": "clarification_required", "support_mode": "clarification_required", "operators": []},
+      "recorded_response": {"status": "clarification_required", "support_mode": "clarification_required", "mechanism_summary": "対象資源と、観測された減少か予定変更かが不明です。", "effects": [], "assumptions": [], "limitations": [], "questions": ["減少した資源と数量を確定して在庫損失として記録しますか、それとも搬入予定の遅延を表しますか。"], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    },
+    {
+      "id": "unknown-gravity-unsupported",
+      "category": "unknown",
+      "story": "体育館内だけ重力が変わり建物が浮き上がる状況を計算してください。",
+      "expected": {"status": "not_simulatable", "support_mode": "not_simulatable", "operators": []},
+      "recorded_response": {"status": "not_simulatable", "support_mode": "not_simulatable", "mechanism_summary": "重力変化や建物浮上のモデルはありません。", "effects": [], "assumptions": [], "limitations": ["未実装の物理現象を数値化することはできません。"], "questions": [], "choices": []},
+      "runtime_observation": null,
+      "kpi_delta": {}
+    }
+  ]
+}
