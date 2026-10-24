@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from sheltersim.core.rng import KeyedRandom
+from sheltersim.domain.information import upgrade_information_runtime_state
 from sheltersim.domain.models import (
     AgentInformationState,
     InformationBeliefStatus,
@@ -113,6 +114,7 @@ class InformationSpreadPolicy:
         if not self.config.enabled:
             return InformationSpreadResult(deepcopy(dict(runtime_state)), (), ())
         state = deepcopy(dict(runtime_state))
+        upgrade_information_runtime_state(state)
         messages = {
             message_id: TypedMessage.from_dict(raw) for message_id, raw in state["messages"].items()
         }
@@ -381,6 +383,9 @@ class EvidenceAwareInformationPolicy(InformationSpreadPolicy):
                         belief_strength=belief.belief_strength, share_propensity=0.0,
                         correction_exposed=belief.correction_exposed,
                         correction_accepted=belief.correction_accepted,
+                        ever_misbelieved=belief.ever_misbelieved,
+                        ever_forgotten=True,
+                        last_correction_accepted=belief.last_correction_accepted,
                     )
                 else:
                     updated = AgentInformationState(

@@ -339,6 +339,185 @@ def test_false_rumor_is_rejected_by_a_causal_correction(tmp_path: Path) -> None:
     )
 
 
+def test_false_rumor_flows_through_integrated_psychology_trace(tmp_path: Path) -> None:
+    document = _scenario(duration=3, correction=False, truth_status="false").model_dump(mode="json")
+    document["model_configs"]["psychology"] = {
+        "natural_recovery_rate_per_minute": 0.01,
+        "baseline_distress_by_agent": {},
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+    }
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "mean-reverting-life-state-v1",
+        "information": "evidence-aware-rumor-v1",
+    }
+    document["model_configs"]["information_spread"].update(
+        rumor_belief_probability=1.0,
+        rumor_trust_sensitivity=0.0,
+        rumor_source_sensitivity=0.0,
+    )
+    scenario = ScenarioSpec.model_validate(document)
+    run_dir = tmp_path / "rumor-psychology-integration"
+
+    run_scenario(scenario, run_dir, trace_level=TraceLevel.FULL)
+
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "psychology_contributions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    origin_trace = next(
+        row["agents"][0]
+        for row in rows
+        if row["minute_index"] == 0 and row["agents"][0]["agent_id"] == "A001"
+    )
+    assert origin_trace["information_belief_effect"]["active_false_claim_pressure"] > 0.0
+    assert origin_trace["stress"]["components"]["information_belief_via_uncertainty"] > 0.0
+    assert (
+        origin_trace["information_belief_effect"]["source_records"][0]["origin_event_id"]
+        == "rumor-event"
+    )
+
+
+def test_accepted_correction_reduces_integrated_false_belief_pressure(
+    tmp_path: Path,
+) -> None:
+    traced_scenarios: dict[str, dict[int, dict[str, object]]] = {}
+    corrected_world = None
+    for name, correction in (("rumor-only", False), ("rumor-corrected", True)):
+        document = _scenario(
+            duration=5,
+            correction=correction,
+            truth_status="false",
+            config=_information_config(
+                max_contacts_per_agent=0,
+                rumor_belief_probability=1.0,
+                rumor_trust_sensitivity=0.0,
+                rumor_source_sensitivity=0.0,
+                correction_acceptance_probability=0.95,
+                correction_trust_sensitivity=0.0,
+                correction_source_sensitivity=0.0,
+            ),
+        ).model_dump(mode="json")
+        document["model_configs"]["psychology"] = {
+            "natural_recovery_rate_per_minute": 0.01,
+            "baseline_distress_by_agent": {},
+            "chronic_retention": 0.9,
+            "chronic_acute_weight": 0.08,
+            "chronic_high_distress_weight": 0.02,
+            "high_distress_threshold": 0.7,
+        }
+        document["model_configs"]["policy_registry"] = {
+            "schema_version": 1,
+            "psychology": "mean-reverting-life-state-v1",
+            "information": "evidence-aware-rumor-v1",
+        }
+        scenario = ScenarioSpec.model_validate(document)
+        run_dir = tmp_path / name
+        world = run_scenario(scenario, run_dir, trace_level=TraceLevel.FULL)
+        rows = [
+            json.loads(line)
+            for line in (run_dir / "psychology_contributions.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        traced_scenarios[name] = {
+            row["minute_index"]: next(
+                agent for agent in row["agents"] if agent["agent_id"] == "A001"
+            )
+            for row in rows
+        }
+        if correction:
+            corrected_world = world
+
+    assert corrected_world is not None
+    belief = corrected_world.model_state[INFORMATION_SPREAD_STATE_KEY]["beliefs"]["A001"]
+    assert belief["claim-water-1"]["last_correction_accepted"] is True
+    initial = traced_scenarios["rumor-corrected"][0]
+    after_correction = traced_scenarios["rumor-corrected"][3]
+    control = traced_scenarios["rumor-only"][3]
+    assert initial["information_belief_effect"]["active_false_claim_pressure"] > 0.0
+    assert initial["stress"]["components"]["information_belief_via_uncertainty"] > 0.0
+    assert "information_belief_effect" not in after_correction
+    assert after_correction["stress"]["after"] < control["stress"]["after"]
+
+
+def test_refused_correction_does_not_relieve_integrated_uncertainty(
+    tmp_path: Path,
+) -> None:
+    outcomes: dict[str, dict[int, dict[str, object]]] = {}
+    refused_world = None
+    for name, correction in (("rumor-only", False), ("rumor-refused", True)):
+        document = _scenario(
+            duration=5,
+            correction=correction,
+            truth_status="false",
+            config=_information_config(
+                max_contacts_per_agent=0,
+                rumor_belief_probability=1.0,
+                rumor_trust_sensitivity=0.0,
+                rumor_source_sensitivity=0.0,
+                correction_acceptance_probability=0.0,
+                correction_trust_sensitivity=0.0,
+                correction_source_sensitivity=0.0,
+            ),
+        ).model_dump(mode="json")
+        document["model_configs"]["psychology"] = {
+            "natural_recovery_rate_per_minute": 0.01,
+            "baseline_distress_by_agent": {},
+            "chronic_retention": 0.9,
+            "chronic_acute_weight": 0.08,
+            "chronic_high_distress_weight": 0.02,
+            "high_distress_threshold": 0.7,
+        }
+        document["model_configs"]["policy_registry"] = {
+            "schema_version": 1,
+            "psychology": "mean-reverting-life-state-v1",
+            "information": "evidence-aware-rumor-v1",
+        }
+        world = run_scenario(
+            ScenarioSpec.model_validate(document),
+            tmp_path / name,
+            trace_level=TraceLevel.FULL,
+        )
+        traces = [
+            json.loads(line)
+            for line in (tmp_path / name / "psychology_contributions.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        outcomes[name] = {
+            row["minute_index"]: next(
+                agent for agent in row["agents"] if agent["agent_id"] == "A001"
+            )
+            for row in traces
+        }
+        if correction:
+            refused_world = world
+
+    assert refused_world is not None
+    belief = refused_world.model_state[INFORMATION_SPREAD_STATE_KEY]["beliefs"]["A001"][
+        "claim-water-1"
+    ]
+    assert belief["correction_exposed"] is True
+    assert belief["correction_accepted"] is False
+    assert belief["last_correction_accepted"] is False
+    correction_history = [
+        item
+        for item in refused_world.model_state["body_state_v1"]["history"]
+        if item["kind"] == "information_correction"
+    ]
+    assert correction_history == []
+    assert (
+        outcomes["rumor-refused"][3]["stress"]["after"]
+        == pytest.approx(outcomes["rumor-only"][3]["stress"]["after"])
+    )
+
+
 def test_evidence_aware_correction_tracks_exposure_and_probabilistic_acceptance(
     tmp_path: Path,
 ) -> None:
@@ -381,3 +560,64 @@ def test_evidence_aware_correction_tracks_exposure_and_probabilistic_acceptance(
     assert any(record["belief"] == "unknown" for record in records)
     assert any(record["share_propensity"] == 0.0 for record in records)
     assert first_state == second_state
+
+
+def test_cumulative_correction_acceptance_does_not_reapply_a_later_refused_event(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(
+        duration=7,
+        profile_count=2,
+        truth_status="false",
+        config=_information_config(
+            correction_acceptance_probability=0.5,
+            correction_trust_sensitivity=0.0,
+            correction_source_sensitivity=0.5,
+            correction_source_reliability_by_id={
+                "staff-notice-source": 1.0,
+                "untrusted-staff-source": 0.0,
+            },
+        ),
+    )
+    document = scenario.model_dump(mode="json")
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "life-state-feedback-v1",
+        "information": "evidence-aware-rumor-v1",
+    }
+    document["scheduled_events"].append(
+        {
+            "id": "correction-followup",
+            "kind": "exogenous",
+            "due_minute": 4,
+            "priority": 0,
+            "sequence": 12,
+            "event_type": "information_correction",
+            "payload": {
+                "message_id": "claim-water-1",
+                "zone_id": "sleeping",
+                "belief": "rejected",
+            },
+            "source_id": "untrusted-staff-source",
+            "causation_id": "rumor-event",
+        }
+    )
+    scenario = ScenarioSpec.model_validate(document)
+    world = run_scenario(scenario, tmp_path / "correction-outcomes", trace_level=TraceLevel.OFF)
+
+    records = world.model_state[INFORMATION_SPREAD_STATE_KEY]["beliefs"]
+    assert all(
+        records[agent_id]["claim-water-1"]["correction_accepted"]
+        for agent_id in ("A001", "A002")
+    )
+    assert all(
+        not records[agent_id]["claim-water-1"]["last_correction_accepted"]
+        for agent_id in ("A001", "A002")
+    )
+    correction_history = [
+        item
+        for item in world.model_state["body_state_v1"]["history"]
+        if item["kind"] == "information_correction"
+    ]
+    assert correction_history
+    assert all(item["event_id"] == "correction-event" for item in correction_history)

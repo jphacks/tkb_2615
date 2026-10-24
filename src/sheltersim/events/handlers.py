@@ -18,7 +18,10 @@ from sheltersim.domain.care_receipts import (
     make_staff_support_continuity_record,
 )
 from sheltersim.domain.facilities import ToiletServiceManager, complete_toilet_service
-from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
+from sheltersim.domain.information import (
+    INFORMATION_SPREAD_STATE_KEY,
+    upgrade_information_runtime_state,
+)
 from sheltersim.domain.infrastructure import (
     INFRASTRUCTURE_STATE_KEY,
     ScenarioInfrastructureSpec,
@@ -363,6 +366,7 @@ class InformationRumorHandler:
             last_contact=event.due_minute,
             last_event_id=event.event_id,
             belief_strength=belief_strength,
+            ever_misbelieved=_claim_is_misbelieved(message.truth_status, belief_strength),
         ).to_dict()
         state["query_pressure"][origin_agent_id] = min(
             1.0,
@@ -490,6 +494,18 @@ class InformationCorrectionHandler:
                 correction_accepted=accepted or bool(
                     previous_state is not None and previous_state.correction_accepted
                 ),
+                last_correction_accepted=accepted,
+                ever_misbelieved=(
+                    bool(previous_state and previous_state.ever_misbelieved)
+                    or (
+                        not accepted
+                        and _claim_is_misbelieved(
+                            message.truth_status,
+                            previous_state.belief_strength if previous_state else 0.5,
+                        )
+                    )
+                ),
+                ever_forgotten=bool(previous_state and previous_state.ever_forgotten),
             ).to_dict()
             if accepted:
                 state["query_pressure"][agent_id] = max(
@@ -679,6 +695,19 @@ class InformationContactHandler:
                 and belief in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
                 or bool(previous_state and previous_state.correction_accepted)
             ),
+            last_correction_accepted=(
+                accepted
+                if belief in (
+                    InformationBeliefStatus.VERIFIED,
+                    InformationBeliefStatus.REJECTED,
+                )
+                else bool(previous_state and previous_state.last_correction_accepted)
+            ),
+            ever_misbelieved=(
+                bool(previous_state and previous_state.ever_misbelieved)
+                or _claim_is_misbelieved(message.truth_status, belief_strength)
+            ),
+            ever_forgotten=bool(previous_state and previous_state.ever_forgotten),
         ).to_dict()
         if belief is InformationBeliefStatus.HEARD:
             state["query_pressure"][recipient_id] = min(
@@ -702,7 +731,20 @@ def _information_runtime_state(world: WorldState) -> dict[str, Any]:
     state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
     if not config.enabled or not isinstance(state, dict):
         raise EventApplicationError("information spread is not enabled for this run")
-    return state
+    try:
+        return upgrade_information_runtime_state(state)
+    except ValueError as exc:
+        raise EventApplicationError(f"invalid information-spread state: {exc}") from exc
+
+
+def _claim_is_misbelieved(truth_status: Any, belief_strength: float) -> bool:
+    from sheltersim.domain.models import InformationTruthStatus
+
+    return (
+        truth_status is InformationTruthStatus.TRUE and belief_strength < 0.5
+    ) or (
+        truth_status is InformationTruthStatus.FALSE and belief_strength > 0.5
+    )
 
 
 def _sample_claim_belief_strength(
