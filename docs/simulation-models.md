@@ -22,6 +22,8 @@ WorldStateはRun中の可変stateです。Checkpointは乱数状態、未処理�
 
 ## 初期Scenario生成
 
+新規の未選択Scenarioは `core-model-suite-v2` を使います。Suite IDと個別Policy ID、係数、有効機構をRunに記録します。Suiteは内部テストされた候補で、避難所実績で校正・外部検証されたモデルではありません。長期比較と未完了ゲートは [標準モデルセット仕様](mathematical-models/14-default-model-suite.md) に記録しています。
+
 WebのScenario previewが使う初期Scenario生成器は、利用者が入力しなかった項目を次の仮定で補います。どれもprovenanceと出典台帳に仮定として記録し、実測値や地域統計ではありません。
 
 - **世帯構成（ASM-SYNTHETIC-HOUSEHOLD-TEMPLATES-V1）:** 世帯構成テンプレートが入力されない場合、単身・大人のみ・大人と子どもの合成テンプレートを使い、生成した未成年者を同じ世帯の大人1人と親子関係で結びます。年齢や同居だけから関係を推測するのではなく、テンプレートで明示した関係だけを作ります。利用者が世帯構成を入力した場合は既定テンプレートを使いません。子どもを選べない年齢条件では、子どもを含むテンプレートを外します。

@@ -517,7 +517,7 @@ def test_generated_preview_context_and_new_namespaces_survive_checkpoint_without
     assert len(context["people"]) == 12
     assert all(person["medication_support"] is None for person in context["people"].values())
     assert draft.scenario.model_configs["policy_registry"]["body_dynamics"] == (
-        "body-feedback-complete-v1"
+        "body-feedback-complete-v2"
     )
     assert draft.scenario.model_configs["policy_registry"]["staff_operations"] == (
         "staff-urgency-first-v1"

@@ -281,6 +281,7 @@ _INSTALLED_FACTORIES.update(
         ("body_dynamics", model_id): _body_formula_factory(model_id)
         for model_id in (
             "body-feedback-complete-v1",
+            "body-feedback-complete-v2",
             "body-feedback-sleep-debt-v1",
         )
     }
@@ -386,7 +387,7 @@ def register_policy(model_id: str, definition: dict[str, Any], factory: Callable
     _INSTALLED_FACTORIES[(definition["domain"], model_id)] = factory
 
 
-_BUILTIN_FACTORIES={"behavior":frozenset({"utility-softmax-v1","priority-rule-v1"}),
+_BUILTIN_FACTORIES={"behavior":frozenset({"utility-softmax-v1","sleep-aware-utility-softmax-v2","priority-rule-v1"}),
     "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1","mean-reverting-distress-v1",INTEGRATED_PSYCHOLOGY_POLICY_VERSION}),
     "social":frozenset({"sparse-family-zone-contact-v1","degroot-contact-v1","expressiveness-channel-openness-v1"}),
     "information":frozenset({"sparse-information-contact-v1","hazard-information-v1","evidence-aware-rumor-v1"})}

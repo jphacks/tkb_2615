@@ -38,7 +38,9 @@ class ScenarioOverrides(_StrictModel):
     food_meal_units: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
     event_frequency: Literal["preset", "disabled"] | None = None
     social_propagation_enabled: StrictBool | None = None
-    behavior_policy: Literal["utility-softmax-v1", "priority-rule-v1"] | None = None
+    behavior_policy: Literal[
+        "utility-softmax-v1", "sleep-aware-utility-softmax-v2", "priority-rule-v1"
+    ] | None = None
 
 
 class ScenarioEditorRequest(_StrictModel):
@@ -219,7 +221,11 @@ def build_scenario_preview(
         behavior["source_id"] = (
             "ASM-PRIORITY-RULE-BEHAVIOR-V1"
             if overrides["behavior_policy"] == "priority-rule-v1"
-            else "ASM-UTILITY-BEHAVIOR-V1"
+            else (
+                "ASM-UTILITY-BEHAVIOR-V1"
+                if overrides["behavior_policy"] == "utility-softmax-v1"
+                else "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+            )
         )
 
     option_hash = _hash_json({"preset_id": request.preset_id, "overrides": overrides})[:12]
@@ -227,6 +233,13 @@ def build_scenario_preview(
     scenario = ScenarioSpec.model_validate(values)
     if "behavior_policy" in overrides:
         scenario = scenario.with_behavior_policy_variant(overrides["behavior_policy"])
+    if (
+        "behavior_policy" not in overrides
+        or overrides["behavior_policy"] == "sleep-aware-utility-softmax-v2"
+    ):
+        from sheltersim.experiments.model_suite import apply_default_model_suite
+
+        scenario = apply_default_model_suite(scenario, force=True)
     if len(scenario.profiles) > 100:
         raise ValueError("scenario editor cannot create more than 100 Agents")
 

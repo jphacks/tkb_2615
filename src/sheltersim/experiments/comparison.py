@@ -341,7 +341,11 @@ def _validate_behavior_policy_pair(
     candidate_behavior = candidate_manifest.get("model_assumptions", {}).get("behavior", {})
     baseline_variant = baseline_behavior.get("variant")
     candidate_variant = candidate_behavior.get("variant")
-    registered = {"utility-softmax-v1", "priority-rule-v1"}
+    registered = {
+        "utility-softmax-v1",
+        "sleep-aware-utility-softmax-v2",
+        "priority-rule-v1",
+    }
     if baseline_variant not in registered or candidate_variant not in registered:
         raise ValueError(
             "policy comparison requires registered behavior variants in both manifests"
@@ -386,6 +390,7 @@ def _validate_behavior_policy_pair(
                 if item
                 not in {
                     "ASM-UTILITY-BEHAVIOR-V1",
+                    "ASM-SLEEP-AWARE-BEHAVIOR-V2",
                     "ASM-PRIORITY-RULE-BEHAVIOR-V1",
                 }
             ]

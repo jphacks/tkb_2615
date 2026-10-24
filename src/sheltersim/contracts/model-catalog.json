@@ -50,6 +50,64 @@
         }
       }
     },
+    "sleep-aware-utility-softmax-v2": {
+      "domain": "behavior",
+      "reference": "Luce (1959), Individual Choice Behavior; Daan et al. (1984), homeostatic sleep structure",
+      "formula": "P(a)=exp(U(a)/T)/sum(exp(U/T)); U_sleep=0.25+0.90*fatigue+w*sleep_debt/S_i+rhythm_bonus-lighting_penalty; S_i=required daily sleep or 480 minutes when unspecified",
+      "assumption_source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+      "parameters": {
+        "behavior.temperature": {
+          "default": 0.2,
+          "unit": "utility_temperature",
+          "lower": 0,
+          "upper": null,
+          "source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated",
+          "lower_exclusive": true
+        },
+        "behavior.decision_interval_minutes": {
+          "default": 15,
+          "unit": "minute",
+          "lower": 1,
+          "upper": null,
+          "source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "behavior.decision_interval_minutes_by_agent.*": {
+          "default": {},
+          "unit": "minute_by_agent_id",
+          "lower": 1,
+          "upper": 1440,
+          "source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "value_type": "integer",
+          "applicability": "Optional experimental decision cadence for explicit resident IDs; other residents use the shared interval"
+        },
+        "behavior.temperature_by_agent.*": {
+          "default": {},
+          "unit": "utility_temperature_by_agent_id",
+          "lower": 0,
+          "upper": 10,
+          "lower_exclusive": true,
+          "source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional experimental choice-noise temperature for explicit resident IDs; other residents use the shared temperature"
+        },
+        "behavior.sleep_debt_utility_weight": {
+          "default": 1.0,
+          "unit": "utility_per_daily_sleep_need",
+          "lower": 0.0,
+          "upper": 5.0,
+          "source_id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated utility mapping; one daily sleep-need equivalent of accumulated sleep debt adds one utility unit."
+        }
+      }
+    },
     "priority-rule-v1": {
       "domain": "behavior",
       "reference": "Simon (1955), A Behavioral Model of Rational Choice, doi:10.2307/1884852",
@@ -942,17 +1000,106 @@
       "implementation_version": "1",
       "state_schema_version": 1,
       "parameters": {
-        "social_propagation.enabled": {"default": false, "unit": "boolean", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Opt-in experimental social synchrony"},
-        "social_propagation.max_contacts_per_agent": {"default": 3, "unit": "count", "lower": 0, "upper": 16, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Bounded sampled local neighborhood"},
-        "social_propagation.minimum_contact_minutes": {"default": 5, "unit": "minute", "lower": 1, "upper": 10080, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Synthetic eligibility threshold, not measured conversation duration"},
-        "social_propagation.stress_spread_per_minute": {"default": 0.001, "unit": "1/minute", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Uncalibrated coupling rate"},
-        "social_propagation.family_channel_strength": {"default": 1.0, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed family-contact channel weight"},
-        "social_propagation.same_zone_channel_strength": {"default": 0.75, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed same-zone channel weight"},
-        "social_propagation.nearby_zone_channel_strength": {"default": 0.5, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed adjacent-zone channel weight"},
-        "social_propagation.source_expressiveness_by_agent.*": {"default": {}, "unit": "dimensionless_0_1_by_agent_id", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "scope": "per_agent_id", "applicability": "Optional assumed sender expressiveness; unspecified residents use neutral value 1"},
-        "social_propagation.cooldown_minutes": {"default": 30, "unit": "minute", "lower": 1, "upper": 10080, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Synthetic repeat-influence bound"},
-        "social_propagation.max_pair_stress_increase": {"default": 0.05, "unit": "normalized_0_1", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Symmetric per-contact change cap"},
-        "social_propagation.max_agent_stress_increase_per_minute": {"default": 0.05, "unit": "normalized_per_minute", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Symmetric per-agent per-minute change cap"}
+        "social_propagation.enabled": {
+          "default": false,
+          "unit": "boolean",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Opt-in experimental social synchrony"
+        },
+        "social_propagation.max_contacts_per_agent": {
+          "default": 3,
+          "unit": "count",
+          "lower": 0,
+          "upper": 16,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Bounded sampled local neighborhood"
+        },
+        "social_propagation.minimum_contact_minutes": {
+          "default": 5,
+          "unit": "minute",
+          "lower": 1,
+          "upper": 10080,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic eligibility threshold, not measured conversation duration"
+        },
+        "social_propagation.stress_spread_per_minute": {
+          "default": 0.001,
+          "unit": "1/minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated coupling rate"
+        },
+        "social_propagation.family_channel_strength": {
+          "default": 1.0,
+          "unit": "dimensionless_0_1",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "ShelterSim assumed family-contact channel weight"
+        },
+        "social_propagation.same_zone_channel_strength": {
+          "default": 0.75,
+          "unit": "dimensionless_0_1",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "ShelterSim assumed same-zone channel weight"
+        },
+        "social_propagation.nearby_zone_channel_strength": {
+          "default": 0.5,
+          "unit": "dimensionless_0_1",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "ShelterSim assumed adjacent-zone channel weight"
+        },
+        "social_propagation.source_expressiveness_by_agent.*": {
+          "default": {},
+          "unit": "dimensionless_0_1_by_agent_id",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional assumed sender expressiveness; unspecified residents use neutral value 1"
+        },
+        "social_propagation.cooldown_minutes": {
+          "default": 30,
+          "unit": "minute",
+          "lower": 1,
+          "upper": 10080,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic repeat-influence bound"
+        },
+        "social_propagation.max_pair_stress_increase": {
+          "default": 0.05,
+          "unit": "normalized_0_1",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Symmetric per-contact change cap"
+        },
+        "social_propagation.max_agent_stress_increase_per_minute": {
+          "default": 0.05,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+          "evidence_grade": "C",
+          "applicability": "Symmetric per-agent per-minute change cap"
+        }
       }
     },
     "degroot-contact-v1": {
@@ -1579,9 +1726,18 @@
             "patrol_stress_at_least": "normalized_stress"
           },
           "field_bounds": {
-            "cleaning_sanitation_below": [0.0, 1.0],
-            "outreach_uncertainty_at_least": [0.0, 1.0],
-            "patrol_stress_at_least": [0.0, 1.0]
+            "cleaning_sanitation_below": [
+              0.0,
+              1.0
+            ],
+            "outreach_uncertainty_at_least": [
+              0.0,
+              1.0
+            ],
+            "patrol_stress_at_least": [
+              0.0,
+              1.0
+            ]
           },
           "source_id": "ASM-STAFF-URGENCY-FIRST-V1",
           "evidence_grade": "C",
@@ -1598,10 +1754,22 @@
             "patrol_reassurance": "normalized_reassurance_per_patrol_task"
           },
           "field_bounds": {
-            "sanitation_use_per_person_minute": [0.0, 0.01],
-            "cleaning_sanitation_recovery": [0.0, 1.0],
-            "outreach_uncertainty_relief": [0.0, 1.0],
-            "patrol_reassurance": [0.0, 1.0]
+            "sanitation_use_per_person_minute": [
+              0.0,
+              0.01
+            ],
+            "cleaning_sanitation_recovery": [
+              0.0,
+              1.0
+            ],
+            "outreach_uncertainty_relief": [
+              0.0,
+              1.0
+            ],
+            "patrol_reassurance": [
+              0.0,
+              1.0
+            ]
           },
           "source_id": "ASM-STAFF-URGENCY-FIRST-V1",
           "evidence_grade": "C",
@@ -1646,9 +1814,18 @@
             "patrol_stress_at_least": "normalized_stress"
           },
           "field_bounds": {
-            "cleaning_sanitation_below": [0.0, 1.0],
-            "outreach_uncertainty_at_least": [0.0, 1.0],
-            "patrol_stress_at_least": [0.0, 1.0]
+            "cleaning_sanitation_below": [
+              0.0,
+              1.0
+            ],
+            "outreach_uncertainty_at_least": [
+              0.0,
+              1.0
+            ],
+            "patrol_stress_at_least": [
+              0.0,
+              1.0
+            ]
           },
           "source_id": "ASM-STAFF-TRAVEL-FIRST-V1",
           "evidence_grade": "C",
@@ -1665,10 +1842,22 @@
             "patrol_reassurance": "normalized_reassurance_per_patrol_task"
           },
           "field_bounds": {
-            "sanitation_use_per_person_minute": [0.0, 0.01],
-            "cleaning_sanitation_recovery": [0.0, 1.0],
-            "outreach_uncertainty_relief": [0.0, 1.0],
-            "patrol_reassurance": [0.0, 1.0]
+            "sanitation_use_per_person_minute": [
+              0.0,
+              0.01
+            ],
+            "cleaning_sanitation_recovery": [
+              0.0,
+              1.0
+            ],
+            "outreach_uncertainty_relief": [
+              0.0,
+              1.0
+            ],
+            "patrol_reassurance": [
+              0.0,
+              1.0
+            ]
           },
           "source_id": "ASM-STAFF-TRAVEL-FIRST-V1",
           "evidence_grade": "C",
@@ -1724,10 +1913,22 @@
             "temperature_c": "degree_celsius"
           },
           "field_bounds": {
-            "ventilation_effectiveness": [0.0, 1.0],
-            "lighting_level": [0.0, 1.0],
-            "privacy_level": [0.0, 1.0],
-            "temperature_c": [-40.0, 60.0]
+            "ventilation_effectiveness": [
+              0.0,
+              1.0
+            ],
+            "lighting_level": [
+              0.0,
+              1.0
+            ],
+            "privacy_level": [
+              0.0,
+              1.0
+            ],
+            "temperature_c": [
+              -40.0,
+              60.0
+            ]
           },
           "source_id": "ASM-ZONE-TEMP-COMFORT-BAND-V1",
           "evidence_grade": "C",
@@ -1782,10 +1983,22 @@
             "temperature_c": "degree_celsius"
           },
           "field_bounds": {
-            "ventilation_effectiveness": [0.0, 1.0],
-            "lighting_level": [0.0, 1.0],
-            "privacy_level": [0.0, 1.0],
-            "temperature_c": [-40.0, 60.0]
+            "ventilation_effectiveness": [
+              0.0,
+              1.0
+            ],
+            "lighting_level": [
+              0.0,
+              1.0
+            ],
+            "privacy_level": [
+              0.0,
+              1.0
+            ],
+            "temperature_c": [
+              -40.0,
+              60.0
+            ]
           },
           "source_id": "ASM-ZONE-TEMP-MIDPOINT-V1",
           "evidence_grade": "C",
@@ -2257,8 +2470,6 @@
           "lower": 0,
           "upper": 1,
           "scope": "per_agent_id",
-          "lower": 0,
-          "upper": 1,
           "replaceable": true,
           "source_id": "ASM-CARE-TYPED-SUPPORT-RESPONSE-V1",
           "evidence_grade": "C",
@@ -2751,6 +2962,120 @@
           "applicability": "Convenience threshold for an internal duration indicator; not a clinical cutoff"
         }
       }
+    },
+    "body-feedback-complete-v2": {
+      "domain": "body_dynamics",
+      "reference": "Installed full body/affect feedback with a balanced sleep-debt assumption for an unspecified 8-hour daily sleep requirement; not calibrated to shelter outcomes",
+      "formula": "debt/1440*sleep_rate + uncertainty*negative_affect_rate + discontent*discontent_rate + hygiene*sanitation_rate + (1-sanitation)*sanitation_rate + separation_pressure - reassurance*negative_affect_rate - positive_affect*relief_rate",
+      "assumption_source_id": "ASM-SLEEP-DEBT-BALANCE-V1",
+      "parameters": {
+        "body_dynamics.sleep_debt_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_stress_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic coefficient; no matched shelter outcomes"
+        },
+        "body_dynamics.sleep_debt_stress_rate_by_agent.*": {
+          "default": {},
+          "unit": "normalized_stress_per_minute_by_agent_id",
+          "scope": "per_agent_id",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Optional synthetic sleep-debt response for explicitly identified residents; other residents use the shared coefficient"
+        },
+        "body_dynamics.complaint_reassurance_gain_by_agent.*": {
+          "default": {},
+          "unit": "normalized_reassurance_per_staff_response_by_agent_id",
+          "scope": "per_agent_id",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Optional experimental per-resident emotional-support response; other residents use the shared gain; not empirically calibrated"
+        },
+        "body_dynamics.negative_affect_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_stress_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic coefficient; no matched shelter outcomes"
+        },
+        "body_dynamics.negative_affect_stress_rate_by_agent.*": {
+          "default": {},
+          "unit": "normalized_stress_per_minute_by_agent_id",
+          "scope": "per_agent_id",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Optional experimental negative-affect stress coefficient for an explicitly identified resident; unspecified residents use the shared value; not calibrated to shelter outcomes"
+        },
+        "body_dynamics.discontent_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_stress_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic coefficient; no matched shelter outcomes"
+        },
+        "body_dynamics.discontent_stress_rate_by_agent.*": {
+          "default": {},
+          "unit": "normalized_stress_per_minute_by_agent_id",
+          "scope": "per_agent_id",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Optional experimental discontent stress coefficient for an explicitly identified resident; unspecified residents use the shared value; not calibrated to shelter outcomes"
+        },
+        "body_dynamics.sanitation_stress_rate": {
+          "default": 0.002,
+          "unit": "normalized_stress_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic coefficient; no matched shelter outcomes"
+        },
+        "body_dynamics.discontent_relief_per_minute": {
+          "default": 0.0002,
+          "unit": "normalized_stress_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-BODY-FEEDBACK-COMPLETE-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic coefficient; no matched shelter outcomes"
+        },
+        "body_dynamics.awake_sleep_debt_minutes_per_minute": {
+          "default": 0.5,
+          "unit": "sleep_debt_minute_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-SLEEP-DEBT-BALANCE-V1",
+          "evidence_grade": "C",
+          "applicability": "Explicit uncalibrated fallback for 480 minutes of required sleep per day; per-resident requirements override this rate using S/(1440-S)"
+        },
+        "body_dynamics.rest_sleep_debt_recovery_per_minute": {
+          "default": 0.0,
+          "unit": "sleep_debt_minute_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-SLEEP-DEBT-BALANCE-V1",
+          "evidence_grade": "C",
+          "applicability": "Quiet rest is not counted as sleep; explicit nonzero values are experimental assumptions"
+        }
+      },
+      "implementation_version": "1",
+      "state_schema_version": 1,
+      "external_validation": false
     }
   }
 }

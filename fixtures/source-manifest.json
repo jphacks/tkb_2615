@@ -6,7 +6,7 @@
     "interview",
     "assumption"
   ],
-  "accessed_on": "2026-10-11",
+  "accessed_on": "2026-10-25",
   "sources": [
     {
       "id": "SRC-CAO-SHELTER-GUIDELINE-2024-12",
@@ -49,6 +49,72 @@
         "避難所運営の主体、運営方法の移行、外部支援、役割分担、成功点と課題の事例"
       ],
       "limits": "事例ヒアリングであり、無作為抽出の標本や心理状態の測定ではない。個別事例から頻度や因果効果を推定しない。"
+    },
+    {
+      "id": "SRC-DAAN-SLEEP-REGULATION-1984",
+      "source_type": "literature",
+      "title": "Timing of human sleep: recovery process gated by a circadian pacemaker",
+      "publisher": "American Journal of Physiology",
+      "edition": "246(2), R161-R183",
+      "published_on": "1984",
+      "url": "https://doi.org/10.1152/ajpregu.1984.246.2.R161",
+      "evidence_scope": [
+        "睡眠圧の覚醒時上昇と睡眠時低下を二過程モデルとして扱う",
+        "睡眠のタイミングと回復過程の構造"
+      ],
+      "limits": "ShelterSimの分単位の睡眠負債係数、個人別必要睡眠時間、施設環境、ストレス係数を校正する資料ではない。"
+    },
+    {
+      "id": "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+      "source_type": "literature",
+      "title": "Stress and the Individual: Mechanisms Leading to Disease",
+      "publisher": "Archives of Internal Medicine",
+      "edition": "153(18), 2093-2101",
+      "published_on": "1993",
+      "url": "https://doi.org/10.1001/archinte.1993.00410180039004",
+      "evidence_scope": [
+        "反復・慢性ストレス負荷と個人差を区別して考える概念枠組み"
+      ],
+      "limits": "ShelterSimの急性ストレス式、累積負荷係数、回復率を指定または校正しない。"
+    },
+    {
+      "id": "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+      "source_type": "literature",
+      "title": "Conditional Logit Analysis of Qualitative Choice Behavior",
+      "publisher": "Frontiers in Econometrics",
+      "edition": "Chapter 4",
+      "published_on": "1974",
+      "url": "https://eml.berkeley.edu/reprints/mcfadden/zarembka.pdf",
+      "evidence_scope": [
+        "選択可能な代替肢に対するランダム効用確率モデルの構造"
+      ],
+      "limits": "ShelterSimの効用係数、緊急度、実行可能行動集合、行動頻度の妥当性を決めない。"
+    },
+    {
+      "id": "SRC-BOSSE-AFFECT-CONTAGION-2015",
+      "source_type": "literature",
+      "title": "Agent-Based Modelling of Emotion Contagion in Groups",
+      "publisher": "Cognitive Computation",
+      "edition": "7, 53-64",
+      "published_on": "2015",
+      "url": "https://doi.org/10.1007/s12559-014-9277-9",
+      "evidence_scope": [
+        "表出性・受容性・相互作用チャネルを介した集団感情伝播のモデル構造"
+      ],
+      "limits": "避難所内の接触頻度、表出性・受容性対応付け、伝播率を実測校正しない。"
+    },
+    {
+      "id": "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+      "source_type": "literature",
+      "title": "The efficacy of corrective information for belief change depends on the source and the correction format",
+      "publisher": "Nature Human Behaviour",
+      "edition": "7, 148-156",
+      "published_on": "2023",
+      "url": "https://doi.org/10.1038/s41562-023-01623-8",
+      "evidence_scope": [
+        "誤情報訂正の効果と条件差に関するメタ分析"
+      ],
+      "limits": "避難所内の伝播確率、訂正受容率、安心感や行動への効果を直接推定しない。"
     }
   ],
   "assumptions": [
@@ -81,6 +147,80 @@
       "notes": "Synthetic balanced profiles and explicit entry orientation exercise the integrated service-to-need-to-psychology paths. Daily delivery starts at simulated minute 1440. Counts, initial stocks, delivery schedule, service times, staffing, and coefficients are test conditions, not estimates for a real shelter."
     },
     {
+      "id": "ASM-CORE-MODEL-SUITE-V1",
+      "source_type": "assumption",
+      "target": "newly authored Scenarios without an explicit historical policy registry",
+      "model_version": "core-model-suite-v1",
+      "values": {
+        "behavior": "utility-softmax-v1",
+        "psychology": "mean-reverting-life-state-v1",
+        "social": "expressiveness-channel-openness-v1",
+        "information": "evidence-aware-rumor-v1",
+        "affect": "linear-positive-negative-v1",
+        "body_dynamics": "body-feedback-complete-v2",
+        "queue": "need-weighted-physical-queue-v1",
+        "relationship": "distance-duration-repeat-trust-v1",
+        "social_proximity": "disabled-proximity-v1",
+        "behavior_decision_interval_minutes": 15
+      },
+      "context_sources": [
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+        "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+        "SRC-BOSSE-AFFECT-CONTAGION-2015",
+        "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "internally versioned operator combination; not empirically calibrated or externally validated",
+      "notes": "Literature informs operator structure only. Coefficients, contact network, social toggles, operational effects, and this combination are ShelterSim assumptions. Existing Scenarios with explicit registries keep their saved selection."
+    },
+    {
+      "id": "ASM-CORE-MODEL-SUITE-V2",
+      "source_type": "assumption",
+      "target": "newly authored Scenarios without an explicit historical policy registry",
+      "model_version": "core-model-suite-v2",
+      "values": {
+        "behavior": "sleep-aware-utility-softmax-v2",
+        "psychology": "mean-reverting-life-state-v1",
+        "social": "expressiveness-channel-openness-v1",
+        "information": "evidence-aware-rumor-v1",
+        "affect": "linear-positive-negative-v1",
+        "body_dynamics": "body-feedback-complete-v2",
+        "queue": "need-weighted-physical-queue-v1",
+        "relationship": "distance-duration-repeat-trust-v1",
+        "social_proximity": "disabled-proximity-v1",
+        "behavior_decision_interval_minutes": 15,
+        "behavior_sleep_debt_utility_weight": 1.0
+      },
+      "context_sources": [
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+        "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+        "SRC-BOSSE-AFFECT-CONTAGION-2015",
+        "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "internally versioned operator combination; not empirically calibrated or externally validated",
+      "notes": "Literature informs operator structure only. Coefficients, contact network, social toggles, operational effects, and this combination are ShelterSim assumptions. The sleep-aware behavior selector adds one utility unit per daily sleep-need equivalent of debt as an uncalibrated hypothesis. Existing Scenarios with explicit registries keep their saved selection."
+    },
+    {
+      "id": "ASM-SLEEP-DEBT-BALANCE-V1",
+      "source_type": "assumption",
+      "target": "body-feedback-complete-v2 sleep-debt step",
+      "model_version": "sleep-debt-balance-v1",
+      "values": {
+        "state_unit": "sleep-debt minutes, bounded 0..1440",
+        "awake_rate_without_person_requirement": 0.5,
+        "awake_rate_with_daily_requirement_S": "S / (1440 - S)",
+        "sleep_recovery_minutes_per_sleep_minute": 1.0,
+        "rest_recovery_minutes_per_rest_minute": 0.0,
+        "sleep_efficiency_multiplier": "zone-derived, bounded 0..1"
+      },
+      "context_sources": [
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "structural balance assumption; not clinically calibrated",
+      "notes": "The daily-rate formula balances exactly when actual sleep equals the supplied daily requirement S. The fallback 0.5 represents an 8-hour requirement under a 16-hour wake schedule. The cited two-process sleep literature motivates asymmetric wake/sleep dynamics, not these minute rates. Rest is not counted as sleep; no sleep recovery is counted twice through the separate psychological rest path."
+    },
+    {
       "id": "ASM-RESEARCH-SHORTAGE-CONDITIONS-V1",
       "source_type": "assumption",
       "target": "fixtures/scenarios/research_shortage_100_7d.json",
@@ -96,7 +236,10 @@
           "food_meal_units": 100
         },
         "working_toilet_units": 2,
-        "unavailable_facilities": ["toilet_3", "toilet_4"],
+        "unavailable_facilities": [
+          "toilet_3",
+          "toilet_4"
+        ],
         "psychology_policy": "mean-reverting-life-state-v1"
       },
       "context_sources": [
@@ -545,6 +688,24 @@
       ],
       "calibration_status": "uncalibrated operational assumption",
       "notes": "The sources do not report sampled per-use service durations; the interval must not be described as measured."
+    },
+    {
+      "id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+      "source_type": "assumption",
+      "target": "sleep-aware-utility-softmax-v2 candidate behavior selector",
+      "model_version": "sleep-aware-utility-softmax-v2",
+      "values": {
+        "sleep_debt_utility_weight": 1.0,
+        "sleep_debt_normalizer": "agent required_sleep_minutes; otherwise 480 minutes",
+        "score_term": "weight * sleep_debt_minutes / daily_sleep_need_minutes",
+        "legacy_utility_softmax_v1_unchanged": true
+      },
+      "context_sources": [
+        "SRC-DAAN-SLEEP-REGULATION-1984",
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974"
+      ],
+      "calibration_status": "synthetic utility assumption; not empirically calibrated or externally validated",
+      "notes": "Homeostatic debt makes sleep continuously more valuable in the candidate selector. A daily sleep-need equivalent adds one utility unit by assumption. This change does not guarantee sleep or predict observed behavior; the old utility-softmax-v1 selector is unchanged."
     },
     {
       "id": "ASM-UTILITY-BEHAVIOR-V1",

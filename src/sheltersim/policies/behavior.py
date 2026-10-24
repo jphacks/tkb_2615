@@ -676,6 +676,24 @@ BEHAVIOR_POLICY_REGISTRY: Mapping[str, BehaviorPolicyDefinition] = MappingProxyT
             ),
             capabilities=("typed action proposals", "keyed random choice", "candidate trace"),
         ),
+        "sleep-aware-utility-softmax-v2": BehaviorPolicyDefinition(
+            variant="sleep-aware-utility-softmax-v2",
+            label="睡眠負債対応 softmax v2",
+            policy_version="sleep-aware-utility-softmax-v2",
+            assumption_source_id="ASM-SLEEP-AWARE-BEHAVIOR-V2",
+            selection_rule="eligible candidates are sampled by utility and urgency priority",
+            description=(
+                "睡眠負債を個別の必要睡眠時間で正規化し、"
+                "必要時間相当の負債が効用へ1単位加算される仮定です。"
+            ),
+            parameters=(
+                "temperature",
+                "decision_interval_minutes",
+                "sleep_debt_utility_weight",
+                "shared candidate utility coefficients",
+            ),
+            capabilities=("typed action proposals", "keyed random choice", "candidate trace"),
+        ),
         "priority-rule-v1": BehaviorPolicyDefinition(
             variant="priority-rule-v1",
             label="優先順位ルール",
@@ -745,7 +763,7 @@ def create_behavior_policy(variant: str, **parameters: Any) -> BehaviorPolicy:
         **parameters,
         policy_version=definition["policy_version"],
     )
-    if variant == "utility-softmax-v1":
+    if variant in {"utility-softmax-v1", "sleep-aware-utility-softmax-v2"}:
         return scorer
     if variant == "priority-rule-v1":
         return PriorityRuleBehaviorPolicy(scorer, policy_version=definition["policy_version"])
@@ -764,6 +782,7 @@ class UtilityBehaviorPolicy:
     decision_interval_minutes: int = 15
     decision_interval_minutes_by_agent: dict[str, int] = field(default_factory=dict)
     temperature_by_agent: dict[str, float] = field(default_factory=dict)
+    sleep_debt_utility_weight: float = 1.0
     policy_version: str = "utility-softmax-v1"
     resource_service_enabled: bool = False
     hydration_action_threshold: float = 0.25
@@ -781,6 +800,11 @@ class UtilityBehaviorPolicy:
             raise ValueError("temperature must be positive and finite")
         if self.decision_interval_minutes <= 0:
             raise ValueError("decision interval must be positive")
+        if (
+            not math.isfinite(self.sleep_debt_utility_weight)
+            or self.sleep_debt_utility_weight < 0.0
+        ):
+            raise ValueError("sleep debt utility weight must be finite and non-negative")
         if len(self.decision_interval_minutes_by_agent) > 100 or len(self.temperature_by_agent) > 100:
             raise ValueError("per-Agent behavior coefficients exceed the 100-resident limit")
         if any(
@@ -997,7 +1021,9 @@ class UtilityBehaviorPolicy:
                 ActionKind.SLEEP,
                 needs.fatigue >= 0.65 or agent.sleep_debt_minutes >= 240.0 or sleep_rhythm_due,
                 "fatigue>=0.65 or sleep_debt_minutes>=240 or individual_sleep_window",
-                0.25 + 0.90 * needs.fatigue + agent.sleep_debt_minutes / 1440.0 * 0.45
+                0.25 + 0.90 * needs.fatigue + _sleep_debt_utility(
+                    agent, self.policy_version, self.sleep_debt_utility_weight
+                )
                 + (0.20 if sleep_rhythm_due else 0.0)
                 - 0.20 * max(0.0, agent.lighting_level - 0.3),
                 0,
@@ -1269,6 +1295,17 @@ def _decision_interval_minutes(
         return base_minutes
     scaled = round(base_minutes * modifier.duration_multiplier)
     return min(maximum, max(minimum, scaled))
+
+
+def _sleep_debt_utility(
+    agent: AgentView, policy_version: str, sleep_debt_utility_weight: float
+) -> float:
+    if not policy_version.startswith("sleep-aware-utility-softmax-v2"):
+        return agent.sleep_debt_minutes / 1440.0 * 0.45
+    required_sleep = agent.required_sleep_minutes
+    if required_sleep is None or required_sleep == 0:
+        required_sleep = 480
+    return sleep_debt_utility_weight * agent.sleep_debt_minutes / required_sleep
 
 
 def _target_for_action(

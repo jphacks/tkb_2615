@@ -222,8 +222,29 @@ def test_registered_priority_policy_reuses_candidates_and_is_keyed_deterministic
     assert sum(item.probability for item in first.candidates) == pytest.approx(1.0)
     assert {item["variant"] for item in behavior_policy_catalog()} == {
         "utility-softmax-v1",
+        "sleep-aware-utility-softmax-v2",
         "priority-rule-v1",
     }
+
+
+def test_sleep_aware_behavior_normalizes_debt_by_daily_sleep_need() -> None:
+    world = make_world()
+    agent = world.agents["A001"]
+    agent.activity = Activity.IDLE
+    agent.needs.fatigue = 0.8
+    body = world.model_state.setdefault("body_state_v1", {"agents": {}})
+    body.setdefault("agents", {})[agent.id] = {"sleep_debt_minutes": 0.0}
+    policy = create_behavior_policy(
+        "sleep-aware-utility-softmax-v2",
+    )
+    low_debt = policy.propose(WorldView.from_world(world), agent.id, CounterRNG(world.seed))
+    body["agents"][agent.id]["sleep_debt_minutes"] = 480.0
+    high_debt = policy.propose(WorldView.from_world(world), agent.id, CounterRNG(world.seed))
+
+    low_sleep = next(item for item in low_debt.candidates if item.action is ActionKind.SLEEP)
+    high_sleep = next(item for item in high_debt.candidates if item.action is ActionKind.SLEEP)
+    assert high_sleep.utility - low_sleep.utility == pytest.approx(1.0)
+    assert high_sleep.probability > low_sleep.probability
 
 
 def test_priority_policy_checkpoint_noop_fork_replays_with_same_variant(tmp_path: Path) -> None:

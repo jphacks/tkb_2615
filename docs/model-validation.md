@@ -44,6 +44,8 @@
 
 ## 検証方法と限界
 
+新規Scenarioの候補セットは [core-model-suite-v2](mathematical-models/14-default-model-suite.md) です。単体式・機構・統合Scenario・長時間比較のゲート状態は [包括的検証記録](mathematical-models/13-comprehensive-validation.md) にあり、未実行項目を合格扱いしません。
+
 - 同一の固定 ScenarioSpec・seed・policy version は同じ canonical state、event trace、KPI を生成することをテストします。
 - 施設故障、待ち列、サービス、復旧は状態不変条件・イベント provenance・メトリクスを検証します。
 - `tests/test_provenance.py` は全主要係数、fixture/model/event source ID、policy trace、Run manifestの有効値を台帳に照合します。

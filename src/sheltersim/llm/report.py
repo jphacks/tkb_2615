@@ -19,6 +19,12 @@ _ASSUMPTION_LABELS = {
     "ASM-SIMPLE-PSYCHOLOGY-RATES-V1": "Psychology rates are uncalibrated assumptions.",
     "ASM-H04-CAUSAL-STRESS-V1": "Causal stress coefficients are bounded, uncalibrated assumptions.",
     "ASM-UTILITY-BEHAVIOR-V1": "Behavior thresholds and utilities are rule assumptions.",
+    "ASM-CORE-MODEL-SUITE-V2": (
+        "Core model suite v2 is an internal uncalibrated operator combination."
+    ),
+    "ASM-SLEEP-AWARE-BEHAVIOR-V2": (
+        "Sleep-debt utility normalization is an uncalibrated behavioral assumption."
+    ),
     "ASM-PRIORITY-RULE-BEHAVIOR-V1": (
         "Priority-rule action selection and shared utilities are uncalibrated assumptions."
     ),
@@ -486,7 +492,12 @@ def scenario_assumption_ids(scenario: ScenarioSpec) -> list[str]:
     behavior_source = (
         "ASM-PRIORITY-RULE-BEHAVIOR-V1"
         if isinstance(behavior_config, dict) and behavior_config.get("policy") == "priority-rule-v1"
-        else "ASM-UTILITY-BEHAVIOR-V1"
+        else (
+            "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+            if isinstance(behavior_config, dict)
+            and behavior_config.get("policy") == "sleep-aware-utility-softmax-v2"
+            else "ASM-UTILITY-BEHAVIOR-V1"
+        )
     )
     ids.append(behavior_source)
     if any("toilet" in facility.kind.casefold() for facility in scenario.facilities):
@@ -925,7 +936,12 @@ def _scenario_assumption_ids(model_configs: Any, profiles: Any) -> list[str]:
             ids.add(
                 "ASM-PRIORITY-RULE-BEHAVIOR-V1"
                 if isinstance(behavior, dict) and behavior.get("policy") == "priority-rule-v1"
-                else "ASM-UTILITY-BEHAVIOR-V1"
+                else (
+                    "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+                    if isinstance(behavior, dict)
+                    and behavior.get("policy") == "sleep-aware-utility-softmax-v2"
+                    else "ASM-UTILITY-BEHAVIOR-V1"
+                )
             )
         if "toilet_service" in model_configs or "staff" in model_configs:
             ids.add("ASM-TOILET-SERVICE-DURATION-V1")
