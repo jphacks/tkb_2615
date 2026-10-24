@@ -133,3 +133,98 @@ Bosse型伝播の正負の影響総量は、基準統合版でそれぞれ0.061�
 急性状態の高値は数値発散ではなく、状態値が `[0,1]` に収まったまま生じた継続負荷です。このScenarioには物資配布ledgerがなく、初期空腹等も7日間続きます。また、life-state policyを有効にすると生成されるAgent facility-awareness状態は初期位置の施設のみを既知とするため、この構成では別zoneにあるトイレが未利用のままでした。したがってこのrunは心理状態・状態不変条件・再現性の長期確認として解釈し、トイレ待ち行列/利用の検証とはしません。後者は短時間の急性のみ対照シナリオで別途確認しました。
 
 Trace artifactは出力せず、Agentごとの高負荷連続時間・回復episodeをonline集計します。1回目は843.27秒（14分03秒）、同seed再実行は787.86秒（13分08秒）で、2回の合計は27分11秒でした。両方の状態hashは一致しました。これはこの実行環境での絶対時間です。A01に対応する実行時間記録がないため、旧版との性能差や「劣化なし」は定量結論できません。外部データによる係数校正、K6得点との対応、現地妥当性は未検証です。
+
+## A03: 施設認知修正後の短時間統合比較
+
+初期状態を「全員sleeping zone、心理Policyはmean-reverting-life-state-v1」とした1人・180分の同seed最小Scenarioで、明示案内なしではトイレ要求候補が出ても完了は0件でした。`initial_known_facility_ids=["toilet_1"]` の案内を与えると、施設への移動、到着時の同zone施設発見、queue/サービスを経て1件が完了し、排泄欲求が無案内条件より低くなりました。テストは案内対象以外の初期知識、設備capacity、心理Policy間の知識一致、Checkpoint復元も確認します。これは原因を切り分けた最小合成ケースです。
+
+通常運営と不足の比較では、両fixtureのseed 2026・同じ100 profileを使って180分だけ実行し、実行窓外の配送eventを外しました。どちらも5 staff、2つのresource service station、施設案内、移動経路と心理係数を共有します。通常は4トイレと初期在庫5,000,000 ml/120食、不足は2トイレと100,000 ml/20食です。
+
+| 180分の指標 | 通常運営 | 不足 |
+|---|---:|---:|
+| トイレ完了 | 58 | 42 |
+| queue person-minutes | 540 | 2,253 |
+| 終了時の平均待ち | 9.31分 | 11.26分 |
+| 平均トイレ利用率 | 0.464 | 0.703 |
+| water残量 | 5,000,000 → 4,994,250 ml | 100,000 → 94,250 ml |
+| 食事残量 | 120 → 92単位 | 20 → 0単位 |
+| 水または食事が0だった分数 | 0 | 80 |
+| 終了時の平均急性stress | 0.3320 | 0.3667 |
+| 終了時のp95 / 0.7以上のAgent割合 | 0.5926 / 0% | 0.6422 / 3% |
+
+この3時間では初期在庫差と容量差がqueue、在庫、stressの差に現れました。終端不足Scenarioでは高負荷episodeが3件継続中（合計64 Agent-minute、最長38分）、完了episodeは0件でした。短い実行の値であり、7日間の長期結果と置き換えません。
+
+## C: 一時ショックと自然回復の分離
+
+`scenario_100_agents.json` を1 Agent・180分に切り出し、初期need、need pressure、queue/support入力、社会伝播、情報伝播を0/無効にしました。平均回帰率は0.01/min、環境熱stress入力は0.002/min、熱eventはminute 20から60までです。stressはminute 59で0.0490251、除去から120分後のminute 179で0.0147661でした。`0.0490251 × exp(-0.01 × 120) = 0.0147661` と一致し、最終状態は有限値でした。これは自然回復式とevent lifecycleの機構検査で、現実の熱曝露や人の反応係数を校正しません。
+
+## A03: 施設認知を揃えた34 runの感度・ablation
+
+既存スクリプトを施設認知明示設定付きで再実行しました。
+
+```text
+SHELTERSIM_LLM_MODE=offline python scripts/run_research_model_validation.py --mode sweep --output /private/tmp/research-validation-a03.json --seeds 3 4 5
+```
+
+12合成Agent・180分の7条件ablationを3 seedで、13条件one-factor感度をseed 3で行いました。全モデル比較で初期案内、設備、乱数条件が揃い、基準設定では各12-Agent runでトイレサービスが12件完了しました。
+
+| 3 seed条件 | 最終平均急性stress | p95 |
+|---|---:|---:|
+| 旧モデル | 0.1679 | 0.3016 |
+| 平均回帰・急性のみ | 0.0747 | 0.1541 |
+| 平均回帰・身体/感情統合 | 0.1417 | 0.2805 |
+| 統合版・自然回復を0にした介入 | 0.3179 | 0.6069 |
+
+統合版で回復率を0.005/minから0.02/minへ動かした1 seed条件では、平均急性stressが0.1994から0.0814へ変化しました。社会同調なし条件は0.1451（基準0.1417）、3倍伝播率はseed 3で正の寄与0.1110・負の寄与0.2643でした。このScenarioでは正負両方向の差分があり、単純なストレス低下効果とは見なしません。
+
+誤情報感度では、seed 3の低/高伝播設定で終了時の現在誤信念が0/6 Agent、低/高信念形成確率では0/8 Agentでした。訂正受容確率0.05/0.95では訂正受容が0/4 Agent-messageでした。訂正なしと統合基準の平均急性stressは0.1444/0.1417で差が小さく、心理効果の実地因果推定ではありません。トイレ所要時間8–12分の急性のみ対照ではqueue person-minutesが58、平均終了待ち4.83分となり、4–8分対照の11、0.92分から増えました。
+
+この感度分析は施設認知の交絡を避けた内部応答試験です。1 seedの一要因条件は効果量推定でなく、全係数は未校正です。
+
+## A03: 100人・7日間の通常運営/不足Scenario
+
+`research_operational_100_7d.json` と `research_shortage_100_7d.json` をseed 2026・10,080分で `TraceLevel.SUMMARY` 実行しました。いずれも100人、最終tickの `WorldState.validate`、有限stress値を確認しました。Scenario SHA-256は通常 `2a15a9743a5d40d96486f3357e76c2b8e0bf7a10700cab502cbcf5f22b701034`、不足 `97acd2a4b18352c7ed034c4ad82c1f401ff0d503797c198a2ca329b0e264b633` です。これらの一回実行では最終WorldState SHA-256がそれぞれ `9bf8ab1b0830dbb2999453ec36bc51631d67aabae7a1c1fb849ebb6d3b26789a` と `f5ab104362bb0de100a9f4da40e7a79af2c1594a30c6b808791dea076f5faee9` でした。
+
+| 7日指標 | 通常運営 | 不足 |
+|---|---:|---:|
+| 終了時平均stress / p95 / 0.7以上の割合 | 0.9255 / 1.000 / 94% | 0.9316 / 1.000 / 97% |
+| 日単位潜在状態平均 | 0.4535 | 0.4618 |
+| 高負荷episode総数 / 完了 / 継続中 | 434 / 340 / 94 | 383 / 285 / 97 |
+| 完了episodeだけの平均継続 | 462.41分 | 482.19分 |
+| 継続中episode経過分の合計 / 最長 | 675,386 / 9,900分 | 727,711 / 9,938分 |
+| 再上昇回数 | 334 | 283 |
+| 完了トイレサービス / queue person-minutes | 913 / 548 | 839 / 101,375 |
+| 最終平均待ち / 観測最大待ち | 0.60 / 26分 | 0.71 / 26分 |
+| 資源サービス完了 / 資源不足分数 | 2,421 / 0 | 2,405 / 1,772 |
+| 食事在庫の初期→終了 | 120 → 5,522単位 | 20 → 38単位 |
+| 水在庫の初期→終了 | 5,000,000 → 16,544,250 ml | 100,000 → 844,250 ml |
+| イベント記録 | 26,742 | 26,505 |
+
+通常運営でも高負荷agent割合は94%まで上がり、stressは多くのAgentで上限1.0付近に達しました。この結果を「正常な避難所では高ストレスにならない」と解釈しません。資源台帳の不足は0分で、トイレ913件・資源サービス2,421件が完了した一方、行動頻度と身体/感情feedbackを含むこのScenarioではneeds負荷が残りました。不足条件は通常よりトイレ処理が74件少ないのにqueue person-minutesが約185倍、資源不足が1,772分となり、運用面の負荷差は明確でした。急性stressの平均差が小さいのは、両条件でstressが上限に近づくためです。係数を下げて見かけ上の差を作らず、この高負荷を未校正モデルの限界として保持します。
+
+Agent×168時間の16,800行の `psychology_contributions_hourly.jsonl` を一時出力からストリーム集計しました。通常運営での7日分の心理成分合計（正規化状態deltaの累積）は、自然回復 -8,624.44、need pressure +3,584.73、life-state feedback +4,396.14、施設queue +1,572.09、staff support wait +19.64でした。positive componentが継続し、自然回復を上回る時間帯があります。終了時stressが1.0に飽和したAgentでは追加の正入力が終端値に現れず、上限clipが蓄積負荷を圧縮して表示することも確認できます。
+
+例として、終了時stress 1.0のA001では7日累積がneed +57.27、life-state +42.82、queue +15.55、staff wait +0.18、自然回復 -97.24でした。A009ではneed +70.20、life-state +45.28、queue +14.35、自然回復 -98.56でした。末尾24時間にも正味の心理入力が残り、自然回復は毎tick動いています。情報不確実性入力と環境stress入力の合計は0で、通常Scenarioの高止まりはそれらの外生入力で説明されません。Summaryでは分単位の既存traceを維持し、Agent別時間別にはraw/applied/social deltaとcomponent totalを別出力します。総clip損失は社会event差分も別に加味するためここでは推定値として報告しません。
+
+通常/不足Summary runのWall timeはそれぞれ1,179.56/1,188.30秒、process CPUは1,168.00/1,171.88秒でした。全JSONL等の一時成果物は506.78/509.14 MB（うち時間別寄与10.63/10.62 MB）で、Gitには登録していません。この時間は統合life-state ScenarioのSummary出力であり、`baseline_100_7d.json` による性能比較とは別です。
+
+通常運営ScenarioをTrace OFFでも再実行し、Summary runと同一のScenario hashと最終WorldState hash（`9bf8ab1b0830dbb2999453ec36bc51631d67aabae7a1c1fb849ebb6d3b26789a`）を確認しました。Trace OFF runは1,123.91秒でした。これはSummary成果物を出さない再現性・Trace中立性確認で、baseline性能計測とは分けます。
+
+## A03: baseline性能測定とTrace sanitizer最適化
+
+同一M1/macOS環境で、`fixtures/scenarios/baseline_100_7d.json`、seed 2026、100 Agent、offline、`TraceLevel.SUMMARY` を使って測りました。1日条件は同fixtureのdurationだけを1,440分に短縮しています。Wall/CPUは秒、RSSはprocess high-water MiB、Traceと成果物容量はMiB（1 MiB = 1,048,576 bytes）です。各条件一回の記述統計で、実行変動を推定する複数seed/反復ではありません。
+
+| 時点・条件 | Wall | CPU | Peak RSS | events | Trace | 全成果物 |
+|---|---:|---:|---:|---:|---:|---:|
+| 研究branch編集前・1日 | 18.03 | 未記録 | 未記録 | 5,637 | 未記録 | 48.44 |
+| 研究branch編集前・7日 | 151.72 | 147.10 | 461.12 | 37,444 | 未記録 | 328.83 |
+| 今回変更後・1日 | 14.75 | 14.70 | 128.27 | 5,637 | 7.66 | 49.63 |
+| 今回変更後・7日 | 127.79 | 127.47 | 492.91 | 37,444 | 50.60 | 337.05 |
+
+編集前の1日Wall timeは前回作業時の測定記録で、CPU/RSS/trace容量は保存されていません。7日編集前値は同じ研究branchの既存ローカル計測です。Wall timeは1日で約18%、7日で約16%短縮しました。7日CPUは約13%短縮しました。一方、7日Peak RSSは約32 MiB、全成果物は約8.6 MiB増加しました。新設した `psychology_contributions_hourly.jsonl` が今回runで1日約1.25 MiB、7日約10.13 MiBを占めます。trace契約を残したまま、結果追跡用の情報を追加したための容量/RSS trade-offです。
+
+ユーザー提供のmain `906a7d5` 測定は同じfixture・seed・trace levelの別スナップショットとして参照します。mainでは1日15.67秒/15.38 CPU秒/108.03 MiB/45.35 MiB、7日132.12秒/130.28 CPU秒/435.77 MiB/306.90 MiBでした。今回変更後はWall/CPUでそれぞれmain測定より短く、RSSと成果物は大きくなっています。mainと研究branchの結果は同一commitの前後比較として扱いません。
+
+1日Summary runのcProfileでは、最適化前の `_sanitize` が累積13.76秒を占めました。キー名の機密フィールド判定を256項目LRU cacheで再利用し、出力内容・redaction条件・Trace項目を変えない修正を行いました。同じプロファイル条件で `_sanitize` は累積4.58秒（約67%減）、`record_psychology_trace` は12.88秒から5.10秒になりました。非profileの同条件1日runでも同一の最終state hash、イベント数、Trace byte数を保ったまま、Wall timeは変更前17.04秒から14.75秒へ短縮しました。Profile付きWall timeはPython profilerの計測負荷があるため、非profile値との速度比較に使いません。
+
+profile後も `WorldView.from_world`（累積約7.3秒）、`support_wait_reason_codes`（約3.7秒）、`WorldState.validate`（約2.8秒）が観測上の処理時間を占めます。これらは複数の走査や全tick状態検証を含むため、本変更では意味や検証頻度を変える危険を避けて触れていません。Agent人数方向の計算量や大規模避難所の性能はこの100-Agent・単一seed・時間方向のbenchmarkから結論しません。

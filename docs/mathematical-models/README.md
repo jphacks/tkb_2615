@@ -23,4 +23,4 @@
 
 検証はコード上の性質、再現性、状態不変条件、合成シナリオへの適用に限ります。実測データによる校正と外部検証は行っていません。高ストレス指標は臨床診断や公衆衛生の閾値ではありません。
 
-最新の統合版比較・感度分析は [`research-validation-a02.json`](research-validation-a02.json)、100人・7日間の再現性runは [`research-validation-7day-a02.json`](research-validation-7day-a02.json) に保存しています。方法と実際の結果、失敗/未観測指標は [内部検証](09-internal-validation.md) に記録します。
+先行する統合版比較・感度分析は [`research-validation-a02.json`](research-validation-a02.json)、施設認知修正前の100人・7日間再現性runは [`research-validation-7day-a02.json`](research-validation-7day-a02.json) に保存しています。施設認知修正後の短時間比較、感度分析、最終100人・7日間run、および性能測定の更新結果は [内部検証](09-internal-validation.md) に記録します。A02の7日runは修正前の歴史的結果として保持し、修正後の値と混ぜていません。
