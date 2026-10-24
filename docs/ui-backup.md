@@ -2,6 +2,8 @@
 
 `/demo`、`/admin`とは独立した、HTML/CSS/JavaScriptの4画面です。WorldState、Run、Checkpoint、EffectProgram、モデル係数の契約を変更しません。
 
+2026-10-25の参照画像との再比較、修正内容、両解像度での実測、残る相違は [視覚レビュー記録](ui-backup-visual-review.md) にまとめています。
+
 ## 起動
 
 バックアップworktree内に専用venvを用意します。既存ディレクトリのvenvへeditable installして、既存作業の参照先を変更しないでください。デモはClaude APIへ接続する`record` modeで起動し、APIエラー時にoffline fallbackせず理由を表示します。API keyはGit管理外の環境変数またはローカルの`.env`から読み込ませてください（アプリは`.env`を自動読込しません）。
@@ -34,8 +36,8 @@ SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
 | 明示承認・Run作成 | POST P/scenario-approve | 実装済み / preview_id、approved_hash、approved:trueを送信 |
 | 計算・停止・進捗 | POST R/resume、R/cancel、GET R | 実装済み / 計算と再生を独立、保存済み時刻を進捗表示 |
 | マップ・人物・スタッフ・正式KPI | GET B/timeline?minute=M | 実装済み / 実Geometry・物理座標のみ描画、欠測位置の行動を補わない |
-| レイヤー・拡大縮小・人物選択 | timelineデータによるブラウザー描画 | 接続が必要 / 新規Canvas描画。健康レイヤーは記録された疲労・空腹・水分ニーズで、医学診断ではない |
-| 再生・停止・速度・巻戻し | 同上 | 接続が必要 / 計算済み範囲のみ。1/5/15/60分刻み、表示更新間隔700ms＋通信時間 |
+| レイヤー・拡大縮小・人物選択 | timelineデータによるブラウザー描画 | 実装済み / 独立Canvas描画、ドラッグ・キー移動・集合内の人物選択。健康レイヤーは記録された疲労・空腹・水分ニーズで、医学診断ではない |
+| 再生・停止・速度・巻戻し | 同上 | 実装済み / 計算済み範囲のみ。1/5/15/60分刻み、表示更新間隔700ms＋通信時間 |
 | 自然言語介入プレビュー | POST B/intervention-preview | 実装済み / 変換作用・検証結果・support_mode・制限を表示 |
 | 介入の明示承認・独立分岐 | POST B/intervention-apply | 実装済み / hashと入力・時刻・分岐を照合。変更で再承認が必要 |
 | 同期比較 | GET R/compare?branch_ids=A,B&minute=M | 実装済み / parentとchildを共通時刻・レイヤー・ズームで比較 |
@@ -64,6 +66,8 @@ SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
 - 写実的な建物写真、未記録の人物の声、根拠のない改善予測・感染リスク、実行時間・費用の推定値は生成しません。
 - スタッフ位置がなければマップに推測配置しません。人物情報の一覧には記録状態を表示します。
 - 履歴は保存範囲の標本です。グラフの線は記録点同士を結ぶ表示であり、未計算時刻を生成しません。
+- マップはドラッグ、矢印キーで移動し、Ctrl/⌘＋ホイールで拡大縮小できます。Homeは表示リセット、Escapeは人物選択解除です。比較の左右は同じパン・ズームを共有します。
+- 避難者数の時系列は現APIのKPI履歴に含まれないため、グラフ選択肢に欠測理由を示します。通常表示はストレスとスタッフ負荷の実履歴です。
 - 介入文の補助表示は当該ブラウザーのsessionStorageを利用します。復元できない場合は欠測を明示し、APIのCheckpoint分岐根拠を表示します。
 - UIのサマリーは記録値と一般的な検討案です。AIによる因果説明や人物の実発言として表示しません。
 - 新しい永続スキーマ・係数・モデルは導入しません。承認・分岐・再現性の検証は既存APIへ委ね、UI側でも条件変更時の承認無効化を行います。
@@ -90,13 +94,13 @@ SHELTERSIM_LLM_MODE=offline PYTHONPATH=src python -m pytest \
 - JS構文チェックとgit diff --checkが通過。新規Pythonテストはruffを通過。既存のserver.py（13件）とnatural_language.py（14件）のlint指摘は起点mainと同じで、新規指摘はありません。
 - 上記pytestはoffline専用です。live APIの確認は利用者が明示した予算上限と`SHELTERSIM_ALLOW_LIVE_API_TESTS=1`を使う別コマンドで実施します。長期7日・大人数での性能は未検証です。
 
-今回のローカル環境では、既存venvの依存だけを読み取り、`PYTHONPATH=src` でバックアップworktreeを優先する次の起動も確認済みです（既存venvへのinstallや設定変更は行いません）。
+以下は回帰テスト専用の隔離サーバーの起動例です。製品デモは冒頭のAPI接続設定を使用してください。
 
 ```sh
 cd /Users/mizuki/.codex/worktrees/ui-backup-20261025/tkb_2615
 PYTHONPATH=src SHELTERSIM_LLM_MODE=offline \
   /Users/mizuki/Dev/tkb_2615/.venv/bin/python -m sheltersim web \
-  --runs-dir /private/tmp/shelter-ui-backup-data --host 127.0.0.1 --port 8876
+  --runs-dir /private/tmp/shelter-ui-backup-test-data --host 127.0.0.1 --port 8877
 ```
 
 作業ブランチ: `feature/ui-backup-20261025`。起点: `origin/main` の `0d3a641d6a8470085b49e09cfda4a8c2cbe467a5`。既存ディレクトリの未コミット変更は引き継がず、独立worktreeで作業しました。

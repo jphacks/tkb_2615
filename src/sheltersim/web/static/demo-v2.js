@@ -5,9 +5,13 @@
   const enc = encodeURIComponent;
   const json = (value) => JSON.stringify(value, null, 2);
   const llmModeLabel = (mode) =>
-    ({ record: "Claude API接続", offline: "API未接続", replay: "記録応答リプレイ" })[
-      mode
-    ] || mode || "未記録";
+    ({
+      record: "Claude API接続",
+      offline: "API未接続",
+      replay: "記録応答リプレイ",
+    })[mode] ||
+    mode ||
+    "未記録";
   const query = new URLSearchParams(location.search);
   let saved = {};
   try {
@@ -30,6 +34,8 @@
     report: null,
     evidence: null,
     zoom: 1,
+    mapPan: { x: 0, y: 0 },
+    selectedGroup: [],
     selected: null,
     playing: false,
     busy: false,
@@ -105,6 +111,12 @@
     corridor: "通路",
   };
   const eventNames = {
+    toilet_service_complete: "トイレ利用完了",
+    support_request_timeout: "支援要請の待機期限",
+    social_interaction: "支援・交流の記録",
+    care_support_transition: "支援対応の進行",
+    facility_outage: "設備の稼働停止",
+    facility_recovery: "設備の稼働復旧",
     agent_action_lifecycle: "行動の状態変化",
     agent_travel_complete: "移動完了",
     agent_travel_start: "移動開始",
@@ -144,6 +156,17 @@
     `${Math.floor(m / 1440) + 1}日目 ${String(Math.floor((m % 1440) / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const shortBranch = (id) =>
     id === "main" ? "元のシナリオ" : `介入分岐 ${id.slice(-6)}`;
+  const runStatusLabel = (status) =>
+    ({
+      running: "計算中",
+      paused: "計算待機",
+      completed: "計算完了",
+      failed: "計算失敗",
+      interrupted: "計算中断",
+      created: "作成済み",
+    })[status] ||
+    status ||
+    "未作成";
   const num = (n) =>
     typeof n === "number" && Number.isFinite(n)
       ? Math.abs(n) >= 100
@@ -158,9 +181,68 @@
     if (cls) node.className = cls;
     return node;
   }
+  const iconPaths = {
+    scenario: ["M6 3h9l4 4v14H5V3z", "M14 3v5h5M8 12h8M8 16h6"],
+    simulation: [
+      "M4 19a9 9 0 1 1 16 0",
+      "M12 13l5-6",
+      "M6 15h1M7 8l1 1M12 5v1M18 14h1",
+    ],
+    comparison: [
+      "M6 5v14M6 12h6l6-6",
+      "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0z",
+      "M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0z",
+      "M20 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0z",
+    ],
+    report: ["M4 20h17M6 17v-6h3v6M11 17V5h3v12M16 17V8h3v9"],
+    people: [
+      "M9 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+      "M3 21v-5a6 6 0 0 1 12 0v5z",
+      "M17 4a3 3 0 0 1 0 6M17 13a5 5 0 0 1 5 5v3h-4",
+    ],
+    clock: ["M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z", "M12 6v6l4 2"],
+    staff: [
+      "M12 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+      "M4 22v-5a8 8 0 0 1 16 0v5z",
+      "M9 15l3 3 3-3",
+    ],
+    alert: ["M12 3l10 18H2L12 3z", "M12 9v5M12 17h.01"],
+    home: ["M2 11L12 2l10 9", "M5 9v13h14V9M9 22v-8h6v8"],
+    queue: [
+      "M5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+      "M2 16v-5a3 3 0 0 1 6 0v5M3 16v6M7 16v6M12 5h10M12 11h10M12 17h10",
+    ],
+  };
+  function uiIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.9");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    for (const d of iconPaths[name] || iconPaths.people) {
+      const path = document.createElementNS(svg.namespaceURI, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+  const chatWelcome = $("chat").firstElementChild.cloneNode(true);
+  function resetChat() {
+    $("chat").replaceChildren(chatWelcome.cloneNode(true));
+  }
+  let noticeTimer;
   function note(text, kind = "") {
+    clearTimeout(noticeTimer);
+    $("notice").hidden = false;
     $("notice").textContent = text;
     $("notice").className = `notice ${kind}`;
+    if (kind === "success")
+      noticeTimer = setTimeout(() => {
+        $("notice").hidden = true;
+      }, 1800);
   }
   function remember() {
     localStorage.setItem(
@@ -222,6 +304,7 @@
     if (!["scenario", "simulation", "comparison", "report"].includes(page))
       page = "scenario";
     state.page = page;
+    document.body.dataset.view = page;
     stopPlayback();
     document
       .querySelectorAll(".page")
@@ -263,7 +346,21 @@
     container.replaceChildren();
     for (const d of defs) {
       const card = el("div", undefined, "kpi");
-      card.append(el("span", d.icon, "kpi-icon"));
+      const image = el("span", undefined, "kpi-icon");
+      image.append(
+        uiIcon(
+          {
+            stress_mean: "people",
+            toilet_wait_max_minutes: "clock",
+            staff_load_ratio: "staff",
+            unresolved_support_request_count: "alert",
+            population: "people",
+            toilet_queue_length: "queue",
+          }[d.key],
+        ),
+      );
+      card.append(image);
+      card.title = d.note;
       const body = el("div");
       body.append(el("small", d.label));
       body.append(
@@ -284,6 +381,9 @@
     const has = Boolean(state.run && state.frame),
       running = state.data?.status === "running",
       working = state.busy || running;
+    document
+      .querySelector(".simulation-side")
+      .classList.toggle("has-intervention", Boolean(state.intervention));
     for (const id of ["compute", "compute-end", "intervention-preview"])
       $(id).disabled = !has || working;
     $("cancel").disabled = !running;
@@ -315,7 +415,7 @@
     $("compare-seek").disabled = !state.comparison || state.busy;
     $("compute-status").textContent = running
       ? `実計算中 · 保存済み ${upper()} 分 / 目標 ${state.target ?? "不明"} 分`
-      : `${state.data?.status || "未作成"} · 計算速度と再生速度は独立しています`;
+      : `${runStatusLabel(state.data?.status)} · 計算速度と再生速度は独立しています`;
     if (has) {
       $("seek").min = lower();
       $("seek").max = upper();
@@ -500,7 +600,12 @@
     $("preview-empty").hidden = true;
     $("preview-step").classList.add("current");
     $("preview-mode").textContent =
-      `${p.llm_usage?.mode || "記録なし"} · 補完値を要確認`;
+      `${llmModeLabel(p.llm_usage?.mode)} · 補完値を要確認`;
+    if (!state.run) {
+      $("scenario-name").textContent = r.municipality + " · " + r.disaster;
+      $("scenario-summary").textContent =
+        r.evacuees + "人 / " + num(r.duration_days) + "日間の試算";
+    }
     $("preview-summary").textContent =
       `${r.municipality}での${r.disaster}を想定し、${r.evacuees}人・${num(r.duration_days)}日間の避難所運営を試算します。施設・人口は合成モデルです。`;
     $("condition-chips").replaceChildren(
@@ -622,6 +727,9 @@
     state.comparison = null;
     state.context = null;
     state.selected = null;
+    state.selectedGroup = [];
+    state.mapPan = { x: 0, y: 0 };
+    state.zoom = 1;
     invalidateIntervention();
     state.preview = null;
     $("scenario-check").checked = false;
@@ -652,6 +760,15 @@
       state.displayName = req
         ? `${req.municipality} · ${req.disaster}`
         : data.scenario_id;
+      const selectedOption = [...$("saved-runs").options].find(
+        (o) => o.value === state.run,
+      );
+      if (selectedOption)
+        selectedOption.textContent =
+          state.displayName +
+          " · " +
+          (state.scenario?.profiles?.length ?? "—") +
+          "人";
       $("target").max = state.total;
       $("compare-target").max = state.total;
       $("target").value = Math.min(state.total, 60);
@@ -728,14 +845,20 @@
       state.displayName || state.data?.scenario_id || "保存シナリオ";
     $("scenario-summary").textContent =
       `${num(frame.kpis.population)}人 / ${shortBranch(state.branch)}\n${time(state.minute)}（経過${state.minute}分）`;
+    const geometryOrigin = {
+      synthetic: "合成施設",
+      measured: "実測形状",
+      operator: "入力された形状",
+      inferred: "推定された形状",
+    };
     $("map-location").textContent = frame.geometry
-      ? "合成施設 / 記録された形状"
+      ? `${geometryOrigin[frame.geometry.source_kind] || "施設"} / 記録された形状`
       : "物理座標なし";
     const missing = frame.agents.filter(
       (a) => !a.point || a.position_kind === "display_only",
     ).length;
     $("position-note").textContent =
-      `人物位置 ${frame.agents.length - missing}/${frame.agents.length}人記録 · 同一座標は人数表示 · 感染症リスクは正式KPI未提供`;
+      `位置 ${frame.agents.length - missing}/${frame.agents.length}人記録 · 同じ位置は集合表示 · ドラッグで移動`;
     const issues = [];
     if (frame.kpis.toilet_queue_length > 0)
       issues.push([
@@ -802,7 +925,7 @@
         ),
         el(
           "span",
-          `${time(e.minute)} · ${e.status === "applied" ? "適用済み" : e.status}`,
+          `${time(e.minute)} · ${{ applied: "適用済み", suppressed: "適用抑制", rejected: "却下", failed: "失敗", scheduled: "予定" }[e.status] || e.status}`,
         ),
       );
       node.title = `${e.event_id} / source: ${e.source_id || "未記録"}`;
@@ -817,14 +940,24 @@
   }
 
   function personSummary(p) {
-    return `${p.traits?.age_years ?? "年齢未記録"}歳 · ${activityNames[p.activity] || p.activity} · ストレス ${num(p.stress * 100)}/100`;
+    return `${typeof p.traits?.age_years === "number" ? p.traits.age_years + "歳" : "年齢未記録"} · ${activityNames[p.activity] || p.activity} · ストレス ${num(p.stress * 100)}/100`;
   }
   function renderPeople() {
     const f = state.frame;
     $("people-list").replaceChildren();
-    for (const p of f.people.slice(0, 8)) {
-      const button = el("button", `♟ ${p.id}`, "person-chip");
-      button.addEventListener("click", () => selectPerson(p.id));
+    const group = state.selectedGroup?.length
+      ? f.people.filter((p) => state.selectedGroup.includes(p.id))
+      : f.people.slice(0, 8);
+    if (state.selectedGroup?.length > 1)
+      $("people-list").append(
+        el("span", `同じ記録位置の${group.length}人`, "group-caption"),
+      );
+    for (const p of group) {
+      const button = el("button", p.id, "person-chip");
+      button.classList.toggle("selected", p.id === state.selected);
+      button.addEventListener("click", () =>
+        selectPerson(p.id, state.selectedGroup),
+      );
       $("people-list").append(button);
     }
     if (state.selected) {
@@ -854,10 +987,25 @@
         $("person-detail").append(
           el("p", "選択した人物はこの時点の記録に含まれません。", "fine"),
         );
+    } else {
+      $("person-detail").replaceChildren();
+      for (const p of [...f.people]
+        .sort((a, b) => (b.stress || 0) - (a.stress || 0))
+        .slice(0, 2)) {
+        const card = el("button", undefined, "person-preview");
+        const avatar = el("span", undefined, "avatar");
+        avatar.append(uiIcon("people"));
+        const body = el("span");
+        body.append(el("strong", p.id), el("small", personSummary(p)));
+        card.append(avatar, body);
+        card.addEventListener("click", () => selectPerson(p.id));
+        $("person-detail").append(card);
+      }
     }
   }
-  function selectPerson(id) {
+  function selectPerson(id, group = []) {
     state.selected = id;
+    state.selectedGroup = group;
     renderPeople();
     drawAll();
   }
@@ -927,7 +1075,7 @@
       if (data.status !== "running") {
         if (reference(branch).computed_until < target)
           throw new Error(
-            `計算は ${data.status} で停止しました。保存済み範囲は保持されています。`,
+            `計算は「${runStatusLabel(data.status)}」で停止しました。保存済み範囲は保持されています。`,
           );
         return;
       }
@@ -1043,7 +1191,7 @@
     state.comparison = null;
     state.history = [];
     state.context = null;
-    $("chat").replaceChildren();
+    resetChat();
     $("comparison-instruction").textContent =
       `${time(i.captured.minute)}に分岐：${i.captured.text}`;
     $("comparison-effect").replaceChildren(
@@ -1123,8 +1271,8 @@
     $("compare-seek").value = m;
     $("comparison-range").textContent = `共通計算済み範囲 ${lo}–${hi} 分`;
     $("compare-time").textContent = time(m);
-    $("branch-a-name").textContent = `A · ${shortBranch(ids[0])}`;
-    $("branch-b-name").textContent = `B · ${shortBranch(ids[1])}`;
+    $("branch-a-name").textContent = shortBranch(ids[0]);
+    $("branch-b-name").textContent = shortBranch(ids[1]);
     const defs = metricDefs.slice(0, 4);
     renderKpis($("compare-kpis-a"), result.frames[0].kpis, defs);
     renderKpis($("compare-kpis-b"), result.frames[1].kpis, defs);
@@ -1162,7 +1310,9 @@
     }
     for (const [index, key] of ["a", "b"].entries()) {
       const frame = result.frames[index],
-        missing = frame.facilities.filter((f) => !f.point).length;
+        missing = frame.facilities.filter(
+          (f) => !f.point && !f.service_queues?.some((q) => q.point),
+        ).length;
       $(`compare-conditions-${key}`).textContent =
         `稼働トイレ ${num(frame.kpis.toilet_working_units)}基 · 物理座標未記録の設備 ${missing}件（推測配置しません）`;
     }
@@ -1185,11 +1335,18 @@
         );
       } else {
         $("comparison-instruction").textContent =
-          `記録された分岐 ${ids[1]} / 起点 ${refs[1].fork_minute}分`;
+          `${time(refs[1].fork_minute)} に分岐`;
         $("comparison-effect").replaceChildren(
           el(
+            "span",
+            result.shared_origin
+              ? "同一起点のCheckpointを確認"
+              : "分岐の根拠を要確認",
+            "badge teal-badge",
+          ),
+          el(
             "p",
-            "介入文のローカル表示記録はありません。Checkpointの分岐根拠を参照してください。",
+            `稼働トイレ ${num(result.frames[0].kpis.toilet_working_units)} → ${num(result.frames[1].kpis.toilet_working_units)}基 · 介入文の端末記録なし。保存された分岐と施設条件を比較しています。`,
             "fine",
           ),
         );
@@ -1246,9 +1403,10 @@
       cursor = page.next_cursor;
     } while (cursor && rows.length < 1000);
     state.history = rows;
-    const last = rows.at(-1);
+    $("history-note").title =
+      "グラフはtick終了時、マップはtick直前境界の記録です。避難者数の時系列は現在のKPI履歴に含まれていません。";
     $("history-note").textContent = rows.length
-      ? `記録 ${rows.length}点 · ${step}分間隔の標本 · tick終了時のKPI（マップはtick直前境界）。取得範囲 ${lo}–${hi}分${last ? "" : ""}`
+      ? `記録 ${rows.length}点 · ${step}分間隔 · 経過 ${lo}–${hi}分（記録時点の詳細はここにマウスを重ねて確認）`
       : "KPI履歴はまだありません。少なくとも1分計算して更新してください。";
     drawHistory();
   }
@@ -1272,7 +1430,9 @@
           ? "規則による代替レポート"
           : report.status === "unavailable"
             ? "レポート生成不可"
-            : report.status || "取得済み";
+            : report.status === "validated"
+              ? "AIレポート生成済み"
+              : report.status || "取得済み";
     $("report-raw").textContent = report.markdown || json(report);
     $("report-evidence").textContent = json({ evidence, llm });
     $("report-minute").textContent =
@@ -1297,6 +1457,33 @@
       const box = el("div", undefined, "report-finding");
       box.append(el("strong", title), el("span", text));
       $("report-summary").append(box);
+    }
+    const review = report.review?.review;
+    const recommended = {
+      compare_capacity_intervention:
+        "同じ条件を起点に、施設容量の介入を比較する",
+      inspect_event_chain: "記録されたイベントと、その後の状態変化を確認する",
+      repeat_across_seeds: "複数のseedで同じ分岐比較を繰り返す",
+      calibrate_with_aggregate_data: "適用可能な集計データで仮定を校正する",
+      review_branch_differences: "結論を出す前に、元の分岐との違いを確認する",
+    };
+    if (review?.recommendations?.length) {
+      const box = el("div", undefined, "report-finding ai-finding");
+      box.append(
+        el(
+          "strong",
+          report.status === "validated"
+            ? "AIが選んだ検討案（効果は未検証）"
+            : "記録に基づく検討案",
+        ),
+      );
+      const list = el("ul");
+      for (const item of review.recommendations) {
+        if (recommended[item.action])
+          list.append(el("li", recommended[item.action]));
+      }
+      box.append(list);
+      $("report-summary").insertBefore(box, $("report-summary").children[2]);
     }
     if (report.markdown)
       $("report-summary").append(
@@ -1323,13 +1510,17 @@
       const row = el("div", undefined, "person-row"),
         body = el("div");
       body.append(el("strong", p.id), el("span", personSummary(p)));
-      row.append(el("span", "♟", "avatar"), body);
+      const avatar = el("span", undefined, "avatar");
+      avatar.append(uiIcon("people"));
+      row.append(avatar, body);
       $("report-people").append(row);
     }
     for (const s of state.frame.staff.slice(0, 2)) {
       const row = el("div", undefined, "person-row");
+      const avatar = el("span", undefined, "avatar");
+      avatar.append(uiIcon("staff"));
       row.append(
-        el("span", "◆", "avatar"),
+        avatar,
         el(
           "span",
           `${s.id} / ${s.zone_id} / 担当 ${s.active_task_id || "なし"}`,
@@ -1378,8 +1569,12 @@
       return;
     state.context = answer.context_id;
     const bubble = el("div", undefined, "chat-bubble answer");
+    const usage = answer.usage || {};
     bubble.append(
-      el("small", `回答状態：${answer.mode || "記録を参照"} / ${time(minute)}`),
+      el(
+        "small",
+        `${llmModeLabel(answer.mode)} · ${usage.fallback_used ? "代替処理あり" : usage.outcome === "recorded" ? "API応答を記録・検証" : "記録を参照"} / ${time(minute)}`,
+      ),
     );
     if (answer.facts?.length)
       bubble.append(
@@ -1398,16 +1593,35 @@
       );
     if (!answer.facts?.length && !answer.explanations?.length)
       bubble.append(el("p", answer.answer));
-    for (const source of answer.sources || [])
-      bubble.append(
-        el(
-          "div",
-          `${source.alias} · ${source.label} · ${json(source.reference)}`,
-          "source-fine",
-        ),
+    const sourceChips = el("div", undefined, "source-chips");
+    for (const source of answer.sources || []) {
+      const chip = el(
+        "span",
+        `${source.alias} · ${source.label}`,
+        "source-chip",
       );
-    for (const limitation of answer.limitations || [])
-      bubble.append(el("p", limitation, "fine"));
+      chip.title = json(source.reference);
+      sourceChips.append(chip);
+    }
+    bubble.append(sourceChips);
+    const detail = el("details");
+    detail.append(
+      el(
+        "summary",
+        `出典・生成情報・回答の限界（${answer.sources?.length || 0}件の出典）`,
+      ),
+      el(
+        "pre",
+        json({
+          sources: answer.sources || [],
+          mode: answer.mode,
+          model: answer.model,
+          usage,
+          limitations: answer.limitations || [],
+        }),
+      ),
+    );
+    bubble.append(detail);
     $("chat").append(bubble);
     $("chat").scrollTop = $("chat").scrollHeight;
     $("question").value = "";
@@ -1451,352 +1665,20 @@
   function drawMap(canvas, frame, layer = "normal", zoom = state.zoom) {
     const sf = surface(canvas);
     if (!sf) return;
-    const { ctx, w, h } = sf;
-    ctx.fillStyle = "#d4e2dc";
-    ctx.fillRect(0, 0, w, h);
-    hits.set(canvas, []);
-    if (!frame?.geometry) {
-      ctx.fillStyle = "#53738f";
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(
-        frame
-          ? "物理座標が記録されていません"
-          : "シナリオを作成すると表示されます",
-        w / 2,
-        h / 2,
-      );
-      return;
-    }
-    const g = frame.geometry,
-      pad = Math.min(w, h) * 0.065,
-      scale =
-        Math.min((w - 2 * pad) / g.width_m, (h - 2 * pad) / g.height_m) * zoom,
-      ox = (w - g.width_m * scale) / 2,
-      oy = (h - g.height_m * scale) / 2,
-      point = (p) => ({ x: ox + p.x * scale, y: oy + p.y * scale });
-    ctx.fillStyle = "#c6d3c8";
-    for (let x = 0; x < w; x += 22) {
-      ctx.fillRect(x, 0, 1, h);
-    }
-    for (let y = 0; y < h; y += 22) {
-      ctx.fillRect(0, y, w, 1);
-    }
-    ctx.shadowColor = "#17374045";
-    ctx.shadowBlur = 14;
-    ctx.shadowOffsetY = 6;
-    ctx.fillStyle = "#a8b8ad";
-    ctx.fillRect(
-      ox - 6,
-      oy - 6,
-      g.width_m * scale + 12,
-      g.height_m * scale + 12,
+    const interactive = [
+      "simulation-map",
+      "compare-map-a",
+      "compare-map-b",
+    ].includes(canvas.id);
+    hits.set(
+      canvas,
+      window.HinanjoMap.draw(sf, frame, {
+        layer,
+        zoom,
+        selected: state.selected,
+        pan: interactive ? state.mapPan : { x: 0, y: 0 },
+      }),
     );
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-    const palettes = {
-      sleeping: ["#e9c984", "#c5a66a"],
-      quiet: ["#e3e4d7", "#9ea7a5"],
-      medical: ["#dfedeb", "#98aca6"],
-      food: ["#eee1c8", "#b9a77e"],
-      toilet: ["#d8ebf2", "#8eabb8"],
-      intake: ["#e5edf0", "#a6b7bb"],
-      staff: ["#dce6e9", "#8b9ea4"],
-      corridor: ["#d1d4cc", "#aeb5b1"],
-    };
-    const count = {};
-    for (const a of frame.agents || [])
-      count[a.zone_id] = (count[a.zone_id] || 0) + 1;
-    const bounds = [];
-    for (const z of g.zones) {
-      const key = z.zone_id.split("_")[0],
-        colors = palettes[key] || ["#e1e8df", "#acb5ac"];
-      const poly = z.polygon.map(point);
-      const xs = poly.map((p) => p.x),
-        ys = poly.map((p) => p.y),
-        x = Math.min(...xs),
-        y = Math.min(...ys),
-        zw = Math.max(...xs) - x,
-        zh = Math.max(...ys) - y;
-      bounds.push({ z, x, y, w: zw, h: zh });
-      ctx.save();
-      ctx.beginPath();
-      poly.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-      ctx.closePath();
-      ctx.fillStyle =
-        layer === "crowd"
-          ? `hsl(${120 * (1 - Math.min(1, (count[z.zone_id] || 0) / Math.max(1, z.usable_area_m2)))},55%,80%)`
-          : colors[0];
-      ctx.fill();
-      ctx.clip();
-      if (key === "sleeping" && layer !== "crowd") {
-        ctx.strokeStyle = "#fff4d744";
-        ctx.lineWidth = 1;
-        for (let yy = y; yy < y + zh; yy += 8) {
-          ctx.beginPath();
-          ctx.moveTo(x, yy);
-          ctx.lineTo(x + zw, yy);
-          ctx.stroke();
-        }
-        ctx.strokeStyle = "#caaa6a55";
-        for (let yy = y; yy < y + zh; yy += 24)
-          for (
-            let xx = x + (Math.round(yy / 24) % 2) * 18;
-            xx < x + zw;
-            xx += 60
-          ) {
-            ctx.beginPath();
-            ctx.moveTo(xx, yy);
-            ctx.lineTo(xx, yy + 8);
-            ctx.stroke();
-          }
-      } else {
-        ctx.strokeStyle = "#ffffff55";
-        ctx.lineWidth = 0.6;
-        for (let xx = x; xx < x + zw; xx += 18) {
-          ctx.beginPath();
-          ctx.moveTo(xx, y);
-          ctx.lineTo(xx, y + zh);
-          ctx.stroke();
-        }
-        for (let yy = y; yy < y + zh; yy += 18) {
-          ctx.beginPath();
-          ctx.moveTo(x, yy);
-          ctx.lineTo(x + zw, yy);
-          ctx.stroke();
-        }
-      }
-      ctx.restore();
-      ctx.strokeStyle = colors[1];
-      ctx.lineWidth = Math.max(2, scale * 0.16);
-      ctx.stroke();
-    }
-    // Stored routes are paths, not invented agent journeys.
-    if (layer === "operations")
-      for (const route of g.routes || []) {
-        ctx.beginPath();
-        route.points
-          .map(point)
-          .forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-        ctx.strokeStyle = "#2589d54a";
-        ctx.setLineDash([3, 4]);
-        ctx.lineWidth = Math.max(1, scale * 0.06);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    for (const f of frame.facilities || []) {
-      if (!f.point) continue;
-      const p = point(f.point),
-        size = Math.max(5, Math.min(16, scale * 0.52));
-      ctx.fillStyle = "#aab9bf";
-      ctx.fillRect(p.x - size / 2 + 1, p.y - size / 2 + 2, size, size);
-      ctx.fillStyle =
-        f.working_units === 0
-          ? "#ffc1cf"
-          : f.kind === "toilet"
-            ? "#f3fcff"
-            : f.kind === "medical_support"
-              ? "#f9ffff"
-              : "#c6a36a";
-      ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
-      ctx.strokeStyle = "#627e90";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
-      ctx.fillStyle = f.kind === "medical_support" ? "#ed4666" : "#397694";
-      ctx.textAlign = "center";
-      ctx.font = `bold ${Math.max(6, size * 0.7)}px sans-serif`;
-      ctx.fillText(
-        f.kind === "medical_support" ? "+" : f.kind === "toilet" ? "▣" : "▪",
-        p.x,
-        p.y + size * 0.26,
-      );
-      if (layer === "operations" && w > 600) {
-        ctx.fillStyle = "#1e3d60";
-        ctx.font = "9px sans-serif";
-        ctx.fillText(
-          `${f.working_units ?? f.capacity}/${f.capacity}`,
-          p.x,
-          p.y - size * 0.9,
-        );
-      }
-    }
-    const people = new Map((frame.people || []).map((p) => [p.id, p]));
-    function actor(id, physical, person, staff = false) {
-      if (!physical) return;
-      const p = point(physical);
-      if (p.x < 0 || p.x > w || p.y < 0 || p.y > h) return;
-      const size = Math.max(2.8, Math.min(6.7, scale * 0.23));
-      let color = staff
-        ? "#2085dc"
-        : person?.activity === "queued"
-          ? "#eca72f"
-          : "#05a788";
-      if (!staff && (layer === "stress" || layer === "health")) {
-        const value =
-          layer === "stress"
-            ? person?.stress
-            : Math.max(
-                person?.needs?.fatigue || 0,
-                person?.needs?.hunger || 0,
-                person?.needs?.hydration_need || 0,
-              );
-        color =
-          typeof value === "number"
-            ? `hsl(${120 * (1 - Math.max(0, Math.min(1, value)))},75%,44%)`
-            : "#8796a9";
-      }
-      ctx.fillStyle = "#23393525";
-      ctx.beginPath();
-      ctx.ellipse(
-        p.x,
-        p.y + size * 1.1,
-        size * 0.9,
-        size * 0.38,
-        0,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      ctx.fillStyle = "#283f60";
-      ctx.fillRect(
-        p.x - size * 0.45,
-        p.y + size * 0.3,
-        size * 0.32,
-        size * 0.7,
-      );
-      ctx.fillRect(
-        p.x + size * 0.13,
-        p.y + size * 0.3,
-        size * 0.32,
-        size * 0.7,
-      );
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.roundRect(
-        p.x - size * 0.65,
-        p.y - size * 0.5,
-        size * 1.3,
-        size * 1.15,
-        size * 0.3,
-      );
-      ctx.fill();
-      ctx.fillStyle = "#f3ceac";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y - size * 0.9, size * 0.48, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = staff ? "#e4f5ff" : "#3d4149";
-      ctx.beginPath();
-      ctx.ellipse(
-        p.x,
-        p.y - size * 1.17,
-        size * 0.49,
-        size * 0.24,
-        0,
-        Math.PI,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      if (staff) {
-        ctx.fillStyle = "#d5f1ff";
-        ctx.fillRect(p.x - size * 0.5, p.y - size * 0.2, size, 1.6);
-      }
-      if (state.selected === id) {
-        ctx.strokeStyle = "#0878ff";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.ellipse(p.x, p.y, size * 1.5, size * 2, 0, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      hits.get(canvas).push({ id, x: p.x, y: p.y, r: Math.max(10, size * 2) });
-    }
-    const groups = new Map();
-    for (const a of frame.agents || []) {
-      if (!a.point || a.position_kind === "display_only") continue;
-      const key = `${a.point.x.toFixed(3)},${a.point.y.toFixed(3)}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(a);
-    }
-    for (const group of groups.values()) {
-      const a = group[0];
-      actor(a.agent_id, a.point, people.get(a.agent_id));
-      if (group.length > 1) {
-        const p = point(a.point),
-          radius = Math.max(9, Math.min(16, scale * 0.5));
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-        const avg =
-          group.reduce((sum, item) => {
-            const p = people.get(item.agent_id);
-            return (
-              sum +
-              (layer === "health"
-                ? Math.max(
-                    p?.needs?.fatigue || 0,
-                    p?.needs?.hunger || 0,
-                    p?.needs?.hydration_need || 0,
-                  )
-                : p?.stress || 0)
-            );
-          }, 0) / group.length;
-        ctx.fillStyle =
-          layer === "stress" || layer === "health"
-            ? `hsl(${120 * (1 - avg)},65%,43%)`
-            : "#16897d";
-        ctx.fill();
-        ctx.strokeStyle = "white";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.fillStyle = "white";
-        ctx.font = `bold ${radius * 0.8}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.fillText(String(group.length), p.x, p.y + radius * 0.3);
-        hits.get(canvas).push({ id: a.agent_id, x: p.x, y: p.y, r: radius });
-      }
-    }
-    for (const s of frame.staff || []) {
-      const p = s.position?.point || s.position;
-      if (typeof p?.x === "number" && typeof p?.y === "number")
-        actor(s.id, p, null, true);
-    }
-    // Labels stay inside recorded zone bounds; no additional rooms are illustrated.
-    for (const b of bounds) {
-      const { z, x, y, w: zw, h: zh } = b;
-      if (zw < 12 || zh < 12) continue;
-      const key = z.zone_id.split("_")[0],
-        name = zoneNames[key] || z.zone_id,
-        font = Math.max(6, Math.min(12, (zw / Math.min(name.length, 8)) * 0.9));
-      ctx.font = `bold ${font}px sans-serif`;
-      ctx.textAlign = "center";
-      const lines =
-          name.length > 7 ? [name.slice(0, 6), name.slice(6)] : [name],
-        ly = y + Math.min(zh * 0.18, 25);
-      ctx.fillStyle = "#ffffffdf";
-      ctx.fillRect(x + 2, ly - font - 3, zw - 4, lines.length * (font + 3) + 6);
-      ctx.fillStyle = "#18386b";
-      lines.forEach((t, i) =>
-        ctx.fillText(t, x + zw / 2, ly + i * (font + 3), zw - 5),
-      );
-      if (layer === "crowd") {
-        ctx.font = `${font}px sans-serif`;
-        ctx.fillText(
-          `${count[z.zone_id] || 0}人`,
-          x + zw / 2,
-          ly + lines.length * (font + 3) + font,
-        );
-      }
-    }
-    // Obstacles, walls and openings come from the geometry contract when present.
-    for (const wall of g.walls || []) {
-      if (!wall.start || !wall.end) continue;
-      const a = point(wall.start),
-        b = point(wall.end);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = "#647681";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    }
   }
   function drawPopulation(scenario) {
     const sf = surface($("population-chart"));
@@ -1851,69 +1733,140 @@
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, w, h);
     const key = $("chart-metric").value,
-      d = metricDefs.find((d) => d.key === key),
-      raw = state.history.map((row) => row.data || row.snapshot || row);
-    const points = raw.filter(
-      (r) => typeof r[key] === "number" && typeof r.minute_index === "number",
-    );
-    ctx.font = "10px sans-serif";
+      overview = key === "overview";
+    const definitions = overview
+      ? [
+          {
+            key: "stress_mean",
+            label: "平均ストレス /100",
+            factor: 100,
+            color: "#ff365e",
+            axis: "left",
+          },
+          {
+            key: "staff_load_ratio",
+            label: "スタッフ負荷 %",
+            factor: 100,
+            color: "#efa023",
+            axis: "left",
+          },
+        ]
+      : [
+          {
+            ...metricDefs.find((d) => d.key === key),
+            color:
+              key === "stress_mean"
+                ? "#ff365e"
+                : key === "staff_load_ratio"
+                  ? "#efa023"
+                  : "#0878ff",
+            axis: "left",
+          },
+        ];
+    const raw = state.history
+      .map((row) => row.data || row.snapshot || row)
+      .filter((r) => typeof r.minute_index === "number");
+    const series = definitions
+      .map((d) => ({
+        ...d,
+        points: raw.filter((r) => typeof r[d.key] === "number"),
+      }))
+      .filter((d) => d.points.length);
+    ctx.font = "11px sans-serif";
     ctx.fillStyle = "#6783a4";
-    if (!points.length) {
+    if (!series.length) {
       ctx.fillText("この指標の時系列記録はありません", 20, h / 2);
       return;
     }
-    const l = 44,
-      r = 18,
-      t = 22,
-      b = 34,
-      maxX = Math.max(...points.map((p) => p.minute_index), 1),
-      minX = Math.min(...points.map((p) => p.minute_index)),
-      maxY = Math.max(...points.map((p) => p[key] * d.factor), 1) * 1.1;
+    const left = 43,
+      right = 18,
+      top = 40,
+      bottom = 32,
+      pw = w - left - right,
+      ph = h - top - bottom;
+    const minX = Math.min(...raw.map((p) => p.minute_index)),
+      maxX = Math.max(minX + 1, ...raw.map((p) => p.minute_index));
+    const leftValues = series
+      .filter((d) => d.axis === "left")
+      .flatMap((d) => d.points.map((p) => p[d.key] * d.factor));
+    const high = Math.max(1, ...leftValues),
+      maxY = overview
+        ? 100
+        : high >= 10
+          ? Math.ceil((high * 1.05) / 10) * 10
+          : high * 1.1;
+    let legendX = left;
+    for (const d of series) {
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(legendX, 13);
+      ctx.lineTo(legendX + 16, 13);
+      ctx.stroke();
+      ctx.fillStyle = "#47658f";
+      ctx.textAlign = "left";
+      ctx.font = "10px sans-serif";
+      ctx.fillText(d.label, legendX + 21, 17);
+      legendX += ctx.measureText(d.label).width + 38;
+    }
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
-      const y = t + ((h - t - b) * i) / 4;
-      ctx.strokeStyle = "#e6eef8";
+      const y = top + (ph * i) / 4;
+      ctx.strokeStyle = "#e5eef7";
       ctx.beginPath();
-      ctx.moveTo(l, y);
-      ctx.lineTo(w - r, y);
+      ctx.moveTo(left, y);
+      ctx.lineTo(w - right, y);
       ctx.stroke();
-      ctx.fillStyle = "#6a80a5";
       ctx.textAlign = "right";
-      ctx.fillText(num(maxY * (1 - i / 4)), l - 7, y + 4);
+      ctx.fillStyle = "#7186a8";
+      ctx.font = "10px sans-serif";
+      ctx.fillText(num(maxY * (1 - i / 4)), left - 7, y + 4);
     }
-    const pos = (p) => [
-      l + ((p.minute_index - minX) / Math.max(1, maxX - minX)) * (w - l - r),
-      h - b - ((p[key] * d.factor) / maxY) * (h - t - b),
-    ];
-    ctx.beginPath();
-    points.forEach((p, i) => {
-      const [x, y] = pos(p);
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    });
-    ctx.strokeStyle =
-      key === "stress_mean"
-        ? "#ff365e"
-        : key === "staff_load_ratio"
-          ? "#f3a11d"
-          : "#0878ff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    if (points.length === 1) {
-      const [x, y] = pos(points[0]);
+    const xOf = (m) => left + ((m - minX) / (maxX - minX)) * pw;
+    for (const d of series) {
+      const pos = (p) => [
+        xOf(p.minute_index),
+        top +
+          ph -
+          ((p[d.key] * d.factor) / (d.axis === "right" ? 100 : maxY)) * ph,
+      ];
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = "#0878ff";
-      ctx.fill();
+      d.points.forEach((p, i) => {
+        const [x, y] = pos(p);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = 2.3;
+      ctx.stroke();
+      if (d.key === "population") {
+        const last = pos(d.points.at(-1)),
+          first = pos(d.points[0]);
+        ctx.lineTo(last[0], top + ph);
+        ctx.lineTo(first[0], top + ph);
+        ctx.closePath();
+        ctx.fillStyle = "#0878ff0b";
+        ctx.fill();
+      }
+      for (
+        let i = 0;
+        i < d.points.length;
+        i += Math.max(1, Math.ceil(d.points.length / 14))
+      ) {
+        const [x, y] = pos(d.points[i]);
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.textAlign = "center";
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = "#647fa3";
     for (let i = 0; i <= 3; i++) {
-      const x = l + ((w - l - r) * i) / 3,
-        m = Math.round(minX + ((maxX - minX) * i) / 3);
-      ctx.fillStyle = "#6a80a5";
-      ctx.fillText(`${m}分`, x, h - 12);
+      const m = Math.round(minX + ((maxX - minX) * i) / 3);
+      ctx.textAlign = i === 0 ? "left" : i === 3 ? "right" : "center";
+      ctx.fillText(time(m), left + (pw * i) / 3, h - 10);
     }
-    ctx.textAlign = "left";
-    ctx.fillText(`${d.label} (${d.unit})`, l, 12);
   }
   function drawAll() {
     if (state.page === "scenario" && state.preview) {
@@ -2032,10 +1985,42 @@
   $("compare-target").addEventListener("input", () => {
     $("target").value = $("compare-target").value;
   });
+  function syncLayerTabs() {
+    document
+      .querySelectorAll("[data-layer]")
+      .forEach((b) =>
+        b.setAttribute(
+          "aria-pressed",
+          String(b.dataset.layer === $("layer").value),
+        ),
+      );
+    const layer = $("layer").value,
+      colored = ["stress", "health", "crowd"].includes(layer);
+    for (const id of ["legend-agents", "legend-queue", "legend-staff"])
+      $(id).hidden = colored;
+    $("layer-scale").hidden = !colored;
+    $("layer-scale").textContent =
+      layer === "stress"
+        ? "ストレス 低 → 高（0–100）"
+        : layer === "health"
+          ? "記録ニーズ 低 → 高（診断ではありません）"
+          : "Zone内の人数 / 面積（高密度ほど赤）";
+  }
   for (const id of ["layer", "compare-layer", "chart-metric"])
-    $(id).addEventListener("change", drawAll);
+    $(id).addEventListener("change", () => {
+      syncLayerTabs();
+      drawAll();
+    });
+  document.querySelectorAll("[data-layer]").forEach((b) =>
+    b.addEventListener("click", () => {
+      $("layer").value = b.dataset.layer;
+      syncLayerTabs();
+      drawAll();
+    }),
+  );
   document.querySelectorAll("[data-zoom]").forEach((b) =>
     b.addEventListener("click", () => {
+      if (b.dataset.zoom === "reset") state.mapPan = { x: 0, y: 0 };
       state.zoom =
         b.dataset.zoom === "reset"
           ? 1
@@ -2049,16 +2034,108 @@
       drawAll();
     }),
   );
-  $("simulation-map").addEventListener("click", (e) => {
-    const rect = e.currentTarget.getBoundingClientRect(),
-      x = e.clientX - rect.left,
-      y = e.clientY - rect.top;
-    const hit = (hits.get(e.currentTarget) || [])
-      .map((p) => ({ ...p, d: Math.hypot(x - p.x, y - p.y) }))
-      .filter((p) => p.d <= p.r)
-      .sort((a, b) => a.d - b.d)[0];
-    if (hit) selectPerson(hit.id);
-  });
+  for (const id of ["simulation-map", "compare-map-a", "compare-map-b"]) {
+    const canvas = $(id);
+    let drag = null;
+    canvas.tabIndex = 0;
+    const hitAt = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      return (hits.get(canvas) || [])
+        .map((p) => ({
+          ...p,
+          d: Math.hypot(
+            e.clientX - rect.left - p.x,
+            e.clientY - rect.top - p.y,
+          ),
+        }))
+        .filter((p) => p.d <= p.r)
+        .sort((a, b) => a.d - b.d)[0];
+    };
+    canvas.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      drag = {
+        x: e.clientX,
+        y: e.clientY,
+        px: state.mapPan.x,
+        py: state.mapPan.y,
+        moved: false,
+      };
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener("pointermove", (e) => {
+      if (drag) {
+        const dx = e.clientX - drag.x,
+          dy = e.clientY - drag.y;
+        if (Math.hypot(dx, dy) > 4) drag.moved = true;
+        if (drag.moved) {
+          state.mapPan = { x: drag.px + dx, y: drag.py + dy };
+          canvas.classList.add("dragging");
+          drawAll();
+        }
+      } else {
+        const hit = hitAt(e);
+        canvas.title =
+          hit?.label || "ドラッグで移動 · Ctrl＋ホイールで拡大縮小";
+        canvas.style.cursor = hit ? "pointer" : "grab";
+      }
+    });
+    canvas.addEventListener("pointerup", (e) => {
+      if (drag && !drag.moved) {
+        const hit = hitAt(e);
+        if (hit?.type === "person") selectPerson(hit.id, hit.ids);
+        else if (hit?.type === "facility") {
+          $("person-detail").replaceChildren(
+            el("div", hit.label, "person-state"),
+          );
+          state.selected = hit.id;
+          drawAll();
+        }
+      }
+      drag = null;
+      canvas.classList.remove("dragging");
+    });
+    canvas.addEventListener("pointercancel", () => {
+      drag = null;
+      canvas.classList.remove("dragging");
+    });
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        state.zoom = Math.max(
+          0.6,
+          Math.min(3, state.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)),
+        );
+        drawAll();
+      },
+      { passive: false },
+    );
+    canvas.addEventListener("keydown", (e) => {
+      const moves = {
+        ArrowLeft: [24, 0],
+        ArrowRight: [-24, 0],
+        ArrowUp: [0, 24],
+        ArrowDown: [0, -24],
+      };
+      if (moves[e.key]) {
+        e.preventDefault();
+        state.mapPan.x += moves[e.key][0];
+        state.mapPan.y += moves[e.key][1];
+        drawAll();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        state.mapPan = { x: 0, y: 0 };
+        state.zoom = 1;
+        drawAll();
+      } else if (e.key === "Escape") {
+        state.selected = null;
+        state.selectedGroup = [];
+        renderPeople();
+        drawAll();
+      }
+    });
+  }
   on("report-refresh", loadReport);
   on("save-report", saveReport);
   $("question-form").addEventListener("submit", (e) => {
@@ -2077,8 +2154,9 @@
       state.scope++;
       state.context = null;
       state.selected = null;
+      state.selectedGroup = [];
       state.history = [];
-      $("chat").replaceChildren();
+      resetChat();
       invalidateIntervention();
       await refreshRun();
     }),
@@ -2095,9 +2173,12 @@
       state.history = [];
       state.context = null;
       state.selected = null;
+      state.selectedGroup = [];
+      state.mapPan = { x: 0, y: 0 };
+      state.zoom = 1;
       state.report = null;
       invalidateIntervention();
-      $("chat").replaceChildren();
+      resetChat();
       if (state.run) {
         await refreshRun();
         show("simulation");
@@ -2120,6 +2201,25 @@
     document.querySelector("main"),
   );
   async function init() {
+    const requestedPage = location.hash.slice(1);
+    syncLayerTabs();
+    document
+      .querySelectorAll("[data-icon]")
+      .forEach((n) => n.replaceChildren(uiIcon(n.dataset.icon)));
+    document.querySelector(".compare-controls").prepend($("compare-refresh"));
+    $("compare-refresh").textContent = "比較を更新";
+    document.querySelectorAll(".compare-controls [data-zoom]").forEach((b) => {
+      b.title =
+        "両マップを" +
+        (b.dataset.zoom === "in"
+          ? "拡大"
+          : b.dataset.zoom === "out"
+            ? "縮小"
+            : "リセット");
+      b.setAttribute("aria-label", b.title);
+      b.textContent =
+        b.dataset.zoom === "in" ? "＋" : b.dataset.zoom === "out" ? "−" : "⌖";
+    });
     renderKpis($("sim-kpis"));
     renderKpis($("report-kpis"));
     $("mode-badge").textContent = "実計算 / modeはRun記録で確認";
@@ -2139,7 +2239,7 @@
         "error",
       );
     }
-    show(location.hash.slice(1) || (state.run ? "simulation" : "scenario"));
+    show(requestedPage || (state.run ? "simulation" : "scenario"));
     controls();
   }
   init().catch((e) => {

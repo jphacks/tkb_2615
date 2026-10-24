@@ -9,12 +9,13 @@
     />
     <title>避難所IF！ | 避難所の「もしも」を、考えよう。</title>
     <link rel="stylesheet" href="/demo-v2.css" />
+    <script src="/demo-v2-map.js" defer></script>
     <script src="/demo-v2.js" defer></script>
   </head>
-  <body>
+  <body data-view="scenario">
     <header class="app-header">
       <a class="brand" href="/demo-v2"
-        ><span class="brand-mark" aria-hidden="true">⌂</span
+        ><span class="brand-mark" data-icon="home" aria-hidden="true"></span
         ><strong>避難所<span>IF！</span></strong></a
       ><span class="tagline">避難所の「もしも」を、考えよう。</span>
       <div class="header-scenario">
@@ -38,18 +39,49 @@
     <aside class="sidebar">
       <nav aria-label="メインナビゲーション">
         <button class="nav-item active" data-page="scenario">
-          <span>▤</span>シナリオ設定</button
+          <span data-icon="scenario"></span>シナリオ設定</button
         ><button class="nav-item" data-page="simulation">
-          <span>◉</span>シミュレーション</button
+          <span data-icon="simulation"></span>シミュレーション</button
         ><button class="nav-item" data-page="comparison">
-          <span>⑂</span>分岐比較</button
+          <span data-icon="comparison"></span>分岐比較</button
         ><button class="nav-item" data-page="report">
-          <span>▥</span>レポート・対話
+          <span data-icon="report"></span>レポート・対話
         </button>
       </nav>
       <div class="sidebar-bottom">
         <div class="shelter-picture" aria-hidden="true">
-          <span>⌂</span><i></i>
+          <svg viewBox="0 0 280 160" role="presentation">
+            <defs>
+              <linearGradient id="campus-sky" x2="0" y2="1">
+                <stop stop-color="#b6dcf3" />
+                <stop offset="1" stop-color="#eff8ff" />
+              </linearGradient>
+            </defs>
+            <path fill="url(#campus-sky)" d="M0 0h280v160H0z" />
+            <path fill="#8eaf7f" d="M0 124h280v36H0z" />
+            <path fill="#b7b7a4" d="M0 144l138-29 142 31v14H0z" />
+            <path fill="#98a5ab" d="M35 59l114-18 100 22v16L35 80z" />
+            <path fill="#e4e0cc" d="M38 70l109-15 98 21v65l-207-4z" />
+            <path
+              fill="#fffdf0"
+              d="M38 89l110-10 97 14v8L38 97zm0 27l110-3 97 7v8L38 125z"
+            />
+            <g fill="#83b2ca" stroke="#f2f1df" stroke-width="3">
+              <path
+                d="M52 80l19-2v14H52zm31-4l19-2v18H83zm31-4l19-2v22h-19zm47 1l18 4v17h-18zm31 6l18 4v15h-18zm31 7l13 3v13h-13zM52 104h19v14H52zm31-1h19v16H83zm31-1h19v18h-19zm47 1h18v18h-18zm31 3h18v17h-18zm31 4h13v16h-13z"
+              />
+            </g>
+            <path fill="#557789" d="M134 116h24v28h-24z" />
+            <g fill="#6e9f69">
+              <circle cx="17" cy="106" r="23" />
+              <circle cx="265" cy="110" r="29" />
+            </g>
+            <g fill="#98bb78">
+              <circle cx="9" cy="96" r="16" />
+              <circle cx="253" cy="98" r="20" />
+            </g>
+          </svg>
+          <small>合成施設イメージ</small>
         </div>
         <div class="current-scenario">
           <small>現在のシナリオ</small
@@ -312,15 +344,23 @@
             <small>SIMULATION / 記録された世界をたどる</small>
             <h1 id="simulation-heading">避難所のいまを、見てみよう。</h1>
           </div>
-          <label
-            >表示する分岐<select id="branch-select" disabled></select
-          ></label>
         </div>
         <div id="sim-kpis" class="kpi-grid"></div>
         <div class="simulation-grid">
           <article class="panel map-panel">
             <div class="panel-title">
               <h2>避難所マップ <small id="map-location">合成施設</small></h2>
+              <div class="layer-tabs" role="group" aria-label="表示レイヤー">
+                <button data-layer="normal" aria-pressed="true">通常</button
+                ><button data-layer="stress" aria-pressed="false">
+                  ストレス</button
+                ><button data-layer="crowd" aria-pressed="false">混雑</button
+                ><button data-layer="health" aria-pressed="false">
+                  健康・ニーズ</button
+                ><button data-layer="operations" aria-pressed="false">
+                  運営
+                </button>
+              </div>
               <div class="map-options">
                 <label
                   >表示レイヤー<select id="layer">
@@ -332,6 +372,10 @@
                   </select></label
                 >
               </div>
+              <label class="branch-switch"
+                ><span>分岐</span
+                ><select id="branch-select" disabled></select
+              ></label>
             </div>
             <div class="map-wrap">
               <canvas
@@ -339,21 +383,23 @@
                 aria-label="記録された施設と人物の位置。人物をクリックして詳細表示"
               ></canvas>
               <div class="map-tools">
-                <span>N ↑</span
+                <span>2D</span
                 ><button data-zoom="in" aria-label="拡大">＋</button
                 ><button data-zoom="out" aria-label="縮小">−</button
                 ><button data-zoom="reset" aria-label="表示をリセット">
                   ⌖
                 </button>
               </div>
-              <span class="map-caption">合成施設 / 記録位置に基づく表示</span>
+              <span class="map-caption"
+                >合成施設 · 床材と背景は表示上の演出</span
+              >
             </div>
             <div class="map-legend">
-              <span>● 移動・行動中</span><span>● 待機中</span
-              ><span>◆ スタッフ</span
-              ><span id="position-note"
-                >同一座標の人物は人数をまとめて表示</span
-              >
+              <span id="legend-agents">● 避難者</span
+              ><span id="legend-queue">● 待機中</span
+              ><span id="legend-staff">● スタッフ</span
+              ><span id="layer-scale" class="layer-scale" hidden></span
+              ><span id="position-note">同じ記録位置は人数付きの集合表示</span>
             </div>
           </article>
           <aside class="simulation-side">
@@ -569,6 +615,10 @@
                 <h2>主要指標の推移</h2>
                 <label
                   >表示する指標<select id="chart-metric">
+                    <option value="overview">ストレス・スタッフ負荷</option>
+                    <option value="population" disabled>
+                      避難者数（時系列はAPI未提供）
+                    </option>
                     <option value="stress_mean">平均ストレス</option>
                     <option value="toilet_wait_max_minutes">
                       最大トイレ待機時間
@@ -631,6 +681,9 @@
                   「なぜトイレが混雑したのか」<br />「どの介入が有効だったか」
                 </p>
                 <span class="badge">Claude APIに接続して回答を生成します</span>
+                <p class="chat-guide">
+                  グラフやマップの気づきを質問できます。回答に引用された記録・時刻と、AIの解釈を並べて確認しましょう。
+                </p>
               </div>
             </div>
             <form id="question-form">

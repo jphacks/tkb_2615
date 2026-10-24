@@ -147,10 +147,10 @@ async function main() {
     await page.locator("#seek").fill("5");
     await page.locator("#seek").dispatchEvent("change");
     await idle();
-    await page.locator("#layer").selectOption("stress");
+    await page.locator('[data-layer="stress"]').click();
     await page.locator('[data-zoom="in"]').first().click();
     await page.locator('[data-zoom="reset"]').first().click();
-    await page.locator("#layer").selectOption("normal");
+    await page.locator('[data-layer="normal"]').click();
     await page.locator("#people-list button").first().click();
     assert((await page.locator("#person-detail").innerText()).includes("A001"));
     await shot("simulation");
@@ -233,7 +233,7 @@ async function main() {
     await page.locator("#question").fill("なぜトイレが混雑したのか");
     await page.locator("#ask").click();
     await idle();
-    assert((await page.locator("#chat").innerText()).includes("offline"));
+    assert((await page.locator("#chat").innerText()).includes("API未接続"));
     assert(
       (await page.locator("#chat").innerText()).includes("回答できません"),
     );

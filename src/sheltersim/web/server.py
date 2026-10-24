@@ -401,6 +401,7 @@ def _handler_for(
                 "/demo-v2": "demo-v2.html",
                 "/demo-v2.css": "demo-v2.css",
                 "/demo-v2.js": "demo-v2.js",
+                "/demo-v2-map.js": "demo-v2-map.js",
                 "/index.html": "index.html",
                 "/project.js": "project.js",
                 "/project-round3.js": "project-round3.js",

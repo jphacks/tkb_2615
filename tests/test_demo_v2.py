@@ -17,6 +17,7 @@ from sheltersim.web.server import _handler_for
         ("/demo-v2", "text/html", "避難所IF！".encode()),
         ("/demo-v2.css", "text/css", b"--navy"),
         ("/demo-v2.js", "text/javascript", b"scenario-approve"),
+        ("/demo-v2-map.js", "text/javascript", b"Hinanj"),
     ],
 )
 def test_backup_assets_are_independent_and_served_locally(tmp_path, route, content_type, marker):
@@ -34,32 +35,37 @@ def test_backup_assets_are_independent_and_served_locally(tmp_path, route, conte
     assert headers["Content-Type"].startswith(content_type)
     assert marker in body
     if route == "/demo-v2":
-        assert b'/demo-v2.js' in body and b'/demo-v2.css' in body
+        assert b"/demo-v2.js" in body and b"/demo-v2.css" in body
         assert b'src="/project.js"' not in body and b'src="/app.js"' not in body
-        assert b'https://cdn' not in body
+        assert b"https://cdn" not in body
 
 
 def parse_target(text):
-    return parse_natural_language(ParseRequest(
-        text=text,
-        branch_id="main",
-        selected_minute=5,
-        scenario_summary=ScenarioSummary(
-            duration_minutes=60,
-            zones=[
-                ZoneTarget(id="toilet", name="トイレ"),
-                ZoneTarget(id="staff", name="スタッフ"),
-                ZoneTarget(id="sleeping", name="避難スペース"),
-            ],
-        ),
-    ))
+    return parse_natural_language(
+        ParseRequest(
+            text=text,
+            branch_id="main",
+            selected_minute=5,
+            scenario_summary=ScenarioSummary(
+                duration_minutes=60,
+                zones=[
+                    ZoneTarget(id="toilet", name="トイレ"),
+                    ZoneTarget(id="staff", name="スタッフ"),
+                    ZoneTarget(id="sleeping", name="避難スペース"),
+                ],
+            ),
+        )
+    )
 
 
-@pytest.mark.parametrize(("text", "target"), [
-    ("トイレを2基追加する zone_id: toilet", "toilet"),
-    ("スタッフを2人追加する zone_id: staff", "staff"),
-    ("避難スペースではなく zone_id: toilet にトイレを2基追加", "toilet"),
-])
+@pytest.mark.parametrize(
+    ("text", "target"),
+    [
+        ("トイレを2基追加する zone_id: toilet", "toilet"),
+        ("スタッフを2人追加する zone_id: staff", "staff"),
+        ("避難スペースではなく zone_id: toilet にトイレを2基追加", "toilet"),
+    ],
+)
 def test_explicit_existing_zone_overrides_ambiguous_common_words(text, target):
     result = parse_target(text)
     assert result.status == "parsed"
