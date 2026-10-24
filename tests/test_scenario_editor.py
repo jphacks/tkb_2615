@@ -80,9 +80,9 @@ def test_behavior_policy_variant_is_hashable_visible_and_allowlisted() -> None:
     }
     assert preview.scenario_hash != baseline_preview.scenario_hash
     assert preview.scenario_family_hash != baseline_preview.scenario_family_hash
-    assert len(list_scenario_presets()[0]["behavior_policy_catalog"]) == 2
-    assert baseline.model_configs["behavior"]["policy"] == "utility-softmax-v1"
-    assert baseline.model_configs["behavior"]["source_id"] == "ASM-UTILITY-BEHAVIOR-V1"
+    assert len(list_scenario_presets()[0]["behavior_policy_catalog"]) == 3
+    assert baseline.model_configs["behavior"]["policy"] == "sleep-aware-utility-softmax-v2"
+    assert baseline.model_configs["behavior"]["source_id"] == "ASM-SLEEP-AWARE-BEHAVIOR-V2"
     assert baseline.canonical_json() == baseline_json
     assert scenario.model_configs["behavior"]["source_id"] == ("ASM-PRIORITY-RULE-BEHAVIOR-V1")
 

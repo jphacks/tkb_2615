@@ -46,6 +46,7 @@ StableId = Annotated[
 
 _BEHAVIOR_POLICY_SOURCE_IDS = {
     "utility-softmax-v1": "ASM-UTILITY-BEHAVIOR-V1",
+    "sleep-aware-utility-softmax-v2": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
     "priority-rule-v1": "ASM-PRIORITY-RULE-BEHAVIOR-V1",
 }
 RESOURCE_SERVICE_POLICY_ID = "resource-service-v1"
@@ -1060,9 +1061,29 @@ class ScenarioSpec(ContractModel):
         if not isinstance(variant, str) or variant not in _BEHAVIOR_POLICY_SOURCE_IDS:
             raise ValueError(f"unsupported behavior policy variant {variant!r}")
         document = self.model_dump(mode="json")
+        registry = document["model_configs"].get("policy_registry", {})
+        suite_id = registry.get("suite_id")
+        if suite_id is not None:
+            from sheltersim.contracts.policies import CORE_MODEL_SUITES
+
+            suite_models = CORE_MODEL_SUITES[suite_id]
+            if variant != suite_models["behavior"]:
+                registry.pop("suite_id")
+                registry["schema_version"] = 2
+                registry.update(
+                    {
+                        domain: model_id
+                        for domain, model_id in suite_models.items()
+                        if domain != "behavior"
+                    }
+                )
         behavior = document["model_configs"].setdefault("behavior", {})
         behavior["policy"] = variant
         behavior["source_id"] = _BEHAVIOR_POLICY_SOURCE_IDS[variant]
+        if variant == "sleep-aware-utility-softmax-v2":
+            behavior.setdefault("sleep_debt_utility_weight", 1.0)
+        else:
+            behavior.pop("sleep_debt_utility_weight", None)
         assumptions = document["provenance"].get("model_assumption_ids")
         if isinstance(assumptions, list):
             assumptions = [

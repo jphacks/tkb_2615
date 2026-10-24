@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sheltersim import __version__
+from sheltersim.contracts.policies import legacy_psychology_notice, selected_models
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.comparison import compare_run_sets, render_comparison_markdown
 from sheltersim.experiments.profiles import GeneratedProfileSet
@@ -135,6 +136,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     toilet_diagnostic.add_argument("--scenario", required=True, type=Path)
     toilet_diagnostic.add_argument("--phase", choices=("initial", "long-term"), default="initial")
+    capacity_diagnostic = subparsers.add_parser(
+        "service-capacity-diagnostic",
+        help="compare toilet, water and meal units with the work their daily demand needs",
+    )
+    capacity_diagnostic.add_argument("--scenario", required=True, type=Path)
+    capacity_diagnostic.add_argument(
+        "--phase", choices=("initial", "long-term"), default="initial"
+    )
     evaluation = subparsers.add_parser(
         "evaluate-models",
         help="run an explicitly requested offline paired model/parameter matrix",
@@ -184,7 +193,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", required=True, type=Path, help="run artifact directory")
     run.add_argument(
         "--behavior-policy",
-        choices=("utility-softmax-v1", "priority-rule-v1"),
+        choices=(
+            "utility-softmax-v1",
+            "sleep-aware-utility-softmax-v2",
+            "priority-rule-v1",
+        ),
         help="swap one installed Agent action policy while preserving other scenario inputs",
     )
     run.add_argument(
@@ -352,6 +365,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             source_document = json.loads(arguments.scenario.read_text(encoding="utf-8"))
             scenario = _load_scenario_input(arguments.scenario)
+            from sheltersim.experiments.model_suite import apply_default_model_suite
+
+            scenario = apply_default_model_suite(scenario)
             router = None
             generation_manifest = None
             generated_scenario = None
@@ -393,6 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.output is not None:
                 _write_atomic(arguments.output, output + "\n")
             print(output)
+            _warn_legacy_psychology(scenario)
             if router is not None:
                 warning = fallback_warning(summarize_call_outcomes(router.records))
                 if warning is not None:
@@ -400,7 +417,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             parser.error(f"could not prepare scenario: {exc}")
         return 0
-    if arguments.command in {"model-catalog", "evaluate-models", "toilet-diagnostic"}:
+    if arguments.command in {
+        "model-catalog", "evaluate-models", "toilet-diagnostic", "service-capacity-diagnostic"
+    }:
         try:
             scenario = ScenarioSpec.load(arguments.scenario)
             if arguments.command == "model-catalog":
@@ -411,6 +430,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from sheltersim.experiments.sanitation_diagnostics import toilet_planning_diagnostic
 
                 result = toilet_planning_diagnostic(scenario, phase=arguments.phase)
+            elif arguments.command == "service-capacity-diagnostic":
+                from sheltersim.experiments.service_capacity import service_capacity_diagnostic
+
+                result = service_capacity_diagnostic(scenario, phase=arguments.phase)
             else:
                 from sheltersim.experiments.validation import EvaluationPlan, evaluate_models
 
@@ -460,9 +483,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                             world.canonical_json().encode("utf-8")
                         ).hexdigest(),
                         "llm_status": llm_status,
+                        "psychology_model": selected_models(scenario.model_configs)["psychology"],
                     }
                 )
             )
+            _warn_legacy_psychology(scenario)
             warning = fallback_warning(llm_status)
             if warning is not None:
                 print(f"warning: {warning}", file=sys.stderr)
@@ -678,6 +703,12 @@ def _load_scenario_input(path: Path) -> ScenarioSpec:
             raise ValueError("scenario preview does not contain a scenario object")
         return ScenarioSpec.model_validate(scenario_document)
     return ScenarioSpec.from_json(json.dumps(document, ensure_ascii=False))
+
+
+def _warn_legacy_psychology(scenario: ScenarioSpec) -> None:
+    notice = legacy_psychology_notice(selected_models(scenario.model_configs)["psychology"])
+    if notice is not None:
+        print(f"warning: {notice}", file=sys.stderr)
 
 
 def _json_text(value: Any) -> str:

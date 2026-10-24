@@ -139,14 +139,9 @@ def validate_operational_events_state(
     ):
         raise ValueError("in-flight operational event must be pending and due")
     if not validate_event_history:
-        if state is None and any(
-            event.event_type in {
-                "resource_delivery", "resource_loss", "resource_reserve",
-                "resource_release", "resource_consume", "staff_unavailable",
-                "staff_available",
-            }
-            for event in pending_events
-        ):
+        # Match the state creation and the full check: plain ledger events such as
+        # resource_loss run without operational state.
+        if state is None and uses_operational_events(pending_events):
             raise ValueError("operational events require operational_events_v1 state")
         return
     all_events = list(pending_events)

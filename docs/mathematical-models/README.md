@@ -13,11 +13,16 @@
 7. [モデル統合・ODD](07-model-integration.md)
 8. [パラメータと根拠](08-parameters-and-evidence.md)
 9. [内部検証](09-internal-validation.md)
-10. [参考文献](references.md)
+10. [慢性的な高ストレスの原因調査](10-chronic-high-distress-investigation.md)
+11. [中核モデル監査](11-core-model-audit.md)
+12. [モデル改善設計](12-model-improvement-design.md)
+13. [包括的検証方法と結果](13-comprehensive-validation.md)
+14. [新規Scenarioの標準モデルセット](14-default-model-suite.md)
+15. [参考文献](references.md)
 
 ## 適用範囲
 
-研究モデルは `model_configs.policy_registry` から選択します。心理状態には `mean-reverting-distress-v1`、従来の`life-state-feedback-v1`、両方を合成する明示的な `mean-reverting-life-state-v1` があります。社会・情報モデルも従来Policyを残して研究版と比較できます。係数は `fixtures/source-manifest.json` と `src/sheltersim/contracts/model-catalog.json` に単位、範囲、出典ID、未校正の説明を記録しています。
+研究モデルは `model_configs.policy_registry` から選択します。心理状態には `mean-reverting-distress-v1`、従来の`life-state-feedback-v1`、両方を合成する明示的な `mean-reverting-life-state-v1` があります。新しく生成するScenarioは `mean-reverting-life-state-v1` を選び、従来モデルは保存済み入力の再生と比較対照のために残します。社会・情報モデルも従来Policyを残して研究版と比較できます。係数は `fixtures/source-manifest.json` と `src/sheltersim/contracts/model-catalog.json` に単位、範囲、出典ID、未校正の説明を記録しています。
 
 統合版では既存body/affect状態を再利用し、false情報への現在の信念を不確実性・心理更新へ接続します。Traceはclip前の心理寄与、clip後の値、社会差分、実適用差分を分け、情報効果はrumor originとbelief更新eventへ遡れます。Traceを保存しない7日間run用に、高負荷の連続時間と回復回数を定数個の指標でオンライン集計します。
 

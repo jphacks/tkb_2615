@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Annotated, Literal
 
@@ -21,6 +22,20 @@ from sheltersim.region.models import RegionModel
 OPERATOR_CONDITION_SOURCE_ID = "SRC-OPERATOR-INITIAL-CONDITIONS"
 RESOURCE_SERVICE_ASSUMPTION_ID = "ASM-REGION-RESOURCE-SERVICE-V1"
 INFRASTRUCTURE_ASSUMPTION_ID = "ASM-REGION-INFRASTRUCTURE-V1"
+
+
+def default_resource_service_config() -> ResourceServiceConfig:
+    """Return the water and meal service coefficients generated Scenarios use."""
+    return ResourceServiceConfig(
+        schema_version=1,
+        policy_version=RESOURCE_SERVICE_POLICY_ID,
+        source_id=RESOURCE_SERVICE_ASSUMPTION_ID,
+        source_type="assumption",
+        service_minutes=5,
+        water_ml_per_service=250,
+        food_meal_units_per_service=1,
+        hydration_growth_per_minute=0.001,
+    )
 
 
 class InitialResourceCondition(RegionModel):
@@ -303,6 +318,7 @@ class OperationalConditions(RegionModel):
             source_kind: str,
             sequence: int,
             input_index: int,
+            causation_id: str | None = None,
         ) -> None:
             if due_minute < 0 or due_minute >= duration_minutes:
                 blockers.append(f"運営条件 {event_type} の開始時刻はシミュレーション期間内にしてください。")
@@ -315,6 +331,7 @@ class OperationalConditions(RegionModel):
                     event_type=event_type,
                     payload=payload,
                     source_id=source_id,
+                    causation_id=causation_id,
                     provenance={
                         "input_path": f"operational_conditions.scheduled[{input_index}]",
                         "source_type": source_kind,
@@ -419,9 +436,11 @@ class OperationalConditions(RegionModel):
                         continue
                     sequence += 1
                     outage_id = f"region-water-outage-{index:03d}-{occurrence:03d}"
+                    outage_event_id = f"region-condition-{sequence:03d}-water_outage"
                     add_event("water_outage", start_minute, {"outage_id": outage_id, "facility_id": condition.facility_id}, condition.source_id, condition.source_kind, sequence, index)
                     sequence += 1
-                    add_event("water_restored", end_minute, {"outage_id": outage_id}, condition.source_id, condition.source_kind, sequence, index)
+                    # ScenarioSpec validation requires a restoration to name its outage.
+                    add_event("water_restored", end_minute, {"outage_id": outage_id}, condition.source_id, condition.source_kind, sequence, index, causation_id=outage_event_id)
             elif condition.kind == "power_outage":
                 if infrastructure_config is None:
                     blockers.append("停電条件には依存関係を含むinfrastructure設定が必要です。施設への影響を推測していません。")
@@ -480,7 +499,19 @@ class OperationalConditions(RegionModel):
                     continue
                 for due_minute in _repeating_minutes(condition.due_minute, condition.repeat_every_minutes, duration_minutes):
                     sequence += 1
-                    add_event(condition.kind, due_minute, {"warehouse_id": condition.warehouse_id, "resource_id": condition.resource_id, "quantity": condition.quantity}, condition.source_id, condition.source_kind, sequence, index)
+                    payload = {
+                        "warehouse_id": condition.warehouse_id,
+                        "resource_id": condition.resource_id,
+                        "quantity": condition.quantity,
+                    }
+                    if condition.kind == "resource_delivery":
+                        # A shipment ID opts the delivery into the operational-event state;
+                        # without it the first state validation stopped the Run.
+                        payload["shipment_id"] = f"region-shipment-{sequence:03d}"
+                    add_event(
+                        condition.kind, due_minute, payload, condition.source_id,
+                        condition.source_kind, sequence, index,
+                    )
 
         model_configs: dict[str, dict[str, object]] = {}
         if needs_resource_service:
@@ -491,16 +522,9 @@ class OperationalConditions(RegionModel):
             elif not has_water or not has_food:
                 blockers.append("資源をシミュレーションで配布するには給水・食事配布設備の両方が必要です。")
             else:
-                model_configs["resource_service"] = ResourceServiceConfig(
-                    schema_version=1,
-                    policy_version=RESOURCE_SERVICE_POLICY_ID,
-                    source_id=RESOURCE_SERVICE_ASSUMPTION_ID,
-                    source_type="assumption",
-                    service_minutes=5,
-                    water_ml_per_service=250,
-                    food_meal_units_per_service=1,
-                    hydration_growth_per_minute=0.001,
-                ).model_dump(mode="json")
+                model_configs["resource_service"] = default_resource_service_config().model_dump(
+                    mode="json"
+                )
         if needs_infrastructure:
             model_configs["infrastructure"] = (
                 infrastructure_config
@@ -566,3 +590,91 @@ def _repeating_minutes(
             break
         current += repeat_every_minutes
     return tuple(minutes)
+
+
+STANDARD_PROVISIONING_SOURCE_ID = "ASM-STANDARD-PROVISIONING-V1"
+DRINKING_WATER_ML_PER_PERSON_DAY = 3_000
+MEAL_UNITS_PER_PERSON_DAY = 3
+STOCK_DAYS = 3
+# Default deliveries may use at most half of the 128 compiled scheduled events.
+_MAX_DEFAULT_DELIVERY_EVENTS = 64
+
+
+def with_standard_provisioning(
+    conditions: OperationalConditions,
+    *,
+    population: int,
+    duration_minutes: int,
+    supply_start_day: int,
+) -> tuple[OperationalConditions, dict[str, object] | None]:
+    """Fill an unknown inventory with the standard stock and a recurring resupply.
+
+    Entered or partial inventories are kept as entered. The defaults follow national
+    guidance: drinking water of 3 L per person per day, three days of household and
+    municipal stock, and outside supply from day 4. Three meal units per person per day
+    is a software assumption standing in for the 2,000 kcal reference intake.
+    """
+    if conditions.initial_resources.status != "unknown":
+        return conditions, None
+    water_per_day = DRINKING_WATER_ML_PER_PERSON_DAY * population
+    meals_per_day = MEAL_UNITS_PER_PERSON_DAY * population
+    stock = InitialResourceCondition(
+        status="entered",
+        water_ml=water_per_day * STOCK_DAYS,
+        food_meal_units=meals_per_day * STOCK_DAYS,
+        source_ids=(STANDARD_PROVISIONING_SOURCE_ID,),
+        source_kind="assumption",
+    )
+    start_minute = (supply_start_day - 1) * 1440
+    interval_days = 1
+    deliveries: list[ResourceQuantityCondition] = []
+    if start_minute < duration_minutes:
+        span_days = math.ceil((duration_minutes - start_minute) / 1440)
+        # Long Runs deliver every few days with the matching quantity instead of daily,
+        # so the expanded schedule stays within the scheduled-event limit.
+        while 2 * math.ceil(span_days / interval_days) > _MAX_DEFAULT_DELIVERY_EVENTS:
+            interval_days += 1
+        deliveries = [
+            ResourceQuantityCondition(
+                kind="resource_delivery",
+                resource_id=resource_id,
+                quantity=per_day * interval_days,
+                due_minute=start_minute,
+                warehouse_id=stock.warehouse_id,
+                source_id=STANDARD_PROVISIONING_SOURCE_ID,
+                source_kind="assumption",
+                repeat_every_minutes=interval_days * 1440,
+            )
+            for resource_id, per_day in (
+                ("water_ml", water_per_day), ("food_meal_units", meals_per_day)
+            )
+        ]
+    provisioned = OperationalConditions.model_validate({
+        **conditions.model_dump(),
+        "initial_resources": stock.model_dump(),
+        "scheduled": [
+            *(item.model_dump() for item in conditions.scheduled),
+            *(item.model_dump() for item in deliveries),
+        ],
+    })
+    record = {
+        "id": STANDARD_PROVISIONING_SOURCE_ID,
+        "subject": "standard_provisioning",
+        "value": {
+            "drinking_water_ml_per_person_day": DRINKING_WATER_ML_PER_PERSON_DAY,
+            "meal_units_per_person_day": MEAL_UNITS_PER_PERSON_DAY,
+            "stock_days": STOCK_DAYS,
+            "initial_water_ml": stock.water_ml,
+            "initial_food_meal_units": stock.food_meal_units,
+            "supply_start_day": supply_start_day,
+            "supply_interval_days": interval_days if deliveries else None,
+            "supply_scheduled": bool(deliveries),
+        },
+        "reason": (
+            "No starting inventory was entered, so the national guidance amounts were "
+            "assumed: 3 days of stock and outside supply from the chosen day. Not a "
+            "measured shelter inventory or delivery plan."
+        ),
+        "source_id": STANDARD_PROVISIONING_SOURCE_ID,
+    }
+    return provisioned, record

@@ -43,6 +43,7 @@ from sheltersim.policies.psychology import (
     IntegratedDistressLifeStatePolicy,
     MeanRevertingDistressPolicy,
     mean_reverting_step,
+    sleep_debt_step,
 )
 from sheltersim.policies.registry import create_psychology, create_social
 
@@ -101,6 +102,71 @@ def _delta(agent_id: str, minute: int, stress: float) -> AgentStateDelta:
         stress=stress,
         trust=0.5,
     )
+
+
+@pytest.mark.parametrize("required_sleep_minutes", [420, 480, 600])
+def test_sleep_debt_balances_a_repeating_required_sleep_schedule(
+    required_sleep_minutes: int,
+) -> None:
+    awake_minutes = 1440 - required_sleep_minutes
+    awake_rate = required_sleep_minutes / awake_minutes
+    debt = 0.0
+    for _ in range(awake_minutes):
+        debt = sleep_debt_step(
+            debt,
+            activity=Activity.IDLE,
+            required_sleep_minutes=required_sleep_minutes,
+            awake_rate=0.5,
+            rest_recovery_rate=0.0,
+            sleep_recovery_rate=1.0,
+            sleep_efficiency=1.0,
+        )
+    assert debt == pytest.approx(required_sleep_minutes)
+    for _ in range(required_sleep_minutes):
+        debt = sleep_debt_step(
+            debt,
+            activity=Activity.SLEEPING,
+            required_sleep_minutes=required_sleep_minutes,
+            awake_rate=0.5,
+            rest_recovery_rate=0.0,
+            sleep_recovery_rate=1.0,
+            sleep_efficiency=1.0,
+        )
+    assert debt == pytest.approx(0.0, abs=1e-9)
+    assert awake_rate * awake_minutes == pytest.approx(required_sleep_minutes)
+
+
+def test_sleep_debt_rest_and_unspecified_requirement_are_explicit_assumptions() -> None:
+    resting = sleep_debt_step(
+        120.0,
+        activity=Activity.RESTING,
+        required_sleep_minutes=None,
+        awake_rate=0.5,
+        rest_recovery_rate=0.0,
+        sleep_recovery_rate=1.0,
+        sleep_efficiency=1.0,
+    )
+    awake = sleep_debt_step(
+        120.0,
+        activity=Activity.IDLE,
+        required_sleep_minutes=None,
+        awake_rate=0.5,
+        rest_recovery_rate=0.0,
+        sleep_recovery_rate=1.0,
+        sleep_efficiency=1.0,
+    )
+    assert resting == 120.0
+    assert awake == 120.5
+    with pytest.raises(ValueError, match="sleep_efficiency"):
+        sleep_debt_step(
+            120.0,
+            activity=Activity.SLEEPING,
+            required_sleep_minutes=480,
+            awake_rate=0.5,
+            rest_recovery_rate=0.0,
+            sleep_recovery_rate=1.0,
+            sleep_efficiency=float("nan"),
+        )
 
 
 def test_acute_distress_is_a_compatibility_alias_and_recovers_at_restless_ticks() -> None:

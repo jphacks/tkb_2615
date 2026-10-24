@@ -93,6 +93,7 @@ class Checkpoint:
         recorded = {
             key: value for key, value in self.model_versions.items()
             if key.startswith(("policy:", "simulator:", "state:", "operator:"))
+            or key == "model_suite"
         }
         if recorded == installed:
             return False

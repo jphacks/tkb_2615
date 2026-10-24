@@ -12,13 +12,63 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from sheltersim.contracts.extensions import ExtensionModel, Identifier
-from sheltersim.domain.psychological_state import LIFE_STATE_PSYCHOLOGY_POLICIES
+from sheltersim.domain.psychological_state import (
+    INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
+    LIFE_STATE_PSYCHOLOGY_POLICIES,
+)
 
 # Literature motivates operators, not calibrated shelter coefficients.
 MODEL_DEFINITIONS: dict[str, dict[str, Any]] = json.loads(
     files("sheltersim.contracts").joinpath("model-catalog.json").read_text(encoding="utf-8")
 )["models"]
 DEFAULT_MODELS = {"behavior": "utility-softmax-v1", "psychology": "causal-stress-v1", "social": "sparse-family-zone-contact-v1", "information": "sparse-information-contact-v1"}
+
+# Historical Scenarios without a suite selector keep DEFAULT_MODELS so a saved
+# Scenario can still be replayed as authored. New Scenario entry points opt into
+# this coherent, internally tested candidate set explicitly.
+CORE_MODEL_SUITE_V1 = "core-model-suite-v1"
+CORE_MODEL_SUITE_V2 = "core-model-suite-v2"
+CORE_MODEL_SUITE_MODELS_V1: dict[str, str] = {
+    "behavior": "utility-softmax-v1",
+    "psychology": "mean-reverting-life-state-v1",
+    "social": "expressiveness-channel-openness-v1",
+    "information": "evidence-aware-rumor-v1",
+    "affect": "linear-positive-negative-v1",
+    "body_dynamics": "body-feedback-complete-v2",
+    "queue": "need-weighted-physical-queue-v1",
+    "relationship": "distance-duration-repeat-trust-v1",
+    "social_proximity": "disabled-proximity-v1",
+}
+CORE_MODEL_SUITE_MODELS: dict[str, str] = {
+    "behavior": "sleep-aware-utility-softmax-v2",
+    "psychology": "mean-reverting-life-state-v1",
+    "social": "expressiveness-channel-openness-v1",
+    "information": "evidence-aware-rumor-v1",
+    "affect": "linear-positive-negative-v1",
+    "body_dynamics": "body-feedback-complete-v2",
+    "queue": "need-weighted-physical-queue-v1",
+    "relationship": "distance-duration-repeat-trust-v1",
+    "social_proximity": "disabled-proximity-v1",
+}
+CORE_MODEL_SUITES = {
+    CORE_MODEL_SUITE_V1: CORE_MODEL_SUITE_MODELS_V1,
+    CORE_MODEL_SUITE_V2: CORE_MODEL_SUITE_MODELS,
+}
+
+# Pre-research psychology models stay installed so saved Runs and Checkpoints
+# replay exactly and remain usable as comparison controls. The mark lives here,
+# not in model-catalog.json, because catalog entries are part of policy signatures.
+LEGACY_PSYCHOLOGY_MODELS = frozenset({"causal-stress-v1", "life-state-feedback-v1"})
+
+
+def legacy_psychology_notice(model_id: object) -> str | None:
+    """Explain when a Scenario or Run uses a pre-research psychology model."""
+    if model_id not in LEGACY_PSYCHOLOGY_MODELS:
+        return None
+    return (
+        f"psychology model {model_id} is a legacy model kept for replay and comparison; "
+        f"new generated Scenarios use {INTEGRATED_PSYCHOLOGY_POLICY_VERSION}"
+    )
 
 
 class ModelCoefficientDefinition(ExtensionModel):
@@ -89,7 +139,7 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     if set(behavior) - {
         "mode", "source_type", "source_id", "policy", "temperature",
         "decision_interval_minutes", "decision_interval_minutes_by_agent",
-        "temperature_by_agent",
+        "temperature_by_agent", "sleep_debt_utility_weight",
     }:
         raise ValueError("unknown behavior coefficient; explicit registry support required")
     interval = behavior.get("decision_interval_minutes", 15)
@@ -100,12 +150,34 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         raise ValueError("behavior temperature must be finite and positive")
     selection = configs.get("policy_registry", {})
     domains = {value["domain"] for value in MODEL_DEFINITIONS.values()}
-    if set(selection) - {"schema_version", *domains}:
+    if set(selection) - {"schema_version", "suite_id", *domains}:
         raise ValueError("unknown policy_registry setting")
-    if selection and (type(selection.get("schema_version")) is not int or selection["schema_version"] not in (1, 2)):
+    if selection and (
+        type(selection.get("schema_version")) is not int
+        or selection["schema_version"] not in (1, 2, 3)
+    ):
         raise ValueError("unsupported policy_registry schema")
-    models = {**DEFAULT_MODELS, "behavior": configs.get("behavior", {}).get("policy", "utility-softmax-v1")}
-    for domain in sorted({*DEFAULT_MODELS, *(set(selection) - {"schema_version"})}):
+    suite_id = selection.get("suite_id")
+    suite_models = None
+    if suite_id is not None:
+        suite_models = CORE_MODEL_SUITES.get(suite_id)
+        if selection.get("schema_version") != 3 or suite_models is None:
+            raise ValueError("unsupported or incorrectly versioned model suite")
+        conflicting = {
+            domain: selection[domain]
+            for domain, model_id in suite_models.items()
+            if domain in selection and selection[domain] != model_id
+        }
+        if conflicting:
+            raise ValueError("model suite selectors cannot be mixed with per-domain overrides")
+        if behavior.get("policy", "utility-softmax-v1") != suite_models["behavior"]:
+            raise ValueError("behavior policy does not match the selected model suite")
+    models = {
+        **DEFAULT_MODELS,
+        **(suite_models or {}),
+        "behavior": configs.get("behavior", {}).get("policy", "utility-softmax-v1"),
+    }
+    for domain in sorted({*models, *(set(selection) - {"schema_version", "suite_id"})}):
         if domain in selection:
             models[domain] = selection[domain]
         model_id = models[domain]
@@ -114,6 +186,22 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     if models["behavior"] != configs.get("behavior", {}).get("policy", "utility-softmax-v1"):
         raise ValueError("behavior selector must agree with model_configs.behavior.policy")
     behavior_parameters = MODEL_DEFINITIONS[models["behavior"]]["parameters"]
+    if "sleep_debt_utility_weight" in behavior:
+        metadata = behavior_parameters.get("behavior.sleep_debt_utility_weight")
+        value = behavior["sleep_debt_utility_weight"]
+        if metadata is None:
+            raise ValueError(
+                "behavior.sleep_debt_utility_weight is not supported by the selected behavior model"
+            )
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("behavior.sleep_debt_utility_weight must be finite")
+        if (
+            metadata.get("lower") is not None and value < metadata["lower"]
+            or metadata.get("upper") is not None and value > metadata["upper"]
+        ):
+            raise ValueError(
+                "behavior.sleep_debt_utility_weight is outside its Model Catalog bounds"
+            )
     for field, expected_unit in (
         ("decision_interval_minutes_by_agent", "minute"),
         ("temperature_by_agent", "utility_temperature"),
@@ -180,8 +268,13 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         "zone_privacy",
         "care_outcome",
     }
-    if formula_factory_domains.intersection(models) and selection.get("schema_version") != 2:
-        raise ValueError("replaceable formula factories require policy_registry schema_version 2")
+    if formula_factory_domains.intersection(models) and selection.get("schema_version") not in (
+        2,
+        3,
+    ):
+        raise ValueError(
+            "replaceable formula factories require policy_registry schema_version 2 or 3"
+        )
     from sheltersim.policies.registry import has_installed_factory
     if any(not has_installed_factory(domain,model_id) for domain,model_id in models.items()):
         raise ValueError("selected model metadata has no installed Policy factory")
@@ -240,6 +333,7 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     from sheltersim.domain.simulator_state import simulator_signatures
     catalog = model_catalog()
     registry_version = configs.get("policy_registry", {}).get("schema_version", 1)
+    suite_id = configs.get("policy_registry", {}).get("suite_id")
     policies: dict[str, str] = {}
     for domain, model_id in selected_models(configs).items():
         definition = catalog[model_id]
@@ -399,11 +493,14 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
             ).encode()).hexdigest()
             base += f":manifest={metadata_hash}:inputs={config_hash}"
         policies[f"policy:{domain}"] = base
-    return {
+    signatures = {
         **policies,
         **simulator_signatures(configs),
         **state_signatures(configs),
     }
+    if suite_id is not None:
+        signatures["model_suite"] = f"{suite_id}@1"
+    return signatures
 
 
 def configuration_hash(configs: dict[str, dict[str, Any]]) -> str:

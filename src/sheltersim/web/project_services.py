@@ -93,7 +93,7 @@ class ProjectServices:
                 "simulator_states": simulator_state_catalog(),
                 "operator_evidence": operator_evidence_catalog(),
                 "models": model_catalog(),
-                "policy_registry_schema_versions": [1, 2],
+                "policy_registry_schema_versions": [1, 2, 3],
                 "policy_models": model_catalog(),
                 "household_correction": HouseholdCorrectionRequest.model_json_schema(),
                 "facility_service_point": GeometryServicePoint.model_json_schema(),
@@ -316,7 +316,11 @@ class ProjectServices:
             except (ValueError,TypeError,KeyError):
                 differences=[{"component":key,"recorded":saved["model_versions"].get(key),"installed":installed.get(key)}
                     for key in sorted(set(saved["model_versions"])|set(installed))
-                    if key.startswith(("policy:","state:","simulator:","operator:")) and saved["model_versions"].get(key)!=installed.get(key)]
+                    if (
+                        key.startswith(("policy:","state:","simulator:","operator:"))
+                        or key == "model_suite"
+                    )
+                    if saved["model_versions"].get(key)!=installed.get(key)]
                 compatible=False;limitation="Installed schema/model validation requires an explicit migration/new Run; original checkpoint is retained."
             settings=saved["runtime_state"].get("llm_settings",{})
             return {"schema_version":1,"continuation_model_state_compatible":compatible,"checkpoint_hash":reference.checkpoint_hash,

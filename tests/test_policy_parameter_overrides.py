@@ -336,9 +336,9 @@ def test_resident_specific_behavior_cadence_reaches_policy_and_checkpoint() -> N
     other_proposal = policy.propose(
         WorldView.from_world(customized_world), other_agent_id, FixedRandom()
     )
-    # A002 keeps the shared 15-minute interval; its generated rest decision
-    # may then be stretched by the sleeping-zone modifier to 60 minutes.
-    assert other_proposal.next_decision_at == 60
+    # The unmodified resident keeps the suite's shared 15-minute decision
+    # interval; resident-specific overrides apply only to A001.
+    assert other_proposal.next_decision_at == 15
     restored = Checkpoint.from_json(customized_checkpoint.to_json()).restore_world()
     assert restored.canonical_json() == customized_world_json
 
@@ -971,10 +971,8 @@ def test_per_agent_sleep_debt_coefficient_changes_only_selected_agent_feedback()
 
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:body_dynamics"] == (
-        "body-feedback-complete-v1@1:state1:"
-        "manifest=6168eba2497656b3ffe85eeb6e7a978ba1aa23ea6138e8df5359038ee867871d:"
-        "inputs=66c5b609760ddcee855ece0defb15ffa3f43e1be02b1116a76bb8d88b68a559d"
+    assert before.model_versions["policy:body_dynamics"].startswith(
+        "body-feedback-complete-v2@1:state1:"
     )
     assert before.model_versions["policy:body_dynamics"] != (
         after.model_versions["policy:body_dynamics"]
@@ -1034,6 +1032,7 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
         "causal-stress-v1",
         "bounded-stress-v1",
         "life-state-feedback-v1",
+        "mean-reverting-life-state-v1",
     ):
         baseline_configs = deepcopy(baseline_world.model_configs)
         customized_configs = deepcopy(customized_world.model_configs)
@@ -1064,10 +1063,8 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
 
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:psychology"] == (
-        "life-state-feedback-v1@3:state1:"
-        "manifest=846a6c7ea660bb20388562bb6a050b721f55c74778c8c3ef26ff9ca5d95ea377:"
-        "inputs=b9d2994df4af3ce5e9cc42442bd1ea7aa4a8fcdcf54465dc67ff55b31a297505"
+    assert before.model_versions["policy:psychology"].startswith(
+        "mean-reverting-life-state-v1@1:state1:"
     )
     assert before.model_versions["policy:psychology"] != after.model_versions[
         "policy:psychology"

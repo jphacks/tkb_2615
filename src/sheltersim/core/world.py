@@ -326,6 +326,8 @@ class WorldState:
             valid_request_reasons = {
                 "arrived_at_facility",
                 "route_available",
+                "in_room_route_available",
+                "room_route_blocked",
                 "no_facility",
                 "no_route",
                 "request_rejected",
@@ -370,6 +372,9 @@ class WorldState:
                 if (record["outcome"], record["reason"]) not in {
                     ("queued", "arrived_at_facility"),
                     ("travel_scheduled", "route_available"),
+                    # Agents already in the facility's zone walk an in-room route instead.
+                    ("travel_scheduled", "in_room_route_available"),
+                    ("rejected", "room_route_blocked"),
                     ("rejected", "no_facility"),
                     ("rejected", "no_route"),
                     ("rejected", "request_rejected"),

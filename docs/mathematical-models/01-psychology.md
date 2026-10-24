@@ -39,6 +39,8 @@ A_i(t+\Delta t)=\operatorname{clip}_{[0,1]}\left[A_{0i}+(A_i(t)-A_{0i})e^{-\kapp
 - `life-state-feedback-v1`: 既存の睡眠負債、安心感、不確実性、感情等を扱います。従来モデルの互換性を維持します。
 - `mean-reverting-life-state-v1`: 新しい明示的な統合版です。平均回帰と身体/感情状態を一つの心理更新に合成し、日単位潜在状態も更新します。旧Policyの意味は書き換えません。
 
+Webと初期Scenario生成器で作る新しいScenarioは`mean-reverting-life-state-v1`を選びます。`causal-stress-v1`（registry未指定時の既定）と`life-state-feedback-v1`は旧来モデルとして、保存済み入力の再生と比較対照のために残します。旧来モデルを選んだRunにはCLIと比較レポートが警告を表示します（[simulation-models.md](../simulation-models.md#旧来の心理モデル)）。
+
 統合版では睡眠・休息の直接stress回復項を0にします。睡眠による睡眠負債の減少、睡眠で維持/回復する感情や安心状態は残します。これにより同じ睡眠を直接stress回復と睡眠負債feedbackの両方で加算しません。統合版のdiscontent・negative affect計算はtick開始の心理状態を読み、計算途中の値を再参照しない同期更新です。
 
 誤情報に関する有効な圧力は、誤った主張がfalseと定義され、現在の信念強度が0.5を超えるとき `min(1, Σ 2(b_i^m-0.5))` で集約します。これは不確実性を押し上げる持続入力であり、rumor eventの一回効果を毎tick再生するものではありません。訂正を受容すると信念強度が訂正側へ移り、この圧力が消えます。係数は未校正で、直接の臨床効果を意味しません。

@@ -6,7 +6,7 @@
     "interview",
     "assumption"
   ],
-  "accessed_on": "2026-10-11",
+  "accessed_on": "2026-10-25",
   "sources": [
     {
       "id": "SRC-CAO-SHELTER-GUIDELINE-2024-12",
@@ -49,6 +49,126 @@
         "避難所運営の主体、運営方法の移行、外部支援、役割分担、成功点と課題の事例"
       ],
       "limits": "事例ヒアリングであり、無作為抽出の標本や心理状態の測定ではない。個別事例から頻度や因果効果を推定しない。"
+    },
+    {
+      "id": "SRC-DAAN-SLEEP-REGULATION-1984",
+      "source_type": "literature",
+      "title": "Timing of human sleep: recovery process gated by a circadian pacemaker",
+      "publisher": "American Journal of Physiology",
+      "edition": "246(2), R161-R183",
+      "published_on": "1984",
+      "url": "https://doi.org/10.1152/ajpregu.1984.246.2.R161",
+      "evidence_scope": [
+        "睡眠圧の覚醒時上昇と睡眠時低下を二過程モデルとして扱う",
+        "睡眠のタイミングと回復過程の構造"
+      ],
+      "limits": "ShelterSimの分単位の睡眠負債係数、個人別必要睡眠時間、施設環境、ストレス係数を校正する資料ではない。"
+    },
+    {
+      "id": "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+      "source_type": "literature",
+      "title": "Stress and the Individual: Mechanisms Leading to Disease",
+      "publisher": "Archives of Internal Medicine",
+      "edition": "153(18), 2093-2101",
+      "published_on": "1993",
+      "url": "https://doi.org/10.1001/archinte.1993.00410180039004",
+      "evidence_scope": [
+        "反復・慢性ストレス負荷と個人差を区別して考える概念枠組み"
+      ],
+      "limits": "ShelterSimの急性ストレス式、累積負荷係数、回復率を指定または校正しない。"
+    },
+    {
+      "id": "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+      "source_type": "literature",
+      "title": "Conditional Logit Analysis of Qualitative Choice Behavior",
+      "publisher": "Frontiers in Econometrics",
+      "edition": "Chapter 4",
+      "published_on": "1974",
+      "url": "https://eml.berkeley.edu/reprints/mcfadden/zarembka.pdf",
+      "evidence_scope": [
+        "選択可能な代替肢に対するランダム効用確率モデルの構造"
+      ],
+      "limits": "ShelterSimの効用係数、緊急度、実行可能行動集合、行動頻度の妥当性を決めない。"
+    },
+    {
+      "id": "SRC-BOSSE-AFFECT-CONTAGION-2015",
+      "source_type": "literature",
+      "title": "Agent-Based Modelling of Emotion Contagion in Groups",
+      "publisher": "Cognitive Computation",
+      "edition": "7, 53-64",
+      "published_on": "2015",
+      "url": "https://doi.org/10.1007/s12559-014-9277-9",
+      "evidence_scope": [
+        "表出性・受容性・相互作用チャネルを介した集団感情伝播のモデル構造"
+      ],
+      "limits": "避難所内の接触頻度、表出性・受容性対応付け、伝播率を実測校正しない。"
+    },
+    {
+      "id": "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+      "source_type": "literature",
+      "title": "The efficacy of corrective information for belief change depends on the source and the correction format",
+      "publisher": "Nature Human Behaviour",
+      "edition": "7, 148-156",
+      "published_on": "2023",
+      "url": "https://doi.org/10.1038/s41562-023-01623-8",
+      "evidence_scope": [
+        "誤情報訂正の効果と条件差に関するメタ分析"
+      ],
+      "limits": "避難所内の伝播確率、訂正受容率、安心感や行動への効果を直接推定しない。"
+    },
+    {
+      "id": "SRC-KANTEI-HOME-STOCKPILE",
+      "source_type": "literature",
+      "title": "災害が起きる前にできること",
+      "publisher": "首相官邸",
+      "edition": "web page, accessed 2026-10-25",
+      "published_on": "undated web page",
+      "url": "https://www.kantei.go.jp/jp/headline/bousai/sonae.html",
+      "evidence_scope": [
+        "飲料水は3日分（1人1日3リットルが目安）、大規模災害では1週間分の備蓄が望ましいとする家庭向けの目安",
+        "飲料水とは別に生活用水が必要と注記"
+      ],
+      "limits": "家庭備蓄の啓発で、避難所の供給基準ではない。摂取量や配布回数を校正しない。"
+    },
+    {
+      "id": "SRC-MAFF-HOME-WATER-STOCK",
+      "source_type": "literature",
+      "title": "大事な水、どうやって備えますか？（家庭備蓄ポータル）",
+      "publisher": "農林水産省",
+      "edition": "web page, accessed 2026-10-25",
+      "published_on": "undated web page",
+      "url": "https://www.maff.go.jp/j/zyukyu/foodstock/imadoki/imadoki02_10.html",
+      "evidence_scope": [
+        "飲料用と調理用で1人1日3リットル、最低3日分で9リットルとする家庭向けの目安"
+      ],
+      "limits": "3リットルは飲料と調理の合計で、家庭備蓄の啓発。避難所での飲水量の実測ではない。"
+    },
+    {
+      "id": "SRC-MHLW-SHELTER-NUTRITION-2011-04",
+      "source_type": "literature",
+      "title": "避難所における食事提供の計画・評価のために当面の目標とする栄養の参照量について（事務連絡）",
+      "publisher": "厚生労働省健康局総務課",
+      "edition": "平成23年4月21日事務連絡",
+      "published_on": "2011-04-21",
+      "url": "https://www.mhlw.go.jp/stf/houdou/2r9852000001a159-img/2r9852000001a29m.pdf",
+      "evidence_scope": [
+        "被災後3か月までの1歳以上1人1日あたりの目標として、エネルギー2,000 kcal（PDF p.2）"
+      ],
+      "limits": "東日本大震災の被災3県と関係市あての通知。食事の回数や1食分の量は定めず、モデルの食事単位への換算は仮定。"
+    },
+    {
+      "id": "SRC-CAO-NOTO-SUPPLY-2024-08",
+      "source_type": "literature",
+      "title": "物資調達・輸送について（令和6年能登半島地震を踏まえた災害対応検討ワーキンググループ 第4回 資料3-1）",
+      "publisher": "内閣府（防災担当）",
+      "edition": "令和6年8月20日",
+      "published_on": "2024-08-20",
+      "url": "https://www.bousai.go.jp/jishin/noto/taisaku_wg_02/pdf/siryo4_3_1.pdf",
+      "evidence_scope": [
+        "発災から3日間は家庭等と被災地方公共団体の備蓄で対応し、国のプッシュ型支援は遅くとも3日目までに被災都道府県へ届くよう調整する（PDF p.3、大規模地震・津波災害応急対策対処方針より）",
+        "能登半島地震では陸路の輸送に時間を要し、プッシュ型支援を計82日間実施（PDF p.4）"
+      ],
+      "limits": "都道府県の拠点までの到着の考え方で、避難所に届く日時や量を示さない。"
     }
   ],
   "assumptions": [
@@ -81,6 +201,80 @@
       "notes": "Synthetic balanced profiles and explicit entry orientation exercise the integrated service-to-need-to-psychology paths. Daily delivery starts at simulated minute 1440. Counts, initial stocks, delivery schedule, service times, staffing, and coefficients are test conditions, not estimates for a real shelter."
     },
     {
+      "id": "ASM-CORE-MODEL-SUITE-V1",
+      "source_type": "assumption",
+      "target": "newly authored Scenarios without an explicit historical policy registry",
+      "model_version": "core-model-suite-v1",
+      "values": {
+        "behavior": "utility-softmax-v1",
+        "psychology": "mean-reverting-life-state-v1",
+        "social": "expressiveness-channel-openness-v1",
+        "information": "evidence-aware-rumor-v1",
+        "affect": "linear-positive-negative-v1",
+        "body_dynamics": "body-feedback-complete-v2",
+        "queue": "need-weighted-physical-queue-v1",
+        "relationship": "distance-duration-repeat-trust-v1",
+        "social_proximity": "disabled-proximity-v1",
+        "behavior_decision_interval_minutes": 15
+      },
+      "context_sources": [
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+        "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+        "SRC-BOSSE-AFFECT-CONTAGION-2015",
+        "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "internally versioned operator combination; not empirically calibrated or externally validated",
+      "notes": "Literature informs operator structure only. Coefficients, contact network, social toggles, operational effects, and this combination are ShelterSim assumptions. Existing Scenarios with explicit registries keep their saved selection."
+    },
+    {
+      "id": "ASM-CORE-MODEL-SUITE-V2",
+      "source_type": "assumption",
+      "target": "newly authored Scenarios without an explicit historical policy registry",
+      "model_version": "core-model-suite-v2",
+      "values": {
+        "behavior": "sleep-aware-utility-softmax-v2",
+        "psychology": "mean-reverting-life-state-v1",
+        "social": "expressiveness-channel-openness-v1",
+        "information": "evidence-aware-rumor-v1",
+        "affect": "linear-positive-negative-v1",
+        "body_dynamics": "body-feedback-complete-v2",
+        "queue": "need-weighted-physical-queue-v1",
+        "relationship": "distance-duration-repeat-trust-v1",
+        "social_proximity": "disabled-proximity-v1",
+        "behavior_decision_interval_minutes": 15,
+        "behavior_sleep_debt_utility_weight": 1.0
+      },
+      "context_sources": [
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974",
+        "SRC-MCEWEN-STELLAR-ALLOSTATIC-LOAD-1993",
+        "SRC-BOSSE-AFFECT-CONTAGION-2015",
+        "SRC-CHAN-MISINFORMATION-CORRECTION-2023",
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "internally versioned operator combination; not empirically calibrated or externally validated",
+      "notes": "Literature informs operator structure only. Coefficients, contact network, social toggles, operational effects, and this combination are ShelterSim assumptions. The sleep-aware behavior selector adds one utility unit per daily sleep-need equivalent of debt as an uncalibrated hypothesis. Existing Scenarios with explicit registries keep their saved selection."
+    },
+    {
+      "id": "ASM-SLEEP-DEBT-BALANCE-V1",
+      "source_type": "assumption",
+      "target": "body-feedback-complete-v2 sleep-debt step",
+      "model_version": "sleep-debt-balance-v1",
+      "values": {
+        "state_unit": "sleep-debt minutes, bounded 0..1440",
+        "awake_rate_without_person_requirement": 0.5,
+        "awake_rate_with_daily_requirement_S": "S / (1440 - S)",
+        "sleep_recovery_minutes_per_sleep_minute": 1.0,
+        "rest_recovery_minutes_per_rest_minute": 0.0,
+        "sleep_efficiency_multiplier": "zone-derived, bounded 0..1"
+      },
+      "context_sources": [
+        "SRC-DAAN-SLEEP-REGULATION-1984"
+      ],
+      "calibration_status": "structural balance assumption; not clinically calibrated",
+      "notes": "The daily-rate formula balances exactly when actual sleep equals the supplied daily requirement S. The fallback 0.5 represents an 8-hour requirement under a 16-hour wake schedule. The cited two-process sleep literature motivates asymmetric wake/sleep dynamics, not these minute rates. Rest is not counted as sleep; no sleep recovery is counted twice through the separate psychological rest path."
+    },
+    {
       "id": "ASM-RESEARCH-SHORTAGE-CONDITIONS-V1",
       "source_type": "assumption",
       "target": "fixtures/scenarios/research_shortage_100_7d.json",
@@ -96,7 +290,10 @@
           "food_meal_units": 100
         },
         "working_toilet_units": 2,
-        "unavailable_facilities": ["toilet_3", "toilet_4"],
+        "unavailable_facilities": [
+          "toilet_3",
+          "toilet_4"
+        ],
         "psychology_policy": "mean-reverting-life-state-v1"
       },
       "context_sources": [
@@ -545,6 +742,24 @@
       ],
       "calibration_status": "uncalibrated operational assumption",
       "notes": "The sources do not report sampled per-use service durations; the interval must not be described as measured."
+    },
+    {
+      "id": "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+      "source_type": "assumption",
+      "target": "sleep-aware-utility-softmax-v2 candidate behavior selector",
+      "model_version": "sleep-aware-utility-softmax-v2",
+      "values": {
+        "sleep_debt_utility_weight": 1.0,
+        "sleep_debt_normalizer": "agent required_sleep_minutes; otherwise 480 minutes",
+        "score_term": "weight * sleep_debt_minutes / daily_sleep_need_minutes",
+        "legacy_utility_softmax_v1_unchanged": true
+      },
+      "context_sources": [
+        "SRC-DAAN-SLEEP-REGULATION-1984",
+        "SRC-MCFADDEN-RANDOM-UTILITY-1974"
+      ],
+      "calibration_status": "synthetic utility assumption; not empirically calibrated or externally validated",
+      "notes": "Homeostatic debt makes sleep continuously more valuable in the candidate selector. A daily sleep-need equivalent adds one utility unit by assumption. This change does not guarantee sleep or predict observed behavior; the old utility-softmax-v1 selector is unchanged."
     },
     {
       "id": "ASM-UTILITY-BEHAVIOR-V1",
@@ -1075,6 +1290,92 @@
       "context_sources": [],
       "calibration_status": "uncalibrated generator heuristic",
       "notes": "Used only when no household composition is entered. Templates are explicit synthetic links, not relationships inferred from age or co-residence, and describe no real family. With the default household-size mix they give about 15-17% minors (seeds 0-9, 30-300 people). Operator-entered compositions replace them; templates with child slots are dropped when the selected ages contain no minors."
+    },
+    {
+      "id": "ASM-SERVICE-CAPACITY-PLANNING-V1",
+      "source_type": "assumption",
+      "target": "service_capacity_diagnostic planning check and the units it reports as needed",
+      "model_version": "service-capacity-planning-v1",
+      "values": {
+        "operating_minutes_per_day": 960,
+        "target_utilization": 0.8,
+        "required_units": "ceil(people x uses per person per day x minutes per use / (960 x 0.8))",
+        "toilet_uses_per_person_day": 5,
+        "toilet_minutes_per_use": "mean of toilet_service minimum_minutes and maximum_minutes",
+        "water_uses_per_person_day": "hydration_growth_per_minute x 1440 / min(hydration_relief, hydration_action_threshold)",
+        "meal_uses_per_person_day": "mean hunger_growth x 1440 / min(hunger_relief, hunger_action_threshold)",
+        "serving_units": "for water and meal, per zone the smaller of working units and staff with the service skill in that zone"
+      },
+      "context_sources": [
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "uncalibrated planning assumption",
+      "notes": "The toilet use count is the Cabinet Office planning figure (5 uses per person per day, PDF p.12). The 16-hour operating window and the 0.8 target load are software assumptions, not measured shelter operations. Water and meal use rates are upper-bound approximations of the Scenario's own need coefficients: agents act only at the action threshold and relief stops at zero, so one service removes at least min(relief, threshold). The check ignores peaks, outages and travel, and it never changes simulation behavior."
+    },
+    {
+      "id": "ASM-STANDARD-PROVISIONING-V1",
+      "source_type": "assumption",
+      "target": "with_standard_provisioning in region conditions for generated Scenarios without an entered inventory",
+      "model_version": "standard-provisioning-v1",
+      "values": {
+        "drinking_water_ml_per_person_day": 3000,
+        "meal_units_per_person_day": 3,
+        "stock_days": 3,
+        "supply_start_day_default": 4,
+        "supply_interval_days": "1, or the smallest interval that keeps default deliveries within 64 compiled events, with the quantity scaled to match",
+        "applies_when": "initial_resources.status is unknown"
+      },
+      "context_sources": [
+        "SRC-KANTEI-HOME-STOCKPILE",
+        "SRC-MAFF-HOME-WATER-STOCK",
+        "SRC-MHLW-SHELTER-NUTRITION-2011-04",
+        "SRC-CAO-NOTO-SUPPLY-2024-08"
+      ],
+      "calibration_status": "uncalibrated planning assumption",
+      "notes": "Drinking water of 3 L per person per day and three days of stock follow national household stockpiling guidance; national policy expects outside supply from day 4, but that is arrival at prefectural hubs, not at a shelter. Three meal units per person per day is a software assumption standing in for the 2,000 kcal reference intake; it is not a measured meal count. Entered or partial inventories are never replaced."
+    },
+    {
+      "id": "ASM-SHELTER-STAFFING-HEURISTIC-V2",
+      "source_type": "assumption",
+      "target": "StandardShelterGenerator staff count and placement",
+      "model_version": "role-based-staffing-v1",
+      "values": {
+        "general_staff": "max(1, ceil(population / 100)) in the staff zone with every skill",
+        "station_staff": "one per water or meal station in the food zone with water_service and meal_service",
+        "entered_total": "kept as entered; station staff fill all but one place"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated synthetic staffing",
+      "notes": "Water and meal service start only with a skilled staff member in the station's zone, so each station gets a station-based staff member. Staff work without shifts. The resulting ratio is denser than the 1:20 to 1:80 range seen in a few reports, which give no standard; this is not staffing guidance."
+    },
+    {
+      "id": "ASM-SHELTER-TOILET-HEURISTIC-V2",
+      "source_type": "assumption",
+      "target": "StandardShelterGenerator toilet count",
+      "model_version": "standard-or-demand-toilets-v1",
+      "values": {
+        "total": "max(accessible toilets + ceil(population / 50), units for 5 uses per person per day at the toilet service duration within the target load)",
+        "maximum": 20
+      },
+      "context_sources": [
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "uncalibrated planning assumption",
+      "notes": "One per 50 people is the Cabinet Office initial planning figure (PDF p.12); the demand term uses ASM-SERVICE-CAPACITY-PLANNING-V1. The long-term figure of one per 20 is not applied because facility counts do not change during a Run."
+    },
+    {
+      "id": "ASM-SHELTER-SERVICE-STATIONS-V1",
+      "source_type": "assumption",
+      "target": "StandardShelterGenerator water station and meal distribution counts",
+      "model_version": "demand-sized-stations-v1",
+      "values": {
+        "water_station": "max(1, units for the default hydration coefficients within the target load)",
+        "meal_distribution": "max(1, units for the default hunger coefficients within the target load)",
+        "zone_id": "food"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated planning assumption",
+      "notes": "No public standard sets station counts. Counts use the default generated coefficients through ASM-SERVICE-CAPACITY-PLANNING-V1; a Scenario whose coefficients are changed later is checked by the capacity diagnostic instead. Each station is a separate facility because a facility with a floor-plan point serves one person at a time."
     }
   ]
 }

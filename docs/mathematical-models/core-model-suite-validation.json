@@ -1,0 +1,771 @@
+{
+  "schema_version": 1,
+  "study_id": "core-model-suite-v1-fixed-seed-comparison",
+  "git_head_at_run": "0d3a641d6a8470085b49e09cfda4a8c2cbe467a5",
+  "branch": "feat/core-model-scientific-validation",
+  "run_conditions": {
+    "llm_mode": "offline",
+    "seed": 2026,
+    "duration_minutes": 1440,
+    "agent_count": 100,
+    "baseline_trace_level": "summary",
+    "candidate_trace_level": "summary",
+    "repeat_trace_level": "off"
+  },
+  "results": {
+    "baseline": {
+      "variant": "saved-research-full",
+      "seed": 2026,
+      "minute": 1440,
+      "agent_count": 100,
+      "acute_distress_mean": 0.8271712757386794,
+      "acute_distress_p95": 1.0,
+      "high_distress_share_ge_0_7": 0.73,
+      "action_records": {
+        "care_family": 54,
+        "collect_meal": 71,
+        "fetch_water": 326,
+        "help_others": 80,
+        "request_toilet": 162,
+        "rest": 23,
+        "seek_help": 196,
+        "sleep": 97,
+        "socialize": 13,
+        "wait": 10
+      },
+      "information_exposure_count": 0,
+      "wrong_belief_count": 0,
+      "current_wrong_belief_count": 0,
+      "ever_wrong_belief_count": 0,
+      "correction_exposure_count": 0,
+      "correction_acceptance_count": 0,
+      "forgotten_information_count": 0,
+      "currently_forgotten_information_count": 0,
+      "toilet_units": 4,
+      "toilet_queue_count": 0,
+      "service_events_applied": 146,
+      "long_term_distress_mean": 0.06035752896255251,
+      "high_distress_episode_count_ge_0_7": 534,
+      "high_distress_longest_run_minutes": 142,
+      "high_distress_mean_recovery_minutes": 22.391304347826086,
+      "high_distress_reascent_count": 461,
+      "social_positive_stress_influence": 0.0,
+      "social_negative_stress_influence_magnitude": 0.0,
+      "toilet_queue_mean_length": 0.375,
+      "toilet_queue_person_minutes": 540,
+      "toilet_wait_mean_minutes_final": 3.6986301369863015,
+      "toilet_wait_max_minutes": 26.0,
+      "toilet_utilization_mean": 0.15104166666666666,
+      "toilet_long_term_planning_shortage_minutes": 1440,
+      "resource_shortage_minutes": 0,
+      "online_distress_monitor": {
+        "monitored_agent_count": 100,
+        "high_distress_episode_count": 102,
+        "completed_high_distress_episode_count": 29,
+        "ongoing_high_distress_episode_count": 73,
+        "ongoing_episode_elapsed_minutes_by_agent": [
+          {
+            "agent_id": "A001",
+            "elapsed_minutes": 1126
+          },
+          {
+            "agent_id": "A003",
+            "elapsed_minutes": 178
+          },
+          {
+            "agent_id": "A004",
+            "elapsed_minutes": 660
+          },
+          {
+            "agent_id": "A005",
+            "elapsed_minutes": 1049
+          },
+          {
+            "agent_id": "A007",
+            "elapsed_minutes": 263
+          },
+          {
+            "agent_id": "A008",
+            "elapsed_minutes": 662
+          },
+          {
+            "agent_id": "A009",
+            "elapsed_minutes": 1220
+          },
+          {
+            "agent_id": "A010",
+            "elapsed_minutes": 476
+          },
+          {
+            "agent_id": "A011",
+            "elapsed_minutes": 1191
+          },
+          {
+            "agent_id": "A013",
+            "elapsed_minutes": 728
+          },
+          {
+            "agent_id": "A016",
+            "elapsed_minutes": 829
+          },
+          {
+            "agent_id": "A017",
+            "elapsed_minutes": 415
+          },
+          {
+            "agent_id": "A018",
+            "elapsed_minutes": 605
+          },
+          {
+            "agent_id": "A019",
+            "elapsed_minutes": 156
+          },
+          {
+            "agent_id": "A020",
+            "elapsed_minutes": 1143
+          },
+          {
+            "agent_id": "A022",
+            "elapsed_minutes": 1188
+          },
+          {
+            "agent_id": "A026",
+            "elapsed_minutes": 198
+          },
+          {
+            "agent_id": "A027",
+            "elapsed_minutes": 912
+          },
+          {
+            "agent_id": "A028",
+            "elapsed_minutes": 231
+          },
+          {
+            "agent_id": "A029",
+            "elapsed_minutes": 772
+          },
+          {
+            "agent_id": "A031",
+            "elapsed_minutes": 472
+          },
+          {
+            "agent_id": "A033",
+            "elapsed_minutes": 1006
+          },
+          {
+            "agent_id": "A034",
+            "elapsed_minutes": 1060
+          },
+          {
+            "agent_id": "A036",
+            "elapsed_minutes": 60
+          },
+          {
+            "agent_id": "A037",
+            "elapsed_minutes": 1189
+          },
+          {
+            "agent_id": "A039",
+            "elapsed_minutes": 1099
+          },
+          {
+            "agent_id": "A041",
+            "elapsed_minutes": 1139
+          },
+          {
+            "agent_id": "A042",
+            "elapsed_minutes": 1145
+          },
+          {
+            "agent_id": "A043",
+            "elapsed_minutes": 1165
+          },
+          {
+            "agent_id": "A044",
+            "elapsed_minutes": 1180
+          },
+          {
+            "agent_id": "A045",
+            "elapsed_minutes": 1147
+          },
+          {
+            "agent_id": "A046",
+            "elapsed_minutes": 1013
+          },
+          {
+            "agent_id": "A047",
+            "elapsed_minutes": 146
+          },
+          {
+            "agent_id": "A049",
+            "elapsed_minutes": 1100
+          },
+          {
+            "agent_id": "A050",
+            "elapsed_minutes": 756
+          },
+          {
+            "agent_id": "A051",
+            "elapsed_minutes": 256
+          },
+          {
+            "agent_id": "A052",
+            "elapsed_minutes": 487
+          },
+          {
+            "agent_id": "A054",
+            "elapsed_minutes": 877
+          },
+          {
+            "agent_id": "A055",
+            "elapsed_minutes": 1102
+          },
+          {
+            "agent_id": "A057",
+            "elapsed_minutes": 291
+          },
+          {
+            "agent_id": "A058",
+            "elapsed_minutes": 1025
+          },
+          {
+            "agent_id": "A059",
+            "elapsed_minutes": 248
+          },
+          {
+            "agent_id": "A060",
+            "elapsed_minutes": 595
+          },
+          {
+            "agent_id": "A062",
+            "elapsed_minutes": 367
+          },
+          {
+            "agent_id": "A063",
+            "elapsed_minutes": 1207
+          },
+          {
+            "agent_id": "A064",
+            "elapsed_minutes": 23
+          },
+          {
+            "agent_id": "A065",
+            "elapsed_minutes": 1260
+          },
+          {
+            "agent_id": "A066",
+            "elapsed_minutes": 1210
+          },
+          {
+            "agent_id": "A068",
+            "elapsed_minutes": 1180
+          },
+          {
+            "agent_id": "A070",
+            "elapsed_minutes": 1032
+          },
+          {
+            "agent_id": "A071",
+            "elapsed_minutes": 199
+          },
+          {
+            "agent_id": "A072",
+            "elapsed_minutes": 818
+          },
+          {
+            "agent_id": "A073",
+            "elapsed_minutes": 1166
+          },
+          {
+            "agent_id": "A074",
+            "elapsed_minutes": 146
+          },
+          {
+            "agent_id": "A075",
+            "elapsed_minutes": 1220
+          },
+          {
+            "agent_id": "A076",
+            "elapsed_minutes": 1021
+          },
+          {
+            "agent_id": "A077",
+            "elapsed_minutes": 1247
+          },
+          {
+            "agent_id": "A078",
+            "elapsed_minutes": 1024
+          },
+          {
+            "agent_id": "A079",
+            "elapsed_minutes": 216
+          },
+          {
+            "agent_id": "A080",
+            "elapsed_minutes": 1194
+          },
+          {
+            "agent_id": "A081",
+            "elapsed_minutes": 1074
+          },
+          {
+            "agent_id": "A083",
+            "elapsed_minutes": 1179
+          },
+          {
+            "agent_id": "A084",
+            "elapsed_minutes": 1015
+          },
+          {
+            "agent_id": "A085",
+            "elapsed_minutes": 162
+          },
+          {
+            "agent_id": "A086",
+            "elapsed_minutes": 1173
+          },
+          {
+            "agent_id": "A087",
+            "elapsed_minutes": 88
+          },
+          {
+            "agent_id": "A088",
+            "elapsed_minutes": 1211
+          },
+          {
+            "agent_id": "A090",
+            "elapsed_minutes": 1211
+          },
+          {
+            "agent_id": "A096",
+            "elapsed_minutes": 1113
+          },
+          {
+            "agent_id": "A097",
+            "elapsed_minutes": 1118
+          },
+          {
+            "agent_id": "A098",
+            "elapsed_minutes": 1222
+          },
+          {
+            "agent_id": "A099",
+            "elapsed_minutes": 1160
+          },
+          {
+            "agent_id": "A100",
+            "elapsed_minutes": 1189
+          }
+        ],
+        "ongoing_episode_elapsed_minutes_total": 60005,
+        "mean_completed_episode_duration_minutes": 154.20689655172413,
+        "high_distress_reascent_count": 28,
+        "longest_high_distress_run_minutes": 1260,
+        "end_high_distress_agent_share": 0.73,
+        "mean_per_agent_longest_high_distress_run_minutes": 608.05,
+        "completed_recovery_count": 29,
+        "mean_completed_recovery_minutes": 154.20689655172413,
+        "currently_high_run_agent_minutes": 60005
+      },
+      "body_state": {
+        "sleep_debt_mean_minutes": 1421.577791477279
+      },
+      "scenario_id": "core-model-suite-validation-2026-1440",
+      "scenario_sha256": "1d777c31d289827d34a81650921357f7cbe01cd0e2263cfeaf71319681bb0a11",
+      "model_signatures": {
+        "policy:behavior": "utility-softmax-v1@1:state1",
+        "policy:psychology": "mean-reverting-life-state-v1@1:state1",
+        "policy:social": "sparse-family-zone-contact-v1@1:state1",
+        "policy:information": "sparse-information-contact-v1@1:state1",
+        "simulator:agent_dynamics_v1": "need-led-autonomy-memory-v1@1:state1",
+        "simulator:population_dynamics_v1": "capacity-aware-arrivals-departures-v1@1:state1",
+        "simulator:social_network_v1": "directed-contact-relationships-v1@2:state1",
+        "simulator:staff_dynamics_v1": "continuous-duty-fatigue-v1@1:state1",
+        "simulator:staff_operations_v1": "autonomous-routed-staff-v1@2:state1",
+        "simulator:body_state_v1": "life-state-feedback-v1@3:state1",
+        "operator:autonomy_behavior": "contextual-autonomy@2:stateless",
+        "operator:facility_awareness": "entry-orientation-and-arrival-discovery-v1@1:a446bac865b697741ec10cbcdc4d43f77c6abb758abd5d8d30fe54c4c85898a0",
+        "operator:action_lifecycle": "applied-action-lifecycle-v2@1:state1"
+      },
+      "policy_registry": {
+        "schema_version": 1,
+        "psychology": "mean-reverting-life-state-v1"
+      }
+    },
+    "candidate": {
+      "variant": "core-model-suite-v1",
+      "seed": 2026,
+      "minute": 1440,
+      "agent_count": 100,
+      "acute_distress_mean": 0.8069800438103067,
+      "acute_distress_p95": 1.0,
+      "high_distress_share_ge_0_7": 0.68,
+      "action_records": {
+        "care_family": 122,
+        "collect_meal": 93,
+        "fetch_water": 343,
+        "help_others": 184,
+        "request_toilet": 186,
+        "rest": 61,
+        "seek_help": 181,
+        "sleep": 190,
+        "socialize": 33,
+        "wait": 28
+      },
+      "information_exposure_count": 0,
+      "wrong_belief_count": 0,
+      "current_wrong_belief_count": 0,
+      "ever_wrong_belief_count": 0,
+      "correction_exposure_count": 0,
+      "correction_acceptance_count": 0,
+      "forgotten_information_count": 0,
+      "currently_forgotten_information_count": 0,
+      "toilet_units": 4,
+      "toilet_queue_count": 0,
+      "service_events_applied": 162,
+      "long_term_distress_mean": 0.060243645636056505,
+      "high_distress_episode_count_ge_0_7": 526,
+      "high_distress_longest_run_minutes": 251,
+      "high_distress_mean_recovery_minutes": 11.733333333333333,
+      "high_distress_reascent_count": 458,
+      "social_positive_stress_influence": 0.0,
+      "social_negative_stress_influence_magnitude": 0.0,
+      "toilet_queue_mean_length": 0.5909722222222222,
+      "toilet_queue_person_minutes": 851,
+      "toilet_wait_mean_minutes_final": 5.253086419753086,
+      "toilet_wait_max_minutes": 26.0,
+      "toilet_utilization_mean": 0.1685763888888889,
+      "toilet_long_term_planning_shortage_minutes": 1440,
+      "resource_shortage_minutes": 0,
+      "online_distress_monitor": {
+        "monitored_agent_count": 100,
+        "high_distress_episode_count": 84,
+        "completed_high_distress_episode_count": 16,
+        "ongoing_high_distress_episode_count": 68,
+        "ongoing_episode_elapsed_minutes_by_agent": [
+          {
+            "agent_id": "A001",
+            "elapsed_minutes": 1121
+          },
+          {
+            "agent_id": "A004",
+            "elapsed_minutes": 870
+          },
+          {
+            "agent_id": "A005",
+            "elapsed_minutes": 1128
+          },
+          {
+            "agent_id": "A007",
+            "elapsed_minutes": 401
+          },
+          {
+            "agent_id": "A008",
+            "elapsed_minutes": 992
+          },
+          {
+            "agent_id": "A009",
+            "elapsed_minutes": 1232
+          },
+          {
+            "agent_id": "A010",
+            "elapsed_minutes": 682
+          },
+          {
+            "agent_id": "A011",
+            "elapsed_minutes": 1201
+          },
+          {
+            "agent_id": "A013",
+            "elapsed_minutes": 835
+          },
+          {
+            "agent_id": "A016",
+            "elapsed_minutes": 790
+          },
+          {
+            "agent_id": "A017",
+            "elapsed_minutes": 269
+          },
+          {
+            "agent_id": "A018",
+            "elapsed_minutes": 305
+          },
+          {
+            "agent_id": "A019",
+            "elapsed_minutes": 84
+          },
+          {
+            "agent_id": "A020",
+            "elapsed_minutes": 1151
+          },
+          {
+            "agent_id": "A022",
+            "elapsed_minutes": 1191
+          },
+          {
+            "agent_id": "A026",
+            "elapsed_minutes": 26
+          },
+          {
+            "agent_id": "A027",
+            "elapsed_minutes": 579
+          },
+          {
+            "agent_id": "A028",
+            "elapsed_minutes": 285
+          },
+          {
+            "agent_id": "A029",
+            "elapsed_minutes": 1067
+          },
+          {
+            "agent_id": "A031",
+            "elapsed_minutes": 814
+          },
+          {
+            "agent_id": "A033",
+            "elapsed_minutes": 969
+          },
+          {
+            "agent_id": "A034",
+            "elapsed_minutes": 1129
+          },
+          {
+            "agent_id": "A037",
+            "elapsed_minutes": 1211
+          },
+          {
+            "agent_id": "A039",
+            "elapsed_minutes": 1012
+          },
+          {
+            "agent_id": "A041",
+            "elapsed_minutes": 1219
+          },
+          {
+            "agent_id": "A042",
+            "elapsed_minutes": 1139
+          },
+          {
+            "agent_id": "A043",
+            "elapsed_minutes": 1182
+          },
+          {
+            "agent_id": "A044",
+            "elapsed_minutes": 1182
+          },
+          {
+            "agent_id": "A045",
+            "elapsed_minutes": 1101
+          },
+          {
+            "agent_id": "A046",
+            "elapsed_minutes": 1075
+          },
+          {
+            "agent_id": "A047",
+            "elapsed_minutes": 371
+          },
+          {
+            "agent_id": "A049",
+            "elapsed_minutes": 1136
+          },
+          {
+            "agent_id": "A050",
+            "elapsed_minutes": 676
+          },
+          {
+            "agent_id": "A051",
+            "elapsed_minutes": 186
+          },
+          {
+            "agent_id": "A052",
+            "elapsed_minutes": 494
+          },
+          {
+            "agent_id": "A054",
+            "elapsed_minutes": 1016
+          },
+          {
+            "agent_id": "A055",
+            "elapsed_minutes": 1097
+          },
+          {
+            "agent_id": "A057",
+            "elapsed_minutes": 996
+          },
+          {
+            "agent_id": "A058",
+            "elapsed_minutes": 656
+          },
+          {
+            "agent_id": "A059",
+            "elapsed_minutes": 13
+          },
+          {
+            "agent_id": "A060",
+            "elapsed_minutes": 693
+          },
+          {
+            "agent_id": "A062",
+            "elapsed_minutes": 293
+          },
+          {
+            "agent_id": "A063",
+            "elapsed_minutes": 1231
+          },
+          {
+            "agent_id": "A065",
+            "elapsed_minutes": 1219
+          },
+          {
+            "agent_id": "A066",
+            "elapsed_minutes": 1207
+          },
+          {
+            "agent_id": "A068",
+            "elapsed_minutes": 1197
+          },
+          {
+            "agent_id": "A070",
+            "elapsed_minutes": 1094
+          },
+          {
+            "agent_id": "A071",
+            "elapsed_minutes": 265
+          },
+          {
+            "agent_id": "A072",
+            "elapsed_minutes": 893
+          },
+          {
+            "agent_id": "A073",
+            "elapsed_minutes": 1181
+          },
+          {
+            "agent_id": "A075",
+            "elapsed_minutes": 1231
+          },
+          {
+            "agent_id": "A076",
+            "elapsed_minutes": 976
+          },
+          {
+            "agent_id": "A077",
+            "elapsed_minutes": 1208
+          },
+          {
+            "agent_id": "A078",
+            "elapsed_minutes": 1108
+          },
+          {
+            "agent_id": "A079",
+            "elapsed_minutes": 401
+          },
+          {
+            "agent_id": "A080",
+            "elapsed_minutes": 1215
+          },
+          {
+            "agent_id": "A081",
+            "elapsed_minutes": 1149
+          },
+          {
+            "agent_id": "A083",
+            "elapsed_minutes": 1216
+          },
+          {
+            "agent_id": "A084",
+            "elapsed_minutes": 1007
+          },
+          {
+            "agent_id": "A086",
+            "elapsed_minutes": 1112
+          },
+          {
+            "agent_id": "A087",
+            "elapsed_minutes": 182
+          },
+          {
+            "agent_id": "A088",
+            "elapsed_minutes": 1234
+          },
+          {
+            "agent_id": "A090",
+            "elapsed_minutes": 1217
+          },
+          {
+            "agent_id": "A096",
+            "elapsed_minutes": 1131
+          },
+          {
+            "agent_id": "A097",
+            "elapsed_minutes": 1222
+          },
+          {
+            "agent_id": "A098",
+            "elapsed_minutes": 1199
+          },
+          {
+            "agent_id": "A099",
+            "elapsed_minutes": 1223
+          },
+          {
+            "agent_id": "A100",
+            "elapsed_minutes": 1216
+          }
+        ],
+        "ongoing_episode_elapsed_minutes_total": 61403,
+        "mean_completed_episode_duration_minutes": 155.0,
+        "high_distress_reascent_count": 15,
+        "longest_high_distress_run_minutes": 1234,
+        "end_high_distress_agent_share": 0.68,
+        "mean_per_agent_longest_high_distress_run_minutes": 620.64,
+        "completed_recovery_count": 16,
+        "mean_completed_recovery_minutes": 155.0,
+        "currently_high_run_agent_minutes": 61403
+      },
+      "body_state": {
+        "sleep_debt_mean_minutes": 845.1803915937974
+      },
+      "scenario_id": "core-model-suite-validation-2026-1440",
+      "scenario_sha256": "c7588b0ac15955e34c503ab3acca3495a99778af7593e33b8d86f22f7c9364a1",
+      "model_signatures": {
+        "policy:behavior": "utility-softmax-v1@1:state1:manifest=5cbb072dcb245a1201dc8bf1b637dbb7faa66413f1216d7899191a3e0d9f3f9b:inputs=2bfa947a501c3b8c3ab0eb5876e31ff726cdf4a0ec81cb9baef6d0ea43c72cab",
+        "policy:psychology": "mean-reverting-life-state-v1@1:state1:manifest=fe69aac430b8085d22c9a02239afd23346ca526c9d98c34f37dad8a4b7cc6582:inputs=519825365a72252e1f6242bb3ba010cfe4bd680224ed6338a257909348dbb646",
+        "policy:social": "expressiveness-channel-openness-v1@1:state1:manifest=d16a6aff2ef96c28843f8f831ed6c15f7460332857bd91b9f9b70e3142cf5d16:inputs=a3d49fc00c8f2e98620c4ad671ff3a159516f3c68ad9b01185599f55513695cc",
+        "policy:information": "evidence-aware-rumor-v1@1:state1:manifest=aa92bcf2b1cf2c7a33589c479f049d2fc55a5df2f4650118b63c45af44672cf4:inputs=b3c2a7d1a03cdd65c95582bef392d132fbc947ba8a8bc758b701e15aa932ac73",
+        "policy:affect": "linear-positive-negative-v1@1:state1:manifest=8d432f75e12feee7929b20f03343f15b6964c5754f455f3939433d2b682bc756:inputs=2f7aa5f6151dbb00dd82f7aa0aaed17a942b02365b56aee0cad05a764e1dbbe0",
+        "policy:body_dynamics": "body-feedback-complete-v2@1:state1:manifest=707cf0e58363885cf8758d549551743873b9d5451f5a2d0e00913132bab59e99:inputs=2f7aa5f6151dbb00dd82f7aa0aaed17a942b02365b56aee0cad05a764e1dbbe0",
+        "policy:queue": "need-weighted-physical-queue-v1@1:state1:manifest=6ef1419f2ecb4ca409870941f5ba94e4694b484b81a11b1a26ad4650e140d0f7:inputs=57da7f71f048f5bc8bf7ff16c97642c165c2d61e1d17b66b1601ec435e9178ee",
+        "policy:relationship": "distance-duration-repeat-trust-v1@1:state1:manifest=99a022fef23fff18a7713474960a57743fbfef96fc31110de9ab324d27c45410:inputs=2f7aa5f6151dbb00dd82f7aa0aaed17a942b02365b56aee0cad05a764e1dbbe0",
+        "policy:social_proximity": "disabled-proximity-v1@1:state1:manifest=25c32489898870161ee0257fb7c571084c7fc0efcead978545357cef945821ba:inputs=44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "simulator:agent_dynamics_v1": "need-led-autonomy-memory-v1@1:state1",
+        "simulator:population_dynamics_v1": "capacity-aware-arrivals-departures-v1@1:state1",
+        "simulator:social_network_v1": "directed-contact-relationships-v1@2:state1",
+        "simulator:staff_dynamics_v1": "continuous-duty-fatigue-v1@1:state1",
+        "simulator:staff_operations_v1": "autonomous-routed-staff-v1@2:state1",
+        "simulator:body_state_v1": "life-state-feedback-v1@3:state1",
+        "operator:autonomy_behavior": "contextual-autonomy@2:stateless",
+        "operator:facility_awareness": "entry-orientation-and-arrival-discovery-v1@1:a446bac865b697741ec10cbcdc4d43f77c6abb758abd5d8d30fe54c4c85898a0",
+        "operator:action_lifecycle": "applied-action-lifecycle-v2@1:state1",
+        "model_suite": "core-model-suite-v1@1"
+      },
+      "policy_registry": {
+        "schema_version": 3,
+        "suite_id": "core-model-suite-v1"
+      }
+    },
+    "same_seed_trace_on_off_final_state_equal": true,
+    "candidate_same_seed_final_state_sha256": "f1166a5b4bdb95b33da85c1dedf1fc266fbfa9371577b3f47a75b62f2ab81085"
+  },
+  "runtime_seconds": {
+    "baseline": 70.77878983295523,
+    "candidate": 65.16388316603843,
+    "candidate_repeat": 58.54482441605069
+  },
+  "interpretation": "Fixed-seed internal software comparison. It checks execution, recorded model identity, Trace independence and reproducibility; it is not empirical calibration or external validation.",
+  "implementation_commit_sha": "e4405419e7de96a71df85e6312f32ce785cff430",
+  "working_tree_dirty_at_run": true
+}

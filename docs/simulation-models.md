@@ -22,11 +22,31 @@ WorldStateはRun中の可変stateです。Checkpointは乱数状態、未処理�
 
 ## 初期Scenario生成
 
+新規の未選択Scenarioは `core-model-suite-v2` を使います。Suite IDと個別Policy ID、係数、有効機構をRunに記録します。Suiteは内部テストされた候補で、避難所実績で校正・外部検証されたモデルではありません。長期比較と未完了ゲートは [標準モデルセット仕様](mathematical-models/14-default-model-suite.md) に記録しています。
+
 WebのScenario previewが使う初期Scenario生成器は、利用者が入力しなかった項目を次の仮定で補います。どれもprovenanceと出典台帳に仮定として記録し、実測値や地域統計ではありません。
 
 - **世帯構成（ASM-SYNTHETIC-HOUSEHOLD-TEMPLATES-V1）:** 世帯構成テンプレートが入力されない場合、単身・大人のみ・大人と子どもの合成テンプレートを使い、生成した未成年者を同じ世帯の大人1人と親子関係で結びます。年齢や同居だけから関係を推測するのではなく、テンプレートで明示した関係だけを作ります。利用者が世帯構成を入力した場合は既定テンプレートを使いません。子どもを選べない年齢条件では、子どもを含むテンプレートを外します。
 - **標準施設の出入口（ASM-STANDARD-SHELTER-GEOMETRY-V1）:** 標準施設は部屋を通路沿いに横一列に並べるため、部屋の間口が出入口幅の上限になります。各部屋に1.8 mの間口を確保できるよう小さい部屋の面積配分を広げ、その分を避難スペースから差し引きます。面積を入力しない場合は、避難スペースが1人3.5 m²を満たすまで延床を広げます。利用者が入力した延床では面積を変えず、確保できない場合は従来どおりapproval blockerを示します。
 - **施設の認知（ASM-INTAKE-FACILITY-ORIENTATION-V1）:** 生成したScenarioはagent_dynamics v2（need-led-autonomy-memory-v2）を使い、受付での案内を仮定して、トイレ・給水・配食・救護・受付・静養の共用施設を開始時から知っています。agent_dynamics設定のない既存Scenarioはv1のままで、開始ゾーンの施設だけを知っています。
+- **心理モデル（ASM-MEAN-REVERTING-LIFE-STATE-V1）:** 生成したScenarioは研究版の心理モデル`mean-reverting-life-state-v1`（平均回帰と身体・感情状態の統合版、[01-psychology.md](mathematical-models/01-psychology.md)）を選び、平均回帰の係数（`natural_recovery_rate_per_minute`など）を既定値のまま明示的に書き込みます。係数は未校正の仮定です。保存済みのScenarioは選択したモデルのまま再生します。`policy_registry`で心理モデルを指定しないScenarioは、従来どおり`causal-stress-v1`を使います。
+- **水・食料の在庫と補給（ASM-STANDARD-PROVISIONING-V1）:** 初期在庫を入力しない場合（`initial_resources.status`が`unknown`）、飲料水1人1日3 L（首相官邸・農林水産省の家庭備蓄の目安）と食事1人1日3単位の3日分を初期在庫とし、資源サービス（給水・配食）を有効にします。国の想定（発災から3日間は備蓄、4日目からプッシュ型支援。内閣府の物資調達資料）に合わせ、4日目から同じ量を毎日届けます。開始日は`default_supply_start_day`（1–91、既定4）で変えられます。Runが開始日より短ければ補給はありません。長いRunでは、予定イベントの上限に収まるよう数日ごとにまとめて届けます（1日あたりの量は同じ）。在庫を入力した場合や一部だけ入力した場合は、既定量で置き換えません。食事3単位は、エネルギー2,000 kcal（厚生労働省の参照量）を表すためのソフトウェア上の仮定です。
+- **トイレの数（ASM-SHELTER-TOILET-HEURISTIC-V2）:** 「入力したバリアフリートイレ＋50人に1基（内閣府の発災当初の目安）」と、「1人1日5回・既定の使用時間で目標の利用率に収まる基数」の大きい方です。上限は従来どおり20基です。長期化時の20人に1基は、Run中に設備数が変わらないため適用していません。
+- **給水所・配食所の数（ASM-SHELTER-SERVICE-STATIONS-V1）:** 公的な台数の基準はないため、既定の係数での1日の需要が目標の利用率に収まる台数（各1台以上）をfood zoneに置きます。図面のある設備は1か所で1人ずつしかサービスしないため、台数は別々の設備として並べます。最初の1台は従来どおり`water_station_main`・`meal_distribution_main`です。
+- **職員の数と配置（ASM-SHELTER-STAFFING-HEURISTIC-V2）:** 一般の職員は従来どおり100人に1人（最低1人）で、staff zoneに置きます。これに加えて、給水所・配食所1台ごとに、給水と配食の技能を持つ職員1人をfood zoneに置きます。給水・配食は同じzoneに担当職員がいないと始まらないためです。職員数を入力した場合はその人数を使い、一般の職員を1人残したうえで残りを担当に割り当てます。職員は交代なしで勤務します。結果の比率（100人なら6人）は、事例で見られる1:20–1:80より手厚く、運営基準ではありません。
+
+
+生成したScenarioには、トイレ・給水・配食の処理能力の診断（ASM-SERVICE-CAPACITY-PLANNING-V1、[05-facilities-resources.md](mathematical-models/05-facilities-resources.md#設備の処理能力の診断)）を実行し、休みなく稼働しても需要を処理できない設備、目標の利用率を超える設備、担当職員のいない給水・配食をプレビューの警告に示します。Scenarioの内容と開始可否は変えません。
+
+## 旧来の心理モデル
+
+`causal-stress-v1`と`life-state-feedback-v1`は研究モデル導入前のモデルです。保存済みRun・Checkpointの再生と、研究モデルとの比較対照のために残しています。新しい分析で意図せず使わないよう、次の場所に使用中の心理モデルを表示します。
+
+- `sheltersim prepare`と`sheltersim run`は、旧来モデルを選んだScenarioでstderrに1行の警告を出します。終了codeは0のままです。
+- `sheltersim run`の出力JSONに`psychology_model`を含めます。保存Runのmanifestでは`policy_implementations.psychology`に記録されます。
+- `sheltersim compare`のレポートに`psychology_models`（baselineとcandidate）を含め、Markdownの先頭に表示します。旧来モデルなら警告行を加えます。
+
+旧来モデルの印はmodel-catalog.jsonではなく`src/sheltersim/contracts/policies.py`の`LEGACY_PSYCHOLOGY_MODELS`に置きます。catalogの項目はPolicy署名に含まれるため、変更すると保存済みCheckpointの照合が変わるからです。
 
 ## 再現性と評価
 

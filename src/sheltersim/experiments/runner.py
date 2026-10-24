@@ -233,6 +233,9 @@ class OfflineSimulationController:
                 "decision_interval_minutes_by_agent", {}
             ),
             "temperature_by_agent": behavior_config.get("temperature_by_agent", {}),
+            "sleep_debt_utility_weight": behavior_config.get(
+                "sleep_debt_utility_weight", 1.0
+            ),
             "resource_service_enabled": resource_service_enabled,
             "autonomy_enabled": bool(
                 world.model_configs.get("simulator_extensions", {}).get("enabled", False)

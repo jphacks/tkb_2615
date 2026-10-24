@@ -48,6 +48,8 @@ def prepare_facility_queue(
         urgency = policy.priority(world, agent_id, service, waited)
         ranked.append((-urgency, task.start_minute, original_order[agent_id], agent_id))
     queue[:] = [agent_id for _, _, _, agent_id in sorted(ranked)]
+    if resource:
+        _drop_stale_resource_stall(world, facility_id)
     for agent_id in tuple(queue):
         task = tasks.get(agent_id)
         if task is None:
@@ -122,6 +124,23 @@ def prepare_independent_facility_queue(
                 source_id=policy.source_id,
                 queue_id=queue_id,
             )
+
+
+def _drop_stale_resource_stall(world: WorldState, facility_id: str) -> None:
+    """Forget a stall once its Agent is no longer at the head of the queue.
+
+    The stall record describes why the current head is waiting. Reordering or a head
+    that leaves the queue makes it stale; the next arbitration records the new head.
+    """
+    from sheltersim.domain.resource_service import SERVICE_STATE_KEY
+
+    state = world.model_state.get(SERVICE_STATE_KEY)
+    if not isinstance(state, dict):
+        return
+    record = state["stall_state"].get(facility_id)
+    queue = world.facilities[facility_id].resource_queue_agent_ids
+    if record is not None and (not queue or queue[0] != record["agent_id"]):
+        del state["stall_state"][facility_id]
 
 
 def _abandon_and_retry(
@@ -220,6 +239,8 @@ def _abandon_and_retry(
     )
     agent = world.agents[agent_id]
     queue.remove(agent_id)
+    if resource:
+        _drop_stale_resource_stall(world, facility_id)
     if queue_id is not None:
         from sheltersim.domain.facility_queues import (
             finish_service as finish_facility_queue_service,
