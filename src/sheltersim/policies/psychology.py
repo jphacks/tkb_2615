@@ -780,20 +780,15 @@ class LifeStatePsychologyPolicy:
             family_separation_pressure = (
                 config["discontent_stress_rate"] if family_separated else 0.0
             )
-            debt = agent.sleep_debt_minutes
-            awake_debt_rate = config["awake_sleep_debt_minutes_per_minute"]
-            if agent.required_sleep_minutes is not None and agent.required_sleep_minutes > 0:
-                awake_debt_rate = min(
-                    10.0,
-                    agent.required_sleep_minutes / max(1, 1440 - agent.required_sleep_minutes),
-                )
-            if agent.activity is Activity.SLEEPING:
-                debt -= config["sleep_sleep_debt_recovery_per_minute"] * agent.rest_efficiency_multiplier
-            elif agent.activity is Activity.RESTING:
-                debt -= config["rest_sleep_debt_recovery_per_minute"] * agent.rest_efficiency_multiplier
-            else:
-                debt += awake_debt_rate
-            debt = min(1440.0, max(0.0, debt))
+            debt = sleep_debt_step(
+                agent.sleep_debt_minutes,
+                activity=agent.activity,
+                required_sleep_minutes=agent.required_sleep_minutes,
+                awake_rate=config["awake_sleep_debt_minutes_per_minute"],
+                rest_recovery_rate=config["rest_sleep_debt_recovery_per_minute"],
+                sleep_recovery_rate=config["sleep_sleep_debt_recovery_per_minute"],
+                sleep_efficiency=agent.rest_efficiency_multiplier,
+            )
 
             reassurance = max(0.0, agent.reassurance - config["reassurance_decay_per_minute"])
             uncertainty_without_misinformation = min(
@@ -1178,6 +1173,65 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
 
 def _clamp(value: float) -> float:
     return min(1.0, max(0.0, value))
+
+
+def sleep_debt_step(
+    debt_minutes: float,
+    *,
+    activity: Activity,
+    required_sleep_minutes: int | None,
+    awake_rate: float,
+    rest_recovery_rate: float,
+    sleep_recovery_rate: float,
+    sleep_efficiency: float,
+) -> float:
+    """Advance bounded sleep debt with a per-day requirement and separate rest.
+
+    For a supplied daily requirement S, awake debt accrues at S/(1440-S)
+    minutes per awake minute. S minutes of sleep then balance one 24-hour
+    cycle with 1440-S awake minutes. When no requirement is supplied, the
+    scenario's explicit awake_rate assumption applies.
+    """
+    for name, value in (
+        ("debt_minutes", debt_minutes),
+        ("awake_rate", awake_rate),
+        ("rest_recovery_rate", rest_recovery_rate),
+        ("sleep_recovery_rate", sleep_recovery_rate),
+        ("sleep_efficiency", sleep_efficiency),
+    ):
+        if (
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or value < 0.0
+        ):
+            raise ValueError(f"{name} must be finite and non-negative")
+    if debt_minutes > 1440.0:
+        raise ValueError("debt_minutes cannot exceed 1440")
+    if not 0.0 <= sleep_efficiency <= 1.0:
+        raise ValueError("sleep_efficiency must be within 0..1")
+    if not isinstance(activity, Activity):
+        raise ValueError("activity must be an Activity")
+    if required_sleep_minutes is not None and (
+        type(required_sleep_minutes) is not int
+        or not 0 <= required_sleep_minutes <= 1440
+    ):
+        raise ValueError("required_sleep_minutes must be an integer within 0..1440")
+    if required_sleep_minutes is None:
+        effective_awake_rate = awake_rate
+    elif required_sleep_minutes == 0:
+        effective_awake_rate = 0.0
+    else:
+        effective_awake_rate = min(
+            10.0,
+            required_sleep_minutes / max(1, 1440 - required_sleep_minutes),
+        )
+    if activity is Activity.SLEEPING:
+        next_debt = debt_minutes - sleep_recovery_rate * sleep_efficiency
+    elif activity is Activity.RESTING:
+        next_debt = debt_minutes - rest_recovery_rate * sleep_efficiency
+    else:
+        next_debt = debt_minutes + effective_awake_rate
+    return min(1440.0, max(0.0, next_debt))
 
 
 def mean_reverting_step(

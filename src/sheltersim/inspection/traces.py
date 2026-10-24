@@ -652,7 +652,11 @@ def _decision_document(
         "source_id": (
             "ASM-PRIORITY-RULE-BEHAVIOR-V1"
             if proposal.policy_version.startswith("priority-rule-")
-            else "ASM-UTILITY-BEHAVIOR-V1"
+            else (
+                "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+                if proposal.policy_version.startswith("sleep-aware-utility-softmax-v2")
+                else "ASM-UTILITY-BEHAVIOR-V1"
+            )
         ),
     }
     if full:

@@ -91,6 +91,8 @@ def test_generated_research_scenario_runs_and_records_its_model(tmp_path) -> Non
 
 def test_saved_scenarios_keep_their_legacy_psychology_selection() -> None:
     document = _generated().model_dump(mode="json")
+    document["model_configs"]["policy_registry"]["schema_version"] = 2
+    document["model_configs"]["policy_registry"].pop("suite_id")
     document["model_configs"]["policy_registry"]["psychology"] = "life-state-feedback-v1"
     legacy = ScenarioSpec.model_validate(document)
     assert type(create_psychology(legacy.model_configs)) is LifeStatePsychologyPolicy
@@ -115,8 +117,15 @@ def test_research_or_unknown_models_have_no_notice(model_id) -> None:
 
 
 def test_cli_reports_and_warns_about_a_legacy_psychology_model(tmp_path, capsys) -> None:
+    legacy_document = ScenarioSpec.load(SMALL_FIXTURE).model_dump(mode="json")
+    legacy_document["model_configs"]["policy_registry"] = {
+        "schema_version": 2,
+        "psychology": "causal-stress-v1",
+    }
+    legacy_scenario = tmp_path / "legacy.json"
+    legacy_scenario.write_text(json.dumps(legacy_document), encoding="utf-8")
     frozen = tmp_path / "frozen.json"
-    assert main(["prepare", "--scenario", str(SMALL_FIXTURE), "--freeze",
+    assert main(["prepare", "--scenario", str(legacy_scenario), "--freeze",
                  "--output", str(frozen)]) == 0
     assert "warning: psychology model causal-stress-v1 is a legacy model" in (
         capsys.readouterr().err

@@ -308,6 +308,11 @@ def _variant_scenario(base: ScenarioSpec, variant: EvaluationVariant, seed: int)
     configs = document["model_configs"]
     if variant.policies:
         selectors = configs.setdefault("policy_registry", {"schema_version": 1})
+        if "suite_id" in selectors:
+            # A sensitivity variant changes one or more selectors explicitly,
+            # so it becomes a schema-2 custom set rather than a suite member.
+            selectors.pop("suite_id")
+            selectors["schema_version"] = 2
         selectors.update(variant.policies)
         if "behavior" in variant.policies:
             if variant.policies["behavior"] not in model_catalog() or model_catalog()[variant.policies["behavior"]]["domain"]!="behavior":

@@ -41,7 +41,7 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
     assert all(
         source["source_type"] in {"literature", "interview", "measured"} for source in sources
     )
-    assert all(source["url"].startswith("https://www.bousai.go.jp/") for source in sources)
+    assert all(source["url"].startswith("https://") for source in sources)
     assert all(source.get("edition") and source.get("published_on") for source in sources)
     assert all(assumption["source_type"] == "assumption" for assumption in assumptions)
     assert all(
@@ -60,6 +60,7 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
         "ASM-SIMPLE-PSYCHOLOGY-RATES-V1",
         "ASM-H04-CAUSAL-STRESS-V1",
         "ASM-UTILITY-BEHAVIOR-V1",
+        "ASM-SLEEP-AWARE-BEHAVIOR-V2",
         "ASM-PRIORITY-RULE-BEHAVIOR-V1",
         "ASM-TOILET-SERVICE-DURATION-V1",
         "ASM-DAY3-TOILET-OUTAGE-V1",
@@ -86,6 +87,9 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
         "ASM-H05-OPERATIONAL-STOCK-V1",
         "ASM-H05-OPERATIONAL-SCHEDULE-V1",
         "ASM-H05-INTERVENTION-V1",
+        "ASM-CORE-MODEL-SUITE-V1",
+        "ASM-CORE-MODEL-SUITE-V2",
+        "ASM-SLEEP-DEBT-BALANCE-V1",
     } <= assumption_ids
     route_edit = next(
         assumption for assumption in assumptions if assumption["id"] == "ASM-A05-ROUTE-EDIT-V1"

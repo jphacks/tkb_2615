@@ -154,7 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", required=True, type=Path, help="run artifact directory")
     run.add_argument(
         "--behavior-policy",
-        choices=("utility-softmax-v1", "priority-rule-v1"),
+        choices=(
+            "utility-softmax-v1",
+            "sleep-aware-utility-softmax-v2",
+            "priority-rule-v1",
+        ),
         help="swap one installed Agent action policy while preserving other scenario inputs",
     )
     run.add_argument(
@@ -289,6 +293,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             source_document = json.loads(arguments.scenario.read_text(encoding="utf-8"))
             scenario = _load_scenario_input(arguments.scenario)
+            from sheltersim.experiments.model_suite import apply_default_model_suite
+
+            scenario = apply_default_model_suite(scenario)
             router = None
             generation_manifest = None
             generated_scenario = None

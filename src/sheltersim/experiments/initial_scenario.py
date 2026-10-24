@@ -12,7 +12,9 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from sheltersim.contracts.extensions import FacilityGeometry
+from sheltersim.contracts.policies import CORE_MODEL_SUITE_MODELS, CORE_MODEL_SUITE_V2
 from sheltersim.domain.models import Mobility
+from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
 from sheltersim.experiments.scenario import (
     TOILET_SERVICE_SOURCE_ID,
     FacilitySpec,
@@ -58,15 +60,17 @@ class InitialScenarioRequest(RegionModel):
     evacuees: int = Field(ge=1, le=10_000)
     duration_days: float = Field(default=7, gt=0, le=90, allow_inf_nan=False)
     seed: int = Field(default=2026, ge=0)
-    behavior_policy_id: Literal["utility-softmax-v1", "priority-rule-v1"] = "utility-softmax-v1"
+    behavior_policy_id: Literal[
+        "utility-softmax-v1", "sleep-aware-utility-softmax-v2", "priority-rule-v1"
+    ] = "sleep-aware-utility-softmax-v2"
     social_policy_id: Literal[
-        "sparse-family-zone-contact-v1", "degroot-contact-v1"
-    ] = "sparse-family-zone-contact-v1"
+        "sparse-family-zone-contact-v1", "degroot-contact-v1", "expressiveness-channel-openness-v1"
+    ] = "expressiveness-channel-openness-v1"
     information_policy_id: Literal[
-        "sparse-information-contact-v1", "hazard-information-v1"
-    ] = "sparse-information-contact-v1"
-    social_propagation_enabled: bool = False
-    information_spread_enabled: bool = False
+        "sparse-information-contact-v1", "hazard-information-v1", "evidence-aware-rumor-v1"
+    ] = "evidence-aware-rumor-v1"
+    social_propagation_enabled: bool = True
+    information_spread_enabled: bool = True
     queue_policy_id: Literal[
         "need-weighted-physical-queue-v1", "strict-fifo-queue-v1"
     ] = "need-weighted-physical-queue-v1"
@@ -77,8 +81,8 @@ class InitialScenarioRequest(RegionModel):
         "disabled-proximity-v1", "distance-sampled-proximity-v1"
     ] = "disabled-proximity-v1"
     body_dynamics_policy_id: Literal[
-        "body-feedback-complete-v1", "body-feedback-sleep-debt-v1"
-    ] = "body-feedback-complete-v1"
+        "body-feedback-complete-v1", "body-feedback-complete-v2", "body-feedback-sleep-debt-v1"
+    ] = "body-feedback-complete-v2"
     staff_operations_policy_id: Literal[
         "staff-urgency-first-v1", "staff-travel-first-v1"
     ] = "staff-urgency-first-v1"
@@ -501,15 +505,32 @@ class InitialScenarioBuilder:
                 "id": (
                     "ASM-PRIORITY-RULE-BEHAVIOR-V1"
                     if request.behavior_policy_id == "priority-rule-v1"
-                    else "ASM-UTILITY-BEHAVIOR-V1"
+                    else (
+                        "ASM-UTILITY-BEHAVIOR-V1"
+                        if request.behavior_policy_id == "utility-softmax-v1"
+                        else "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+                    )
                 ),
                 "subject": "behavior_model_defaults",
-                "value": {"decision_interval_minutes": 60, "mode": "offline", "policy": request.behavior_policy_id},
+                "value": {
+                    "decision_interval_minutes": 15,
+                    "mode": "offline",
+                    "policy": request.behavior_policy_id,
+                    **(
+                        {"sleep_debt_utility_weight": 1.0}
+                        if request.behavior_policy_id == "sleep-aware-utility-softmax-v2"
+                        else {}
+                    ),
+                },
                 "reason": "Default simulation behavior configuration; not calibrated to local observations.",
                 "source_id": (
                     "ASM-PRIORITY-RULE-BEHAVIOR-V1"
                     if request.behavior_policy_id == "priority-rule-v1"
-                    else "ASM-UTILITY-BEHAVIOR-V1"
+                    else (
+                        "ASM-UTILITY-BEHAVIOR-V1"
+                        if request.behavior_policy_id == "utility-softmax-v1"
+                        else "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+                    )
                 ),
             },
             {
@@ -774,15 +795,24 @@ class InitialScenarioBuilder:
         ).hexdigest()[:16]
         model_configs: dict[str, dict[str, Any]] = {
             "behavior": {
-                "decision_interval_minutes": 60,
+                "decision_interval_minutes": 15,
                 "temperature": 0.2,
+                **(
+                    {"sleep_debt_utility_weight": 1.0}
+                    if request.behavior_policy_id == "sleep-aware-utility-softmax-v2"
+                    else {}
+                ),
                 "mode": "offline",
                 "policy": request.behavior_policy_id,
                 "source_type": "assumption",
                 "source_id": (
                     "ASM-PRIORITY-RULE-BEHAVIOR-V1"
                     if request.behavior_policy_id == "priority-rule-v1"
-                    else "ASM-UTILITY-BEHAVIOR-V1"
+                    else (
+                        "ASM-UTILITY-BEHAVIOR-V1"
+                        if request.behavior_policy_id == "utility-softmax-v1"
+                        else "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+                    )
                 ),
             },
             "staff": {
@@ -828,11 +858,14 @@ class InitialScenarioBuilder:
         social_parameters["enabled"] = request.social_propagation_enabled
         social_parameters.update({
             "source_type": "assumption",
-            "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+            "source_id": (
+                "ASM-BOSSE-AFFECT-CONTAGION-V1"
+                if request.social_policy_id == "expressiveness-channel-openness-v1"
+                else "ASM-SOCIAL-PROPAGATION-V1"
+            ),
         })
         information_config = InformationSpreadConfig().to_dict()
         information_config["enabled"] = request.information_spread_enabled
-        from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
         from sheltersim.policies.psychology import (
             IntegratedDistressLifeStatePolicy,
             PsychologyParameters,
@@ -850,14 +883,22 @@ class InitialScenarioBuilder:
         ).to_model_config()
         model_configs["social_propagation"] = social_parameters
         model_configs["information_spread"] = information_config
-        # New previews explicitly select the published model. Existing saved inputs
-        # retain their own registry selector/configuration and are not rewritten.
+        core_suite_selected = (
+            request.behavior_policy_id == CORE_MODEL_SUITE_MODELS["behavior"]
+            and request.social_policy_id == CORE_MODEL_SUITE_MODELS["social"]
+            and request.information_policy_id == CORE_MODEL_SUITE_MODELS["information"]
+            and request.queue_policy_id == CORE_MODEL_SUITE_MODELS["queue"]
+            and request.relationship_policy_id == CORE_MODEL_SUITE_MODELS["relationship"]
+            and request.social_proximity_policy_id == CORE_MODEL_SUITE_MODELS["social_proximity"]
+            and request.body_dynamics_policy_id == CORE_MODEL_SUITE_MODELS["body_dynamics"]
+        )
+        # The suite pins the tested policy set. Custom registry choices remain
+        # explicit and versioned without the suite label.
         model_configs["policy_registry"] = {
-            # v2 binds the selected formula metadata and its consumed config sections
-            # into each policy signature captured by the initial Checkpoint.
-            "schema_version": 2,
-            # New drafts use the research model; life-state-feedback-v1 stays
-            # installed only for saved inputs and explicit comparison controls.
+            "schema_version": 3 if core_suite_selected else 2,
+            **({"suite_id": CORE_MODEL_SUITE_V2} if core_suite_selected else {}),
+            # Schema 2 binds formula metadata; schema 3 additionally pins a model suite.
+            # New drafts use the research model; legacy models remain for replay/controls.
             "psychology": INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
             "social": request.social_policy_id,
             "information": request.information_policy_id,
@@ -888,6 +929,9 @@ class InitialScenarioBuilder:
             "population_presence_v1": {"implementation_id": "population-presence-ledger-v1",
                 "implementation_version": "1", "schema_version": 1}}}
         model_configs["body_dynamics"] = canonical_body_config(None)
+        if core_suite_selected:
+            model_configs["body_dynamics"]["awake_sleep_debt_minutes_per_minute"] = 0.5
+            model_configs["body_dynamics"]["rest_sleep_debt_recovery_per_minute"] = 0.0
         model_configs["staff_operations"] = canonical_staff_operations_config(None)
         model_configs["shared_operations"] = {
             "schema_version": 1, "policy_version": "shared-operations-v1",
@@ -966,6 +1010,10 @@ class InitialScenarioBuilder:
                 "ASM-UTILITY-BEHAVIOR-V1",
                 "Utility softmax Agent behavior",
             ),
+            "sleep-aware-utility-softmax-v2": (
+                "ASM-SLEEP-AWARE-BEHAVIOR-V2",
+                "Sleep-debt-aware utility softmax Agent behavior",
+            ),
             "priority-rule-v1": (
                 "ASM-PRIORITY-RULE-BEHAVIOR-V1",
                 "Priority-rule Agent behavior",
@@ -989,6 +1037,10 @@ class InitialScenarioBuilder:
             "body-feedback-complete-v1": (
                 "ASM-BODY-FEEDBACK-COMPLETE-V1",
                 "Body state complete feedback equation",
+            ),
+            "body-feedback-complete-v2": (
+                "ASM-SLEEP-DEBT-BALANCE-V1",
+                "Body state complete feedback with balanced sleep-debt accounting",
             ),
             "staff-urgency-first-v1": (
                 "ASM-STAFF-URGENCY-FIRST-V1",
@@ -1058,6 +1110,10 @@ class InitialScenarioBuilder:
                 "ASM-SOCIAL-PROPAGATION-V1",
                 "Sparse family and zone stress propagation",
             ),
+            "expressiveness-channel-openness-v1": (
+                "ASM-BOSSE-AFFECT-CONTAGION-V1",
+                "Expressiveness and channel openness affect contagion",
+            ),
             "degroot-contact-v1": (
                 "ASM-DEGROOT-CONTACT-V1",
                 "DeGroot contact stress averaging",
@@ -1069,6 +1125,10 @@ class InitialScenarioBuilder:
             "hazard-information-v1": (
                 "ASM-HAZARD-INFORMATION-V1",
                 "Hazard-based contact information transmission",
+            ),
+            "evidence-aware-rumor-v1": (
+                "ASM-EVIDENCE-AWARE-RUMOR-V1",
+                "Evidence-aware rumor belief and correction",
             ),
         }
         for model_id in (
@@ -1186,6 +1246,43 @@ class InitialScenarioBuilder:
             if config.get("source_id") and not any(source["id"] == config["source_id"] for source in provenance["sources"]):
                 provenance["sources"].append({"id": config["source_id"], "source_kind": "assumption",
                     "title": "Installed experimental " + key, "description": "Uncalibrated operator coefficients; no empirical validity claim."})
+        if core_suite_selected:
+            from sheltersim.experiments.model_suite import (
+                CORE_MODEL_SUITE_SOURCE_ID,
+                SLEEP_DEBT_BALANCE_SOURCE_ID,
+            )
+            for source_id, title, description in (
+                (
+                    CORE_MODEL_SUITE_SOURCE_ID,
+                    CORE_MODEL_SUITE_V2,
+                    (
+                        "Versioned combination of installed operators; internally tested, "
+                        "not empirically validated."
+                    ),
+                ),
+                (
+                    SLEEP_DEBT_BALANCE_SOURCE_ID,
+                    "Balanced sleep-debt accounting assumption",
+                    (
+                        "Required-sleep balance and no-recovery-during-rest coefficients "
+                        "are synthetic assumptions, not clinical estimates."
+                    ),
+                ),
+            ):
+                if not any(source["id"] == source_id for source in provenance["sources"]):
+                    provenance["sources"].append({
+                        "id": source_id,
+                        "source_kind": "assumption",
+                        "title": title,
+                        "description": description,
+                    })
+                if not any(item.get("id") == source_id for item in provenance["assumptions"]):
+                    provenance["assumptions"].append({
+                        "id": source_id,
+                        "subject": title,
+                        "source_id": source_id,
+                        "reason": description,
+                    })
         provenance["sources"].append({"id": "ASM-AFFECT-TRANSFER-V1", "source_kind": "assumption",
             "title": "Installed affect transfer", "description": "Synthetic contact transfer equation, not calibrated to measured shelter outcomes."})
         scenario = ScenarioSpec(
