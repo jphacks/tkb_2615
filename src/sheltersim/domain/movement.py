@@ -921,6 +921,12 @@ def progress_physical_queue_positions(
             world.metric_state["physical_queue_route_blocked_count"] = (
                 world.metric_state.get("physical_queue_route_blocked_count", 0.0) + 1.0
             )
+            if index > 0:
+                # A follower with no reachable slot (the room is full or its path is
+                # blocked) waits where it stands, and so does everyone behind it. It
+                # must not hold back the positioned members ahead, or the head is
+                # never served once the queue outgrows the room.
+                break
             return True
         _schedule_queue_trip(
             world,
