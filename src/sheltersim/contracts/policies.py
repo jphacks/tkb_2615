@@ -12,13 +12,31 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from sheltersim.contracts.extensions import ExtensionModel, Identifier
-from sheltersim.domain.psychological_state import LIFE_STATE_PSYCHOLOGY_POLICIES
+from sheltersim.domain.psychological_state import (
+    INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
+    LIFE_STATE_PSYCHOLOGY_POLICIES,
+)
 
 # Literature motivates operators, not calibrated shelter coefficients.
 MODEL_DEFINITIONS: dict[str, dict[str, Any]] = json.loads(
     files("sheltersim.contracts").joinpath("model-catalog.json").read_text(encoding="utf-8")
 )["models"]
 DEFAULT_MODELS = {"behavior": "utility-softmax-v1", "psychology": "causal-stress-v1", "social": "sparse-family-zone-contact-v1", "information": "sparse-information-contact-v1"}
+
+# Pre-research psychology models stay installed so saved Runs and Checkpoints
+# replay exactly and remain usable as comparison controls. The mark lives here,
+# not in model-catalog.json, because catalog entries are part of policy signatures.
+LEGACY_PSYCHOLOGY_MODELS = frozenset({"causal-stress-v1", "life-state-feedback-v1"})
+
+
+def legacy_psychology_notice(model_id: object) -> str | None:
+    """Explain when a Scenario or Run uses a pre-research psychology model."""
+    if model_id not in LEGACY_PSYCHOLOGY_MODELS:
+        return None
+    return (
+        f"psychology model {model_id} is a legacy model kept for replay and comparison; "
+        f"new generated Scenarios use {INTEGRATED_PSYCHOLOGY_POLICY_VERSION}"
+    )
 
 
 class ModelCoefficientDefinition(ExtensionModel):

@@ -207,7 +207,8 @@ def test_cli_offline_run_does_not_warn(
 
     captured = capsys.readouterr()
     assert json.loads(captured.out)["llm_status"]["status"] == "not_requested"
-    assert captured.err == ""
+    # The fixture selects no psychology model, so only the legacy-model notice may appear.
+    assert [line for line in captured.err.splitlines() if "legacy model" not in line] == []
 
 
 def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path) -> None:
