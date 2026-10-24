@@ -68,7 +68,9 @@ D_i(d+1)=\operatorname{clip}_{[0,1]}\{\mu_i+\phi_i(D_i(d)-\mu_i)+\theta_A(\bar A
 - `src/sheltersim/experiments/runner.py`: 心理・社会更新、Trace、日内積分を同じtickで順序制御
 - model version: `mean-reverting-distress-v1`, `life-state-feedback-v1`, `mean-reverting-life-state-v1`; 潜在状態schema: 1
 
-心理Traceは各入力の寄与、解析的な平均回帰分、clip前候補、clip後の心理差分、社会差分、実際の適用差分を別々に記録します。平均回帰Policyでは各forcing寄与へ解析解の積分係数を掛けます。したがって寄与合計はclip前差分と一致し、clip差分と社会差分を合わせると実際の適用差分になります。
+心理Traceは各入力の寄与、解析的な平均回帰分、clip前候補、clip後の心理差分、社会差分、実際の適用差分を別々に記録します。平均回帰Policyでは各forcing寄与へ解析解の積分係数を掛けます。したがって寄与合計はclip前差分と一致し、clip差分と社会差分を合わせると実際の適用差分になります。Summary Traceは分単位の `psychology_contributions.jsonl` を維持し、追加の `psychology_contributions_hourly.jsonl` へAgent×時間帯の平均stress、閾値以上の分数、寄与成分別合計を出します。これはRun後の要約で、状態更新には使いません。
+
+`distress_monitor_summary` は高負荷episode総数、完了episode数、終了時点で継続しているepisode数とAgent別経過時間、完了episodeだけの平均継続時間、最長継続時間、再上昇回数、終了時の高負荷Agent割合を分けて返します。完了episode平均は右打ち切りの継続中episodeを含みません。「全Agentの平均回復時間」とは呼びません。終了時点で閾値未満なら未完了episode数は増えず、終了時点で高負荷のAgentはongoing一覧に載ります。monitorはpost-social値を毎tick観測しますが、心理状態や乱数を変更しません。
 
 ## 内部検証
 

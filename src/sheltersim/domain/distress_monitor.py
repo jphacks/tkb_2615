@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from typing import Any
 
 from sheltersim.domain.models import validate_unit_interval
 
@@ -66,7 +67,7 @@ def record_distress_monitor_tick(
         metrics[f"{key}:recovered_run_count"] = recovered_count
 
 
-def distress_monitor_summary(metrics: Mapping[str, float]) -> dict[str, float | int]:
+def distress_monitor_summary(metrics: Mapping[str, float]) -> dict[str, Any]:
     """Return aggregate online indicators without loading full psychological traces."""
     agent_keys = sorted(
         key.removesuffix(":current_run")
@@ -78,19 +79,34 @@ def distress_monitor_summary(metrics: Mapping[str, float]) -> dict[str, float | 
     recovered_total = sum(metrics.get(f"{key}:recovered_run_total", 0.0) for key in agent_keys)
     recovered_count = sum(metrics.get(f"{key}:recovered_run_count", 0.0) for key in agent_keys)
     current = sum(metrics.get(f"{key}:current_run", 0.0) for key in agent_keys)
+    ongoing = [
+        {
+            "agent_id": key.removeprefix(f"{_PREFIX}:"),
+            "elapsed_minutes": int(metrics.get(f"{key}:current_run", 0.0)),
+        }
+        for key in agent_keys
+        if metrics.get(f"{key}:current_run", 0.0) > 0.0
+    ]
+    mean_completed = recovered_total / recovered_count if recovered_count else 0.0
     return {
         "monitored_agent_count": len(agent_keys),
         "high_distress_episode_count": int(episodes),
+        "completed_high_distress_episode_count": int(recovered_count),
+        "ongoing_high_distress_episode_count": len(ongoing),
+        "ongoing_episode_elapsed_minutes_by_agent": ongoing,
+        "ongoing_episode_elapsed_minutes_total": int(current),
+        "mean_completed_episode_duration_minutes": mean_completed,
         "high_distress_reascent_count": int(
             sum(max(0.0, metrics.get(f"{key}:episodes", 0.0) - 1.0) for key in agent_keys)
         ),
         "longest_high_distress_run_minutes": int(max(longest, default=0.0)),
+        "end_high_distress_agent_share": (len(ongoing) / len(agent_keys) if agent_keys else 0.0),
         "mean_per_agent_longest_high_distress_run_minutes": (
             sum(longest) / len(longest) if longest else 0.0
         ),
         "completed_recovery_count": int(recovered_count),
-        "mean_completed_recovery_minutes": (
-            recovered_total / recovered_count if recovered_count else 0.0
-        ),
+        # Retained for readers of earlier run artifacts; new reports should use the
+        # explicitly episode-scoped mean above.
+        "mean_completed_recovery_minutes": mean_completed,
         "currently_high_run_agent_minutes": int(current),
     }

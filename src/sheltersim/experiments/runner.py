@@ -538,7 +538,21 @@ class OfflineSimulationController:
                         minute,
                         source_id=self.psychology.source_id,
                         full=self.artifacts.trace_level is TraceLevel.FULL,
-                    )
+                    ),
+                    agent_contributions=(
+                        {
+                            "agent_id": trace.agent_id,
+                            "stress_before": trace.stress_before,
+                            "stress_after": final_by_agent[trace.agent_id].stress,
+                            "raw_stress_delta": trace.raw_stress_delta,
+                            "social_stress_delta": (
+                                final_by_agent[trace.agent_id].stress
+                                - base_by_agent[trace.agent_id].stress
+                            ),
+                            "component_contributions": dict(trace.component_contributions),
+                        }
+                        for trace in psychology_result.traces
+                    ),
                 )
             update_long_term = getattr(self.psychology, "update_long_term_state", None)
             if callable(update_long_term):
