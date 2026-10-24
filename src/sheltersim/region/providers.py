@@ -196,6 +196,11 @@ def _get_gsi_shelter_snapshot_locked(url: str) -> GsiCsvSnapshot:
             elif response.headers.get("Transfer-Encoding", "").casefold() != "chunked":
                 raise RegionProviderError("GSI shelter CSV response length could not be verified")
             while True:
+                # http.client closes the response as soon as the whole body has been
+                # read, so a closed response is the end of the download. Setting the
+                # read timeout on it used to fail and every download was discarded.
+                if response.isclosed():
+                    break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise RegionProviderError("GSI shelter CSV download exceeded its time limit")
