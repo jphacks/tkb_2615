@@ -532,3 +532,36 @@ def test_scenario_text_fallback_satisfies_its_own_schema() -> None:
 
     # Before $ref support every reply, including this fallback, failed validation.
     validate_task_output(_schema_task(region_prepare._intent_json_schema()), fallback)
+
+
+def test_adapter_keeps_search_results_when_the_json_answer_has_no_citations() -> None:
+    def result(url: str, title: str) -> SimpleNamespace:
+        return SimpleNamespace(type="web_search_result", url=url, title=title)
+
+    search_block = SimpleNamespace(type="web_search_tool_result", content=[
+        result("https://www.city.example.lg.jp/bousai", "Municipal disaster plan"),
+        result("https://example.com/blog", "Unapproved page"),
+        result("https://www.city.example.lg.jp/bousai", "Duplicate"),
+    ])
+    error_block = SimpleNamespace(type="web_search_tool_result",
+                                  content=SimpleNamespace(type="web_search_tool_result_error"))
+    text_block = SimpleNamespace(type="text", text='{"ok":true}', citations=None)
+    usage = SimpleNamespace(input_tokens=100, output_tokens=20,
+                            server_tool_use=SimpleNamespace(web_search_requests=1))
+
+    class Messages:
+        def create(self, **_kwargs):
+            return SimpleNamespace(content=[search_block, error_block, text_block], usage=usage,
+                                   model="claude-opus-5-5", id="msg-test")
+
+    task = LLMTask(stage=LLMStage.PREPARE, input_text="Find official municipal sources",
+        state_hash="region-state", prompt_version="source-candidates-v1",
+        fallback_text='{"ok":false}', max_output_tokens=64,
+        web_search_allowed_domains=("go.jp", "lg.jp"), max_web_searches=1)
+    response = AnthropicProvider("test-key", client=SimpleNamespace(messages=Messages())).complete(
+        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=5)
+
+    assert [citation.url for citation in response.citations] == [
+        "https://www.city.example.lg.jp/bousai"
+    ]
+    assert response.citations[0].cited_text == ""

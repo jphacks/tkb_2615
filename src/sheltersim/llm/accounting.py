@@ -16,7 +16,7 @@ from sheltersim.llm.provider import (
     Provider,
     output_reservation_tokens,
 )
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger, task_campaign_summary
 
 RUNTIME_ACCOUNTS_PROJECT_ID = "runtime-accounts"
@@ -156,6 +156,27 @@ class AccountedProvider:
                 output_tokens=response.output_tokens, cost_usd=cost, outcome="settled",
             )
         return response
+
+
+class StoredResponseTape(ResponseTape):
+    """Accepted replies kept in the Project store for one draft or Run analysis.
+
+    The ledger never pays twice for an identical request, so without the earlier reply a
+    repeated preview or question could only fall back. A tape whose sanitized copy differs
+    (contact-like or secret-like text) stays in memory and is not written.
+    """
+
+    def __init__(self, store: ProjectStore, path: Path) -> None:
+        self._store, self._file = store, path
+        entries = ResponseTape.from_dict(store._read(path)).entries if path.exists() else {}
+        super().__init__(entries=entries)
+
+    def save(self) -> None:
+        document = self.to_dict()
+        if safe_document(document) != document:
+            return
+        with self._store.transaction():
+            self._store._write(self._file, document)
 
 
 def accounted_router(store: ProjectStore, project_id: str, *, run_id: str | None = None,
