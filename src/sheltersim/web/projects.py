@@ -99,6 +99,23 @@ class ProjectAPI:
                 self.store.load_branch(project_id, run_id, branch_id)
                 path = self.store._path(project_id, "runs", run_id, "branches", branch_id, "report.json")
                 return self.store._read(path) if path.exists() else {"status": "not_generated"}
+            if action == "llm-status" and not query:
+                from sheltersim.llm.outcomes import summarize_call_outcomes
+                reference = self.store.branch_reference(project_id, run_id, branch_id)
+                saved = self.store.checkpoint_fields(
+                    project_id, run_id, reference.checkpoint_hash, ("runtime_state",)
+                )["runtime_state"].get("llm")
+                return {
+                    "schema_version": 1, "branch_id": branch_id,
+                    "checkpoint_hash": reference.checkpoint_hash,
+                    "computed_until": reference.computed_until,
+                    "mode": saved.get("mode") if isinstance(saved, dict) else None,
+                    "outcomes": summarize_call_outcomes(
+                        saved.get("records", []) if isinstance(saved, dict) else []
+                    ),
+                    "record_scope": "router records in the branch head checkpoint; a child "
+                                    "branch includes the parent's records before its fork",
+                }
             if action == "conversations" and not query:
                 self.store.load_branch(project_id, run_id, branch_id)
                 from sheltersim.storage.history_index import HistoryIndex

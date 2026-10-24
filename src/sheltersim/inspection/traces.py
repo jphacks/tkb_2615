@@ -36,6 +36,7 @@ from sheltersim.experiments.operational_kpis import (
     operational_kpi_values,
 )
 from sheltersim.experiments.scenario import PsychologyModelConfig, ScenarioSpec
+from sheltersim.llm.outcomes import summarize_call_outcomes
 from sheltersim.llm.runtime import (
     SOCIAL_INTERACTIONS_SOURCE_ID,
     SOCIAL_LIMITS_SOURCE_ID,
@@ -755,19 +756,17 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
 
 
 def _llm_usage_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    outcomes = summarize_call_outcomes(records)
     return {
         "api_request_count": sum(record.get("api_request_count", 0) for record in records),
         "input_tokens": sum(record.get("input_tokens", 0) for record in records),
         "output_tokens": sum(record.get("output_tokens", 0) for record in records),
         "estimated_cost_usd": sum(record.get("estimated_cost_usd", 0.0) for record in records),
         "cache_hits": sum(1 for record in records if record.get("cache_hit")),
-        "failures": sum(
-            1
-            for record in records
-            if record.get("outcome")
-            in ("api_error", "rate_limited", "invalid_output", "budget_exceeded", "replay_miss")
-        ),
+        # Every non-offline rule fallback, including call caps and denied allowances.
+        "failures": outcomes["fallback_count"],
         "models": sorted({record.get("model_id", "") for record in records if record}),
+        "outcomes": outcomes,
     }
 
 
