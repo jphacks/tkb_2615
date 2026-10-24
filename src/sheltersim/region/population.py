@@ -26,6 +26,7 @@ SYNTHETIC_TRAIT_ASSUMPTION_ID = "ASM-SYNTHETIC-PERSON-TRAITS-V1"
 SYNTHETIC_EVACUATION_SELECTION_ID = "ASM-EVACUATION-SELECTION-UNIFORM-V1"
 SYNTHETIC_HOUSEHOLD_CONSTRUCTION_ID = "ASM-HOUSEHOLD-CARE-RELATIONSHIPS-V1"
 OPERATOR_POPULATION_SOURCE_ID = "SRC-OPERATOR-POPULATION-CONDITIONS"
+SYNTHETIC_HOUSEHOLD_TEMPLATE_ID = "ASM-SYNTHETIC-HOUSEHOLD-TEMPLATES-V1"
 
 
 class AgeBand(RegionModel):
@@ -168,12 +169,14 @@ class HouseholdCompositionInput(RegionModel):
     templates: tuple[HouseholdTemplate, ...] = Field(min_length=1, max_length=64)
     household_size_weights: dict[int, float] = Field(default_factory=dict)
     source_ids: tuple[str, ...] = ()
-    source_kind: Literal["operator"] = "operator"
+    source_kind: Literal["operator", "assumption"] = "operator"
 
     @model_validator(mode="after")
     def unique_templates(self) -> HouseholdCompositionInput:
         if len({item.template_id for item in self.templates}) != len(self.templates):
             raise ValueError("household composition template IDs must be unique")
+        if self.source_kind == "assumption" and not self.source_ids:
+            raise ValueError("assumed household composition templates must cite an assumption ID")
         if len(self.source_ids) != len(set(self.source_ids)) or any(
             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", source_id)
             for source_id in self.source_ids
@@ -192,6 +195,51 @@ class HouseholdCompositionInput(RegionModel):
         ):
             raise ValueError("operator household-size weights must have a positive finite total for sizes 1..10")
         return self
+
+
+def _default_household_templates() -> tuple[HouseholdTemplate, ...]:
+    def template(template_id: str, adults: int, children: int, weight: float) -> HouseholdTemplate:
+        # One adult slot is linked to each child; no other relationship is declared.
+        return HouseholdTemplate(
+            template_id=template_id,
+            weight=weight,
+            members=(
+                *(HouseholdMemberPattern(role="adult") for _ in range(adults)),
+                *(HouseholdMemberPattern(role="child") for _ in range(children)),
+            ),
+            relationships=tuple(
+                HouseholdRelationshipPattern(
+                    caregiver_member_index=0, dependent_member_index=adults + child,
+                    relationship="parent_child",
+                )
+                for child in range(children)
+            ),
+        )
+
+    templates = [
+        template("adult-1", 1, 0, 1.0),
+        template("adults-2", 2, 0, 0.9),
+        template("adult-1-children-1", 1, 1, 0.1),
+        template("adults-3", 3, 0, 0.6),
+        template("adults-2-children-1", 2, 1, 0.4),
+        template("adults-4", 4, 0, 0.4),
+        template("adults-3-children-1", 3, 1, 0.2),
+        template("adults-2-children-2", 2, 2, 0.4),
+    ]
+    for size in range(5, 11):
+        templates.extend((
+            template(f"adults-{size}", size, 0, 0.3),
+            template(f"adults-3-children-{size - 3}", 3, size - 3, 0.4),
+            template(f"adults-2-children-{size - 2}", 2, size - 2, 0.3),
+        ))
+    return tuple(templates)
+
+
+DEFAULT_SYNTHETIC_HOUSEHOLD_COMPOSITION = HouseholdCompositionInput(
+    templates=_default_household_templates(),
+    source_ids=(SYNTHETIC_HOUSEHOLD_TEMPLATE_ID,),
+    source_kind="assumption",
+)
 
 
 class PopulationConditionInput(RegionModel):
@@ -597,6 +645,19 @@ class SyntheticPopulationGenerator:
                 initial_zone_ids=zones,
             ),
         )
+        if (
+            household_composition is not None
+            and household_composition.source_kind == "assumption"
+            and _maximum_supported_age(
+                bands=bands, selected_distribution=evacuee_age_distribution,
+                minimum_age=0, maximum_age=17, age_band_label=None,
+            ) is None
+        ):
+            # Assumed templates must not make an adult-only selection fail.
+            household_composition = household_composition.model_copy(update={"templates": tuple(
+                template for template in household_composition.templates
+                if all(member.role != "child" for member in template.members)
+            )})
         rng = CounterRNG(seed)
         household_sizes, household_by_index = HouseholdGenerator.group_indices(count, rng, mix)
         household_templates = HouseholdGenerator.choose_templates(
@@ -644,6 +705,9 @@ class SyntheticPopulationGenerator:
             )
             if household_composition.source_kind == "operator" and not household_composition.source_ids:
                 source_id_set.add(OPERATOR_POPULATION_SOURCE_ID)
+        operator_composition = (
+            household_composition is not None and household_composition.source_kind == "operator"
+        )
         has_explicit_condition_input = bool(
             conditions.medical_support_rate is not None
             or conditions.medication_support_rate is not None
@@ -654,7 +718,7 @@ class SyntheticPopulationGenerator:
             or conditions.language_weights
             or conditions.additional_access_need_rates
             or conditions.daily_rhythms
-            or household_composition is not None
+            or operator_composition
         )
         has_explicit_selection = bool(selection.age_band_multipliers)
         if (has_explicit_condition_input or has_explicit_selection) and not conditions.source_ids and not selection.source_ids:
@@ -968,7 +1032,7 @@ class SyntheticPopulationGenerator:
                 {item.template_id for item in household_composition.templates}
                 - {item.template_id for item in household_templates.values()}
             )
-        ) if household_composition is not None else ()
+        ) if operator_composition else ()
         if unselected_template_ids:
             assumptions.append(
                 {
@@ -978,6 +1042,28 @@ class SyntheticPopulationGenerator:
                     "reason": "These operator templates did not match a generated household size in this seed and were not applied.",
                     "source_id": OPERATOR_POPULATION_SOURCE_ID,
                 }
+            )
+        if household_composition is not None and household_composition.source_kind == "assumption":
+            assumptions.append(
+                {
+                    "id": household_composition.source_ids[0],
+                    "subject": "synthetic_household_composition_templates",
+                    "value": {
+                        "applied_template_ids": sorted({item.template_id for item in household_templates.values()}),
+                        "minor_count": sum(1 for person in people.values() if person.age_years < 18),
+                    },
+                    "reason": "No household composition was entered, so generic synthetic templates place each generated minor with a linked adult. They describe no real family and are not regional statistics.",
+                    "source_id": household_composition.source_ids[0],
+                }
+            )
+            sources.extend(
+                {
+                    "id": source_id,
+                    "title": "Generic synthetic household composition templates",
+                    "source_kind": "assumption",
+                    "description": "Template shapes and weights are a generator heuristic; operator-entered compositions replace them.",
+                }
+                for source_id in household_composition.source_ids
             )
         sources.append(
             {

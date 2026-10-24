@@ -272,13 +272,19 @@ class StandardShelterGenerator:
             if unknown_zone_ids:
                 raise ValueError("zone area shares reference unknown standard zones: " + ", ".join(sorted(unknown_zone_ids)))
             zone_design = _apply_zone_area_shares(zone_design, request.zone_area_shares)
-        sleeping_share = next(share for zone_id, _, share in zone_design if zone_id == "sleeping")
         gross_area = request.gross_area_m2 or _default_gross_area(
             request.population,
             aspect_ratio=request.aspect_ratio,
-            sleeping_share=sleeping_share,
+            zone_design=zone_design,
         )
         width_m = math.sqrt(gross_area * request.aspect_ratio)
+        requested_shares = {zone_id: share for zone_id, _, share in zone_design}
+        zone_design = _with_accessible_frontage(zone_design, width_m)
+        widened_zones = [
+            zone_id for zone_id, _, share in zone_design
+            if zone_id != "sleeping" and share > requested_shares[zone_id] + 1e-12
+        ]
+        sleeping_share = next(share for zone_id, _, share in zone_design if zone_id == "sleeping")
         height_m = gross_area / width_m
         corridor_depth_m = min(1.8, height_m * 0.25)
         room_height_m = height_m - corridor_depth_m
@@ -292,6 +298,11 @@ class StandardShelterGenerator:
             else area_capacity
         )
         warnings: list[str] = []
+        if widened_zones:
+            warnings.append(
+                f"出入口幅{ACCESSIBLE_ROUTE_MIN_WIDTH_M} mを確保するため、次のゾーンの面積配分を広げ、その分を避難スペースから差し引きました: "
+                + "、".join(widened_zones)
+            )
         unrecognized = [
             condition for condition in request.facility_conditions
             if not any(term in condition.casefold() for term in recognized)
@@ -625,6 +636,8 @@ class StandardShelterGenerator:
                     "facility_conditions": list(request.facility_conditions),
                     "typed_zone_conditions": [item.model_dump(mode="json") for item in request.zone_conditions],
                     "target_accessible_route_width_m": 1.8,
+                    "minimum_zone_frontage_m": ACCESSIBLE_ROUTE_MIN_WIDTH_M,
+                    "frontage_widened_zones": widened_zones,
                     "minimum_generated_route_width_m": min(
                         route.width_m for route in routes
                     ),
@@ -681,21 +694,51 @@ class StandardShelterGenerator:
 
 
 def _default_gross_area(
-    population: int, *, aspect_ratio: float, sleeping_share: float
+    population: int, *, aspect_ratio: float, zone_design: list[tuple[str, str, float]]
 ) -> float:
-    """Provide enough heuristic sleeping area for the requested count by default."""
-    gross_area = max(80.0, population * 3.5 / max(0.01, sleeping_share * 0.9) * 1.1)
-    for _ in range(80):
-        width_m = math.sqrt(gross_area * aspect_ratio)
-        height_m = gross_area / width_m
+    """Provide enough heuristic sleeping area and doorway frontage by default."""
+    requested_sleeping_share = next(share for zone_id, _, share in zone_design if zone_id == "sleeping")
+    gross_area = max(80.0, population * 3.5 / max(0.01, requested_sleeping_share * 0.9) * 1.1)
+    for _ in range(160):
+        # Round first so the checked plan is the one the generator builds.
+        rounded_area = math.ceil(gross_area / 10.0) * 10.0
+        width_m = math.sqrt(rounded_area * aspect_ratio)
+        height_m = rounded_area / width_m
         corridor_depth_m = min(1.8, height_m * 0.25)
+        design = _with_accessible_frontage(zone_design, width_m)
+        sleeping_share = next(share for zone_id, _, share in design if zone_id == "sleeping")
         sleeping_usable_area = (
-            gross_area * sleeping_share * (height_m - corridor_depth_m) / height_m * 0.9
+            rounded_area * sleeping_share * (height_m - corridor_depth_m) / height_m * 0.9
         )
-        if math.floor(sleeping_usable_area / 3.5) >= population:
-            return math.ceil(gross_area / 10.0) * 10.0
+        frontage_met = min(width_m * share for _, _, share in design) >= ACCESSIBLE_ROUTE_MIN_WIDTH_M - 1e-9
+        if frontage_met and math.floor(sleeping_usable_area / 3.5) >= population:
+            return rounded_area
         gross_area *= 1.05
     return math.ceil(gross_area / 10.0) * 10.0
+
+
+def _with_accessible_frontage(
+    zone_design: list[tuple[str, str, float]], width_m: float
+) -> list[tuple[str, str, float]]:
+    """Widen narrow rooms to an accessible doorway, taking the area from the sleeping zone.
+
+    Rooms sit side by side along the corridor, so a room's frontage caps its doorway.
+    When the building is too narrow to give every room the minimum, the requested
+    shares are kept and the existing accessibility blocker reports the gap.
+    """
+    minimum_share = ACCESSIBLE_ROUTE_MIN_WIDTH_M / width_m
+    widened = [
+        (zone_id, label, share if zone_id == "sleeping" else max(share, minimum_share))
+        for zone_id, label, share in zone_design
+    ]
+    others = sum(share for zone_id, _, share in widened if zone_id != "sleeping")
+    sleeping_share = 1.0 - others
+    if sleeping_share < minimum_share:
+        return list(zone_design)
+    return [
+        (zone_id, label, sleeping_share if zone_id == "sleeping" else share)
+        for zone_id, label, share in widened
+    ]
 
 
 def _apply_zone_area_shares(
