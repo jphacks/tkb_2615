@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from sheltersim.contracts.policies import legacy_psychology_notice
 from sheltersim.experiments.branch import BranchRuntime
 
 
@@ -207,6 +208,10 @@ def compare_run_artifacts(
         "seed": baseline_manifest.get("seed"),
         "baseline_run": str(baseline_path),
         "candidate_run": str(candidate_path),
+        "psychology_models": {
+            "baseline": _psychology_model(baseline_manifest),
+            "candidate": _psychology_model(candidate_manifest),
+        },
         "first_divergence_minute": first_minute,
         "changed_metrics_at_first_divergence": first_changes,
         "final_metric_differences": _metric_differences(final_before, final_after),
@@ -236,6 +241,14 @@ def compare_run_artifacts(
             "human behavior or proof that one policy is better."
         )
     return report
+
+
+def _psychology_model(manifest: dict[str, Any]) -> str | None:
+    implementations = manifest.get("policy_implementations")
+    if not isinstance(implementations, dict):
+        return None
+    model_id = implementations.get("psychology")
+    return model_id if isinstance(model_id, str) else None
 
 
 def compare_run_sets(
@@ -301,6 +314,7 @@ def compare_run_sets(
         "scenario_hash_kind": baseline_hash[0],
         "seed_count": len(per_seed),
         "seeds": summary["seeds"],
+        "psychology_models": per_seed[0]["psychology_models"],
         "per_seed_reports": per_seed,
         "paired_delta_summary": summary["paired_delta_summary"],
         "interpretation": summary["interpretation"],
@@ -957,8 +971,21 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
         f"- Baseline scenario: `{report.get('baseline_scenario_id', 'baseline')}`",
         f"- Candidate scenario: `{report.get('candidate_scenario_id', 'candidate')}`",
         f"- Seeds: {report.get('seeds', [report.get('seed', 'unknown')])}",
-        "",
     ]
+    psychology = report.get("psychology_models")
+    if isinstance(psychology, dict):
+        baseline_model = psychology.get("baseline") or "unknown"
+        candidate_model = psychology.get("candidate") or "unknown"
+        lines.append(
+            f"- Psychology model: baseline `{baseline_model}`, candidate `{candidate_model}`"
+        )
+        notices = dict.fromkeys(
+            notice
+            for notice in map(legacy_psychology_notice, (baseline_model, candidate_model))
+            if notice is not None
+        )
+        lines.extend(f"- Warning: {notice}" for notice in notices)
+    lines.append("")
     summary = report.get("paired_delta_summary")
     if isinstance(summary, dict):
         lines.extend(

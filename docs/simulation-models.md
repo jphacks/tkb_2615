@@ -27,6 +27,17 @@ WebのScenario previewが使う初期Scenario生成器は、利用者が入力�
 - **世帯構成（ASM-SYNTHETIC-HOUSEHOLD-TEMPLATES-V1）:** 世帯構成テンプレートが入力されない場合、単身・大人のみ・大人と子どもの合成テンプレートを使い、生成した未成年者を同じ世帯の大人1人と親子関係で結びます。年齢や同居だけから関係を推測するのではなく、テンプレートで明示した関係だけを作ります。利用者が世帯構成を入力した場合は既定テンプレートを使いません。子どもを選べない年齢条件では、子どもを含むテンプレートを外します。
 - **標準施設の出入口（ASM-STANDARD-SHELTER-GEOMETRY-V1）:** 標準施設は部屋を通路沿いに横一列に並べるため、部屋の間口が出入口幅の上限になります。各部屋に1.8 mの間口を確保できるよう小さい部屋の面積配分を広げ、その分を避難スペースから差し引きます。面積を入力しない場合は、避難スペースが1人3.5 m²を満たすまで延床を広げます。利用者が入力した延床では面積を変えず、確保できない場合は従来どおりapproval blockerを示します。
 - **施設の認知（ASM-INTAKE-FACILITY-ORIENTATION-V1）:** 生成したScenarioはagent_dynamics v2（need-led-autonomy-memory-v2）を使い、受付での案内を仮定して、トイレ・給水・配食・救護・受付・静養の共用施設を開始時から知っています。agent_dynamics設定のない既存Scenarioはv1のままで、開始ゾーンの施設だけを知っています。
+- **心理モデル（ASM-MEAN-REVERTING-LIFE-STATE-V1）:** 生成したScenarioは研究版の心理モデル`mean-reverting-life-state-v1`（平均回帰と身体・感情状態の統合版、[01-psychology.md](mathematical-models/01-psychology.md)）を選び、平均回帰の係数（`natural_recovery_rate_per_minute`など）を既定値のまま明示的に書き込みます。係数は未校正の仮定です。保存済みのScenarioは選択したモデルのまま再生します。`policy_registry`で心理モデルを指定しないScenarioは、従来どおり`causal-stress-v1`を使います。
+
+## 旧来の心理モデル
+
+`causal-stress-v1`と`life-state-feedback-v1`は研究モデル導入前のモデルです。保存済みRun・Checkpointの再生と、研究モデルとの比較対照のために残しています。新しい分析で意図せず使わないよう、次の場所に使用中の心理モデルを表示します。
+
+- `sheltersim prepare`と`sheltersim run`は、旧来モデルを選んだScenarioでstderrに1行の警告を出します。終了codeは0のままです。
+- `sheltersim run`の出力JSONに`psychology_model`を含めます。保存Runのmanifestでは`policy_implementations.psychology`に記録されます。
+- `sheltersim compare`のレポートに`psychology_models`（baselineとcandidate）を含め、Markdownの先頭に表示します。旧来モデルなら警告行を加えます。
+
+旧来モデルの印はmodel-catalog.jsonではなく`src/sheltersim/contracts/policies.py`の`LEGACY_PSYCHOLOGY_MODELS`に置きます。catalogの項目はPolicy署名に含まれるため、変更すると保存済みCheckpointの照合が変わるからです。
 
 ## 再現性と評価
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sheltersim import __version__
+from sheltersim.contracts.policies import legacy_psychology_notice, selected_models
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.comparison import compare_run_sets, render_comparison_markdown
 from sheltersim.experiments.profiles import GeneratedProfileSet
@@ -329,6 +330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.output is not None:
                 _write_atomic(arguments.output, output + "\n")
             print(output)
+            _warn_legacy_psychology(scenario)
             if router is not None:
                 warning = fallback_warning(summarize_call_outcomes(router.records))
                 if warning is not None:
@@ -396,9 +398,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                             world.canonical_json().encode("utf-8")
                         ).hexdigest(),
                         "llm_status": llm_status,
+                        "psychology_model": selected_models(scenario.model_configs)["psychology"],
                     }
                 )
             )
+            _warn_legacy_psychology(scenario)
             warning = fallback_warning(llm_status)
             if warning is not None:
                 print(f"warning: {warning}", file=sys.stderr)
@@ -614,6 +618,12 @@ def _load_scenario_input(path: Path) -> ScenarioSpec:
             raise ValueError("scenario preview does not contain a scenario object")
         return ScenarioSpec.model_validate(scenario_document)
     return ScenarioSpec.from_json(json.dumps(document, ensure_ascii=False))
+
+
+def _warn_legacy_psychology(scenario: ScenarioSpec) -> None:
+    notice = legacy_psychology_notice(selected_models(scenario.model_configs)["psychology"])
+    if notice is not None:
+        print(f"warning: {notice}", file=sys.stderr)
 
 
 def _json_text(value: Any) -> str:

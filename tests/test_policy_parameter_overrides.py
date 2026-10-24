@@ -1034,6 +1034,7 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
         "causal-stress-v1",
         "bounded-stress-v1",
         "life-state-feedback-v1",
+        "mean-reverting-life-state-v1",
     ):
         baseline_configs = deepcopy(baseline_world.model_configs)
         customized_configs = deepcopy(customized_world.model_configs)
@@ -1065,9 +1066,9 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
     assert before.model_versions["policy:psychology"] == (
-        "life-state-feedback-v1@3:state1:"
-        "manifest=846a6c7ea660bb20388562bb6a050b721f55c74778c8c3ef26ff9ca5d95ea377:"
-        "inputs=b9d2994df4af3ce5e9cc42442bd1ea7aa4a8fcdcf54465dc67ff55b31a297505"
+        "mean-reverting-life-state-v1@1:state1:"
+        "manifest=fe69aac430b8085d22c9a02239afd23346ca526c9d98c34f37dad8a4b7cc6582:"
+        "inputs=9ec2d1893460e4937a74e7ede0b535d0709a6815b861068421beb1036a2376fe"
     )
     assert before.model_versions["policy:psychology"] != after.model_versions[
         "policy:psychology"

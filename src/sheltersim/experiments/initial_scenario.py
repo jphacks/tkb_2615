@@ -809,7 +809,6 @@ class InitialScenarioBuilder:
             "population": population.population.model_dump(mode="json"),
         }
         from sheltersim.domain.body_state import (
-            BODY_POLICY_VERSION,
             BODY_SOURCE_ID,
             canonical_body_config,
         )
@@ -833,7 +832,22 @@ class InitialScenarioBuilder:
         })
         information_config = InformationSpreadConfig().to_dict()
         information_config["enabled"] = request.information_spread_enabled
-        model_configs["psychology"] = PsychologyModelConfig().to_model_config()
+        from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
+        from sheltersim.policies.psychology import (
+            IntegratedDistressLifeStatePolicy,
+            PsychologyParameters,
+        )
+
+        # The research mean-reversion terms are written out so the Scenario shows
+        # (and its hash binds) every coefficient the selected model consumes.
+        research_defaults = PsychologyParameters()
+        model_configs["psychology"] = PsychologyModelConfig(
+            natural_recovery_rate_per_minute=research_defaults.natural_recovery_rate_per_minute,
+            chronic_retention=research_defaults.chronic_retention,
+            chronic_acute_weight=research_defaults.chronic_acute_weight,
+            chronic_high_distress_weight=research_defaults.chronic_high_distress_weight,
+            high_distress_threshold=research_defaults.high_distress_threshold,
+        ).to_model_config()
         model_configs["social_propagation"] = social_parameters
         model_configs["information_spread"] = information_config
         # New previews explicitly select the published model. Existing saved inputs
@@ -842,7 +856,9 @@ class InitialScenarioBuilder:
             # v2 binds the selected formula metadata and its consumed config sections
             # into each policy signature captured by the initial Checkpoint.
             "schema_version": 2,
-            "psychology": BODY_POLICY_VERSION,
+            # New drafts use the research model; life-state-feedback-v1 stays
+            # installed only for saved inputs and explicit comparison controls.
+            "psychology": INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
             "social": request.social_policy_id,
             "information": request.information_policy_id,
             "queue": request.queue_policy_id,
@@ -917,6 +933,25 @@ class InitialScenarioBuilder:
             "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
             "source_id": ORIENTATION_FACILITY_SOURCE_ID,
             "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
+        })
+        provenance["sources"].append({
+            "id": IntegratedDistressLifeStatePolicy.source_id,
+            "title": "Mean-reverting acute distress with life-state feedback",
+            "source_kind": "assumption",
+            "description": (
+                "Literature-motivated mean-reversion structure (Kuppens et al. 2010) "
+                "with uncalibrated coefficients; not fitted to shelter data."
+            ),
+        })
+        provenance["assumptions"].append({
+            "id": IntegratedDistressLifeStatePolicy.source_id,
+            "subject": "psychology_model",
+            "value": {"policy_version": INTEGRATED_PSYCHOLOGY_POLICY_VERSION},
+            "source_id": IntegratedDistressLifeStatePolicy.source_id,
+            "reason": (
+                "New generated Scenarios select the research psychology model; legacy models "
+                "remain only for saved inputs and explicit comparisons."
+            ),
         })
         from sheltersim.policies.queueing import (
             NeedWeightedPhysicalQueuePolicy,
