@@ -88,6 +88,7 @@ def parse_scenario_text(text: str, *, router: LLMRouter | None = None) -> Scenar
             explicit = _merge_explicit(explicit, extracted)
             if len(router.records) > prior_record_count and router.records[-1].fallback_used:
                 source = "rules_fallback"
+                warnings.append("AIの入力整理を利用できず、明示された値のみを使用します。")
             else:
                 source = "prepare_llm"
         except Exception:

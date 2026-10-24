@@ -14,6 +14,7 @@ from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMErrorPolicy, LLMMode, LLMSettings, ModelPrice
 from sheltersim.llm.contracts import (
     LLMCallRecord,
+    LLMContractError,
     LLMProviderError,
     LLMStage,
     LLMTask,
@@ -427,7 +428,7 @@ def test_prepare_generation_routes_through_opus_and_returns_a_reviewable_draft()
     )
     provider = FakeProvider(responses=[response])
     router = LLMRouter(
-        settings(max_input_tokens=4096, max_output_tokens=512, budget_usd=0.1),
+        settings(max_input_tokens=4096, max_output_tokens=512, budget_usd=0.5),
         provider=provider,
         tape=ResponseTape(),
     )
@@ -439,3 +440,95 @@ def test_prepare_generation_routes_through_opus_and_returns_a_reviewable_draft()
     assert [profile.initial_needs.hunger for profile in draft.profiles] == [0.2, 0.2]
     assert all(profile.provenance.source_kind == "llm" for profile in draft.profiles)
     assert draft.provenance["llm_initial_needs"]["prompt_version"] == "initial-needs-v1"
+
+
+def _captured_request(stage: LLMStage) -> dict:
+    text_block = SimpleNamespace(type="text", text='{"ok":true}')
+    usage = SimpleNamespace(input_tokens=10, output_tokens=4)
+
+    class Messages:
+        request = None
+
+        def create(self, **kwargs):
+            self.request = kwargs
+            return SimpleNamespace(content=[text_block], usage=usage, model="claude-opus-5-5",
+                                   id="msg-test")
+
+    messages = Messages()
+    stage_task = LLMTask(stage=stage, input_text="request", state_hash="state",
+        prompt_version="stage-request-v1", fallback_text='{"ok":false}', max_output_tokens=64)
+    AnthropicProvider("test-key", client=SimpleNamespace(messages=messages)).complete(
+        model_id="claude-opus-5-5", task=stage_task, max_output_tokens=64, timeout_seconds=5)
+    return messages.request
+
+
+def test_adapter_bounds_thinking_by_stage() -> None:
+    runtime = _captured_request(LLMStage.RUNTIME)
+    prepare = _captured_request(LLMStage.PREPARE)
+    review = _captured_request(LLMStage.REVIEW)
+
+    assert runtime["thinking"] == {"type": "disabled"} and "output_config" not in runtime
+    # Opus rejects disabled thinking, so preparation keeps it short with low effort.
+    assert prepare["output_config"] == {"effort": "low"} and "thinking" not in prepare
+    assert "thinking" not in review and "output_config" not in review
+
+
+def test_router_adds_thinking_headroom_outside_runtime() -> None:
+    from sheltersim.llm.provider import THINKING_HEADROOM_TOKENS
+
+    provider = FakeProvider(responses=['{"ok":true}'])
+    router = LLMRouter(settings(budget_usd=1.0), provider=provider, tape=ResponseTape())
+    router.complete(LLMTask(stage=LLMStage.PREPARE, input_text="request", state_hash="state",
+        prompt_version="headroom-v1", fallback_text='{"ok":false}', max_output_tokens=32,
+        output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}},
+                       "required": ["ok"], "additionalProperties": False}))
+    runtime_provider = FakeProvider()
+    LLMRouter(settings(), provider=runtime_provider, tape=ResponseTape()).complete(task())
+
+    # The answer cap stays the task's own size; thinking gets room on top of it.
+    assert provider.calls[0][1] == 32 + THINKING_HEADROOM_TOKENS
+    assert runtime_provider.calls[0][1] == 32
+
+
+def _schema_task(schema: dict) -> LLMTask:
+    return LLMTask(stage=LLMStage.PREPARE, input_text="request", state_hash="state",
+        prompt_version="schema-v1", output_schema=schema, fallback_text="{}")
+
+
+def test_validator_follows_pydantic_refs_unions_and_typed_maps() -> None:
+    from sheltersim.llm.contracts import validate_task_output
+
+    schema = {
+        "type": "object",
+        "$defs": {"Share": {"type": "number", "minimum": 0, "exclusiveMaximum": 1}},
+        "properties": {
+            "shares": {"type": "object", "additionalProperties": {"$ref": "#/$defs/Share"}},
+            "kind": {"oneOf": [{"const": "outage", "type": "string"},
+                               {"const": "closure", "type": "string"}]},
+            "code": {"type": "string", "pattern": "^[0-9]{5}$", "minLength": 5},
+        },
+        "required": ["shares", "kind"],
+        "additionalProperties": False,
+    }
+    task = _schema_task(schema)
+
+    validate_task_output(task, '{"shares":{"sleeping":0.5},"kind":"outage","code":"14100"}')
+    for invalid in (
+        '{"shares":{"sleeping":1.0},"kind":"outage"}',  # exclusiveMaximum
+        '{"shares":{},"kind":"flood"}',  # no oneOf branch
+        '{"shares":{},"kind":"outage","code":"14-00"}',  # pattern
+        '{"shares":{},"kind":"outage","extra":1}',  # unknown field still rejected
+    ):
+        with pytest.raises(LLMContractError):
+            validate_task_output(task, invalid)
+
+
+def test_scenario_text_fallback_satisfies_its_own_schema() -> None:
+    from sheltersim.llm import region_prepare
+    from sheltersim.llm.contracts import validate_task_output
+
+    explicit = region_prepare._parse_explicit_fields("横浜市で地震が発生。避難者30人、期間は1日。")
+    fallback = json.dumps(region_prepare._to_llm_contract(explicit), ensure_ascii=False)
+
+    # Before $ref support every reply, including this fallback, failed validation.
+    validate_task_output(_schema_task(region_prepare._intent_json_schema()), fallback)

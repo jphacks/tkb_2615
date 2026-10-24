@@ -74,7 +74,7 @@ def _router(response: dict[str, Any]) -> tuple[LLMRouter, ReviewProvider]:
             api_key="test-key",
             max_input_tokens=4096,
             max_output_tokens=256,
-            budget_usd=0.1,
+            budget_usd=0.5,
         ),
         provider=provider,
         tape=ResponseTape(),

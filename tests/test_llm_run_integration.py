@@ -48,7 +48,7 @@ def test_api_enabled_run_writes_usage_and_separate_opus_review(tmp_path: Path) -
         api_key="mock-key",
         max_input_tokens=4096,
         max_output_tokens=64,
-        budget_usd=0.1,
+        budget_usd=0.5,
     )
     router = LLMRouter(settings, provider=ReviewProvider(), tape=ResponseTape())
     output = tmp_path / "run"
