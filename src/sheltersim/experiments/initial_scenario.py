@@ -40,6 +40,7 @@ from sheltersim.region.models import (
 )
 from sheltersim.region.plan_import import ImportedPlanGeometry
 from sheltersim.region.population import (
+    DEFAULT_SYNTHETIC_HOUSEHOLD_COMPOSITION,
     OPERATOR_POPULATION_SOURCE_ID,
     AgeBand,
     EvacuationSelection,
@@ -413,6 +414,12 @@ class InitialScenarioBuilder:
             household_mix=household_mix,
             evacuation_selection=request.evacuation_selection,
             conditions=request.population_conditions,
+            # Without entered household shapes, minors would have no linked adult
+            # and every draft would stop at the guardian review blocker.
+            household_composition=(
+                None if request.population_conditions.household_composition is not None
+                else DEFAULT_SYNTHETIC_HOUSEHOLD_COMPOSITION
+            ),
         )
         unaccompanied_minors = tuple(
             item.person_id
@@ -886,6 +893,31 @@ class InitialScenarioBuilder:
                     "source_kind": "assumption", "description": "Installed synthetic coefficients; not empirically calibrated."})
             provenance["assumptions"].append({"id": source_id, "subject": title,
                 "source_id": source_id, "reason": "New generated Scenario explicitly enables the installed experimental model."})
+        from sheltersim.domain.agent_dynamics import (
+            ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
+            ORIENTATION_FACILITY_KINDS,
+            ORIENTATION_FACILITY_SOURCE_ID,
+            canonical_agent_dynamics_config,
+        )
+
+        # Without this, Agents start knowing only facilities in the sleeping zone
+        # and never learn the separate toilet, water or meal zones.
+        model_configs["agent_dynamics"] = canonical_agent_dynamics_config(
+            {"policy_version": ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION}
+        )
+        provenance["sources"].append({
+            "id": ORIENTATION_FACILITY_SOURCE_ID,
+            "title": "Intake orientation to shared shelter facilities",
+            "source_kind": "assumption",
+            "description": "Every Agent is assumed to be shown the shared service facilities at intake; not observed at a real shelter.",
+        })
+        provenance["assumptions"].append({
+            "id": ORIENTATION_FACILITY_SOURCE_ID,
+            "subject": "initial_facility_knowledge",
+            "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
+            "source_id": ORIENTATION_FACILITY_SOURCE_ID,
+            "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
+        })
         from sheltersim.policies.queueing import (
             NeedWeightedPhysicalQueuePolicy,
             StrictFIFOQueuePolicy,

@@ -1004,6 +1004,77 @@
       "conceptual_reference": "Daley & Kendall (1965), Stochastic Rumours, doi:10.1093/imamat/1.1.42; Nekovee et al. (2007), Theory of rumour spreading in complex social networks",
       "calibration_status": "uncalibrated literature-inspired process structure and software assumptions",
       "notes": "Exposure, belief strength, sharing propensity and correction acceptance are separate state/processes. References motivate spreading-process structure only; all shelter-specific probabilities and trust responses remain uncalibrated assumptions."
+    },
+    {
+      "id": "ASM-INTAKE-FACILITY-ORIENTATION-V1",
+      "source_type": "assumption",
+      "target": "agent_dynamics_v1 initial known_facility_ids for generated Scenarios",
+      "model_version": "need-led-autonomy-memory-v2",
+      "values": {
+        "known_facility_kinds_at_start": [
+          "intake",
+          "meal_distribution",
+          "medical_support",
+          "quiet_space",
+          "toilet",
+          "water_station"
+        ],
+        "learned_on_arrival": "facilities of other kinds outside the Agent's start zone, such as pet, family and privacy spaces"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated structural assumption",
+      "notes": "Agents only choose facilities they know. Under v1 they knew only facilities in their start zone, so generated Scenarios, whose sleeping zone holds no facilities, never served a toilet. v2 assumes every Agent is shown the shared services at intake. Whether and when evacuees learn facility locations at real shelters is not measured. Scenarios without an agent_dynamics config keep v1 so saved histories replay exactly."
+    },
+    {
+      "id": "ASM-STANDARD-SHELTER-GEOMETRY-V1",
+      "source_type": "assumption",
+      "target": "StandardShelterGenerator rectangular synthetic floor plan",
+      "model_version": "standard-shelter-geometry with minimum zone frontage",
+      "values": {
+        "layout": "rooms side by side along one corridor; each room spans the full room depth",
+        "corridor_depth_m": "min(1.8, building height × 0.25)",
+        "aspect_ratio_default": 1.5,
+        "minimum_zone_frontage_m": 1.8,
+        "frontage_rule": "a room narrower than the minimum is widened to it and the difference is taken from the sleeping zone; the requested shares are kept when the building cannot fit the minimum for every room",
+        "default_gross_area": "at least 80 m², grown by 5% steps until the sleeping zone holds the population at the area heuristic and every room has the minimum frontage",
+        "route_speed_m_per_minute": 60
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated synthetic geometry",
+      "notes": "A generic editable plan for drafts with no real floor plan. The 1.8 m minimum matches the accessible-route width the generator already checks (ACCESSIBLE_ROUTE_MIN_WIDTH_M); it is not taken from a cited standard and does not show legal compliance or evacuation safety of any real building. Saved Scenarios keep the geometry they were generated with."
+    },
+    {
+      "id": "ASM-SYNTHETIC-HOUSEHOLD-TEMPLATES-V1",
+      "source_type": "assumption",
+      "target": "SyntheticPopulationGenerator default household composition for generated Scenarios",
+      "model_version": "default-synthetic-household-templates-v1",
+      "values": {
+        "size_1": {
+          "adult-1": 1.0
+        },
+        "size_2": {
+          "adults-2": 0.9,
+          "adult-1-children-1": 0.1
+        },
+        "size_3": {
+          "adults-3": 0.6,
+          "adults-2-children-1": 0.4
+        },
+        "size_4": {
+          "adults-4": 0.4,
+          "adults-3-children-1": 0.2,
+          "adults-2-children-2": 0.4
+        },
+        "size_5_to_10": {
+          "adults-N": 0.3,
+          "adults-3-children-(N-3)": 0.4,
+          "adults-2-children-(N-2)": 0.3
+        },
+        "declared_links": "the first adult slot is the parent of each child slot; no other relationship is declared"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated generator heuristic",
+      "notes": "Used only when no household composition is entered. Templates are explicit synthetic links, not relationships inferred from age or co-residence, and describe no real family. With the default household-size mix they give about 15-17% minors (seeds 0-9, 30-300 people). Operator-entered compositions replace them; templates with child slots are dropped when the selected ages contain no minors."
     }
   ]
 }

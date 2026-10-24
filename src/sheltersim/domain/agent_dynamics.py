@@ -10,13 +10,57 @@ from sheltersim.policies.behavior import ActionProposal
 
 AGENT_DYNAMICS_STATE_KEY = "agent_dynamics_v1"
 AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v1"
+ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v2"
+ORIENTATION_FACILITY_SOURCE_ID = "ASM-INTAKE-FACILITY-ORIENTATION-V1"
+# Shared services every evacuee is assumed to be shown at intake. Group-specific
+# spaces (pet, family, privacy) are still learned only on arrival.
+ORIENTATION_FACILITY_KINDS = frozenset({
+    "intake", "meal_distribution", "medical_support", "quiet_space", "toilet", "water_station",
+})
+
+
+def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
+    """Select the facility-awareness version; a missing config keeps v1 histories exact."""
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict) or set(raw) - {"schema_version", "policy_version", "source_id"}:
+        raise ValueError("agent_dynamics config has unsupported fields")
+    policy_version = raw.get("policy_version", AGENT_DYNAMICS_POLICY_VERSION)
+    if raw.get("schema_version", 1) != 1 or policy_version not in {
+        AGENT_DYNAMICS_POLICY_VERSION, ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
+    }:
+        raise ValueError("agent_dynamics config has an unsupported version")
+    if policy_version == AGENT_DYNAMICS_POLICY_VERSION:
+        if "source_id" in raw:
+            raise ValueError("agent_dynamics v1 has no orientation source")
+        return {"schema_version": 1, "policy_version": policy_version}
+    if raw.get("source_id", ORIENTATION_FACILITY_SOURCE_ID) != ORIENTATION_FACILITY_SOURCE_ID:
+        raise ValueError("agent_dynamics v2 must cite the intake orientation assumption")
+    return {
+        "schema_version": 1,
+        "policy_version": policy_version,
+        "source_id": ORIENTATION_FACILITY_SOURCE_ID,
+    }
+
+
+def _initial_known_facility_ids(world: WorldState, zone_id: str) -> list[str]:
+    policy_version = canonical_agent_dynamics_config(
+        world.model_configs.get("agent_dynamics")
+    )["policy_version"]
+    oriented = policy_version == ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION
+    return sorted(
+        facility.id for facility in world.facilities.values()
+        if facility.zone_id == zone_id or (oriented and facility.kind in ORIENTATION_FACILITY_KINDS)
+    )
 
 
 def create_agent_dynamics_state(world: WorldState) -> dict[str, Any]:
     """Create bounded decision memory without changing legacy Agent encodings."""
     return {
         "schema_version": 1,
-        "policy_version": AGENT_DYNAMICS_POLICY_VERSION,
+        "policy_version": canonical_agent_dynamics_config(
+            world.model_configs.get("agent_dynamics")
+        )["policy_version"],
         "agents": {
             agent_id: _new_agent_dynamics_record(world, agent_id)
             for agent_id in sorted(world.agents)
@@ -33,7 +77,9 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
         not isinstance(state, dict)
         or set(state) != {"schema_version", "policy_version", "agents"}
         or state.get("schema_version") != 1
-        or state.get("policy_version") != AGENT_DYNAMICS_POLICY_VERSION
+        or state.get("policy_version") != canonical_agent_dynamics_config(
+            world.model_configs.get("agent_dynamics")
+        )["policy_version"]
         or not isinstance(state.get("agents"), dict)
         or set(state["agents"]) != set(world.agents)
     ):
@@ -81,7 +127,9 @@ def record_proposal(
 
 def agent_knows_facility(world: WorldState, agent_id: str, facility_id: str) -> bool:
     """Apply explicit awareness only when the Scenario selected that model."""
-    if "facility_awareness" not in world.model_configs:
+    if not {"facility_awareness", "agent_dynamics"}.intersection(
+        world.model_configs
+    ):
         # Older Scenarios had no knowledge gate. Keep their behavior independent
         # of whether a psychology policy happens to create autonomy memory.
         return True
@@ -140,11 +188,7 @@ def _state(world: WorldState) -> dict[str, Any]:
 
 def _new_agent_dynamics_record(world: WorldState, agent_id: str) -> dict[str, Any]:
     agent = world.agents[agent_id]
-    known_facility_ids = {
-        facility.id
-        for facility in world.facilities.values()
-        if facility.zone_id == agent.zone_id
-    }
+    known_facility_ids = set(_initial_known_facility_ids(world, agent.zone_id))
     config_document = world.model_configs.get("facility_awareness")
     if isinstance(config_document, dict):
         config = FacilityAwarenessConfig.model_validate(config_document)

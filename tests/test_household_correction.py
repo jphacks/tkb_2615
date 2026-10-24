@@ -12,6 +12,21 @@ from sheltersim.experiments.initial_scenario import (
 from sheltersim.storage.projects import ProjectStore, StorageError, digest
 from sheltersim.web.projects import ProjectAPI
 
+# Operator household shapes with no declared links. Generated minors then have
+# no guardian, which is the case the correction route exists for; the default
+# synthetic templates would link every minor to an adult instead.
+UNLINKED_SOURCE_ID = "SRC-TEST-UNLINKED-HOUSEHOLDS"
+UNLINKED_CONDITIONS = {
+    "household_composition": {
+        "templates": [
+            {"template_id": f"unlinked-{size}", "members": [{"role": "unspecified"}] * size}
+            for size in range(1, 6)
+        ],
+        "source_ids": [UNLINKED_SOURCE_ID],
+    },
+    "source_ids": [UNLINKED_SOURCE_ID],
+}
+
 
 def _unsafe_generated_household():
     draft = InitialScenarioBuilder().build(InitialScenarioRequest(
@@ -20,13 +35,15 @@ def _unsafe_generated_household():
         evacuees=20,
         duration_days=1,
         seed=42,
+        population_conditions=UNLINKED_CONDITIONS,
     ))
     scenario = draft.scenario
     people = scenario.model_configs["population"]["people"]
     # Seed 42 contains this generated minor and two older synthetic household
     # members, so the test exercises exact-ID correction without inventing IDs.
-    assert people["A003"]["age_years"] == 9
-    assert scenario.profiles[1].group_id == "H000002"
+    assert people["A005"]["age_years"] == 6
+    assert people["A005"]["household_id"] == "H000002"
+    assert people["A002"]["household_id"] == "H000002"
     return draft
 
 
@@ -41,6 +58,7 @@ def test_household_correction_creates_hash_bound_immutable_preview(tmp_path) -> 
         reviewed_request = {
             "municipality": "Synthetic municipality", "disaster": "earthquake",
             "evacuees": 20, "duration_days": 1, "seed": 42,
+            "population_conditions": UNLINKED_CONDITIONS,
         }
         preview_id = api.workspace._cache({
             "usage_account_id": "draft-account",
@@ -60,7 +78,7 @@ def test_household_correction_creates_hash_bound_immutable_preview(tmp_path) -> 
                 "schema_version": 1,
                 "expected_scenario_hash": source_hash,
                 "corrections": [{
-                    "agent_id": "A003",
+                    "agent_id": "A005",
                     "household_id": "H000002",
                     "parent_ids": ["A002"],
                     "caregiver_ids": [],
@@ -71,23 +89,21 @@ def test_household_correction_creates_hash_bound_immutable_preview(tmp_path) -> 
         assert response["preview_id"] != preview_id
         assert response["source_preview_id"] == preview_id
         assert response["source_scenario_hash"] == source_hash
-        assert response["corrected_agent_ids"] == ["A003"]
+        assert response["corrected_agent_ids"] == ["A005"]
         assert response["request"] == reviewed_request
         assert response["facility_design"] is None
         assert response["research"] is None
-        assert not response["can_start"]  # Other unreviewed minors/blockers remain.
-        assert any("未成年者が8人います" in row for row in response["approval_blockers"])
-        assert any("アクセシブルな往復経路を確認できない設備ゾーン" in row
-                   for row in response["approval_blockers"])
+        assert not response["can_start"]  # Other unreviewed minors remain.
+        assert any("未成年者が3人います" in row for row in response["approval_blockers"])
         corrected = response["scenario"]
-        corrected_person = corrected["model_configs"]["population_context"]["people"]["A003"]
+        corrected_person = corrected["model_configs"]["population_context"]["people"]["A005"]
         assert corrected_person["parent_ids"] == ["A002"]
         assert corrected_person["guardian_status"] == "accompanied"
         assert corrected["provenance"]["household_assignment_corrections"]["seed"] == 42
         assert api.workspace._preview("project", preview_id)["hash"] == source_hash
         assert api.workspace._preview("project", preview_id)["scenario"].model_configs[
             "population_context"
-        ]["people"]["A003"]["parent_ids"] == []
+        ]["people"]["A005"]["parent_ids"] == []
     finally:
         api.close()
 
@@ -115,7 +131,7 @@ def test_household_correction_rejects_stale_hash_and_cross_household_links(tmp_p
         base = {"preview_id": preview_id, "correction": {
             "schema_version": 1,
             "expected_scenario_hash": "0" * 64,
-            "corrections": [{"agent_id": "A003", "household_id": "H000002",
+            "corrections": [{"agent_id": "A005", "household_id": "H000002",
                              "parent_ids": ["A002"], "caregiver_ids": []}],
         }}
         with pytest.raises(StorageError, match="stale_preview"):
@@ -125,8 +141,8 @@ def test_household_correction_rejects_stale_hash_and_cross_household_links(tmp_p
             "correction": {
                 **base["correction"],
                 "expected_scenario_hash": source_hash,
-                "corrections": [{"agent_id": "A003", "household_id": "H000002",
-                                 "parent_ids": ["A006"], "caregiver_ids": []}],
+                "corrections": [{"agent_id": "A005", "household_id": "H000002",
+                                 "parent_ids": ["A007"], "caregiver_ids": []}],
             },
         }
         with pytest.raises(StorageError, match="same household"):
@@ -140,7 +156,7 @@ def test_household_correction_request_requires_a_real_change() -> None:
         HouseholdCorrectionRequest.model_validate({
             "schema_version": 1,
             "expected_scenario_hash": "a" * 64,
-            "corrections": [{"agent_id": "A003", "household_id": "H000002"}],
+            "corrections": [{"agent_id": "A005", "household_id": "H000002"}],
         })
 
 
@@ -169,14 +185,15 @@ def test_household_correction_keeps_other_blockers_from_a_real_preview(tmp_path)
     store.create_project("project")
     api = ProjectAPI(store, recover=False)
     try:
-        # Seed 1 at 10 people has only correctable minors plus an inaccessible
-        # standard-plan route, so the route blocker must survive the correction.
+        # Seed 0 at 10 people has only correctable minors, and a 30 m² building
+        # cannot hold them, so the capacity blocker must survive the correction.
         preview = api.workspace.post(["project", "scenario-preview"], {"text": "", "request": {
             "municipality": "Synthetic municipality", "disaster": "earthquake",
-            "evacuees": 10, "duration_days": 1, "seed": 1,
+            "evacuees": 10, "duration_days": 1, "seed": 0, "gross_area_m2": 30,
+            "population_conditions": UNLINKED_CONDITIONS,
         }})
         assert any("未成年者が" in row for row in preview["approval_blockers"])
-        assert any("アクセシブルな往復経路" in row for row in preview["approval_blockers"])
+        assert any("避難スペース容量" in row for row in preview["approval_blockers"])
         response = api.workspace.post(["project", "scenario-household-corrections"], {
             "preview_id": preview["preview_id"],
             "correction": {
@@ -187,7 +204,7 @@ def test_household_correction_keeps_other_blockers_from_a_real_preview(tmp_path)
         })
 
         assert not any("未成年者が" in row for row in response["approval_blockers"])
-        assert any("アクセシブルな往復経路" in row for row in response["approval_blockers"])
+        assert any("避難スペース容量" in row for row in response["approval_blockers"])
         assert response["can_start"] is False
         with pytest.raises(StorageError, match="startable reviewed scenario"):
             api.workspace.post(["project", "scenario-approve"], {
@@ -217,7 +234,7 @@ def test_household_correction_refuses_a_draft_without_recorded_blockers(tmp_path
                 "preview_id": legacy_preview_id,
                 "correction": {
                     "schema_version": 1, "expected_scenario_hash": source_hash,
-                    "corrections": [{"agent_id": "A003", "household_id": "H000002",
+                    "corrections": [{"agent_id": "A005", "household_id": "H000002",
                                      "parent_ids": ["A002"], "caregiver_ids": []}],
                 },
             })
