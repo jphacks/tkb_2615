@@ -7,13 +7,13 @@ from typing import Any
 
 from sheltersim.experiments.scenario import ScenarioSpec
 
-_PEOPLE_PER_TOILET = {"initial": 50, "long-term": 20}
-_PLANNING_USES_PER_PERSON_DAY = 5
+PEOPLE_PER_TOILET = {"initial": 50, "long-term": 20}
+PLANNING_TOILET_USES_PER_PERSON_DAY = 5
 
 
 def toilet_planning_diagnostic(scenario: ScenarioSpec, *, phase: str = "initial") -> dict[str, Any]:
     """Compare declared working toilet units with planning benchmarks, not behavior."""
-    if phase not in _PEOPLE_PER_TOILET:
+    if phase not in PEOPLE_PER_TOILET:
         raise ValueError("phase must be 'initial' or 'long-term'")
     population = len(scenario.profiles)
     available_units = sum(
@@ -21,9 +21,9 @@ def toilet_planning_diagnostic(scenario: ScenarioSpec, *, phase: str = "initial"
         for facility in scenario.facilities
         if facility.kind == "toilet"
     )
-    people_per_toilet = _PEOPLE_PER_TOILET[phase]
+    people_per_toilet = PEOPLE_PER_TOILET[phase]
     target_units = math.ceil(population / people_per_toilet) if population else 0
-    planned_daily_uses = population * _PLANNING_USES_PER_PERSON_DAY
+    planned_daily_uses = population * PLANNING_TOILET_USES_PER_PERSON_DAY
     shortage = max(0, target_units - available_units)
     warnings = []
     if available_units < target_units:
@@ -40,7 +40,7 @@ def toilet_planning_diagnostic(scenario: ScenarioSpec, *, phase: str = "initial"
         "planning_people_per_toilet": people_per_toilet,
         "planning_target_toilet_units": target_units,
         "shortage_units": shortage,
-        "planning_uses_per_person_day": _PLANNING_USES_PER_PERSON_DAY,
+        "planning_uses_per_person_day": PLANNING_TOILET_USES_PER_PERSON_DAY,
         "planning_total_uses_per_day": planned_daily_uses,
         "warnings": warnings,
         "source": "Cabinet Office, Shelter Toilet Provision and Management Guideline (2024-12)",

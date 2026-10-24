@@ -105,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     toilet_diagnostic.add_argument("--scenario", required=True, type=Path)
     toilet_diagnostic.add_argument("--phase", choices=("initial", "long-term"), default="initial")
+    capacity_diagnostic = subparsers.add_parser(
+        "service-capacity-diagnostic",
+        help="compare toilet, water and meal units with the work their daily demand needs",
+    )
+    capacity_diagnostic.add_argument("--scenario", required=True, type=Path)
+    capacity_diagnostic.add_argument(
+        "--phase", choices=("initial", "long-term"), default="initial"
+    )
     evaluation = subparsers.add_parser(
         "evaluate-models",
         help="run an explicitly requested offline paired model/parameter matrix",
@@ -345,7 +353,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             parser.error(f"could not prepare scenario: {exc}")
         return 0
-    if arguments.command in {"model-catalog", "evaluate-models", "toilet-diagnostic"}:
+    if arguments.command in {
+        "model-catalog", "evaluate-models", "toilet-diagnostic", "service-capacity-diagnostic"
+    }:
         try:
             scenario = ScenarioSpec.load(arguments.scenario)
             if arguments.command == "model-catalog":
@@ -356,6 +366,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from sheltersim.experiments.sanitation_diagnostics import toilet_planning_diagnostic
 
                 result = toilet_planning_diagnostic(scenario, phase=arguments.phase)
+            elif arguments.command == "service-capacity-diagnostic":
+                from sheltersim.experiments.service_capacity import service_capacity_diagnostic
+
+                result = service_capacity_diagnostic(scenario, phase=arguments.phase)
             else:
                 from sheltersim.experiments.validation import EvaluationPlan, evaluate_models
 

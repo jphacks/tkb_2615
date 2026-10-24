@@ -1236,6 +1236,27 @@
       "context_sources": [],
       "calibration_status": "uncalibrated generator heuristic",
       "notes": "Used only when no household composition is entered. Templates are explicit synthetic links, not relationships inferred from age or co-residence, and describe no real family. With the default household-size mix they give about 15-17% minors (seeds 0-9, 30-300 people). Operator-entered compositions replace them; templates with child slots are dropped when the selected ages contain no minors."
+    },
+    {
+      "id": "ASM-SERVICE-CAPACITY-PLANNING-V1",
+      "source_type": "assumption",
+      "target": "service_capacity_diagnostic planning check and the units it reports as needed",
+      "model_version": "service-capacity-planning-v1",
+      "values": {
+        "operating_minutes_per_day": 960,
+        "target_utilization": 0.8,
+        "required_units": "ceil(people x uses per person per day x minutes per use / (960 x 0.8))",
+        "toilet_uses_per_person_day": 5,
+        "toilet_minutes_per_use": "mean of toilet_service minimum_minutes and maximum_minutes",
+        "water_uses_per_person_day": "hydration_growth_per_minute x 1440 / min(hydration_relief, hydration_action_threshold)",
+        "meal_uses_per_person_day": "mean hunger_growth x 1440 / min(hunger_relief, hunger_action_threshold)",
+        "serving_units": "for water and meal, per zone the smaller of working units and staff with the service skill in that zone"
+      },
+      "context_sources": [
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "uncalibrated planning assumption",
+      "notes": "The toilet use count is the Cabinet Office planning figure (5 uses per person per day, PDF p.12). The 16-hour operating window and the 0.8 target load are software assumptions, not measured shelter operations. Water and meal use rates are upper-bound approximations of the Scenario's own need coefficients: agents act only at the action threshold and relief stops at zero, so one service removes at least min(relief, threshold). The check ignores peaks, outages and travel, and it never changes simulation behavior."
     }
   ]
 }
