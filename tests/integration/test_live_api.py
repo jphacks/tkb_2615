@@ -11,7 +11,7 @@ from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, us
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.contracts import LLMStage, LLMTask
-from sheltersim.llm.provider import LLMRouter
+from sheltersim.llm.provider import THINKING_HEADROOM_TOKENS, LLMRouter
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
 
 pytestmark = [
@@ -36,8 +36,10 @@ _ACK_SCHEMA = {
 
 def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_path) -> None:
     settings = LLMSettings.from_env().for_live_integration_tests()
+    # Opus and Sonnet always think, so each non-runtime call reserves thinking headroom
+    # (about $0.09 for Opus before the call); actual spend stays far below this cap.
     settings = replace(settings, max_api_calls=3, live_test_max_calls=3,
-                       live_test_budget_usd=0.03, budget_usd=0.03,
+                       live_test_budget_usd=0.15, budget_usd=0.15,
                        intervention_model_family="sonnet")
     settings = replace(settings, cache_path=tmp_path / "live-api-tape.json")
     store = runtime_usage_store()
@@ -72,7 +74,13 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_
         settings.haiku_model,
     ]
     assert all(record.outcome == "recorded" for record in router.records)
-    assert sum(record.output_tokens for record in router.records) <= 96
+    # Billed output includes thinking outside runtime; runtime Haiku runs without it.
+    answer_cap = 32
+    for record in router.records:
+        limit = answer_cap if record.stage == LLMStage.RUNTIME.value else (
+            answer_cap + THINKING_HEADROOM_TOKENS
+        )
+        assert record.output_tokens <= limit
     assert router.spent_usd <= settings.budget_usd
     assert task_campaign_ledger(store).summary()["estimated_cost_usd"] <= 50.0
 
@@ -89,7 +97,8 @@ def test_live_official_domain_search_returns_only_verifiable_source_candidates(t
     from sheltersim.region.models import RegionResearchRequest
     from sheltersim.region.research import _official_source_search_task
 
-    settings = replace(LLMSettings.from_env(), mode="record", max_api_calls=1,
+    # Two calls of allowance: a web-search call reserves output for two sampling passes.
+    settings = replace(LLMSettings.from_env(), mode="record", max_api_calls=2,
         max_input_tokens=4096, max_output_tokens=256, max_concurrency=1,
         timeout_seconds=120, budget_usd=10, cache_path=tmp_path / "source-search-tape.json")
     store = runtime_usage_store()
