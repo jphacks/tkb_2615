@@ -294,9 +294,14 @@ class LLMRouter:
                     timeout_seconds=self.settings.timeout_seconds,
                 )
             validate_task_output(task, response.text)
-        except LLMAllowanceError:
+        except LLMAllowanceError as exc:
             self.api_request_count -= 1
-            return self._failure(task, model_id, "shared_allowance_unavailable",
+            outcome = (
+                "runtime_call_share_exhausted"
+                if "usage_runtime_share_exhausted" in str(exc)
+                else "shared_allowance_unavailable"
+            )
+            return self._failure(task, model_id, outcome,
                                  "durable usage allowance unavailable", api_calls=0)
         except LLMContractError as exc:
             cost = _estimate_cost(response, price) if response is not None else reserve

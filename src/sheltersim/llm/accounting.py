@@ -9,7 +9,7 @@ from typing import Any
 from sheltersim.contracts.workspace import UsageLimits
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMSettings
-from sheltersim.llm.contracts import LLMAllowanceError, LLMTask, ProviderResponse
+from sheltersim.llm.contracts import LLMAllowanceError, LLMStage, LLMTask, ProviderResponse
 from sheltersim.llm.provider import (
     THINKING_HEADROOM_TOKENS,
     LLMRouter,
@@ -20,6 +20,9 @@ from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger, task_campaign_summary
 
 RUNTIME_ACCOUNTS_PROJECT_ID = "runtime-accounts"
+# Calls a Run's runtime decisions must leave on the shared account: the post-run report
+# plus two results questions. Without this, a long Run used every call before its report.
+ANALYSIS_RESERVED_CALLS = 3
 
 
 def usage_limits(settings: LLMSettings) -> UsageLimits:
@@ -80,6 +83,9 @@ class AccountedProvider:
                 request_key=key, operation=self.operation, branch_id=self.branch_id,
                 stage=task.stage.value, model_id=model_id, input_tokens=input_reservation,
                 output_tokens=output_reservation, cost_usd=reserve,
+                keep_calls_free=(
+                    ANALYSIS_RESERVED_CALLS if task.stage is LLMStage.RUNTIME else 0
+                ),
                 identity={"input_hash": task.input_hash, "state_hash": task.state_hash,
                           "prompt_version": task.prompt_version, "schema_version": task.schema_version,
                           "input_usd_per_million": price.input_usd_per_million,
