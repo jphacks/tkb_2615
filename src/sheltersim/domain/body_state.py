@@ -517,7 +517,11 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
         ):
             if evidence_aware:
                 raw = information_state.get("beliefs", {}).get(actor, {}).get(message_id)
-                if raw is None or not raw.get("correction_accepted", False):
+                if (
+                    raw is None
+                    or raw.get("last_event_id") != event.event_id
+                    or not raw.get("last_correction_accepted", False)
+                ):
                     continue
             record = state["agents"][actor]
             before = dict(record)

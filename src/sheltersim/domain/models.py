@@ -123,6 +123,9 @@ class AgentInformationState:
     share_propensity: float = 0.5
     correction_exposed: bool = False
     correction_accepted: bool = False
+    ever_misbelieved: bool = False
+    ever_forgotten: bool = False
+    last_correction_accepted: bool = False
 
     def __post_init__(self) -> None:
         for name in ("message_id", "source", "last_event_id"):
@@ -140,8 +143,16 @@ class AgentInformationState:
             self.correction_accepted, bool
         ):
             raise ValueError("correction exposure and acceptance must be boolean")
+        if not isinstance(self.ever_misbelieved, bool) or not isinstance(
+            self.ever_forgotten, bool
+        ):
+            raise ValueError("historical information flags must be boolean")
+        if not isinstance(self.last_correction_accepted, bool):
+            raise ValueError("last correction outcome must be boolean")
         if self.correction_accepted and not self.correction_exposed:
             raise ValueError("a correction cannot be accepted before exposure")
+        if self.last_correction_accepted and not self.correction_exposed:
+            raise ValueError("a correction outcome requires correction exposure")
         validate_unit_interval("belief_strength", self.belief_strength)
         validate_unit_interval("share_propensity", self.share_propensity)
         if not self.exposed:
@@ -161,6 +172,9 @@ class AgentInformationState:
             "share_propensity": self.share_propensity,
             "correction_exposed": self.correction_exposed,
             "correction_accepted": self.correction_accepted,
+            "ever_misbelieved": self.ever_misbelieved,
+            "ever_forgotten": self.ever_forgotten,
+            "last_correction_accepted": self.last_correction_accepted,
         }
 
     @classmethod
@@ -170,7 +184,11 @@ class AgentInformationState:
             "exposed", "belief_strength", "share_propensity", "correction_exposed",
             "correction_accepted",
         }
-        if not isinstance(document, dict) or set(document) not in (legacy_fields, current_fields):
+        historical_fields = current_fields | {"ever_misbelieved", "ever_forgotten"}
+        extended_fields = historical_fields | {"last_correction_accepted"}
+        if not isinstance(document, dict) or set(document) not in (
+            legacy_fields, current_fields, historical_fields, extended_fields
+        ):
             raise ValueError("AgentInformationState fields do not match the supported schema")
         values = dict(document)
         if set(document) == legacy_fields:
@@ -185,7 +203,18 @@ class AgentInformationState:
                 share_propensity=(0.0 if belief is InformationBeliefStatus.UNKNOWN else 0.5),
                 correction_exposed=corrected,
                 correction_accepted=corrected,
+                ever_misbelieved=False,
+                ever_forgotten=belief is InformationBeliefStatus.UNKNOWN,
+                last_correction_accepted=corrected,
             )
+        elif set(document) == current_fields:
+            values.update(
+                ever_misbelieved=False,
+                ever_forgotten=document["belief"] == InformationBeliefStatus.UNKNOWN.value,
+                last_correction_accepted=document["correction_accepted"],
+            )
+        elif set(document) == historical_fields:
+            values["last_correction_accepted"] = document["correction_accepted"]
         return cls(**values)
 
 

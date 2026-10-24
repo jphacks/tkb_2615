@@ -13,6 +13,7 @@ from sheltersim.contracts.policies import (
     selected_models,
 )
 from sheltersim.domain.models import InformationSpreadConfig
+from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
 from sheltersim.experiments.scenario import PsychologyModelConfig
 from sheltersim.policies.alternatives import (
     BoundedStressPolicy,
@@ -22,6 +23,7 @@ from sheltersim.policies.alternatives import (
 from sheltersim.policies.behavior import BehaviorPolicy, create_behavior_policy
 from sheltersim.policies.information import EvidenceAwareInformationPolicy, InformationSpreadPolicy
 from sheltersim.policies.psychology import (
+    IntegratedDistressLifeStatePolicy,
     LifeStatePsychologyPolicy,
     MeanRevertingDistressPolicy,
     PsychologyParameters,
@@ -385,7 +387,7 @@ def register_policy(model_id: str, definition: dict[str, Any], factory: Callable
 
 
 _BUILTIN_FACTORIES={"behavior":frozenset({"utility-softmax-v1","priority-rule-v1"}),
-    "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1","mean-reverting-distress-v1"}),
+    "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1","mean-reverting-distress-v1",INTEGRATED_PSYCHOLOGY_POLICY_VERSION}),
     "social":frozenset({"sparse-family-zone-contact-v1","degroot-contact-v1","expressiveness-channel-openness-v1"}),
     "information":frozenset({"sparse-information-contact-v1","hazard-information-v1","evidence-aware-rumor-v1"})}
 
@@ -487,6 +489,12 @@ def create_psychology(configs: dict[str, dict[str, Any]], *, resource_service_en
     parameters = PsychologyParameters(**values)
     if selected == "mean-reverting-distress-v1":
         return MeanRevertingDistressPolicy(parameters)
+    if selected == INTEGRATED_PSYCHOLOGY_POLICY_VERSION:
+        return IntegratedDistressLifeStatePolicy(
+            parameters,
+            body_config=configs.get("body_dynamics"),
+            body_formula=create_body_dynamics_formula(configs),
+        )
     if selected == "life-state-feedback-v1":
         return LifeStatePsychologyPolicy(
             parameters,
@@ -510,7 +518,10 @@ def create_social(configs: dict[str, dict[str, Any]]) -> StressPropagationPolicy
     parameters = SocialPropagationParameters.from_mapping(
         configs.get("social_propagation"), source_id=expected_source
     )
-    if selected_models(configs)["psychology"] == "mean-reverting-distress-v1":
+    if selected_models(configs)["psychology"] in {
+        "mean-reverting-distress-v1",
+        INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
+    }:
         parameters = replace(parameters, natural_recovery_per_minute=0.0)
     return factories[selected](parameters)
 

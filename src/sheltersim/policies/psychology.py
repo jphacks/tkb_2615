@@ -99,6 +99,7 @@ class AgentPsychologyTrace:
     environmental_stress: float
     environmental_stressor_event_ids: tuple[str, ...]
     environmental_assumption_source_id: str | None
+    information_uncertainty_stress: float = 0.0
     ambient_noise_level: float = 0.0
     rest_efficiency_multiplier: float = 1.0
     zone_environment_modifier_event_ids: tuple[str, ...] = ()
@@ -113,6 +114,13 @@ class AgentPsychologyTrace:
     natural_recovery_stress: float = 0.0
     life_state_before: tuple[tuple[str, float], ...] = ()
     life_state_after: tuple[tuple[str, float], ...] = ()
+    information_belief_pressure: float = 0.0
+    information_effect_sources: tuple[tuple[str, str, str, str, int], ...] = ()
+    component_contributions: tuple[tuple[str, float], ...] = ()
+    raw_stress_delta: float | None = None
+    stress_candidate_before_clip: float | None = None
+    psychology_clipped_delta: float | None = None
+    social_stress_delta: float = 0.0
 
     def to_dict(self, *, source_id: str) -> dict[str, Any]:
         """Build a detached JSON-compatible record with explicit cause references."""
@@ -162,6 +170,17 @@ class AgentPsychologyTrace:
                     "assumption_source_id": self.environmental_assumption_source_id,
                 }
             )
+        if self.information_effect_sources or self.information_belief_pressure > 0.0:
+            direct_causes.append(
+                {
+                    "kind": "active_false_claim_belief",
+                    "pressure": self.information_belief_pressure,
+                    "message_ids": [item[0] for item in self.information_effect_sources],
+                    "origin_event_ids": [item[1] for item in self.information_effect_sources],
+                    "belief_event_ids": [item[2] for item in self.information_effect_sources],
+                    "source_ids": [item[3] for item in self.information_effect_sources],
+                }
+            )
         if self.zone_environment_modifier_event_ids:
             direct_causes.append(
                 {
@@ -172,15 +191,20 @@ class AgentPsychologyTrace:
                     "assumption_ids": list(self.zone_environment_assumption_ids),
                 }
             )
-        components = {
+        components = dict(self.component_contributions) if self.component_contributions else {
             "unmet_need_pressure": self.need_pressure_stress,
             "facility_queue_wait": self.queue_wait_stress,
             "staff_support_wait": self.support_wait_stress,
+            "experimental_environmental_stress": self.environmental_stress,
             "recovery": self.recovery_stress,
             "natural_recovery": self.natural_recovery_stress,
         }
         if self.life_state_feedback_stress:
             components["life_state_feedback"] = self.life_state_feedback_stress
+        if self.information_uncertainty_stress:
+            components["information_belief_via_uncertainty"] = (
+                self.information_uncertainty_stress
+            )
         if self.environmental_stress > 0.0:
             components["experimental_environmental_stress"] = self.environmental_stress
         references = {
@@ -212,17 +236,22 @@ class AgentPsychologyTrace:
                 "before": self.stress_before,
                 "after": self.stress_after,
                 "applied_delta": self.stress_after - self.stress_before,
+                "raw_delta": (
+                    self.raw_stress_delta
+                    if self.raw_stress_delta is not None
+                    else sum(components.values())
+                ),
+                "candidate_before_clip": self.stress_candidate_before_clip,
+                "psychology_clipped_delta": self.psychology_clipped_delta,
+                "social_delta": self.social_stress_delta,
+                "clip_delta": (
+                    None
+                    if self.raw_stress_delta is None or self.psychology_clipped_delta is None
+                    else self.psychology_clipped_delta - self.raw_stress_delta
+                ),
                 "components": {
                     **components,
                 },
-                "raw_delta": (
-                    self.need_pressure_stress
-                    + self.queue_wait_stress
-                    + self.support_wait_stress
-                    + self.recovery_stress
-                    + self.natural_recovery_stress
-                    + self.life_state_feedback_stress
-                ),
             },
             "direct_causes": direct_causes,
             "source_references": references,
@@ -255,6 +284,27 @@ class AgentPsychologyTrace:
                     "delta": after_life[name] - before_life[name],
                 }
                 for name in before_life
+            }
+        if self.information_effect_sources or self.information_belief_pressure:
+            document["information_belief_effect"] = {
+                "active_false_claim_pressure": self.information_belief_pressure,
+                "source_records": [
+                    {
+                        "message_id": message_id,
+                        "origin_event_id": origin_event_id,
+                        "belief_event_id": belief_event_id,
+                        "source_id": source_id,
+                        "origin_minute": origin_minute,
+                    }
+                    for (
+                        message_id,
+                        origin_event_id,
+                        belief_event_id,
+                        source_id,
+                        origin_minute,
+                    ) in self.information_effect_sources
+                ],
+                "effect_kind": "persistent_belief_state_input",
             }
         return document
 
@@ -432,11 +482,13 @@ class SimplePsychologyPolicy:
         parameters: PsychologyParameters | None = None,
         *,
         source_id: str = "ASM-H04-CAUSAL-STRESS-V1",
+        include_direct_rest_stress_recovery: bool = True,
     ) -> None:
         self.parameters = parameters or PsychologyParameters()
         if not source_id:
             raise ValueError("source_id must be non-empty")
         self.source_id = source_id
+        self.include_direct_rest_stress_recovery = include_direct_rest_stress_recovery
 
     def update(self, view: WorldView, minute: int) -> tuple[AgentStateDelta, ...]:
         """Return next state values without changing the view or world."""
@@ -459,10 +511,18 @@ class SimplePsychologyPolicy:
             )
             if agent.activity is Activity.SLEEPING:
                 fatigue_delta = -params.sleeping_fatigue_recovery * agent.rest_efficiency_multiplier
-                stress_recovery = params.sleeping_stress_recovery
+                stress_recovery = (
+                    params.sleeping_stress_recovery
+                    if self.include_direct_rest_stress_recovery
+                    else 0.0
+                )
             elif agent.activity is Activity.RESTING:
                 fatigue_delta = -params.resting_fatigue_recovery * agent.rest_efficiency_multiplier
-                stress_recovery = params.resting_stress_recovery
+                stress_recovery = (
+                    params.resting_stress_recovery
+                    if self.include_direct_rest_stress_recovery
+                    else 0.0
+                )
             else:
                 fatigue_delta = params.awake_fatigue_growth_by_agent.get(
                     agent.id, params.awake_fatigue_growth
@@ -565,6 +625,8 @@ class SimplePsychologyPolicy:
                     environmental_stress=environmental_stress,
                     environmental_stressor_event_ids=agent.environmental_stressor_event_ids,
                     environmental_assumption_source_id=agent.environmental_assumption_source_id,
+                    information_belief_pressure=agent.misinformation_belief_pressure,
+                    information_effect_sources=agent.misinformation_effect_sources,
                     ambient_noise_level=agent.ambient_noise_level,
                     rest_efficiency_multiplier=agent.rest_efficiency_multiplier,
                     zone_environment_modifier_event_ids=(agent.zone_environment_modifier_event_ids),
@@ -575,6 +637,16 @@ class SimplePsychologyPolicy:
                     temperature_c=agent.temperature_c,
                     condition_modifier_event_ids=agent.condition_modifier_event_ids,
                     condition_assumption_ids=agent.condition_assumption_ids,
+                    raw_stress_delta=stress_delta,
+                    stress_candidate_before_clip=agent.stress + stress_delta,
+                    psychology_clipped_delta=new_values["stress"] - agent.stress,
+                    component_contributions=(
+                        ("unmet_need_pressure", need_pressure_stress),
+                        ("facility_queue_wait", queue_wait_stress),
+                        ("staff_support_wait", support_wait_stress),
+                        ("experimental_environmental_stress", environmental_stress),
+                        ("recovery", -stress_recovery),
+                    ),
                 )
             )
         return PsychologyUpdateResult(tuple(deltas), tuple(traces))
@@ -600,26 +672,35 @@ class MeanRevertingDistressPolicy(SimplePsychologyPolicy):
             personal_baseline = self.parameters.baseline_distress_by_agent.get(
                 delta.agent_id, 0.0
             )
-            natural_only = mean_reverting_step(
-                trace.stress_before, personal_baseline, 0.0, kappa, 1.0
+            natural_delta, forcing_multiplier = _mean_reverting_terms(
+                trace.stress_before, personal_baseline, kappa, 1.0
             )
-            forcing = (
-                trace.need_pressure_stress
-                + trace.queue_wait_stress
-                + trace.support_wait_stress
-                + trace.environmental_stress
-                + trace.recovery_stress
-                + trace.life_state_feedback_stress
+            effective_components = tuple(
+                (name, amount * forcing_multiplier)
+                for name, amount in (
+                    ("unmet_need_pressure", trace.need_pressure_stress),
+                    ("facility_queue_wait", trace.queue_wait_stress),
+                    ("staff_support_wait", trace.support_wait_stress),
+                    ("experimental_environmental_stress", trace.environmental_stress),
+                    ("recovery", trace.recovery_stress),
+                    ("life_state_feedback", trace.life_state_feedback_stress),
+                )
             )
-            stress = mean_reverting_step(
-                trace.stress_before, personal_baseline, forcing, kappa, 1.0
-            )
+            raw_delta = natural_delta + sum(amount for _, amount in effective_components)
+            candidate = trace.stress_before + raw_delta
+            stress = _clamp(candidate)
             deltas.append(replace(delta, stress=stress))
             traces.append(
                 replace(
                     trace,
                     stress_after=stress,
-                    natural_recovery_stress=natural_only - trace.stress_before,
+                    natural_recovery_stress=natural_delta,
+                    component_contributions=(
+                        ("natural_recovery", natural_delta), *effective_components
+                    ),
+                    raw_stress_delta=raw_delta,
+                    stress_candidate_before_clip=candidate,
+                    psychology_clipped_delta=stress - trace.stress_before,
                 )
             )
         return PsychologyUpdateResult(
@@ -657,11 +738,18 @@ class LifeStatePsychologyPolicy:
         *,
         body_config: Any = None,
         body_formula: Any = None,
+        include_direct_rest_stress_recovery: bool = True,
+        use_tick_start_stress_for_feedback: bool = False,
     ) -> None:
-        self.base = SimplePsychologyPolicy(parameters, source_id=BODY_SOURCE_ID)
+        self.base = SimplePsychologyPolicy(
+            parameters,
+            source_id=BODY_SOURCE_ID,
+            include_direct_rest_stress_recovery=include_direct_rest_stress_recovery,
+        )
         self.body_config = canonical_body_config(body_config)
         self.body_formula = body_formula
         self.parameters = parameters
+        self.use_tick_start_stress_for_feedback = use_tick_start_stress_for_feedback
 
     def update(self, view: WorldView, minute: int) -> tuple[AgentStateDelta, ...]:
         return self.explain_update(view, minute).deltas
@@ -669,12 +757,15 @@ class LifeStatePsychologyPolicy:
     def explain_update(self, view: WorldView, minute: int) -> PsychologyUpdateResult:
         """Return deterministic per-minute state deltas from the same observed view."""
         result = self.base.explain_update(view, minute)
+        base_trace_by_agent = {trace.agent_id: trace for trace in result.traces}
         config = self.body_config
         values: list[AgentStateDelta] = []
         feedback_by_agent: dict[str, float] = {}
         stress_after_by_agent: dict[str, float] = {}
+        stress_candidate_by_agent: dict[str, float] = {}
         life_before: dict[str, tuple[tuple[str, float], ...]] = {}
         life_after: dict[str, tuple[tuple[str, float], ...]] = {}
+        information_feedback_by_agent: dict[str, float] = {}
         for delta in result.deltas:
             agent = view.agents[delta.agent_id]
             household_peers = view.group_members.get(agent.group_id or "", ())
@@ -705,12 +796,25 @@ class LifeStatePsychologyPolicy:
             debt = min(1440.0, max(0.0, debt))
 
             reassurance = max(0.0, agent.reassurance - config["reassurance_decay_per_minute"])
-            uncertainty = min(
+            uncertainty_without_misinformation = min(
                 1.0,
                 max(
                     0.0,
                     agent.uncertainty
                     + agent.information_query_pressure * config["uncertainty_drift_per_minute"]
+                    - config["uncertainty_decay_per_minute"]
+                    - reassurance * config["uncertainty_decay_per_minute"],
+                ),
+            )
+            uncertainty = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.uncertainty
+                    + (
+                        agent.information_query_pressure
+                        + agent.misinformation_belief_pressure
+                    ) * config["uncertainty_drift_per_minute"]
                     - config["uncertainty_decay_per_minute"]
                     - reassurance * config["uncertainty_decay_per_minute"],
                 ),
@@ -723,12 +827,15 @@ class LifeStatePsychologyPolicy:
                 agent.needs.hydration_need,
             )
             support_relief = config["discontent_relief_per_minute"] if agent.activity in (Activity.RESTING, Activity.SLEEPING) and agent.support_request_status not in ("pending", "assigned") else 0.0
+            stress_feedback_reference = (
+                agent.stress if self.use_tick_start_stress_for_feedback else delta.stress
+            )
             discontent = min(
                 1.0,
                 max(
                     0.0,
                     agent.discontent
-                    + delta.stress * config["discontent_stress_rate"]
+                    + stress_feedback_reference * config["discontent_stress_rate"]
                     + queue_pressure
                     + agent.privacy_discontent_per_minute
                     + max(0.0, need_pressure - 0.5) * config["discontent_stress_rate"]
@@ -755,7 +862,7 @@ class LifeStatePsychologyPolicy:
                 max(
                     0.0,
                     agent.negative_affect
-                    + delta.stress * config["negative_affect_stress_rate"]
+                    + stress_feedback_reference * config["negative_affect_stress_rate"]
                     - reassurance * config["negative_affect_stress_rate"],
                 ),
             )
@@ -783,6 +890,32 @@ class LifeStatePsychologyPolicy:
                     config=config,
                     agent_id=delta.agent_id,
                 )
+            if self.body_formula is None:
+                feedback_without_misinformation = (
+                    debt / 1440.0 * config["sleep_debt_stress_rate"]
+                    + uncertainty_without_misinformation * config["negative_affect_stress_rate"]
+                    + discontent * config["discontent_stress_rate"]
+                    + hygiene_need * config["sanitation_stress_rate"]
+                    + (1.0 - agent.sanitation_level) * config["sanitation_stress_rate"]
+                    + family_separation_pressure
+                    - reassurance * config["negative_affect_stress_rate"]
+                    - positive * config["discontent_relief_per_minute"]
+                )
+            else:
+                feedback_without_misinformation = self.body_formula.stress_feedback(
+                    sleep_debt_minutes=debt,
+                    uncertainty=uncertainty_without_misinformation,
+                    discontent=discontent,
+                    hygiene_need=hygiene_need,
+                    sanitation_level=agent.sanitation_level,
+                    family_separation_pressure=family_separation_pressure,
+                    reassurance=reassurance,
+                    positive_affect=positive,
+                    config=config,
+                    agent_id=delta.agent_id,
+                )
+            information_feedback_stress = feedback_stress - feedback_without_misinformation
+            information_feedback_by_agent[delta.agent_id] = information_feedback_stress
             feedback_by_agent[delta.agent_id] = feedback_stress
             updated = replace(
                 delta,
@@ -796,6 +929,7 @@ class LifeStatePsychologyPolicy:
                 hygiene_need=hygiene_need,
             )
             stress_after_by_agent[delta.agent_id] = updated.stress
+            stress_candidate_by_agent[delta.agent_id] = delta.stress + feedback_stress
             values.append(updated)
             life_before[delta.agent_id] = (
                 ("sleep_debt_minutes", agent.sleep_debt_minutes),
@@ -806,6 +940,7 @@ class LifeStatePsychologyPolicy:
                 ("negative_affect", agent.negative_affect),
                 ("hygiene_need", agent.hygiene_need),
                 ("family_separation_pressure", family_separation_pressure),
+                ("information_belief_pressure", agent.misinformation_belief_pressure),
             )
             life_after[delta.agent_id] = (
                 ("sleep_debt_minutes", debt),
@@ -816,6 +951,7 @@ class LifeStatePsychologyPolicy:
                 ("negative_affect", negative),
                 ("hygiene_need", hygiene_need),
                 ("family_separation_pressure", family_separation_pressure),
+                ("information_belief_pressure", agent.misinformation_belief_pressure),
             )
         traces = tuple(
             replace(
@@ -823,13 +959,152 @@ class LifeStatePsychologyPolicy:
                 stress_after=stress_after_by_agent.get(
                     trace.agent_id, trace.stress_after
                 ),
-                life_state_feedback_stress=feedback_by_agent.get(trace.agent_id, 0.0),
+                life_state_feedback_stress=(
+                    feedback_by_agent.get(trace.agent_id, 0.0)
+                    - information_feedback_by_agent.get(trace.agent_id, 0.0)
+                ),
+                information_uncertainty_stress=information_feedback_by_agent.get(
+                    trace.agent_id, 0.0
+                ),
                 life_state_before=life_before.get(trace.agent_id, ()),
                 life_state_after=life_after.get(trace.agent_id, ()),
+                raw_stress_delta=(
+                    stress_candidate_by_agent.get(trace.agent_id, trace.stress_before)
+                    - trace.stress_before
+                ),
+                stress_candidate_before_clip=stress_candidate_by_agent.get(
+                    trace.agent_id, trace.stress_before
+                ),
+                psychology_clipped_delta=(
+                    stress_after_by_agent.get(trace.agent_id, trace.stress_after)
+                    - trace.stress_before
+                ),
+                component_contributions=(
+                    ("unmet_need_pressure", trace.need_pressure_stress),
+                    ("facility_queue_wait", trace.queue_wait_stress),
+                    ("staff_support_wait", trace.support_wait_stress),
+                    ("experimental_environmental_stress", trace.environmental_stress),
+                    ("recovery", trace.recovery_stress),
+                    (
+                        "base_stage_clip",
+                        base_trace_by_agent[trace.agent_id].stress_after
+                        - (
+                            trace.stress_before
+                            + trace.need_pressure_stress
+                            + trace.queue_wait_stress
+                            + trace.support_wait_stress
+                            + trace.environmental_stress
+                            + trace.recovery_stress
+                        ),
+                    ),
+                    (
+                        "life_state_feedback",
+                        feedback_by_agent.get(trace.agent_id, 0.0)
+                        - information_feedback_by_agent.get(trace.agent_id, 0.0),
+                    ),
+                    (
+                        "information_belief_via_uncertainty",
+                        information_feedback_by_agent.get(trace.agent_id, 0.0),
+                    ),
+                ),
+                information_belief_pressure=view.agents[
+                    trace.agent_id
+                ].misinformation_belief_pressure,
+                information_effect_sources=view.agents[
+                    trace.agent_id
+                ].misinformation_effect_sources,
             )
             for trace in result.traces
         )
         return PsychologyUpdateResult(tuple(values), traces, self.policy_version)
+
+
+class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
+    """Exact acute mean reversion composed with existing body and affect dynamics."""
+
+    policy_version = "mean-reverting-life-state-v1"
+    source_id = "ASM-MEAN-REVERTING-LIFE-STATE-V1"
+
+    def __init__(
+        self,
+        parameters: PsychologyParameters,
+        *,
+        body_config: Any = None,
+        body_formula: Any = None,
+    ) -> None:
+        super().__init__(
+            parameters,
+            body_config=body_config,
+            body_formula=body_formula,
+            include_direct_rest_stress_recovery=False,
+            use_tick_start_stress_for_feedback=True,
+        )
+
+    def explain_update(self, view: WorldView, minute: int) -> PsychologyUpdateResult:
+        body_result = super().explain_update(view, minute)
+        delta_by_agent = {delta.agent_id: delta for delta in body_result.deltas}
+        deltas: list[AgentStateDelta] = []
+        traces: list[AgentPsychologyTrace] = []
+        for trace in body_result.traces:
+            delta = delta_by_agent[trace.agent_id]
+            kappa = self.parameters.natural_recovery_rate_by_agent.get(
+                trace.agent_id, self.parameters.natural_recovery_rate_per_minute
+            )
+            baseline = self.parameters.baseline_distress_by_agent.get(
+                trace.agent_id, 0.0
+            )
+            natural_delta, forcing_multiplier = _mean_reverting_terms(
+                trace.stress_before, baseline, kappa, 1.0
+            )
+            rate_components = (
+                ("unmet_need_pressure", trace.need_pressure_stress),
+                ("facility_queue_wait", trace.queue_wait_stress),
+                ("staff_support_wait", trace.support_wait_stress),
+                ("experimental_environmental_stress", trace.environmental_stress),
+                ("life_state_feedback", trace.life_state_feedback_stress),
+                ("information_belief_via_uncertainty", trace.information_uncertainty_stress),
+            )
+            effective_components = tuple(
+                (name, value * forcing_multiplier) for name, value in rate_components
+            )
+            raw_delta = natural_delta + sum(value for _, value in effective_components)
+            candidate = trace.stress_before + raw_delta
+            stress = _clamp(candidate)
+            deltas.append(replace(delta, stress=stress))
+            traces.append(
+                replace(
+                    trace,
+                    stress_after=stress,
+                    recovery_stress=0.0,
+                    natural_recovery_stress=natural_delta,
+                    component_contributions=(
+                        ("natural_recovery", natural_delta), *effective_components
+                    ),
+                    raw_stress_delta=raw_delta,
+                    stress_candidate_before_clip=candidate,
+                    psychology_clipped_delta=stress - trace.stress_before,
+                )
+            )
+        return PsychologyUpdateResult(
+            tuple(deltas), tuple(traces), policy_version=self.policy_version
+        )
+
+    def update_long_term_state(
+        self,
+        runtime_state: dict[str, Any],
+        minute: int,
+        final_deltas: tuple[AgentStateDelta, ...],
+    ) -> dict[str, Any]:
+        return update_psychological_state(
+            runtime_state,
+            minute=minute,
+            acute_by_agent={delta.agent_id: delta.stress for delta in final_deltas},
+            retention=self.parameters.chronic_retention,
+            acute_weight=self.parameters.chronic_acute_weight,
+            high_distress_weight=self.parameters.chronic_high_distress_weight,
+            high_distress_threshold=self.parameters.high_distress_threshold,
+            baseline_by_agent=self.parameters.baseline_distress_by_agent,
+        )
 
 
 def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -> None:
@@ -923,14 +1198,34 @@ def mean_reverting_step(
         or delta_minutes <= 0.0
     ):
         raise ValueError("mean-reversion forcing, rate, or interval is invalid")
+    natural_delta, forcing_multiplier = _mean_reverting_terms(
+        value, baseline, recovery_rate_per_minute, delta_minutes
+    )
+    return _clamp(value + natural_delta + forcing_per_minute * forcing_multiplier)
+
+
+def _mean_reverting_terms(
+    value: float,
+    baseline: float,
+    recovery_rate_per_minute: float,
+    delta_minutes: float,
+) -> tuple[float, float]:
+    """Return exact baseline movement and the integrated constant-forcing multiplier."""
+    for name, item in (("value", value), ("baseline", baseline)):
+        validate_unit_interval(name, item)
+    if (
+        not math.isfinite(recovery_rate_per_minute)
+        or recovery_rate_per_minute < 0.0
+        or not math.isfinite(delta_minutes)
+        or delta_minutes <= 0.0
+    ):
+        raise ValueError("mean-reversion rate or interval is invalid")
     decay = math.exp(-recovery_rate_per_minute * delta_minutes)
+    natural_delta = (baseline - value) * (1.0 - decay)
     if recovery_rate_per_minute == 0.0:
-        result = value + forcing_per_minute * delta_minutes
-    else:
-        forcing_integral = -math.expm1(-recovery_rate_per_minute * delta_minutes)
-        result = (
-            baseline
-            + (value - baseline) * decay
-            + forcing_per_minute * forcing_integral / recovery_rate_per_minute
-        )
-    return _clamp(result)
+        return natural_delta, delta_minutes
+    return (
+        natural_delta,
+        -math.expm1(-recovery_rate_per_minute * delta_minutes)
+        / recovery_rate_per_minute,
+    )

@@ -19,8 +19,18 @@ from sheltersim.domain.infrastructure import (
     active_environmental_stress,
     infrastructure_event_context_ids,
 )
-from sheltersim.domain.models import Activity, Mobility
-from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
+from sheltersim.domain.models import (
+    Activity,
+    AgentInformationState,
+    InformationBeliefStatus,
+    InformationTruthStatus,
+    Mobility,
+    TypedMessage,
+)
+from sheltersim.domain.psychological_state import (
+    LIFE_STATE_PSYCHOLOGY_POLICIES,
+    PSYCHOLOGICAL_STATE_KEY,
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,8 @@ class AgentView:
     support_wait_minutes: int = 0
     support_cooldown_remaining_minutes: int = 0
     information_query_pressure: float = 0.0
+    misinformation_belief_pressure: float = 0.0
+    misinformation_effect_sources: tuple[tuple[str, str, str, str, int], ...] = ()
     environmental_stress_per_minute: float = 0.0
     environmental_stressor_event_ids: tuple[str, ...] = ()
     environmental_assumption_source_id: str | None = None
@@ -184,6 +196,49 @@ class WorldView:
             or "body_state_v1" in world.model_state
         )
         staff_operations = world.model_state.get("staff_operations_v1", {})
+        misinformation_by_agent: dict[str, tuple[float, tuple[tuple[str, str, str], ...]]] = {}
+        psychology_model_id = world.model_configs.get("policy_registry", {}).get(
+            "psychology", "causal-stress-v1"
+        )
+        if (
+            isinstance(information_state, dict)
+            and psychology_model_id in LIFE_STATE_PSYCHOLOGY_POLICIES
+        ):
+            messages = information_state.get("messages", {})
+            beliefs_by_agent = information_state.get("beliefs", {})
+            for agent_id in world.agents:
+                pressure = 0.0
+                sources: list[tuple[str, str, str]] = []
+                raw_beliefs = beliefs_by_agent.get(agent_id, {})
+                if isinstance(raw_beliefs, dict) and isinstance(messages, dict):
+                    for message_id, raw_belief in sorted(raw_beliefs.items()):
+                        raw_message = messages.get(message_id)
+                        if not isinstance(raw_message, dict):
+                            continue
+                        belief = AgentInformationState.from_dict(raw_belief)
+                        message = TypedMessage.from_dict(raw_message)
+                        if (
+                            message.truth_status is InformationTruthStatus.FALSE
+                            and belief.belief is not InformationBeliefStatus.UNKNOWN
+                            and belief.belief_strength > 0.5
+                        ):
+                            pressure += 2.0 * (belief.belief_strength - 0.5)
+                            sources.append(
+                                (
+                                    message_id,
+                                    message.origin_event_id,
+                                    belief.last_event_id,
+                                    message.source_id,
+                                    message.time,
+                                )
+                            )
+                misinformation_by_agent[agent_id] = (
+                    min(1.0, pressure), tuple(sources)
+                )
+        else:
+            misinformation_by_agent = {
+                agent_id: (0.0, ()) for agent_id in world.agents
+            }
         sanitation_by_zone = (
             {
                 zone_id: record.get("sanitation", 1.0)
@@ -272,6 +327,8 @@ class WorldView:
                     if information_state is not None
                     else 0.0
                 ),
+                misinformation_belief_pressure=misinformation_by_agent[agent_id][0],
+                misinformation_effect_sources=misinformation_by_agent[agent_id][1],
                 environmental_stress_per_minute=environmental_by_agent[agent_id][0],
                 environmental_stressor_event_ids=environmental_by_agent[agent_id][1],
                 environmental_assumption_source_id=environmental_by_agent[agent_id][2],

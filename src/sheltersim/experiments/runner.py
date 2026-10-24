@@ -33,6 +33,7 @@ from sheltersim.domain.care_receipts import (
     make_staff_support_continuity_record,
     support_kind_for_agent,
 )
+from sheltersim.domain.distress_monitor import record_distress_monitor_tick
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import facility_has_independent_queues
 from sheltersim.domain.geometry_overlay import release_sleep_bed, reserve_sleep_bed
@@ -494,14 +495,6 @@ class OfflineSimulationController:
             view = WorldView.from_world(world, include_state_hash=False)
             psychology_result = self.psychology.explain_update(view, minute)
             base_deltas = psychology_result.deltas
-            if self.artifacts.trace_level is not TraceLevel.OFF:
-                self.artifacts.record_psychology_trace(
-                    psychology_result.trace_document(
-                        minute,
-                        source_id=self.psychology.source_id,
-                        full=self.artifacts.trace_level is TraceLevel.FULL,
-                    )
-                )
             if self.stress_policy.parameters.enabled:
                 result = self.stress_policy.update(
                     view,
@@ -523,8 +516,42 @@ class OfflineSimulationController:
                     self.artifacts.record_social_contact_trace(result.trace_document(minute))
             else:
                 final_deltas = base_deltas
+            if self.artifacts.trace_level is not TraceLevel.OFF:
+                final_by_agent = {delta.agent_id: delta for delta in final_deltas}
+                base_by_agent = {delta.agent_id: delta for delta in base_deltas}
+                traced_result = replace(
+                    psychology_result,
+                    traces=tuple(
+                        replace(
+                            trace,
+                            stress_after=final_by_agent[trace.agent_id].stress,
+                            social_stress_delta=(
+                                final_by_agent[trace.agent_id].stress
+                                - base_by_agent[trace.agent_id].stress
+                            ),
+                        )
+                        for trace in psychology_result.traces
+                    ),
+                )
+                self.artifacts.record_psychology_trace(
+                    traced_result.trace_document(
+                        minute,
+                        source_id=self.psychology.source_id,
+                        full=self.artifacts.trace_level is TraceLevel.FULL,
+                    )
+                )
             update_long_term = getattr(self.psychology, "update_long_term_state", None)
             if callable(update_long_term):
+                record_distress_monitor_tick(
+                    world.metric_state,
+                    previous_by_agent={
+                        agent_id: agent.stress for agent_id, agent in view.agents.items()
+                    },
+                    current_by_agent={
+                        delta.agent_id: delta.stress for delta in final_deltas
+                    },
+                    threshold=self.psychology.parameters.high_distress_threshold,
+                )
                 runtime_state = world.model_state.get(PSYCHOLOGICAL_STATE_KEY)
                 if not isinstance(runtime_state, dict):
                     raise ValueError("mean-reverting psychology runtime state is missing")

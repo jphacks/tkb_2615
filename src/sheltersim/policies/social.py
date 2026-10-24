@@ -165,6 +165,11 @@ class SocialContactTrace:
     cooldown_remaining_minutes: int
     stress_difference: float
     stress_contribution: float
+    influence_weight: float = 0.0
+    aggregate_rate: float = 0.0
+    pre_pair_cap_contribution: float = 0.0
+    pair_cap_contribution: float = 0.0
+    aggregate_scale: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -195,6 +200,11 @@ class SocialPropagationResult:
             "selected_contact_count": len(self.contacts),
             "contributing_contact_count": self.contributing_contact_count,
             "total_stress_added": self.total_stress_added,
+            "aggregation": (
+                "snapshot weighted synchrony; pair cap then recipient cap then [0,1] bound"
+                if self.policy_version == "expressiveness-channel-openness-v1"
+                else "legacy directed positive stress propagation"
+            ),
             "truncated_contact_count": len(self.contacts) - len(sample),
             "contacts": [item.to_dict() for item in sample],
             "contributions": contributions,
@@ -426,26 +436,31 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
             weight_total = math.fsum(weights)
             shift = 0.0
             pair_shifts: list[float] = []
+            raw_pair_shifts: list[float] = []
+            aggregate_rate = 0.0
+            pair_cap_scale = 1.0
             if weight_total > 0.0:
                 gamma = min(1.0, self.parameters.stress_spread_per_minute * weight_total)
+                aggregate_rate = gamma
                 current = view.agents[agent_id].stress
+                raw_pair_shifts = [
+                    gamma * weight / weight_total
+                    * (view.agents[contact.source_id].stress - current)
+                    for contact, weight in zip(eligible, weights, strict=True)
+                ]
                 pair_shifts = [
                     max(
                         -self.parameters.max_pair_stress_increase,
-                        min(
-                            self.parameters.max_pair_stress_increase,
-                            gamma * weight / weight_total
-                            * (view.agents[contact.source_id].stress - current),
-                        ),
+                        min(self.parameters.max_pair_stress_increase, value),
                     )
-                    for contact, weight in zip(eligible, weights, strict=True)
+                    for value in raw_pair_shifts
                 ]
                 raw_shift = math.fsum(pair_shifts)
                 limit = self.parameters.max_agent_stress_increase_per_minute
                 shift = max(-limit, min(limit, raw_shift))
                 shift = max(-delta.stress, min(1.0 - delta.stress, shift))
-                scale = shift / raw_shift if raw_shift else 0.0
-                pair_shifts = [value * scale for value in pair_shifts]
+                pair_cap_scale = shift / raw_shift if raw_shift else 0.0
+                pair_shifts = [value * pair_cap_scale for value in pair_shifts]
             updated = min(1.0, max(0.0, delta.stress + shift))
             output.append(replace(delta, stress=updated))
             total_shift += shift
@@ -453,19 +468,48 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
                 contributing += 1
                 cooldowns[agent_id] = view.minute_index + self.parameters.cooldown_minutes
             eligible_contributions = {
-                (contact.source_id, contact.contact_basis): contribution
-                for contact, contribution in zip(eligible, pair_shifts, strict=True)
+                (contact.source_id, contact.contact_basis): (
+                    contribution,
+                    weights[index],
+                    aggregate_rate,
+                    raw_pair_shifts[index],
+                    max(
+                        -self.parameters.max_pair_stress_increase,
+                        min(
+                            self.parameters.max_pair_stress_increase,
+                            raw_pair_shifts[index],
+                        ),
+                    ),
+                    pair_cap_scale,
+                )
+                for index, (contact, contribution) in enumerate(
+                    zip(eligible, pair_shifts, strict=True)
+                )
             }
             for contact in contacts:
                 source = view.agents[contact.source_id]
                 raw_difference = source.stress - recipient.stress
+                (
+                    contribution,
+                    weight,
+                    contact_gamma,
+                    raw_pair,
+                    pair_capped,
+                    contact_aggregate_scale,
+                ) = eligible_contributions.get(
+                    (contact.source_id, contact.contact_basis),
+                    (0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                )
                 contact_traces.append(
                     replace(
                         contact,
                         stress_difference=raw_difference,
-                        stress_contribution=eligible_contributions.get(
-                            (contact.source_id, contact.contact_basis), 0.0
-                        ),
+                        stress_contribution=contribution,
+                        influence_weight=weight,
+                        aggregate_rate=contact_gamma,
+                        pre_pair_cap_contribution=raw_pair,
+                        pair_cap_contribution=pair_capped,
+                        aggregate_scale=contact_aggregate_scale,
                         cooldown_remaining_minutes=max(
                             0, cooldowns.get(agent_id, 0) - view.minute_index
                         ),

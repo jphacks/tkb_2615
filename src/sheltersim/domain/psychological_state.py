@@ -11,6 +11,13 @@ from sheltersim.domain.models import validate_unit_interval
 PSYCHOLOGICAL_STATE_KEY = "psychological_distress_v1"
 PSYCHOLOGICAL_STATE_SCHEMA_VERSION = 1
 PSYCHOLOGICAL_STATE_POLICY_VERSION = "mean-reverting-distress-v1"
+INTEGRATED_PSYCHOLOGY_POLICY_VERSION = "mean-reverting-life-state-v1"
+MEAN_REVERTING_PSYCHOLOGY_POLICIES = frozenset(
+    {PSYCHOLOGICAL_STATE_POLICY_VERSION, INTEGRATED_PSYCHOLOGY_POLICY_VERSION}
+)
+LIFE_STATE_PSYCHOLOGY_POLICIES = frozenset(
+    {"life-state-feedback-v1", INTEGRATED_PSYCHOLOGY_POLICY_VERSION}
+)
 
 
 def create_psychological_state(

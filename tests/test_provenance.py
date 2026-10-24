@@ -67,6 +67,7 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
         "ASM-SPACE-AND-STAFF-CAPACITY-V1",
         "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
         "ASM-SOCIAL-PROPAGATION-V1",
+        "ASM-MEAN-REVERTING-LIFE-STATE-V1",
         "ASM-INFORMATION-SPREAD-V1",
         "ASM-A07-SENSITIVITY-CASES-V1",
         "ASM-ZONE-ROUTING-V1",

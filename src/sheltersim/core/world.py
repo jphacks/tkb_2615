@@ -48,8 +48,8 @@ from sheltersim.domain.operational import (
     validate_operational_events_state,
 )
 from sheltersim.domain.psychological_state import (
+    MEAN_REVERTING_PSYCHOLOGY_POLICIES,
     PSYCHOLOGICAL_STATE_KEY,
-    PSYCHOLOGICAL_STATE_POLICY_VERSION,
     create_psychological_state,
     validate_psychological_state,
 )
@@ -226,7 +226,7 @@ class WorldState:
             world.model_state[INFORMATION_SPREAD_STATE_KEY] = create_information_runtime_state(
                 set(world.agents)
             )
-        if selected_models(world.model_configs)["psychology"] == PSYCHOLOGICAL_STATE_POLICY_VERSION:
+        if selected_models(world.model_configs)["psychology"] in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
             psychology_config = world.model_configs.get("psychology", {})
             baselines = {
                 agent_id: psychology_config.get("baseline_distress_by_agent", {}).get(
@@ -441,7 +441,7 @@ class WorldState:
             raise StateInvariantError(
                 "information-spread state requires an enabled information_spread model"
             )
-        if selected_models(self.model_configs)["psychology"] == PSYCHOLOGICAL_STATE_POLICY_VERSION:
+        if selected_models(self.model_configs)["psychology"] in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
             try:
                 validate_psychological_state(self.model_state.get(PSYCHOLOGICAL_STATE_KEY))
             except ValueError as exc:

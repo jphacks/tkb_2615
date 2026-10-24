@@ -53,6 +53,26 @@
   ],
   "assumptions": [
     {
+      "id": "ASM-MEAN-REVERTING-LIFE-STATE-V1",
+      "source_type": "assumption",
+      "target": "IntegratedDistressLifeStatePolicy and mean-reverting-life-state-v1",
+      "model_version": "mean-reverting-life-state-v1",
+      "values": {
+        "natural_recovery_rate_per_minute": 0.01,
+        "baseline_distress_default": 0.0,
+        "body_feedback": "life-state-feedback-v1 with tick-start synchronous feedback",
+        "direct_sleep_rest_stress_recovery": "disabled; sleep debt and affect feedback retained",
+        "information_misinformation_uncertainty_path": "active false-claim belief raises uncertainty through a per-minute assumption",
+        "daily_retention": 0.9,
+        "daily_acute_weight": 0.08,
+        "daily_high_distress_weight": 0.02
+      },
+      "context_sources": [],
+      "conceptual_reference": "Kuppens et al. (2010), doi:10.1177/0956797610372634; existing life-state-feedback-v1 structure; neither source calibrates these coefficients",
+      "calibration_status": "uncalibrated integrated structure and ShelterSim assumptions",
+      "notes": "The policy integrates the exact acute mean-reversion step with the existing sleep-debt, uncertainty, reassurance, affect, hygiene, and discontent state. Social-model recovery and the legacy direct sleep/rest stress recovery are disabled in this composition to prevent duplicate recovery. Information correction is an event-level state change; persistent false belief acts through uncertainty once per tick as a level input, not as a replayed event pulse."
+    },
+    {
       "id": "ASM-DAY3-TOILET-OUTAGE-V1",
       "source_type": "assumption",
       "target": "fixtures/scenarios/failure_day3.json:scheduled_events",
