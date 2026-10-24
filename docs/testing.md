@@ -13,6 +13,18 @@ ruff format --check .
 
 標準pytestには長時間simulation testも含まれます。live API testはSHELTERSIM_ALLOW_LIVE_API_TESTSとANTHROPIC_API_KEYの両方を明示した場合だけ対象です。通常のCIではlive gateを設定しないでください。
 
+### 並列実行
+
+開発依存にはpytest-xdistが含まれます。複数CPUで並列に実行するには`-n auto`を付けます。
+
+~~~shell
+SHELTERSIM_LLM_MODE=offline python -m pytest -n auto
+~~~
+
+Ryzen 5 5625U（WSL2、12スレッド）での全件（640 passed、3 skipped）は、直列で約12〜15分、`-n auto`で約7〜9分でした（同じPCでの複数回の計測。負荷により変動します）。最も長い`test_100_agent_seven_day_combined_scenario_preserves_operational_invariants`だけで6分前後かかるため、並列にしてもそれより短くはなりません。開発中の確認には`-m "not long_simulation"`で長時間simulationを除けます。
+
+tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、状態保存先（XDG_STATE_HOME）、LLM cache（SHELTERSIM_LLM_CACHE_PATH）を一時directoryに向けます。並列workerがこれらを共有せず、開発者のrunsやPC全体の利用記録にも書き込みません。test内でこれらを設定した場合はその値が優先されます。live_api testは、実費をPC全体の利用記録に残すため対象外です。
+
 ## 移管時の検証記録
 
 採用したsource snapshot a162aed8284641c2a21e21bbcd04bad6e595ffb1で、CPython 3.12.14と固定dependencyを使ってoffline pytest全件を実行し、**579 passed、3 skipped**でした。所要時間は545.17秒です。ANTHROPIC_API_KEYとlive test gateは未設定で、有料Provider呼び出しはありません。

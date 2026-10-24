@@ -15,11 +15,13 @@
 開発依存を導入し、offlineで実行します。
 
 ```shell
-python -m pip install -e "[dev]"
-SHELTERSIM_LLM_MODE=offline python -m pytest
+python -m pip install -e ".[dev]"
+SHELTERSIM_LLM_MODE=offline python -m pytest -n auto
 ruff check .
 ruff format --check .
 ```
+
+`-n auto`はpytest-xdistで複数CPUに分けて実行します。直列で実行する場合は省略できます。詳細は[テストと検証](docs/testing.md)を参照してください。
 
 テストから有料APIを呼ばないでください。ライブ連携テストは別枠で、[LLM連携文書](docs/llm-integration.md)にある明示ゲートが必要です。過去タスクの予算やAPI利用承認を、新しい実行の許可として扱ってはいけません。
 
