@@ -24,7 +24,9 @@ from sheltersim.experiments.scenario import (
 )
 from sheltersim.region.conditions import (
     RESOURCE_SERVICE_ASSUMPTION_ID,
+    STANDARD_PROVISIONING_SOURCE_ID,
     OperationalConditions,
+    with_standard_provisioning,
 )
 from sheltersim.region.facility import (
     SYNTHETIC_STAFFING_SOURCE_ID,
@@ -110,6 +112,9 @@ class InitialScenarioRequest(RegionModel):
     gross_area_m2: float | None = Field(default=None, gt=0, le=100_000, allow_inf_nan=False)
     accessible_toilet_count: int = Field(default=1, ge=0, le=20)
     staff_count: int | None = Field(default=None, ge=0, le=100)
+    # Day on which outside supply starts when no inventory is entered (national
+    # guidance: three days of stock, then supply from day 4).
+    default_supply_start_day: int = Field(default=4, ge=1, le=91)
     season: str | None = Field(default=None, max_length=40)
     target_date: date | None = None
     weather_area_code: str | None = Field(default=None, pattern=r"^\d{6}$")
@@ -176,7 +181,8 @@ class InitialScenarioRequest(RegionModel):
             raise ValueError("duration must be at least one minute")
         allowed = {
             "municipality", "municipality_code", "disaster", "evacuees", "duration_days", "gross_area_m2",
-            "accessible_toilet_count", "staff_count", "season", "facility_conditions", "seed",
+            "accessible_toilet_count", "staff_count", "default_supply_start_day", "season",
+            "facility_conditions", "seed",
             "behavior_policy_id", "social_policy_id", "information_policy_id",
             "social_propagation_enabled", "information_spread_enabled",
             "facility_zones", "zone_area_shares", "operational_conditions", "evacuation_selection", "population_conditions",
@@ -604,8 +610,14 @@ class InitialScenarioBuilder:
             )
         population_assumptions = population.assumptions
         duration_minutes = max(1, round(request.duration_days * 1440))
+        operational_conditions, provisioning = with_standard_provisioning(
+            request.operational_conditions,
+            population=request.evacuees,
+            duration_minutes=duration_minutes,
+            supply_start_day=request.default_supply_start_day,
+        )
         initial_stock, scheduled_events, operational_model_configs, condition_blockers = (
-            request.operational_conditions.compile(
+            operational_conditions.compile(
                 duration_minutes=duration_minutes,
                 zone_ids=set(zone_ids),
                 facilities=facilities,
@@ -613,8 +625,16 @@ class InitialScenarioBuilder:
             )
         )
         approval_blockers.extend(condition_blockers)
-        for record in request.operational_conditions.provenance_sources():
+        for record in operational_conditions.provenance_sources():
             source_records[str(record["id"])] = record
+        if provisioning is not None:
+            source_records[STANDARD_PROVISIONING_SOURCE_ID] = {
+                "id": STANDARD_PROVISIONING_SOURCE_ID,
+                "title": "Standard food and water provisioning",
+                "source_kind": "assumption",
+                "description": "Drinking water of 3 L per person per day and three days of stock follow national household guidance; outside supply starts on the chosen day.",
+            }
+            model_assumptions = (*model_assumptions, provisioning)
         if "resource_service" in operational_model_configs:
             source_records[RESOURCE_SERVICE_ASSUMPTION_ID] = {
                 "id": RESOURCE_SERVICE_ASSUMPTION_ID,
@@ -701,7 +721,7 @@ class InitialScenarioBuilder:
             "approval_blockers": approval_blockers,
             "unknown_initial_stock": request.operational_conditions.initial_resources.status == "unknown",
             "notes": [
-                *(["No starting food or water inventory was entered; no inventory is implied."] if request.operational_conditions.initial_resources.status == "unknown" else []),
+                *(["No starting food or water inventory was entered; the standard provisioning assumption was applied."] if request.operational_conditions.initial_resources.status == "unknown" else []),
                 "Synthetic profiles do not represent identifiable real people.",
             ],
         }

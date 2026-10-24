@@ -76,7 +76,7 @@ def service_capacity_diagnostic(
                 scenario,
                 service="water",
                 facility_kind="water_station",
-                uses_per_person_day=_uses_per_day(
+                uses_per_person_day=uses_per_person_day(
                     resource.hydration_growth_per_minute,
                     relief=resource.hydration_relief,
                     action_threshold=resource.hydration_action_threshold,
@@ -95,7 +95,7 @@ def service_capacity_diagnostic(
                 scenario,
                 service="meal",
                 facility_kind="meal_distribution",
-                uses_per_person_day=_uses_per_day(
+                uses_per_person_day=uses_per_person_day(
                     sum(hunger_rates) / len(hunger_rates) if hunger_rates else 0.0,
                     relief=resource.hunger_relief,
                     action_threshold=resource.hunger_action_threshold,
@@ -124,15 +124,28 @@ def service_capacity_diagnostic(
     }
 
 
-def _uses_per_day(growth_per_minute: float, *, relief: float, action_threshold: float) -> float:
+def uses_per_person_day(
+    growth_per_minute: float, *, relief: float, action_threshold: float
+) -> float:
+    """Return an upper bound on daily services one person needs for a growing need."""
     # Agents act only once the need reaches the threshold and relief stops at zero,
-    # so one service removes at least min(relief, threshold): an upper bound on uses.
+    # so one service removes at least min(relief, threshold).
     removed = min(relief, action_threshold) if action_threshold > 0 else relief
     return growth_per_minute * 1440 / removed
 
 
-def _working_units(facility: Any) -> int:
-    return facility.working_units if facility.working_units is not None else facility.capacity
+def _working_units(scenario: ScenarioSpec, facility: Any) -> int:
+    units = facility.working_units if facility.working_units is not None else facility.capacity
+    geometry = scenario.model_configs.get("facility_geometry")
+    # With a floor plan each facility has one surveyed service point, which serves one
+    # person at a time whatever its capacity (see physical_service_capacity).
+    if (
+        "movement_model" in scenario.model_configs
+        and isinstance(geometry, dict)
+        and facility.id in geometry.get("facility_points", {})
+    ):
+        return min(units, 1)
+    return units
 
 
 def _row(
@@ -147,14 +160,16 @@ def _row(
     standard_units: int | None,
 ) -> dict[str, Any]:
     facilities = [item for item in scenario.facilities if item.kind == facility_kind]
-    units = sum(_working_units(item) for item in facilities)
+    units = sum(_working_units(scenario, item) for item in facilities)
     if staff_skill is None:
         serving_units = units
     else:
         # A staffed service starts only with a free, skilled staff member in its zone.
         serving_units = 0
         for zone_id in sorted({item.zone_id for item in facilities}):
-            zone_units = sum(_working_units(item) for item in facilities if item.zone_id == zone_id)
+            zone_units = sum(
+                _working_units(scenario, item) for item in facilities if item.zone_id == zone_id
+            )
             zone_staff = sum(
                 1
                 for member in scenario.staff
