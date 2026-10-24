@@ -43,6 +43,7 @@ from sheltersim.domain.movement import (
     MOVEMENT_STATE_KEY,
     agent_is_at_facility_service_point,
     agent_is_at_queue_slot,
+    agent_is_at_queue_trip_destination,
     facility_approach_route,
     finish_movement,
     start_movement,
@@ -1915,6 +1916,7 @@ class AgentTravelCompletionHandler:
                 service_point_id = request.get("service_point_id") if isinstance(request, dict) else None
                 at_reserved_destination = (
                     agent_is_at_queue_slot(world, agent_id, facility_id, queue_id)
+                    or agent_is_at_queue_trip_destination(world, agent_id, journey)
                     if purpose.endswith("_position") and isinstance(facility_id, str)
                     else agent_is_at_facility_service_point(
                         world, agent_id, facility_id, service_point_id
@@ -1926,6 +1928,7 @@ class AgentTravelCompletionHandler:
                 queue_contains_request = agent_id in queue
                 at_reserved_destination = (
                     agent_is_at_queue_slot(world, agent_id, facility_id)
+                    or agent_is_at_queue_trip_destination(world, agent_id, journey)
                     if purpose.endswith("_position") and isinstance(facility_id, str)
                     else agent_is_at_facility_service_point(world, agent_id, facility_id)
                     if isinstance(facility_id, str)

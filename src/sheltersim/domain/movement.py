@@ -890,17 +890,16 @@ def progress_physical_queue_positions(
         else facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
     )
     movement = world.model_state[MOVEMENT_STATE_KEY]
-    if any(
-        journey.get("facility_id") == facility_id
-        and (queue_id is None or journey.get("queue_id") == queue_id)
-        and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
-        }
-        for journey in movement["journeys"].values()
-    ):
-        return True
+    trips = _queue_trips(movement, facility_id, queue_id)
+    head = queue[0] if queue else None
+    if any(journey["purpose"].endswith("_position") for journey in trips.values()):
+        # Followers walk to their slots one at a time. That walk holds back service
+        # only when it is the head's own; otherwise every shift of a long queue
+        # stopped service until the whole line had moved up.
+        return head in trips
     for index, agent_id in enumerate(queue):
+        if index == 0 and agent_id in trips:
+            continue
         if index == 0 and agent_is_at_facility_service_point(
             world, agent_id, facility_id,
             service_point_id=(
@@ -939,7 +938,7 @@ def progress_physical_queue_positions(
             phase="position",
             queue_id=queue_id,
         )
-        return True
+        return index == 0
     return False
 
 
@@ -963,15 +962,8 @@ def progress_physical_queue_head_to_service(
         return False
     agent_id = queue[0]
     movement = world.model_state[MOVEMENT_STATE_KEY]
-    if any(
-        journey.get("facility_id") == facility_id
-        and (queue_id is None or journey.get("queue_id") == queue_id)
-        and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
-        }
-        for journey in movement["journeys"].values()
-    ):
+    # Only the head's own walk delays its service; followers may still be moving up.
+    if agent_id in _queue_trips(movement, facility_id, queue_id):
         return True
     service_point_id = (
         world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][queue_id]["service_point_id"]
@@ -998,6 +990,36 @@ def progress_physical_queue_head_to_service(
         queue_id=queue_id,
     )
     return True
+
+
+def _queue_trips(
+    movement: dict[str, Any], facility_id: str, queue_id: str | None
+) -> dict[str, dict[str, Any]]:
+    return {
+        agent_id: journey
+        for agent_id, journey in movement["journeys"].items()
+        if journey.get("facility_id") == facility_id
+        and (queue_id is None or journey.get("queue_id") == queue_id)
+        and journey.get("purpose") in _QUEUE_TRIP_PURPOSES
+    }
+
+
+def agent_is_at_queue_trip_destination(
+    world: WorldState, agent_id: str, journey: dict[str, Any]
+) -> bool:
+    """Check that a queue walk ended where it was sent.
+
+    People ahead may be served while a follower walks, so the slot it was sent to can
+    differ from its slot on arrival; the next tick moves it on to the current slot.
+    """
+    points = journey.get("route_points") if isinstance(journey, dict) else None
+    if not points:
+        return False
+    destination = Point2D.model_validate(points[-1])
+    movement = world.model_state.get(MOVEMENT_STATE_KEY, {})
+    raw = movement.get("positions", {}).get(agent_id, {}).get("point")
+    current = Point2D.model_validate(raw) if isinstance(raw, dict) else None
+    return current is not None and _distance(destination, current) <= 0.05
 
 
 def agent_is_at_queue_slot(
