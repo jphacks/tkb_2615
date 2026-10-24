@@ -31,6 +31,8 @@ WebのScenario previewが使う初期Scenario生成器は、利用者が入力�
 - **施設の認知（ASM-INTAKE-FACILITY-ORIENTATION-V1）:** 生成したScenarioはagent_dynamics v2（need-led-autonomy-memory-v2）を使い、受付での案内を仮定して、トイレ・給水・配食・救護・受付・静養の共用施設を開始時から知っています。agent_dynamics設定のない既存Scenarioはv1のままで、開始ゾーンの施設だけを知っています。
 - **心理モデル（ASM-MEAN-REVERTING-LIFE-STATE-V1）:** 生成したScenarioは研究版の心理モデル`mean-reverting-life-state-v1`（平均回帰と身体・感情状態の統合版、[01-psychology.md](mathematical-models/01-psychology.md)）を選び、平均回帰の係数（`natural_recovery_rate_per_minute`など）を既定値のまま明示的に書き込みます。係数は未校正の仮定です。保存済みのScenarioは選択したモデルのまま再生します。`policy_registry`で心理モデルを指定しないScenarioは、従来どおり`causal-stress-v1`を使います。
 
+生成したScenarioには、トイレ・給水・配食の処理能力の診断（ASM-SERVICE-CAPACITY-PLANNING-V1、[05-facilities-resources.md](mathematical-models/05-facilities-resources.md#設備の処理能力の診断)）を実行し、休みなく稼働しても需要を処理できない設備、目標の利用率を超える設備、担当職員のいない給水・配食をプレビューの警告に示します。Scenarioの内容と開始可否は変えません。
+
 ## 旧来の心理モデル
 
 `causal-stress-v1`と`life-state-feedback-v1`は研究モデル導入前のモデルです。保存済みRun・Checkpointの再生と、研究モデルとの比較対照のために残しています。新しい分析で意図せず使わないよう、次の場所に使用中の心理モデルを表示します。

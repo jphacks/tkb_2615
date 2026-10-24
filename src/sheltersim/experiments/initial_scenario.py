@@ -1300,11 +1300,14 @@ class InitialScenarioBuilder:
             model_configs=model_configs,
             provenance=provenance,
         )
+        from sheltersim.experiments.service_capacity import service_capacity_diagnostic
+
         warnings = tuple(
             [
                 *design_warnings,
                 *(plan_override.notes if plan_override is not None else ()),
                 *_research_warnings(research),
+                *service_capacity_diagnostic(scenario)["warnings"],
             ]
         )
         return InitialScenarioDraft(

@@ -28,6 +28,27 @@ FIFO位置、待ち開始、サービス中、完了をイベントで記録し�
 
 `sheltersim toilet-diagnostic --scenario scenario.json --phase initial|long-term` はScenario内の稼働トイレ数を数え、発災初期の約50人/基、長期化時の約20人/基の計画目安と比較します。計画上の1人1日5回を総数として出します。不足時は警告を返します。実利用可能性やアクセシビリティの確認を代替せず、排泄確率・個人利用率・サービス時間には係数として入力しません。
 
+## 設備の処理能力の診断
+
+`sheltersim service-capacity-diagnostic --scenario scenario.json --phase initial|long-term` は、トイレ・給水・配食のそれぞれについて、1日の需要を処理するのに必要な作業時間と、設備が処理できる作業時間を比べます（`ASM-SERVICE-CAPACITY-PLANNING-V1`）。初期Scenario生成器も同じ診断を実行し、問題があればプレビューの警告に表示します。警告だけで、開始は止めません。
+
+\[
+\text{利用率}=\frac{N\times u\times s}{c\times T},\qquad
+\text{目安の台数}=\left\lceil\frac{N\times u\times s}{T\times\rho}\right\rceil
+\]
+
+`N` は人数、`u` は1人1日の利用回数、`s` は1回の分数、`c` は稼働している台数、`T=960` 分（起きている16時間）、`ρ=0.8` は目標の利用率です。`T` と `ρ` はソフトウェア上の仮定です。
+
+| 設備 | 1人1日の利用回数 `u` | 1回の分数 `s` |
+|---|---|---|
+| トイレ | 5回（内閣府の計画目安） | `toilet_service` の最短と最長の平均（既定4–8分なら6分） |
+| 給水 | `hydration_growth_per_minute × 1440 ÷ min(hydration_relief, hydration_action_threshold)` | `resource_service.service_minutes` |
+| 配食 | 平均の `hunger_growth × 1440 ÷ min(hunger_relief, hunger_action_threshold)` | 同上 |
+
+給水と配食の利用回数は、Scenarioの係数から求めた上限の近似です。Agentはニーズが閾値に達してから向かい、回復は0で止まるので、1回のサービスで少なくとも `min(回復量, 閾値)` が減ります。給水と配食は、同じzoneに担当技能を持つ職員がいないと始まらないため、zoneごとに台数と職員数の小さい方を稼働台数 `c` とします。`resource_service` がないScenarioでは、給水と配食を `not_modeled` とします。
+
+利用率が1以上なら「休みなく稼働しても需要を処理できない」、0.8を超えれば「長い待ち行列が起きやすい」、職員がいなければ「一度も始まらない」と警告します。トイレは公的な計画目安を下回る場合も警告します。時間帯の集中、故障、移動時間、列に並ぶ場所の広さは考慮しません。たとえば100人・既定のトイレ3基（4–8分）では、利用率は約1.04です。
+
 ## 内部検証と限界
 
 既存 `tests/test_facility_queues.py`, `test_resource_service.py`, `test_resources.py` 等はFIFO、capacity、予約/在庫保存、失敗/取消、状態不変条件を検査します。新しい診断は稼働unitと初期/長期目安の計算を検査します。外部の到着率・便器利用時間・必要在庫の実測データはありません。
