@@ -318,6 +318,7 @@ class OperationalConditions(RegionModel):
             source_kind: str,
             sequence: int,
             input_index: int,
+            causation_id: str | None = None,
         ) -> None:
             if due_minute < 0 or due_minute >= duration_minutes:
                 blockers.append(f"運営条件 {event_type} の開始時刻はシミュレーション期間内にしてください。")
@@ -330,6 +331,7 @@ class OperationalConditions(RegionModel):
                     event_type=event_type,
                     payload=payload,
                     source_id=source_id,
+                    causation_id=causation_id,
                     provenance={
                         "input_path": f"operational_conditions.scheduled[{input_index}]",
                         "source_type": source_kind,
@@ -434,9 +436,11 @@ class OperationalConditions(RegionModel):
                         continue
                     sequence += 1
                     outage_id = f"region-water-outage-{index:03d}-{occurrence:03d}"
+                    outage_event_id = f"region-condition-{sequence:03d}-water_outage"
                     add_event("water_outage", start_minute, {"outage_id": outage_id, "facility_id": condition.facility_id}, condition.source_id, condition.source_kind, sequence, index)
                     sequence += 1
-                    add_event("water_restored", end_minute, {"outage_id": outage_id}, condition.source_id, condition.source_kind, sequence, index)
+                    # ScenarioSpec validation requires a restoration to name its outage.
+                    add_event("water_restored", end_minute, {"outage_id": outage_id}, condition.source_id, condition.source_kind, sequence, index, causation_id=outage_event_id)
             elif condition.kind == "power_outage":
                 if infrastructure_config is None:
                     blockers.append("停電条件には依存関係を含むinfrastructure設定が必要です。施設への影響を推測していません。")
