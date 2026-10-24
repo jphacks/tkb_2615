@@ -170,9 +170,12 @@
     }
     ctx.restore();
   }
-  function person(ctx, x, y, size, color, staff, selected) {
+  function person(ctx, x, y, size, color, staff, selected, motion = {}) {
     ctx.save();
     ctx.translate(x, y);
+    const phase = motion.phase || 0;
+    const step = motion.walking ? Math.sin(phase * 8) * size * 0.28 : 0;
+    const breathe = motion.active ? Math.sin(phase * 2) * size * 0.035 : 0;
     ctx.fillStyle = "#203b4936";
     ctx.beginPath();
     ctx.ellipse(1, size * 0.85, size * 0.85, size * 0.28, 0, 0, Math.PI * 2);
@@ -187,17 +190,22 @@
       ctx.stroke();
     }
     ctx.fillStyle = "#314c64";
-    round(ctx, -size * 0.45, size * 0.22, size * 0.36, size * 0.73, 1);
+    round(ctx, -size * 0.45, size * 0.22 + step, size * 0.36, size * 0.73, 1);
     ctx.fill();
-    round(ctx, size * 0.09, size * 0.22, size * 0.36, size * 0.73, 1);
+    round(ctx, size * 0.09, size * 0.22 - step, size * 0.36, size * 0.73, 1);
     ctx.fill();
+    ctx.translate(0, breathe);
+    ctx.scale(
+      motion.walking && Math.cos(motion.direction || 0) < 0 ? -0.95 : 1,
+      1,
+    );
     ctx.fillStyle = color;
     round(ctx, -size * 0.65, -size * 0.62, size * 1.3, size * 1.1, size * 0.28);
     ctx.fill();
     ctx.fillStyle = "#f1c39b";
-    round(ctx, -size * 0.82, -size * 0.4, size * 0.22, size * 0.76, 1);
+    round(ctx, -size * 0.82, -size * 0.4 - step, size * 0.22, size * 0.76, 1);
     ctx.fill();
-    round(ctx, size * 0.6, -size * 0.4, size * 0.22, size * 0.76, 1);
+    round(ctx, size * 0.6, -size * 0.4 + step, size * 0.22, size * 0.76, 1);
     ctx.fill();
     ctx.beginPath();
     ctx.arc(0, -size * 0.99, size * 0.47, 0, Math.PI * 2);
@@ -218,7 +226,156 @@
       ctx.fillStyle = "#d9ffff";
       ctx.fillRect(-size * 0.47, -size * 0.4, size * 0.94, size * 0.2);
     }
+    if (motion.walking) {
+      ctx.fillStyle = "#edbd96";
+      ctx.fillRect(size * 0.35, -size * 0.98, size * 0.3, size * 0.2);
+    }
     ctx.restore();
+  }
+  function drawActors(ctx, frame, point, scale, w, h, options, hits) {
+    const layer = options.layer || "normal",
+      compact = w < 460;
+    const people = new Map((frame.people || []).map((p) => [p.id, p]));
+    const groups = new Map();
+    for (const a of frame.agents || []) {
+      if (!a.point || (!options.diagram && a.position_kind === "display_only"))
+        continue;
+      const key = `${a.point.x.toFixed(4)},${a.point.y.toFixed(4)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a);
+    }
+    const actorSize = clamp(
+      scale * (options.diagram ? 0.95 : 0.38),
+      compact ? 4.3 : 6,
+      compact ? 6.8 : 9.2,
+    );
+    const colorOf = (p) => {
+      if (layer === "stress" || layer === "health") {
+        const needs = [
+          p?.needs?.fatigue,
+          p?.needs?.hunger,
+          p?.needs?.hydration_need,
+        ];
+        const n =
+          layer === "stress"
+            ? p?.stress
+            : needs.every((v) => typeof v === "number")
+              ? Math.max(...needs)
+              : undefined;
+        return typeof n === "number"
+          ? `hsl(${120 * (1 - clamp(n, 0, 1))} 72% 43%)`
+          : "#8494a5";
+      }
+      if (p?.activity === "queued") return "#efa829";
+      let seed = 0;
+      for (const c of p?.id || "a") seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
+      return palette[seed % palette.length];
+    };
+    for (const group of [...groups.values()].sort(
+      (a, b) => a[0].point.y - b[0].point.y,
+    )) {
+      const a = group[0],
+        p = point(a.point),
+        personData = people.get(a.agent_id),
+        selected = group.some((x) => x.agent_id === options.selected);
+      if (p.x < -20 || p.x > w + 20 || p.y < -30 || p.y > h + 30) continue;
+      if (group.length > 1) {
+        // A stacked symbol represents co-located people; these offsets are not world positions.
+        for (let i = Math.min(3, group.length - 1); i >= 0; i--) {
+          const pp = people.get(group[i].agent_id);
+          person(
+            ctx,
+            p.x + (i - 1.5) * actorSize * 0.55,
+            p.y + (i % 2) * 2,
+            actorSize,
+            colorOf(pp),
+            false,
+            selected && i === 0,
+          );
+        }
+        ctx.font = "bold 11px sans-serif";
+        const label = String(group.length),
+          bw = Math.max(22, ctx.measureText(label).width + 14);
+        ctx.fillStyle = "#0c7e75";
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 1.7;
+        round(ctx, p.x + actorSize * 0.6, p.y - actorSize * 2.5, bw, 20, 10);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "white";
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          label,
+          p.x + actorSize * 0.6 + bw / 2,
+          p.y - actorSize * 2.5 + 14,
+        );
+      } else {
+        if (options.diagram && a.zone_id === "sleeping") {
+          ctx.fillStyle = "#90b5a470";
+          ctx.strokeStyle = "#fff8e4b0";
+          ctx.lineWidth = 1;
+          round(
+            ctx,
+            p.x - actorSize * 1.4,
+            p.y - actorSize * 0.8,
+            actorSize * 2.8,
+            actorSize * 2.8,
+            3,
+          );
+          ctx.fill();
+          ctx.stroke();
+        }
+        let seed = 0;
+        for (const c of a.agent_id) seed += c.charCodeAt(0);
+        person(ctx, p.x, p.y, actorSize, colorOf(personData), false, selected, {
+          active: options.animate,
+          phase: (options.time || 0) / 1000 + seed,
+          walking: a._walking,
+          direction: a._direction,
+        });
+      }
+      hits.push({
+        type: "person",
+        id: a.agent_id,
+        ids: group.map((x) => x.agent_id),
+        x: p.x,
+        y: p.y,
+        r: Math.max(12, actorSize * 1.8),
+        label:
+          group.length > 1
+            ? `同じ記録位置に${group.length}人 · クリックして一覧`
+            : `${a.agent_id} · ストレス ${typeof personData?.stress === "number" ? Math.round(personData.stress * 100) : "未記録"}`,
+      });
+    }
+    for (const s of frame.staff || []) {
+      const physical = s.position?.point || s.position;
+      if (typeof physical?.x !== "number" || typeof physical?.y !== "number")
+        continue;
+      const p = point(physical);
+      person(
+        ctx,
+        p.x,
+        p.y,
+        actorSize,
+        "#188dd0",
+        true,
+        s.id === options.selected,
+        {
+          active: options.animate,
+          phase: (options.time || 0) / 1000 + s.id.length,
+        },
+      );
+      hits.push({
+        type: "person",
+        id: s.id,
+        ids: [s.id],
+        x: p.x,
+        y: p.y,
+        r: actorSize * 1.8,
+        label: `${s.id} · スタッフ`,
+      });
+    }
   }
   function draw(sf, frame, options = {}) {
     const { ctx, w, h } = sf,
@@ -243,10 +400,11 @@
       zoom = options.zoom || 1;
     const compact = w < 460,
       pad = compact ? 12 : 22;
-    const scale =
-      Math.min((w - pad * 2) / g.width_m, (h - pad * 2) / g.height_m) * zoom;
-    const ox = (w - g.width_m * scale) / 2 + (options.pan?.x || 0),
-      oy = (h - g.height_m * scale) / 2 + (options.pan?.y || 0);
+    const viewW = options.viewportBounds?.width || g.width_m,
+      viewH = options.viewportBounds?.height || g.height_m;
+    const scale = Math.min((w - pad * 2) / viewW, (h - pad * 2) / viewH) * zoom;
+    const ox = (w - viewW * scale) / 2 + (options.pan?.x || 0),
+      oy = (h - viewH * scale) / 2 + (options.pan?.y || 0);
     const point = (p) => ({ x: ox + p.x * scale, y: oy + p.y * scale });
     // Paving and foliage are decorative backdrop, not a reconstruction of a real site.
     ctx.strokeStyle = "#c2cec355";
@@ -301,7 +459,7 @@
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
-    const counts = {};
+    const counts = { ...options.crowdCounts };
     for (const a of frame.agents || [])
       counts[a.zone_id] = (counts[a.zone_id] || 0) + 1;
     const bounds = [];
@@ -562,118 +720,7 @@
         });
       }
     }
-    const people = new Map((frame.people || []).map((p) => [p.id, p]));
-    const groups = new Map();
-    for (const a of frame.agents || []) {
-      if (!a.point || a.position_kind === "display_only") continue;
-      const key = `${a.point.x.toFixed(4)},${a.point.y.toFixed(4)}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(a);
-    }
-    const actorSize = clamp(
-      scale * 0.38,
-      compact ? 4.3 : 6,
-      compact ? 6.8 : 9.2,
-    );
-    const colorOf = (p) => {
-      if (layer === "stress" || layer === "health") {
-        const needs = [
-          p?.needs?.fatigue,
-          p?.needs?.hunger,
-          p?.needs?.hydration_need,
-        ];
-        const n =
-          layer === "stress"
-            ? p?.stress
-            : needs.every((v) => typeof v === "number")
-              ? Math.max(...needs)
-              : undefined;
-        return typeof n === "number"
-          ? `hsl(${120 * (1 - clamp(n, 0, 1))} 72% 43%)`
-          : "#8494a5";
-      }
-      if (p?.activity === "queued") return "#efa829";
-      let seed = 0;
-      for (const c of p?.id || "a") seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
-      return palette[seed % palette.length];
-    };
-    for (const group of [...groups.values()].sort(
-      (a, b) => a[0].point.y - b[0].point.y,
-    )) {
-      const a = group[0],
-        p = point(a.point),
-        personData = people.get(a.agent_id),
-        selected = group.some((x) => x.agent_id === options.selected);
-      if (p.x < -20 || p.x > w + 20 || p.y < -30 || p.y > h + 30) continue;
-      if (group.length > 1) {
-        // A stacked symbol represents co-located people; these offsets are not world positions.
-        for (let i = Math.min(3, group.length - 1); i >= 0; i--) {
-          const pp = people.get(group[i].agent_id);
-          person(
-            ctx,
-            p.x + (i - 1.5) * actorSize * 0.55,
-            p.y + (i % 2) * 2,
-            actorSize,
-            colorOf(pp),
-            false,
-            selected && i === 0,
-          );
-        }
-        const label = String(group.length),
-          bw = Math.max(22, ctx.measureText(label).width + 14);
-        ctx.fillStyle = "#0c7e75";
-        ctx.strokeStyle = "white";
-        ctx.lineWidth = 1.7;
-        round(ctx, p.x + actorSize * 0.6, p.y - actorSize * 2.5, bw, 20, 10);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = "white";
-        ctx.font = "bold 11px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(
-          label,
-          p.x + actorSize * 0.6 + bw / 2,
-          p.y - actorSize * 2.5 + 14,
-        );
-      } else
-        person(ctx, p.x, p.y, actorSize, colorOf(personData), false, selected);
-      hits.push({
-        type: "person",
-        id: a.agent_id,
-        ids: group.map((x) => x.agent_id),
-        x: p.x,
-        y: p.y,
-        r: Math.max(12, actorSize * 1.8),
-        label:
-          group.length > 1
-            ? `同じ記録位置に${group.length}人 · クリックして一覧`
-            : `${a.agent_id} · ストレス ${typeof personData?.stress === "number" ? Math.round(personData.stress * 100) : "未記録"}`,
-      });
-    }
-    for (const s of frame.staff || []) {
-      const physical = s.position?.point || s.position;
-      if (typeof physical?.x !== "number" || typeof physical?.y !== "number")
-        continue;
-      const p = point(physical);
-      person(
-        ctx,
-        p.x,
-        p.y,
-        actorSize,
-        "#188dd0",
-        true,
-        s.id === options.selected,
-      );
-      hits.push({
-        type: "person",
-        id: s.id,
-        ids: [s.id],
-        x: p.x,
-        y: p.y,
-        r: actorSize * 1.8,
-        label: `${s.id} · スタッフ`,
-      });
-    }
+    drawActors(ctx, frame, point, scale, w, h, options, hits);
     // Room captions remain in each recorded polygon; narrow rooms get short multiline names.
     for (const b of bounds) {
       if (b.w < 15 || b.h < 15) continue;
@@ -700,9 +747,17 @@
               (frame.zones || []).find((z) => z.id === b.z.zone_id)?.name ||
                 spec.name,
             ]
-          : spec.short.split("\n");
+          : options.diagram
+            ? [spec.short.replace("\n", "・")]
+            : spec.short.split("\n");
       const cardW = main ? Math.min(b.w - 16, 230) : Math.max(12, b.w - 7),
-        cardH = main ? 34 : lines.length * (font + 2) + (b.w > 33 ? 24 : 11),
+        cardH = main
+          ? compact
+            ? 20
+            : 34
+          : options.diagram
+            ? 24
+            : lines.length * (font + 2) + (b.w > 33 ? 24 : 11),
         cx = b.x + b.w / 2,
         top = b.y + 8;
       ctx.fillStyle = "#fffffff0";
@@ -712,7 +767,7 @@
       ctx.fill();
       ctx.stroke();
       let yy = top + font + 7;
-      if (!main && b.w > 33) {
+      if (!main && b.w > 33 && !options.diagram) {
         symbol(
           ctx,
           spec.icon,
@@ -731,7 +786,7 @@
       );
     }
     // Scale is derived from the physical coordinate transform, never from the backdrop.
-    if (w > 450) {
+    if (w > 450 && !options.diagram) {
       const meters = scale * 5 < w * 0.2 ? 5 : 2,
         sw = meters * scale,
         x = w - sw - 18,
@@ -756,5 +811,75 @@
     }
     return hits;
   }
-  window.HinanjoMap = { draw };
+  const staticCache = new WeakMap();
+  function drawCached(sf, source, options = {}) {
+    const frame =
+      options.mode === "schematic"
+        ? window.HinanjoScene.project(source, options.mode)
+        : source;
+    if (!frame?.geometry) return draw(sf, frame, options);
+    const { ctx, w, h } = sf,
+      g = frame.geometry;
+    const counts = {};
+    for (const a of frame.agents || [])
+      counts[a.zone_id] = (counts[a.zone_id] || 0) + 1;
+    const key = JSON.stringify([
+      w,
+      h,
+      devicePixelRatio,
+      options.layer,
+      options.zoom,
+      options.pan,
+      options.viewportBounds,
+      g,
+      frame.geometry_overlay,
+      frame.facilities,
+      options.layer === "crowd" ? counts : null,
+    ]);
+    let cache = staticCache.get(ctx.canvas);
+    if (!cache || cache.key !== key) {
+      const canvas = document.createElement("canvas"),
+        dpr = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.ceil(w * dpr);
+      canvas.height = Math.ceil(h * dpr);
+      const context = canvas.getContext("2d");
+      context.scale(dpr, dpr);
+      const hits = draw(
+        { ctx: context, w, h },
+        { ...frame, agents: [], people: [], staff: [] },
+        {
+          ...options,
+          crowdCounts: counts,
+          diagram: frame.presentation_mode === "schematic",
+        },
+      );
+      cache = { key, canvas, hits };
+      staticCache.set(ctx.canvas, cache);
+    }
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(cache.canvas, 0, 0, w, h);
+    const compact = w < 460,
+      pad = compact ? 12 : 22;
+    const viewW = options.viewportBounds?.width || g.width_m,
+      viewH = options.viewportBounds?.height || g.height_m;
+    const scale =
+      Math.min((w - pad * 2) / viewW, (h - pad * 2) / viewH) *
+      (options.zoom || 1);
+    const ox = (w - viewW * scale) / 2 + (options.pan?.x || 0),
+      oy = (h - viewH * scale) / 2 + (options.pan?.y || 0);
+    const point = (p) => ({ x: ox + p.x * scale, y: oy + p.y * scale });
+    const hits = cache.hits.map((hit) => ({ ...hit }));
+    drawActors(
+      ctx,
+      frame,
+      point,
+      scale,
+      w,
+      h,
+      { ...options, diagram: frame.presentation_mode === "schematic" },
+      hits,
+    );
+    return hits;
+  }
+  window.HinanjoMap = { draw: drawCached };
 })();

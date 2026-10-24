@@ -2224,7 +2224,7 @@ h2 {
   bottom: 6px;
 }
 .map-legend {
-  padding-top: 7px;
+  padding-top: 6px;
   gap: 10px;
   font-size: 9px;
   min-height: 20px;
@@ -3013,4 +3013,67 @@ h2 {
   .chart-panel select {
     width: 180px;
   }
+}
+.scene-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.scene-choice select {
+  width: 96px;
+  min-height: 20px;
+  height: 20px;
+  padding: 3px 5px;
+  font-size: 10px;
+}
+.report-map-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 5px 0;
+  flex-wrap: wrap;
+}
+.report-top #report-map {
+  height: clamp(200px, calc(100vh * 0.29 - 45px), 280px);
+}
+.report-map-controls > select {
+  width: 100px;
+  min-height: 25px;
+  font-size: 10px;
+  padding: 3px;
+}
+.report-map-controls::after {
+  content: "模式図は距離非対応・個別配置は記号";
+  font-size: 9px;
+  color: var(--muted);
+}
+.report-map-controls:has(
+    select[data-scene-mode] option[value="physical"]:checked
+  )::after {
+  content: "記録された実座標";
+}
+.map-host {
+  position: relative;
+}
+.map-inspector {
+  position: absolute;
+  z-index: 5;
+  top: 58px;
+  right: 16px;
+  max-width: 80%;
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  background: #ffffffef;
+  border: 1px solid #69aaff;
+  border-radius: 8px;
+  box-shadow: 0 5px 16px #174a6d22;
+  font-size: 12px;
+  pointer-events: none;
+}
+.map-inspector small {
+  font-size: 10px;
+  color: var(--muted);
 }

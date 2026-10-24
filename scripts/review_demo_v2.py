@@ -125,6 +125,7 @@ def main() -> None:
         page.locator("#seek").dispatch_event("change")
         idle()
         frame = get(f"{root}/branches/{parent_id}/timeline?minute={minute}")
+        page.locator("[data-scene-mode]").first.select_option("physical")
         renderer = page.evaluate(
             """frame => {
           const source=JSON.stringify(frame), visible=document.querySelector('#simulation-map');
@@ -139,7 +140,13 @@ def main() -> None:
           const expected={x:(w-frame.geometry.width_m*scale)/2+physical.x*scale,
             y:(h-frame.geometry.height_m*scale)/2+physical.y*scale};
           const moved=b.find(x=>x.id===person.id&&x.type==='person');
+          const expanded=structuredClone(frame);expanded.geometry.width_m*=1.5;
+          const viewportBounds={width:expanded.geometry.width_m,height:frame.geometry.height_m};
+          const sharedA=window.HinanjoMap.draw(sf,frame,{viewportBounds});
+          const sharedB=window.HinanjoMap.draw(sf,expanded,{viewportBounds});
+          const pa=sharedA.find(x=>x.id===person.id),pb=sharedB.find(x=>x.id===person.id);
           return {unchanged:source===JSON.stringify(frame),person,
+            sharedScale:pa.x===pb.x&&pa.y===pb.y,
             expected,pan:{x:moved.x-person.x,y:moved.y-person.y},
             ids:a.filter(x=>x.type==='person').flatMap(x=>x.ids||[x.id]),
             physicalIds:frame.agents.filter(x=>x.point&&x.position_kind!=='display_only').map(x=>x.agent_id)};
@@ -147,6 +154,7 @@ def main() -> None:
             frame,
         )
         assert renderer["unchanged"]
+        assert renderer["sharedScale"]
         assert abs(renderer["person"]["x"] - renderer["expected"]["x"]) < 0.1
         assert abs(renderer["person"]["y"] - renderer["expected"]["y"]) < 0.1
         assert abs(renderer["pan"]["x"] - 31) < 0.00001
@@ -168,6 +176,24 @@ def main() -> None:
             "physical coordinates, grouped IDs, immutable input, "
             "layer tabs, person click, zoom reset"
         )
+        diagram = page.evaluate(
+            """frame => {
+          const canvas=document.createElement('canvas');canvas.width=817;canvas.height=445;
+          const source=JSON.stringify(frame),projected=window.HinanjoScene.project(frame);
+          const hits=window.HinanjoMap.draw({ctx:canvas.getContext('2d'),w:817,h:445},
+            frame,{mode:'schematic'});
+          const people=new Set(frame.agents.map(a=>a.agent_id));
+          return {unchanged:source===JSON.stringify(frame),
+            count:hits.filter(h=>h.type==='person'&&people.has(h.id)).length,
+            individual:hits.filter(h=>h.type==='person'&&people.has(h.id)).every(h=>h.ids.length===1),
+            geometry:projected.recorded_geometry===frame.geometry};
+        }""",
+            frame,
+        )
+        assert diagram["unchanged"] and diagram["geometry"] and diagram["individual"]
+        assert diagram["count"] == len(frame["agents"])
+        checks["schematic"] = diagram
+        page.locator("[data-scene-mode]").first.select_option("schematic")
         capture("simulation")
 
         page.locator('[data-page="comparison"]').click()
@@ -230,6 +256,24 @@ def main() -> None:
             }
             page.locator("#chat").evaluate("c=>c.scrollTop=0")
         capture("report")
+        report_frame = get(
+            f"{root}/branches/{args.branch}/timeline?minute={child['computed_until']}"
+        )
+        hit = page.evaluate(
+            """frame=>{
+          const c=document.querySelector('#report-map'),r=c.getBoundingClientRect();
+          return window.HinanjoMap.draw({ctx:c.getContext('2d'),w:r.width,h:r.height},frame,
+            {mode:'schematic',layer:'normal'}).find(h=>h.type==='person'&&frame.agents.some(a=>a.agent_id===h.id));
+        }""",
+            report_frame,
+        )
+        box = page.locator("#report-map").bounding_box()
+        page.mouse.click(box["x"] + hit["x"], box["y"] + hit["y"])
+        assert hit["id"] in page.locator(".map-inspector").inner_text()
+        before = page.locator("#report-map").evaluate("c=>c.toDataURL()")
+        page.locator("#report-layer").select_option("stress")
+        assert before != page.locator("#report-map").evaluate("c=>c.toDataURL()")
+        checks["report_map"] = "person click and recorded stress layer"
         page.reload()
         page.wait_for_load_state("networkidle")
         idle()

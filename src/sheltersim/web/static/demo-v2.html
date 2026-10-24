@@ -9,6 +9,7 @@
     />
     <title>避難所IF！ | 避難所の「もしも」を、考えよう。</title>
     <link rel="stylesheet" href="/demo-v2.css" />
+    <script src="/demo-v2-scene.js" defer></script>
     <script src="/demo-v2-map.js" defer></script>
     <script src="/demo-v2.js" defer></script>
   </head>
@@ -395,6 +396,12 @@
               >
             </div>
             <div class="map-legend">
+              <label class="scene-choice"
+                >地図<select data-scene-mode aria-label="マップの表示方式">
+                  <option value="schematic">模式表示</option>
+                  <option value="physical">実座標</option>
+                </select></label
+              >
               <span id="legend-agents">● 避難者</span
               ><span id="legend-queue">● 待機中</span
               ><span id="legend-staff">● スタッフ</span

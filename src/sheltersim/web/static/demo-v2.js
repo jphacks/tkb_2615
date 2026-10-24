@@ -38,6 +38,9 @@
     selectedGroup: [],
     selected: null,
     playing: false,
+    sceneMode: "schematic",
+    motion: null,
+    playToken: 0,
     busy: false,
     page: "scenario",
     inputVersion: 0,
@@ -111,6 +114,11 @@
     corridor: "通路",
   };
   const eventNames = {
+    resource_reserve: "物資の利用予約",
+    resource_consume: "物資の消費",
+    resource_service_complete: "物資の受取完了",
+    staff_operation_transition: "スタッフ対応の進行",
+    staff_operation_arrive: "スタッフの到着",
     toilet_service_complete: "トイレ利用完了",
     support_request_timeout: "支援要請の待機期限",
     social_interaction: "支援・交流の記録",
@@ -274,8 +282,16 @@
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
-  function stopPlayback() {
+  function stopPlayback(preserve = false) {
     state.playing = false;
+    state.playToken++;
+    if (preserve && state.motion) {
+      state.motion.fraction = Math.min(
+        1,
+        (performance.now() - state.motion.started) / state.motion.duration,
+      );
+      state.motion.paused = true;
+    } else state.motion = null;
     $("play").textContent = "▶ 再生";
     $("timeline-play").textContent = "▶ 再生";
   }
@@ -815,7 +831,7 @@
       }, 1200);
     }
   }
-  async function seek(minute) {
+  async function seek(minute, expectedPlayToken) {
     if (!Number.isInteger(minute) || minute < lower() || minute > upper())
       throw new Error("計算済み時刻だけを表示できます。");
     const serial = ++state.seekVersion,
@@ -823,6 +839,8 @@
       branch = state.branch;
     const frame = await api(`${branchBase()}/timeline?minute=${minute}`);
     if (
+      (expectedPlayToken !== undefined &&
+        expectedPlayToken !== state.playToken) ||
       serial !== state.seekVersion ||
       scope !== state.scope ||
       branch !== state.branch
@@ -839,6 +857,21 @@
   function renderFrame() {
     const frame = state.frame;
     if (!frame) return;
+    if (
+      state.sceneMode === "schematic" &&
+      frame.geometry &&
+      !window.HinanjoScene.supported(frame)
+    ) {
+      state.sceneMode = "physical";
+      document
+        .querySelectorAll("[data-scene-mode]")
+        .forEach((s) => (s.value = "physical"));
+      document
+        .querySelectorAll(".map-caption")
+        .forEach(
+          (n) => (n.textContent = "実座標 · この施設形状は模式図の対象外です"),
+        );
+    }
     renderKpis($("sim-kpis"), frame.kpis);
     renderKpis($("report-kpis"), frame.kpis);
     $("scenario-name").textContent =
@@ -858,7 +891,9 @@
       (a) => !a.point || a.position_kind === "display_only",
     ).length;
     $("position-note").textContent =
-      `位置 ${frame.agents.length - missing}/${frame.agents.length}人記録 · 同じ位置は集合表示 · ドラッグで移動`;
+      state.sceneMode === "schematic" && window.HinanjoScene.supported(frame)
+        ? "模式表示：個別の配置は所属を表す記号です。距離・動線は実寸ではありません。"
+        : `実座標 ${frame.agents.length - missing}/${frame.agents.length}人記録 · 同じ位置は集合表示 · ドラッグで移動`;
     const issues = [];
     if (frame.kpis.toilet_queue_length > 0)
       issues.push([
@@ -1011,7 +1046,7 @@
   }
   async function togglePlayback() {
     if (state.playing) {
-      stopPlayback();
+      stopPlayback(true);
       return;
     }
     if (state.page === "comparison") {
@@ -1021,12 +1056,59 @@
         await loadComparison(state.comparison.common_range[0]);
     } else if (state.minute >= upper()) await seek(lower());
     state.playing = true;
+    animationStats = { frames: 0, drawMs: 0, fps: 0 };
+    statsStart = 0;
+    const token = ++state.playToken;
+    if (state.motion?.paused) {
+      state.motion.started =
+        performance.now() - state.motion.fraction * state.motion.duration;
+      state.motion.paused = false;
+    }
     $("play").textContent = "Ⅱ 一時停止";
     $("timeline-play").textContent = "Ⅱ 一時停止";
-    void playbackLoop();
+    animatePlayback(token);
+    void playbackLoop(token);
   }
-  async function playbackLoop() {
-    if (!state.playing) return;
+  let animationStats = { frames: 0, drawMs: 0, fps: 0 },
+    statsStart = 0;
+  function animatePlayback(token) {
+    if (!state.playing || token !== state.playToken) return;
+    const now = performance.now();
+    if (!statsStart) statsStart = now;
+    drawAll();
+    animationStats.frames++;
+    animationStats.drawMs += performance.now() - now;
+    if (now - statsStart >= 1000) {
+      window.HinanjoPlayback = {
+        fps: (animationStats.frames * 1000) / (now - statsStart),
+        drawMs: animationStats.drawMs / animationStats.frames,
+        minute:
+          state.page === "comparison" ? state.comparison.minute : state.minute,
+        endpoints: state.motion
+          ? {
+              from: state.motion.from.map((f) => f.minute),
+              to: state.motion.to.map((f) => f.minute),
+            }
+          : null,
+        comparison: state.page === "comparison",
+        fraction: motionFraction(),
+        displayMode: state.sceneMode,
+      };
+      animationStats = { frames: 0, drawMs: 0, fps: 0 };
+      statsStart = now;
+    }
+    requestAnimationFrame(() => animatePlayback(token));
+  }
+  function motionFraction() {
+    const m = state.motion;
+    return m
+      ? m.paused
+        ? m.fraction
+        : Math.min(1, (performance.now() - m.started) / m.duration)
+      : 0;
+  }
+  async function playbackLoop(token) {
+    if (!state.playing || token !== state.playToken) return;
     try {
       const comparing = state.page === "comparison",
         minute = comparing ? state.comparison.minute : state.minute,
@@ -1036,9 +1118,40 @@
         stopPlayback();
         return;
       }
-      if (comparing) await loadComparison(next);
-      else await seek(next);
-      if (state.playing) setTimeout(playbackLoop, 700);
+      if (!state.motion) {
+        const result = comparing
+          ? await api(
+              `${runBase()}/compare?branch_ids=${enc(pairIds().join(","))}&minute=${next}`,
+            )
+          : await api(`${branchBase()}/timeline?minute=${next}`);
+        if (!state.playing || token !== state.playToken) return;
+        state.motion = {
+          from: comparing ? state.comparison.frames : [state.frame],
+          to: comparing ? result.frames : [result],
+          minute: next,
+          started: performance.now(),
+          duration: 700,
+        };
+      }
+      await new Promise((resolve) => {
+        const check = () => {
+          if (
+            token !== state.playToken ||
+            !state.playing ||
+            motionFraction() >= 1
+          )
+            resolve();
+          else requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      });
+      if (!state.playing || token !== state.playToken) return;
+      const completed = state.motion.minute;
+      if (comparing) await loadComparison(completed, token);
+      else await seek(completed, token);
+      if (token !== state.playToken) return;
+      state.motion = null;
+      if (state.playing) void playbackLoop(token);
     } catch (e) {
       stopPlayback();
       note(e.message, "error");
@@ -1247,7 +1360,7 @@
     if (!b) throw new Error("介入後の分岐を選択してください。");
     return [b.parent_branch_id || "main", child];
   }
-  async function loadComparison(minute) {
+  async function loadComparison(minute, expectedPlayToken) {
     const ids = pairIds(),
       refs = ids.map(reference),
       lo = Math.max(...refs.map((r) => r.fork_minute)),
@@ -1264,8 +1377,23 @@
     const result = await api(
       `${runBase()}/compare?branch_ids=${enc(ids.join(","))}&minute=${m}`,
     );
-    if (scope !== state.scope || selected !== $("compare-branch").value) return;
+    if (
+      (expectedPlayToken !== undefined &&
+        expectedPlayToken !== state.playToken) ||
+      scope !== state.scope ||
+      selected !== $("compare-branch").value
+    )
+      return;
     state.comparison = result;
+    if (
+      state.sceneMode === "schematic" &&
+      !result.frames.every(window.HinanjoScene.supported)
+    ) {
+      state.sceneMode = "physical";
+      document
+        .querySelectorAll("[data-scene-mode]")
+        .forEach((s) => (s.value = "physical"));
+    }
     $("compare-seek").min = lo;
     $("compare-seek").max = hi;
     $("compare-seek").value = m;
@@ -1314,7 +1442,7 @@
           (f) => !f.point && !f.service_queues?.some((q) => q.point),
         ).length;
       $(`compare-conditions-${key}`).textContent =
-        `稼働トイレ ${num(frame.kpis.toilet_working_units)}基 · 物理座標未記録の設備 ${missing}件（推測配置しません）`;
+        `${state.sceneMode === "schematic" && window.HinanjoScene.supported(frame) ? "模式図（距離非対応）" : "実座標"} · 稼働トイレ ${num(frame.kpis.toilet_working_units)}基 · 実座標未記録設備 ${missing}件`;
     }
     $("comparison-provenance").textContent = json({
       minute: result.minute,
@@ -1655,10 +1783,14 @@
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return null;
     const dpr = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.round(r.width * dpr);
-    canvas.height = Math.round(r.height * dpr);
+    const width = Math.round(r.width * dpr),
+      height = Math.round(r.height * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
     const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx, w: r.width, h: r.height };
   }
   const hits = new Map();
@@ -1669,10 +1801,35 @@
       "simulation-map",
       "compare-map-a",
       "compare-map-b",
+      "report-map",
     ].includes(canvas.id);
     hits.set(
       canvas,
       window.HinanjoMap.draw(sf, frame, {
+        viewportBounds:
+          state.page === "comparison" &&
+          state.sceneMode === "physical" &&
+          state.comparison
+            ? {
+                width: Math.max(
+                  ...state.comparison.frames.map(
+                    (f) => f.geometry?.width_m || 1,
+                  ),
+                ),
+                height: Math.max(
+                  ...state.comparison.frames.map(
+                    (f) => f.geometry?.height_m || 1,
+                  ),
+                ),
+              }
+            : undefined,
+        mode: state.sceneMode,
+        animate:
+          state.playing &&
+          !matchMedia("(prefers-reduced-motion: reduce)").matches,
+        time: state.motion?.paused
+          ? state.motion.started + state.motion.fraction * state.motion.duration
+          : performance.now(),
         layer,
         zoom,
         selected: state.selected,
@@ -1869,6 +2026,15 @@
     }
   }
   function drawAll() {
+    const visible = (frame, index = 0) =>
+      state.motion
+        ? window.HinanjoScene.sample(
+            state.motion.from[index],
+            state.motion.to[index],
+            motionFraction(),
+            state.sceneMode,
+          )
+        : frame;
     if (state.page === "scenario" && state.preview) {
       const f = state.preview.facility_design;
       drawMap(
@@ -1890,21 +2056,21 @@
       drawPopulation(state.preview.scenario);
     }
     if (state.page === "simulation")
-      drawMap($("simulation-map"), state.frame, $("layer").value);
+      drawMap($("simulation-map"), visible(state.frame), $("layer").value);
     if (state.page === "comparison") {
       drawMap(
         $("compare-map-a"),
-        state.comparison?.frames[0],
+        visible(state.comparison?.frames[0], 0),
         $("compare-layer").value,
       );
       drawMap(
         $("compare-map-b"),
-        state.comparison?.frames[1],
+        visible(state.comparison?.frames[1], 1),
         $("compare-layer").value,
       );
     }
     if (state.page === "report") {
-      drawMap($("report-map"), state.frame, "normal", 1);
+      drawMap($("report-map"), state.frame, $("report-layer").value);
       drawHistory();
     }
   }
@@ -2034,7 +2200,12 @@
       drawAll();
     }),
   );
-  for (const id of ["simulation-map", "compare-map-a", "compare-map-b"]) {
+  for (const id of [
+    "simulation-map",
+    "compare-map-a",
+    "compare-map-b",
+    "report-map",
+  ]) {
     const canvas = $(id);
     let drag = null;
     canvas.tabIndex = 0;
@@ -2082,8 +2253,35 @@
     canvas.addEventListener("pointerup", (e) => {
       if (drag && !drag.moved) {
         const hit = hitAt(e);
-        if (hit?.type === "person") selectPerson(hit.id, hit.ids);
-        else if (hit?.type === "facility") {
+        if (hit?.type === "person") {
+          if (id === "simulation-map" || id === "report-map")
+            selectPerson(hit.id, hit.ids);
+          else {
+            state.selected = hit.id;
+            drawAll();
+          }
+          if (id !== "simulation-map") {
+            const f =
+              id === "report-map"
+                ? state.frame
+                : state.comparison.frames[id === "compare-map-a" ? 0 : 1];
+            const p = f.people.find((p) => p.id === hit.id),
+              a = f.agents.find((a) => a.agent_id === hit.id);
+            let detail = canvas.parentElement.querySelector(".map-inspector");
+            if (!detail) {
+              detail = el("div", undefined, "map-inspector");
+              canvas.parentElement.append(detail);
+            }
+            detail.replaceChildren(
+              el("strong", hit.id),
+              el("span", p ? personSummary(p) : "スタッフ"),
+              el(
+                "small",
+                `所属 ${a?.zone_id || "—"} · 記録座標 ${a?.point ? num(a.point.x) + ", " + num(a.point.y) + "m" : "未提供"}`,
+              ),
+            );
+          }
+        } else if (hit?.type === "facility") {
           $("person-detail").replaceChildren(
             el("div", hit.label, "person-state"),
           );
@@ -2131,6 +2329,7 @@
       } else if (e.key === "Escape") {
         state.selected = null;
         state.selectedGroup = [];
+        document.querySelectorAll(".map-inspector").forEach((n) => n.remove());
         renderPeople();
         drawAll();
       }
@@ -2202,6 +2401,62 @@
   );
   async function init() {
     const requestedPage = location.hash.slice(1);
+    const template = document.querySelector("[data-scene-mode]").parentElement;
+    document
+      .querySelector(".compare-controls")
+      .append(template.cloneNode(true));
+    const reportControls = el("div", undefined, "report-map-controls");
+    reportControls.append(template.cloneNode(true));
+    const reportLayer = el("select");
+    reportLayer.id = "report-layer";
+    reportLayer.setAttribute("aria-label", "レポートのマップレイヤー");
+    for (const [value, label] of [
+      ["normal", "通常"],
+      ["stress", "ストレス"],
+      ["crowd", "混雑"],
+      ["health", "健康・ニーズ"],
+      ["operations", "運営"],
+    ]) {
+      const option = el("option", label);
+      option.value = value;
+      reportLayer.append(option);
+    }
+    reportControls.append(reportLayer);
+    $("report-map").before(reportControls);
+    reportLayer.addEventListener("change", drawAll);
+    for (const id of ["compare-map-a", "compare-map-b", "report-map"])
+      $(id).parentElement.classList.add("map-host");
+    document.querySelectorAll("[data-scene-mode]").forEach((select) =>
+      select.addEventListener("change", () => {
+        state.sceneMode = select.value;
+        document
+          .querySelectorAll("[data-scene-mode]")
+          .forEach((s) => (s.value = state.sceneMode));
+        state.mapPan = { x: 0, y: 0 };
+        state.zoom = 1;
+        if (state.frame) renderFrame();
+        else drawAll();
+        updateSceneCaption();
+      }),
+    );
+    function updateSceneCaption() {
+      document
+        .querySelectorAll(".map-caption")
+        .forEach(
+          (n) =>
+            (n.textContent =
+              state.sceneMode === "schematic"
+                ? "模式図 · 部屋形状・人物の個別配置は表示用／距離は非対応"
+                : "実座標 · 床材と背景は表示上の演出"),
+        );
+      $("report-map").setAttribute(
+        "aria-description",
+        state.sceneMode === "schematic"
+          ? "模式図。個別の配置は所属を表す記号です。"
+          : "記録された実座標",
+      );
+    }
+    updateSceneCaption();
     syncLayerTabs();
     document
       .querySelectorAll("[data-icon]")
