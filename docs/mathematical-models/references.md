@@ -10,12 +10,16 @@
 - Kunii et al. (2016). Fukushima evacuees and psychological distress. [PMC4938533](https://pmc.ncbi.nlm.nih.gov/articles/PMC4938533/). 詳細な書誌はリンク先記録を参照。
 - Oe et al. (2016). Long-term trajectory of psychological distress after disaster. [PMC5073554](https://pmc.ncbi.nlm.nih.gov/articles/PMC5073554/). 詳細な書誌はリンク先記録を参照。
 - Hobfoll, S. E. et al. (2007). “Five Essential Elements of Immediate and Mid-Term Mass Trauma Intervention: Empirical Evidence.” *Psychiatry*, 70(4), 283–315. DOI: [10.1521/psyc.2007.70.4.283](https://doi.org/10.1521/psyc.2007.70.4.283).
+- McEwen, B. S. & Stellar, E. (1993). “Stress and the Individual: Mechanisms Leading to Disease.” *Archives of Internal Medicine*, 153(18), 2093–2101. DOI: [10.1001/archinte.1993.00410180039004](https://doi.org/10.1001/archinte.1993.00410180039004). Allostatic load motivates separating recurrent burden from acute state; it does not specify ShelterSim coefficients.
+- Daan, S., Beersma, D. G. M., & Borbély, A. A. (1984). “Timing of human sleep: recovery process gated by a circadian pacemaker.” *American Journal of Physiology*, 246(2), R161–R183. DOI: [10.1152/ajpregu.1984.246.2.R161](https://doi.org/10.1152/ajpregu.1984.246.2.R161). Supports asymmetric homeostatic wake/sleep process structure, not the minute rates used by ShelterSim.
+- Van Dongen, H. P. A. et al. (2003). “The cumulative cost of additional wakefulness: dose-response effects on neurobehavioral functions and sleep physiology from chronic sleep restriction and total sleep deprivation.” *Sleep*, 26(2), 117–126. DOI: [10.1093/sleep/26.2.117](https://doi.org/10.1093/sleep/26.2.117). Supports cumulative effects of insufficient sleep under the study protocol; does not calibrate ShelterSim's bounded sleep-debt state.
 - Koyama et al. (2014). 社会的支援と被災者の心理状態. *Tohoku Journal of Experimental Medicine*, 234(3), 241–249. [Article](https://www.jstage.jst.go.jp/article/tjem/234/3/234_241/_html/-char/en).
 
 ## 社会・情報
 
 - Bosse, T. et al. (2013). “Modelling collective decision making in groups and crowds.” *Journal of Artificial Societies and Social Simulation*. [DOI/record](https://link.springer.com/article/10.1007/s10458-012-9201-1). 表出性・channel・openness構造の参考。実装係数は未校正。
-- Bosse et al. (2015). “Agent-Based Modelling of Emotion Contagion in Groups.” 依頼資料の題名。完全な書誌/DOIはこの環境では確認できず、未確認。
+- Bosse, T. et al. (2015). “Agent-Based Modelling of Emotion Contagion in Groups.” *Cognitive Computation*, 7, 53–64. DOI: [10.1007/s12559-014-9277-9](https://doi.org/10.1007/s12559-014-9277-9). 伝播構造の参考。接触や係数は避難所向けに校正されていない。
+- Chan, M.-P. S. et al. (2023). “The efficacy of corrective information for belief change depends on the source and the correction format.” *Nature Human Behaviour*, 7, 148–156. DOI: [10.1038/s41562-023-01623-8](https://doi.org/10.1038/s41562-023-01623-8). 訂正効果の条件差に関するメタ分析。訂正が安心感や避難所内行動を必ず変えることは示さない。
 - Daley, D. J. & Kendall, D. G. (1965). “Stochastic Rumours.” *IMA Journal of Applied Mathematics*, 1(1), 42–55. DOI: [10.1093/imamat/1.1.42](https://doi.org/10.1093/imamat/1.1.42). 初出年は依頼文中の1964ではなく掲載誌情報の1965を採用。
 - Nekovee, M. et al. (2007). “Theory of rumour spreading in complex social networks.” *Physica A*, 374, 457–470. DOI: [10.1016/j.physa.2006.07.017](https://doi.org/10.1016/j.physa.2006.07.017).
 - Takayasu et al. (2015). “Rumor Diffusion and Convergence during the 3.11 Earthquake.” *PLOS ONE*. [Article](https://doi.org/10.1371/journal.pone.0121443).
