@@ -14,6 +14,14 @@ class LLMCacheError(ValueError):
     """Raised when a response tape is corrupt or from an unsupported schema."""
 
 
+def _entry_document(response: ProviderResponse) -> dict[str, Any]:
+    # Use JSON-native lists: Project storage compares Checkpoints with their sanitized
+    # copy, and a tuple there would differ from the list it becomes on disk.
+    document = asdict(response)
+    document["citations"] = list(document["citations"])
+    return document
+
+
 @dataclass
 class ResponseTape:
     """Small local store of accepted API outputs; cache keys include all decision inputs."""
@@ -67,7 +75,9 @@ class ResponseTape:
         assert self.entries is not None
         return {
             "schema_version": self.CURRENT_SCHEMA_VERSION,
-            "entries": {key: asdict(response) for key, response in sorted(self.entries.items())},
+            "entries": {
+                key: _entry_document(response) for key, response in sorted(self.entries.items())
+            },
         }
 
     @classmethod

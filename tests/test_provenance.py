@@ -17,7 +17,7 @@ from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import PsychologyModelConfig, ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter, _decision_document
 from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
-from sheltersim.llm.runtime import SocialRuntimeLimits
+from sheltersim.llm.runtime import SocialRuntimeLimits, SupportPriorityLimits
 from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.social import SocialPropagationParameters
 
@@ -72,6 +72,7 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
         "ASM-ZONE-ROUTING-V1",
         "ASM-A05-ROUTE-EDIT-V1",
         "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1",
+        "ASM-SUPPORT-PRIORITY-LIMITS-V1",
         "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
         "ASM-SYNTHETIC-ZONE-DISPLAY-V1",
         "ASM-H02-RESOURCE-SERVICE-V1",
@@ -189,6 +190,9 @@ def test_optional_and_runtime_assumptions_match_the_implemented_defaults() -> No
 
     runtime_limits = assumptions["ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1"]["values"]
     assert runtime_limits == asdict(SocialRuntimeLimits())
+    priority_limits = assumptions["ASM-SUPPORT-PRIORITY-LIMITS-V1"]
+    assert priority_limits["values"] == asdict(SupportPriorityLimits())
+    assert priority_limits["model_version"] == "support-priority-v2"
 
     zone_layout = assumptions["ASM-SYNTHETIC-ZONE-DISPLAY-V1"]["values"]
     assert zone_layout["grid_columns"] == 4
@@ -213,6 +217,10 @@ def test_run_manifest_and_decision_trace_include_source_ids(tmp_path: Path) -> N
     assert (
         model_assumptions["event_triggered_social_limits"]["source_id"]
         == "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1"
+    )
+    assert (
+        model_assumptions["event_triggered_support_priority_limits"]["source_id"]
+        == "ASM-SUPPORT-PRIORITY-LIMITS-V1"
     )
     assert model_assumptions["zone_routing"]["source_id"] == "ASM-ZONE-ROUTING-V1"
     assert model_assumptions["inspector_zone_projection"]["affects_simulation"] is False

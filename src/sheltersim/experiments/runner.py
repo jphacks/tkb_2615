@@ -125,7 +125,14 @@ from sheltersim.llm.report import (
     scenario_assumption_ids,
     validate_comparison_scope,
 )
-from sheltersim.llm.runtime import EventTriggeredSocialPolicy
+from sheltersim.llm.runtime import (
+    LEGACY_SUPPORT_PRIORITY_POLICY_VERSION,
+    SUPPORT_PRIORITY_POLICY_VERSION,
+    EventTriggeredSocialPolicy,
+    SupportPriorityLimits,
+    support_priority_policy_version,
+    support_priority_runtime,
+)
 from sheltersim.llm.schemas import SUPPORT_ADVICE_SCHEMA
 from sheltersim.policies.behavior import (
     ActionKind,
@@ -188,6 +195,12 @@ class OfflineSimulationController:
             raise ValueError("social_proximity requires installed movement and social state")
         self.artifacts = artifacts
         self.llm_router = llm_router
+        self.support_priority_version = (
+            support_priority_policy_version(llm_router)
+            if llm_router is not None
+            else SUPPORT_PRIORITY_POLICY_VERSION
+        )
+        self.support_priority_limits = SupportPriorityLimits()
         self.social_policy = (
             EventTriggeredSocialPolicy(
                 llm_router,
@@ -1112,15 +1125,36 @@ class OfflineSimulationController:
         if self.llm_router is None or self.llm_router.mode.value == "offline":
             return
         agent = self.world.agents[proposal.agent_id]
+        constraints = [
+            "Use only the functional need and current state values below.",
+            "Do not infer from names, demographics, or group membership.",
+            "Do not approve or deny support; this only orders a staff queue.",
+            "Return the required JSON object only.",
+        ]
+        if self.support_priority_version != LEGACY_SUPPORT_PRIORITY_POLICY_VERSION:
+            # v2 asks only for stressed requesters within a daily cap; skipped
+            # requests keep the rule priority 0, exactly like a fallback.
+            runtime = support_priority_runtime(self.world)
+            day_key = str(self.world.minute_index // 1440)
+            skip_reason = (
+                "below_stress_threshold"
+                if agent.stress < self.support_priority_limits.stress_threshold
+                else "global_daily_cap"
+                if runtime["attempts_by_day"].get(day_key, 0)
+                >= self.support_priority_limits.global_per_day
+                else None
+            )
+            if skip_reason is not None:
+                skipped = runtime["skipped_by_reason"]
+                skipped[skip_reason] = skipped.get(skip_reason, 0) + 1
+                return
+            attempts = runtime["attempts_by_day"]
+            attempts[day_key] = attempts.get(day_key, 0) + 1
+            constraints.append("Keep rationale to one short phrase of at most 80 characters.")
         prompt = {
             "task": "Set queue priority for one synthetic staff support request.",
             "allowed_priority": {"0": "normal", "1": "urgent"},
-            "constraints": [
-                "Use only the functional need and current state values below.",
-                "Do not infer from names, demographics, or group membership.",
-                "Do not approve or deny support; this only orders a staff queue.",
-                "Return the required JSON object only.",
-            ],
+            "constraints": constraints,
             "minute": self.world.minute_index,
             "support_need": agent.profile.support_need,
             "stress": agent.stress,
@@ -1143,7 +1177,7 @@ class OfflineSimulationController:
                 stage=LLMStage.RUNTIME,
                 input_text=input_text,
                 state_hash=proposal.observed_state_hash,
-                prompt_version="support-priority-v1",
+                prompt_version=self.support_priority_version,
                 schema_version=1,
                 output_schema=SUPPORT_ADVICE_SCHEMA,
                 fallback_text='{"priority":0,"rationale":"rule-based fallback"}',

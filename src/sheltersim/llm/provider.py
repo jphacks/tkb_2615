@@ -346,6 +346,10 @@ class LLMRouter:
         )
         return response.text
 
+    def history_records(self) -> tuple[LLMCallRecord, ...]:
+        """Return every call this router has recorded or restored, for version checks."""
+        return tuple(self.records)
+
     def snapshot_state(self) -> dict[str, object]:
         """Return router counters for inclusion in a Checkpoint runtime_state."""
         return {

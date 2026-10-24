@@ -47,8 +47,8 @@ class DeniedAllowanceProvider:
         raise LLMAllowanceError("usage_allowance_denied:usage_limit_exceeded")
 
 
-def _scenario(duration_minutes: int = 30) -> ScenarioSpec:
-    # Thirty synthetic Agents raise several pending support requests at minute 0.
+def _scenario(duration_minutes: int = 200) -> ScenarioSpec:
+    # By minute 200 stressed synthetic Agents trigger support-priority and social tasks.
     return build_benchmark_scenario(
         ScenarioSpec.load(BASELINE), agent_count=30, seed=7, duration_minutes=duration_minutes
     )
@@ -222,7 +222,7 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path)
     router = _router(DeniedAllowanceProvider())
     timeline = TimelineStore(store, "project", "run")
     timeline.record(runtime, router=router)
-    timeline.advance("main", 30, router=router)
+    timeline.advance("main", 200, router=router)
     head_before = store.branch_reference("project", "run", "main").checkpoint_hash
     api = ProjectAPI(store, recover=False)
     try:
@@ -231,7 +231,7 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path)
         api.close()
 
     assert status["mode"] == "record"
-    assert status["computed_until"] == 30
+    assert status["computed_until"] == 200
     assert status["outcomes"]["status"] == "all_fallback"
     assert status["outcomes"]["fallback_count"] == len(router.records) > 0
     # Reading the status is observational and leaves the branch head unchanged.
