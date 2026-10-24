@@ -331,11 +331,7 @@ class ResultsChatService:
                     rejected_claim = True
                     break
                 actual = _evidence_value(evidence_by_alias.get(proof["alias"]), proof["field"])
-                try:
-                    copied_value = json.loads(proof["value"])
-                except (json.JSONDecodeError, TypeError):
-                    copied_value = _MISSING
-                if actual is _MISSING or type(actual) not in {str, int, float, bool, type(None)} or type(actual) is not type(copied_value) or actual != copied_value:
+                if not _proof_matches(actual, proof["value"]):
                     rejected_claim = True
                     break
                 proof_rows.append({"alias": proof["alias"], "field": proof["field"], "value": actual})
@@ -370,12 +366,7 @@ class ResultsChatService:
                     proof_rows = []
                     break
                 actual = _evidence_value(evidence_by_alias.get(proof["alias"]), proof["field"])
-                try:
-                    copied_value = json.loads(proof["value"])
-                except (json.JSONDecodeError, TypeError):
-                    copied_value = _MISSING
-                if (actual is _MISSING or type(actual) not in {str, int, float, bool, type(None)}
-                        or type(actual) is not type(copied_value) or actual != copied_value):
+                if not _proof_matches(actual, proof["value"]):
                     rejected_explanation = True
                     proof_rows = []
                     break
@@ -754,6 +745,22 @@ def _proof_object(value: Any) -> Any:
         metadata = {"cursor", "next_cursor", "anchor_hash", "state_hash", "total_items", "effective_limit"}
         return {key: _proof_object(item) for key, item in value.items() if key not in metadata}
     return value
+
+
+def _proof_matches(actual: Any, copied: Any) -> bool:
+    """Require an exact copy of one recorded scalar, never a rounded or retyped value."""
+    if actual is _MISSING or type(actual) not in {str, int, float, bool, type(None)}:
+        return False
+    if not isinstance(copied, str):
+        return False
+    # Models often give a recorded string verbatim instead of JSON-quoting it.
+    if isinstance(actual, str) and copied == actual:
+        return True
+    try:
+        copied_value = json.loads(copied)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return type(actual) is type(copied_value) and actual == copied_value
 
 
 def _evidence_value(data: Any, path: str) -> Any:

@@ -308,8 +308,9 @@ class ProjectAPI:
             runtime = TimelineStore(self.store, project_id, run_id)._advance_locked(branch_id, target_minute, router=router, cancelled=cancel.is_set)
             status = "completed" if runtime.world.minute_index == runtime.world.duration_minutes else "paused"
             computed_until = runtime.world.minute_index
-            self.store.set_status(project_id, run_id, status)
             if status == "completed":
+                # The UI fetches the report once when the status leaves "running", so
+                # write the report (or its unavailability) before marking completion.
                 try:
                     self.workspace.finish_review(project_id, run_id, branch_id, runtime)
                 except Exception:
@@ -322,6 +323,7 @@ class ProjectAPI:
                         # A full disk can also prevent recording the optional report failure.
                         # Keep the already durable completed simulation and its status.
                         pass
+            self.store.set_status(project_id, run_id, status)
         except Exception as exc:
             # Provider errors may contain secrets; only a fixed failure code is persisted.
             failure_code = type(exc).__name__
