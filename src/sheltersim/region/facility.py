@@ -23,8 +23,9 @@ from sheltersim.region.conditions import FacilityEquipmentCondition
 
 SYNTHETIC_FACILITY_SOURCE_ID = "ASM-STANDARD-SHELTER-GEOMETRY-V1"
 SYNTHETIC_CAPACITY_SOURCE_ID = "ASM-SHELTER-AREA-HEURISTIC-V1"
-SYNTHETIC_STAFFING_SOURCE_ID = "ASM-SHELTER-STAFFING-HEURISTIC-V1"
-SYNTHETIC_TOILET_SOURCE_ID = "ASM-SHELTER-TOILET-HEURISTIC-V1"
+SYNTHETIC_STAFFING_SOURCE_ID = "ASM-SHELTER-STAFFING-HEURISTIC-V2"
+SYNTHETIC_TOILET_SOURCE_ID = "ASM-SHELTER-TOILET-HEURISTIC-V2"
+SERVICE_STATION_SOURCE_ID = "ASM-SHELTER-SERVICE-STATIONS-V1"
 
 
 class FacilityZoneCondition(RegionModel):
@@ -335,7 +336,7 @@ class StandardShelterGenerator:
         warnings.extend(
             (
                 "平面形状、1.8 m通路、面積配分、設備数は標準モデルの仮定です。実施設の図面・法令適合・避難安全性を示しません。",
-                "食料・飲料水の在庫量は指定されていません。施設数から在庫や供給能力を推定していません。",
+                "食料・飲料水の在庫量は施設数から推定していません。在庫を入力しない場合の既定量はScenarioの仮定として記録します。",
             )
         )
         sources = tuple(sorted({
@@ -343,6 +344,7 @@ class StandardShelterGenerator:
             SYNTHETIC_CAPACITY_SOURCE_ID,
             SYNTHETIC_STAFFING_SOURCE_ID,
             SYNTHETIC_TOILET_SOURCE_ID,
+            SERVICE_STATION_SOURCE_ID,
             *area_source_ids,
             *request.capacity_source_ids,
             *(item.source_id for item in request.zone_conditions),
@@ -419,8 +421,10 @@ class StandardShelterGenerator:
             zone_centers[zone_id] = Point2D(x=(left + right) / 2, y=(top + bottom) / 2)
             x_cursor = right
 
-        ordinary_toilets = math.ceil(request.population / 50)
-        toilets = request.accessible_toilet_count + ordinary_toilets
+        counts = standard_service_counts(request.population)
+        toilets = max(
+            request.accessible_toilet_count + counts["toilet_standard"], counts["toilet_demand"]
+        )
         if toilets > 20:
             warnings.append("標準モデルのトイレ設備は20基で上限化されています。追加設備を手動指定してください。")
             toilets = 20
@@ -438,8 +442,8 @@ class StandardShelterGenerator:
         )
         facilities.extend(
             (
-                FacilitySpec(id="water_station_main", kind="water_station", zone_id="food", capacity=1),
-                FacilitySpec(id="meal_distribution_main", kind="meal_distribution", zone_id="food", capacity=1),
+                *_service_stations("water_station", counts["water_station"]),
+                *_service_stations("meal_distribution", counts["meal_distribution"]),
                 FacilitySpec(id="medical_desk", kind="medical_support", zone_id="medical", capacity=1),
                 FacilitySpec(id="intake_desk", kind="intake", zone_id="intake", capacity=1),
                 FacilitySpec(id="quiet_support", kind="quiet_space", zone_id="quiet", capacity=1),
@@ -508,8 +512,16 @@ class StandardShelterGenerator:
                 raise ValueError(f"equipment {item.facility_id!r} position lies outside its assigned zone")
             facility_points[item.facility_id] = item.position_m
 
-        default_staff_count = max(1, math.ceil(request.population / 100))
-        staff_count = request.staff_count if request.staff_count is not None else default_staff_count
+        # Water and meal service start only with skilled staff in the food zone, so each
+        # station gets its own station-based staff member next to the general staff.
+        station_staff_needed = counts["water_station"] + counts["meal_distribution"]
+        if request.staff_count is None:
+            general_staff_count = max(1, math.ceil(request.population / 100))
+            station_staff_count = station_staff_needed
+        else:
+            station_staff_count = min(station_staff_needed, max(0, request.staff_count - 1))
+            general_staff_count = request.staff_count - station_staff_count
+        staff_count = general_staff_count + station_staff_count
         staff_skills = (
             "support",
             "intake",
@@ -520,7 +532,12 @@ class StandardShelterGenerator:
         )
         staff = tuple(
             StaffSpec(id=f"staff_{index:03d}", zone_id="staff", skills=staff_skills)
-            for index in range(1, staff_count + 1)
+            for index in range(1, general_staff_count + 1)
+        ) + tuple(
+            StaffSpec(
+                id=f"staff_{index:03d}", zone_id="food", skills=("water_service", "meal_service")
+            )
+            for index in range(general_staff_count + 1, staff_count + 1)
         )
 
         edges: list[ZoneEdgeSpec] = []
@@ -662,8 +679,14 @@ class StandardShelterGenerator:
             {
                 "id": SYNTHETIC_STAFFING_SOURCE_ID,
                 "subject": "synthetic_staff_count",
-                "value": staff_count,
-                "reason": "One generic staff member per 100 requested occupants, minimum one; not an operational staffing standard.",
+                "value": {
+                    "total": staff_count,
+                    "general_staff": general_staff_count,
+                    "station_staff": station_staff_count,
+                    "station_staff_zone_id": "food",
+                    "entered_total": request.staff_count,
+                },
+                "reason": "One general staff member per 100 requested occupants (minimum one) plus one station-based staff member per water or meal station; an entered total keeps at least one general staff member. Not an operational staffing standard.",
                 "source_id": SYNTHETIC_STAFFING_SOURCE_ID,
             },
             {
@@ -671,11 +694,23 @@ class StandardShelterGenerator:
                 "subject": "synthetic_toilet_count",
                 "value": {
                     "accessible_toilets": request.accessible_toilet_count,
-                    "ordinary_toilets": math.ceil(request.population / 50),
+                    "planning_standard_units": counts["toilet_standard"],
+                    "demand_units": counts["toilet_demand"],
+                    "total": toilets,
                     "maximum": 20,
                 },
-                "reason": "One ordinary toilet per 50 requested occupants plus the entered accessible-toilet count, capped at 20; a simulation heuristic, not a facility standard.",
+                "reason": "The larger of the entered accessible toilets plus one per 50 occupants (Cabinet Office initial planning figure) and the units the modeled daily use needs at the target load, capped at 20.",
                 "source_id": SYNTHETIC_TOILET_SOURCE_ID,
+            },
+            {
+                "id": SERVICE_STATION_SOURCE_ID,
+                "subject": "synthetic_service_station_count",
+                "value": {
+                    "water_station": counts["water_station"],
+                    "meal_distribution": counts["meal_distribution"],
+                },
+                "reason": "Units that keep the modeled daily water and meal demand within the target load (at least one each); no public standard sets station counts.",
+                "source_id": SERVICE_STATION_SOURCE_ID,
             },
         )
         return FacilityDesign(
@@ -691,6 +726,65 @@ class StandardShelterGenerator:
             assumptions=assumptions,
             warnings=tuple(warnings),
         )
+
+
+def standard_service_counts(population: int) -> dict[str, int]:
+    """Return default unit counts that meet the planning standard and modeled demand.
+
+    Demand uses the default generated coefficients; a Scenario whose coefficients are
+    changed later is checked by service_capacity_diagnostic instead.
+    """
+    from sheltersim.experiments.sanitation_diagnostics import (
+        PEOPLE_PER_TOILET,
+        PLANNING_TOILET_USES_PER_PERSON_DAY,
+    )
+    from sheltersim.experiments.scenario import PsychologyModelConfig, ToiletServiceConfig
+    from sheltersim.experiments.service_capacity import (
+        required_service_units,
+        uses_per_person_day,
+    )
+    from sheltersim.region.conditions import default_resource_service_config
+
+    toilet = ToiletServiceConfig()
+    resource = default_resource_service_config()
+    water_uses = uses_per_person_day(
+        resource.hydration_growth_per_minute,
+        relief=resource.hydration_relief,
+        action_threshold=resource.hydration_action_threshold,
+    )
+    meal_uses = uses_per_person_day(
+        PsychologyModelConfig().hunger_growth,
+        relief=resource.hunger_relief,
+        action_threshold=resource.hunger_action_threshold,
+    )
+    return {
+        "toilet_standard": math.ceil(population / PEOPLE_PER_TOILET["initial"]),
+        "toilet_demand": required_service_units(
+            population
+            * PLANNING_TOILET_USES_PER_PERSON_DAY
+            * (toilet.minimum_minutes + toilet.maximum_minutes)
+            / 2
+        ),
+        "water_station": max(
+            1, required_service_units(population * water_uses * resource.service_minutes)
+        ),
+        "meal_distribution": max(
+            1, required_service_units(population * meal_uses * resource.service_minutes)
+        ),
+    }
+
+
+def _service_stations(kind: str, count: int) -> tuple[FacilitySpec, ...]:
+    # The first station keeps its historical ID so single-station plans stay recognizable.
+    return tuple(
+        FacilitySpec(
+            id=f"{kind}_main" if index == 1 else f"{kind}_{index:02d}",
+            kind=kind,
+            zone_id="food",
+            capacity=1,
+        )
+        for index in range(1, count + 1)
+    )
 
 
 def _default_gross_area(
