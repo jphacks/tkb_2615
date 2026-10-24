@@ -1436,9 +1436,16 @@ def plan_in_room_route(
                 if _point_walkable(candidate, zone.polygon, blocked_polygons):
                     nodes.append(candidate)
     unique = {(round(point.x, 8), round(point.y, 8)): point for point in nodes}
-    nodes = [unique[key] for key in sorted(unique)]
-    start_index = next(index for index, point in enumerate(nodes) if point == origin)
-    end_index = next(index for index, point in enumerate(nodes) if point == destination)
+    # A corner or opening node can round onto an endpoint and replace it; restore the
+    # endpoints so they are always found. Without a collision nothing changes.
+    origin_key = (round(origin.x, 8), round(origin.y, 8))
+    destination_key = (round(destination.x, 8), round(destination.y, 8))
+    unique[destination_key] = destination
+    unique[origin_key] = origin
+    keys = sorted(unique)
+    nodes = [unique[key] for key in keys]
+    start_index = keys.index(origin_key)
+    end_index = keys.index(destination_key)
     graph: dict[int, list[tuple[float, int]]] = {index: [] for index in range(len(nodes))}
     for left in range(len(nodes)):
         for right in range(left + 1, len(nodes)):
