@@ -15,7 +15,7 @@
 
 主要schemaは個別に版管理しています。現在の形式にはScenarioSpec v3、ProfileSpec v2、拡張状態に応じてWorldState v5またはv6、Checkpoint v1があります。契約変更時は現行validatorと移行テストを確認してください。版の異なるデータは互換とは限りません。
 
-Scenario JSON、Run manifest、CheckpointはJSONを使います。eventとdecisionはJSONL、metricsはCSVを使う場合があります。Run manifestにはseed、モデル版、仮定、source ID、実行mode、hashを記録します。有効なsubsystemにより、追加の版管理済みtrace成果物が作られます。
+Scenario JSON、Run manifest、CheckpointはJSONを使います。eventとdecisionはJSONL、metricsはCSVを使う場合があります。Run manifestにはseed、モデル版、仮定、source ID、実行mode、hash、LLM利用量とfallback集計（llm_usage.outcomes、llm-integration.md参照）を記録します。有効なsubsystemにより、追加の版管理済みtrace成果物が作られます。
 
 ## CLI
 
@@ -43,7 +43,7 @@ serverは型付きrequest契約と、許可されたfield/queryだけを受け�
 | /api/v1/projects/{project}/scenario-preview | Scenario案を作成・検証します |
 | /api/v1/projects/{project}/scenario-approve | preview hashを承認し、保存ScenarioとRunを作成します |
 | /api/v1/projects/{project}/runs/{run} | Runを再開・取消し、telemetryや比較を参照します |
-| /api/v1/projects/{project}/runs/{run}/branches/{branch} | timeline、履歴、report、会話を参照し、型付きBranch操作を送ります |
+| /api/v1/projects/{project}/runs/{run}/branches/{branch} | timeline、履歴、report、会話、LLM fallback集計（llm-status）を参照し、型付きBranch操作を送ります |
 | /api/v1/runs | read-only Inspectorから保存Run成果物を検索します |
 | /api/v1/demo | process内DemoとBranchを参照します |
 | /api/v1/usage/runtime | CLI/Demoの上限付き利用記録を参照します |

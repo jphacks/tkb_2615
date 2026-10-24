@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -20,6 +21,7 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.query import InspectorQueryError, RunInspector
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.generation import generate_initial_needs
+from sheltersim.llm.outcomes import fallback_warning, summarize_call_outcomes
 from sheltersim.llm.prepare import generate_scenario_draft
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.report import review_saved_run
@@ -317,6 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 llm_router=llm_router,
                 comparison_report=comparison_report,
             )
+            llm_status = summarize_call_outcomes(llm_router.records)
             print(
                 _json_text(
                     {
@@ -327,9 +330,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "final_state_hash": hashlib.sha256(
                             world.canonical_json().encode("utf-8")
                         ).hexdigest(),
+                        "llm_status": llm_status,
                     }
                 )
             )
+            warning = fallback_warning(llm_status)
+            if warning is not None:
+                print(f"warning: {warning}", file=sys.stderr)
         except (OSError, ValueError, RuntimeError) as exc:
             parser.error(f"could not run scenario: {exc}")
         return 0
