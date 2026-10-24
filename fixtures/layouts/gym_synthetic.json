@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "id": "gym-synthetic-v1",
+  "title": "合成体育館図面",
+  "source": "ShelterSim synthetic display fixture",
+  "note": "合成図面です。区画ポリゴン・設備位置は表示用で、経路・移動時間・Simulation hashには使いません。route_edgesはScenarioのZoneGraphと一対一に対応するID台帳です。",
+  "width": 1000,
+  "height": 560,
+  "zones": [
+    {
+      "zone_id": "corridor",
+      "label": "通路",
+      "polygon": [
+        [
+          35,
+          62
+        ],
+        [
+          965,
+          62
+        ],
+        [
+          965,
+          112
+        ],
+        [
+          35,
+          112
+        ]
+      ],
+      "modelled": true
+    },
+    {
+      "zone_id": "sleeping",
+      "label": "居住・就寝",
+      "polygon": [
+        [
+          35,
+          132
+        ],
+        [
+          480,
+          132
+        ],
+        [
+          480,
+          515
+        ],
+        [
+          35,
+          515
+        ]
+      ],
+      "modelled": true
+    },
+    {
+      "zone_id": "information_desk",
+      "label": "受付",
+      "polygon": [
+        [
+          505,
+          132
+        ],
+        [
+          710,
+          132
+        ],
+        [
+          710,
+          275
+        ],
+        [
+          505,
+          275
+        ]
+      ],
+      "modelled": true
+    },
+    {
+      "zone_id": "toilet",
+      "label": "トイレ",
+      "polygon": [
+        [
+          735,
+          132
+        ],
+        [
+          965,
+          132
+        ],
+        [
+          965,
+          275
+        ],
+        [
+          735,
+          275
+        ]
+      ],
+      "modelled": true
+    },
+    {
+      "zone_id": "meal_distribution",
+      "label": "食事配給",
+      "polygon": [
+        [
+          505,
+          298
+        ],
+        [
+          710,
+          298
+        ],
+        [
+          710,
+          515
+        ],
+        [
+          505,
+          515
+        ]
+      ],
+      "modelled": false
+    },
+    {
+      "zone_id": "water_station",
+      "label": "給水",
+      "polygon": [
+        [
+          735,
+          298
+        ],
+        [
+          965,
+          298
+        ],
+        [
+          965,
+          385
+        ],
+        [
+          735,
+          385
+        ]
+      ],
+      "modelled": false
+    },
+    {
+      "zone_id": "support",
+      "label": "支援",
+      "polygon": [
+        [
+          735,
+          405
+        ],
+        [
+          845,
+          405
+        ],
+        [
+          845,
+          515
+        ],
+        [
+          735,
+          515
+        ]
+      ],
+      "modelled": false
+    },
+    {
+      "zone_id": "isolation",
+      "label": "隔離",
+      "polygon": [
+        [
+          865,
+          405
+        ],
+        [
+          965,
+          405
+        ],
+        [
+          965,
+          515
+        ],
+        [
+          865,
+          515
+        ]
+      ],
+      "modelled": false
+    }
+  ],
+  "facilities": [
+    {
+      "facility_id": "toilet_1",
+      "point": [
+        785,
+        183
+      ],
+      "zone_id": "toilet",
+      "display_zone_id": "toilet"
+    },
+    {
+      "facility_id": "toilet_2",
+      "point": [
+        840,
+        183
+      ],
+      "zone_id": "toilet",
+      "display_zone_id": "toilet"
+    },
+    {
+      "facility_id": "toilet_3",
+      "point": [
+        895,
+        183
+      ],
+      "zone_id": "toilet",
+      "display_zone_id": "toilet"
+    },
+    {
+      "facility_id": "toilet_4",
+      "point": [
+        950,
+        183
+      ],
+      "zone_id": "toilet",
+      "display_zone_id": "toilet"
+    },
+    {
+      "facility_id": "meal_distribution_main",
+      "point": [
+        610,
+        365
+      ],
+      "zone_id": "sleeping",
+      "display_zone_id": "meal_distribution"
+    },
+    {
+      "facility_id": "water_station_main",
+      "point": [
+        850,
+        340
+      ],
+      "zone_id": "sleeping",
+      "display_zone_id": "water_station"
+    }
+  ],
+  "route_edges": [
+    {
+      "edge_id": "corridor_desk",
+      "from_zone_id": "corridor",
+      "to_zone_id": "information_desk"
+    },
+    {
+      "edge_id": "corridor_sleeping",
+      "from_zone_id": "corridor",
+      "to_zone_id": "sleeping"
+    },
+    {
+      "edge_id": "corridor_toilet",
+      "from_zone_id": "corridor",
+      "to_zone_id": "toilet"
+    },
+    {
+      "edge_id": "desk_corridor",
+      "from_zone_id": "information_desk",
+      "to_zone_id": "corridor"
+    },
+    {
+      "edge_id": "sleeping_corridor",
+      "from_zone_id": "sleeping",
+      "to_zone_id": "corridor"
+    },
+    {
+      "edge_id": "toilet_corridor",
+      "from_zone_id": "toilet",
+      "to_zone_id": "corridor"
+    }
+  ]
+}

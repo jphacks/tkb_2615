@@ -1,0 +1,2335 @@
+{
+  "duration_minutes": 10080,
+  "facilities": [
+    {
+      "capacity": 1,
+      "id": "toilet_1",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_2",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_3",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_4",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "id": "water_station_main",
+      "kind": "water_station",
+      "zone_id": "sleeping",
+      "capacity": 1
+    },
+    {
+      "id": "meal_distribution_main",
+      "kind": "meal_distribution",
+      "zone_id": "sleeping",
+      "capacity": 1
+    }
+  ],
+  "id": "baseline_multi_operational",
+  "model_configs": {
+    "behavior": {
+      "decision_interval_minutes": 60,
+      "mode": "offline",
+      "policy": "utility-softmax-v1",
+      "source_type": "assumption",
+      "source_id": "ASM-UTILITY-BEHAVIOR-V1"
+    },
+    "toilet_service": {
+      "duration_distribution": "discrete_uniform_inclusive",
+      "maximum_minutes": 8,
+      "minimum_minutes": 4,
+      "source_type": "assumption",
+      "source_id": "ASM-TOILET-SERVICE-DURATION-V1"
+    },
+    "staff": {
+      "support_task_minutes": 10,
+      "unresolved_after_minutes": 90,
+      "support_cooldown_minutes": 30,
+      "source_type": "assumption",
+      "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1"
+    },
+    "social_propagation": {
+      "enabled": false,
+      "max_contacts_per_agent": 3,
+      "minimum_contact_minutes": 5,
+      "stress_spread_per_minute": 0.001,
+      "natural_recovery_per_minute": 0.0005,
+      "cooldown_minutes": 30,
+      "max_pair_stress_increase": 0.05,
+      "max_agent_stress_increase_per_minute": 0.05,
+      "source_type": "assumption",
+      "source_id": "ASM-SOCIAL-PROPAGATION-V1"
+    },
+    "resource_service": {
+      "schema_version": 1,
+      "policy_version": "resource-service-v1",
+      "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
+      "source_type": "assumption",
+      "service_minutes": 5,
+      "water_ml_per_service": 250,
+      "food_meal_units_per_service": 1,
+      "hydration_growth_per_minute": 0.006
+    }
+  },
+  "profiles": [
+    {
+      "group_id": "G001",
+      "id": "A001",
+      "initial_needs": {
+        "fatigue": 0.4976599457955883,
+        "hunger": 0.9794616646381298,
+        "toilet_urgency": 0.1866529940393592
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A001",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7435250194629027,
+      "support_need": 0.37387076915424183
+    },
+    {
+      "group_id": "G001",
+      "id": "A002",
+      "initial_needs": {
+        "fatigue": 0.5684506322013796,
+        "hunger": 0.8271342046961999,
+        "toilet_urgency": 0.47906218480808616
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A002",
+      "schema_version": 2,
+      "stress_sensitivity": 0.2083001013072911,
+      "support_need": 0.28083414617585156
+    },
+    {
+      "group_id": "G001",
+      "id": "A003",
+      "initial_needs": {
+        "fatigue": 0.06249928486435384,
+        "hunger": 0.025615816358124276,
+        "toilet_urgency": 0.704628461624468
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A003",
+      "schema_version": 2,
+      "stress_sensitivity": 0.27645139337514474,
+      "support_need": 0.46795630236779584
+    },
+    {
+      "group_id": "G001",
+      "id": "A004",
+      "initial_needs": {
+        "fatigue": 0.288857036280807,
+        "hunger": 0.04849068202211752,
+        "toilet_urgency": 0.5559265558453603
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A004",
+      "schema_version": 2,
+      "stress_sensitivity": 0.490539207381208,
+      "support_need": 0.4111610558633719
+    },
+    {
+      "group_id": "G002",
+      "id": "A005",
+      "initial_needs": {
+        "fatigue": 0.34003028505632454,
+        "hunger": 0.24109144498122487,
+        "toilet_urgency": 0.826760819534379
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A005",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7712322302333914,
+      "support_need": 0.4261747376275999
+    },
+    {
+      "group_id": "G002",
+      "id": "A006",
+      "initial_needs": {
+        "fatigue": 0.0630683675432566,
+        "hunger": 0.18647556452727773,
+        "toilet_urgency": 0.6987823538371716
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A006",
+      "schema_version": 2,
+      "stress_sensitivity": 0.18457414589033103,
+      "support_need": 0.4664973599858302
+    },
+    {
+      "group_id": "G002",
+      "id": "A007",
+      "initial_needs": {
+        "fatigue": 0.33390246116111255,
+        "hunger": 0.6896800994924098,
+        "toilet_urgency": 0.23279163292521432
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A007",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3549786283536269,
+      "support_need": 0.5798684185848776
+    },
+    {
+      "group_id": "G002",
+      "id": "A008",
+      "initial_needs": {
+        "fatigue": 0.4192553920699942,
+        "hunger": 0.44455517774895803,
+        "toilet_urgency": 0.8083693011700799
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A008",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5320105712749215,
+      "support_need": 0.32034334123722646
+    },
+    {
+      "group_id": "G003",
+      "id": "A009",
+      "initial_needs": {
+        "fatigue": 0.02835536117569259,
+        "hunger": 0.6346465712954263,
+        "toilet_urgency": 0.7700054978913509
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A009",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9037148709887222,
+      "support_need": 0.46834112805305905
+    },
+    {
+      "group_id": "G003",
+      "id": "A010",
+      "initial_needs": {
+        "fatigue": 0.43676062401117094,
+        "hunger": 0.16231142392747705,
+        "toilet_urgency": 0.4368081160036895
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A010",
+      "schema_version": 2,
+      "stress_sensitivity": 0.4240629931884438,
+      "support_need": 0.17014752721312518
+    },
+    {
+      "group_id": "G003",
+      "id": "A011",
+      "initial_needs": {
+        "fatigue": 0.16325033592453117,
+        "hunger": 0.7082943887763258,
+        "toilet_urgency": 0.11600176163454744
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A011",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9673729998891208,
+      "support_need": 0.10392972090106636
+    },
+    {
+      "group_id": "G003",
+      "id": "A012",
+      "initial_needs": {
+        "fatigue": 0.18822916227840317,
+        "hunger": 0.002784314558562091,
+        "toilet_urgency": 0.8990407480861088
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A012",
+      "schema_version": 2,
+      "stress_sensitivity": 0.1856568003699712,
+      "support_need": 0.36519287402968736
+    },
+    {
+      "group_id": "G004",
+      "id": "A013",
+      "initial_needs": {
+        "fatigue": 0.2561135289166919,
+        "hunger": 0.6388967569269571,
+        "toilet_urgency": 0.8275134386152697
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A013",
+      "schema_version": 2,
+      "stress_sensitivity": 0.4636370740549706,
+      "support_need": 0.2253051948748559
+    },
+    {
+      "group_id": "G004",
+      "id": "A014",
+      "initial_needs": {
+        "fatigue": 0.34611947354869543,
+        "hunger": 0.07596985955637717,
+        "toilet_urgency": 0.9538329147245069
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A014",
+      "schema_version": 2,
+      "stress_sensitivity": 0.04377693260551267,
+      "support_need": 0.5768329229171016
+    },
+    {
+      "group_id": "G004",
+      "id": "A015",
+      "initial_needs": {
+        "fatigue": 0.625315170363712,
+        "hunger": 0.990539237536727,
+        "toilet_urgency": 0.4138910647027792
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A015",
+      "schema_version": 2,
+      "stress_sensitivity": 0.09432954756201009,
+      "support_need": 0.5557218203247387
+    },
+    {
+      "group_id": "G004",
+      "id": "A016",
+      "initial_needs": {
+        "fatigue": 0.39753320194636366,
+        "hunger": 0.6777634188542927,
+        "toilet_urgency": 0.9144936615234323
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A016",
+      "schema_version": 2,
+      "stress_sensitivity": 0.44353294201545845,
+      "support_need": 0.5231783800485779
+    },
+    {
+      "group_id": "G005",
+      "id": "A017",
+      "initial_needs": {
+        "fatigue": 0.27469814327527203,
+        "hunger": 0.18139551938682622,
+        "toilet_urgency": 0.612209959903757
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A017",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3518027019684377,
+      "support_need": 0.3335392807398947
+    },
+    {
+      "group_id": "G005",
+      "id": "A018",
+      "initial_needs": {
+        "fatigue": 0.6074143498454289,
+        "hunger": 0.6998419406409473,
+        "toilet_urgency": 0.7028013632178348
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A018",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3853676654922448,
+      "support_need": 0.44856793753574764
+    },
+    {
+      "group_id": "G005",
+      "id": "A019",
+      "initial_needs": {
+        "fatigue": 0.8251611140607061,
+        "hunger": 0.03392153528051208,
+        "toilet_urgency": 0.07513597727364126
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A019",
+      "schema_version": 2,
+      "stress_sensitivity": 0.27004638887388077,
+      "support_need": 0.546824393848391
+    },
+    {
+      "group_id": "G005",
+      "id": "A020",
+      "initial_needs": {
+        "fatigue": 0.41721099559648145,
+        "hunger": 0.263653532351067,
+        "toilet_urgency": 0.2559479457138743
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A020",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7234927126682814,
+      "support_need": 0.5157455011442196
+    },
+    {
+      "group_id": "G006",
+      "id": "A021",
+      "initial_needs": {
+        "fatigue": 0.045577787318585326,
+        "hunger": 0.15373168139795382,
+        "toilet_urgency": 0.983912526445407
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A021",
+      "schema_version": 2,
+      "stress_sensitivity": 0.013604658728496245,
+      "support_need": 0.04702268435268949
+    },
+    {
+      "group_id": "G006",
+      "id": "A022",
+      "initial_needs": {
+        "fatigue": 0.03079215612975392,
+        "hunger": 0.08573550179330768,
+        "toilet_urgency": 0.3519146712838817
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A022",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9605568607653874,
+      "support_need": 0.4875160607164382
+    },
+    {
+      "group_id": "G006",
+      "id": "A023",
+      "initial_needs": {
+        "fatigue": 0.5172952207652077,
+        "hunger": 0.2716819686066791,
+        "toilet_urgency": 0.89231199082153
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A023",
+      "schema_version": 2,
+      "stress_sensitivity": 0.11668299482604579,
+      "support_need": 0.2019144501544313
+    },
+    {
+      "group_id": "G006",
+      "id": "A024",
+      "initial_needs": {
+        "fatigue": 0.14927468354936332,
+        "hunger": 0.7465826171703801,
+        "toilet_urgency": 0.7314687679727021
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A024",
+      "schema_version": 2,
+      "stress_sensitivity": 0.05862660834461162,
+      "support_need": 0.5180148329652066
+    },
+    {
+      "group_id": "G007",
+      "id": "A025",
+      "initial_needs": {
+        "fatigue": 0.8868127571732788,
+        "hunger": 0.7734095462511099,
+        "toilet_urgency": 0.5887780597631904
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A025",
+      "schema_version": 2,
+      "stress_sensitivity": 0.049638679931075166,
+      "support_need": 0.16134630527453228
+    },
+    {
+      "group_id": "G007",
+      "id": "A026",
+      "initial_needs": {
+        "fatigue": 0.3945889778389033,
+        "hunger": 0.7938884087165905,
+        "toilet_urgency": 0.3644169577906528
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A026",
+      "schema_version": 2,
+      "stress_sensitivity": 0.34685250379444993,
+      "support_need": 0.1389969069715403
+    },
+    {
+      "group_id": "G007",
+      "id": "A027",
+      "initial_needs": {
+        "fatigue": 0.03872603672800319,
+        "hunger": 0.7361196723677684,
+        "toilet_urgency": 0.9359076982339561
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A027",
+      "schema_version": 2,
+      "stress_sensitivity": 0.4758231528435808,
+      "support_need": 0.3807866716536618
+    },
+    {
+      "group_id": "G007",
+      "id": "A028",
+      "initial_needs": {
+        "fatigue": 0.6620008798095631,
+        "hunger": 0.244898073887123,
+        "toilet_urgency": 0.482284245140214
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A028",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3573967695657496,
+      "support_need": 0.3267678488786372
+    },
+    {
+      "group_id": "G008",
+      "id": "A029",
+      "initial_needs": {
+        "fatigue": 0.22497590907329992,
+        "hunger": 0.9172050565258288,
+        "toilet_urgency": 0.8596097858266414
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A029",
+      "schema_version": 2,
+      "stress_sensitivity": 0.566199637500572,
+      "support_need": 0.43465056517272016
+    },
+    {
+      "group_id": "G008",
+      "id": "A030",
+      "initial_needs": {
+        "fatigue": 0.4305579858574212,
+        "hunger": 0.3486129459693313,
+        "toilet_urgency": 0.9916224784502324
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A030",
+      "schema_version": 2,
+      "stress_sensitivity": 0.17254537030402275,
+      "support_need": 0.48694794373447686
+    },
+    {
+      "group_id": "G008",
+      "id": "A031",
+      "initial_needs": {
+        "fatigue": 0.5312118798849819,
+        "hunger": 0.2515604317199174,
+        "toilet_urgency": 0.35277259433681135
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A031",
+      "schema_version": 2,
+      "stress_sensitivity": 0.453867067915602,
+      "support_need": 0.22946463183155807
+    },
+    {
+      "group_id": "G008",
+      "id": "A032",
+      "initial_needs": {
+        "fatigue": 0.19269958403437706,
+        "hunger": 0.4025499475418284,
+        "toilet_urgency": 0.554666103934444
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A032",
+      "schema_version": 2,
+      "stress_sensitivity": 0.18734683670329838,
+      "support_need": 0.11438401883563565
+    },
+    {
+      "group_id": "G009",
+      "id": "A033",
+      "initial_needs": {
+        "fatigue": 0.3457047575205871,
+        "hunger": 0.167854806058281,
+        "toilet_urgency": 0.5632971740208771
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A033",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5286957656023812,
+      "support_need": 0.09875025583586947
+    },
+    {
+      "group_id": "G009",
+      "id": "A034",
+      "initial_needs": {
+        "fatigue": 0.25897919693442983,
+        "hunger": 0.1940691211113189,
+        "toilet_urgency": 0.03638860863827239
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A034",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7272952447293436,
+      "support_need": 0.5435585266270139
+    },
+    {
+      "group_id": "G009",
+      "id": "A035",
+      "initial_needs": {
+        "fatigue": 0.9810262067213446,
+        "hunger": 0.33181519594725706,
+        "toilet_urgency": 0.3066446348218124
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A035",
+      "schema_version": 2,
+      "stress_sensitivity": 0.2530801444473387,
+      "support_need": 0.36236909444672794
+    },
+    {
+      "group_id": "G009",
+      "id": "A036",
+      "initial_needs": {
+        "fatigue": 0.7194962467241356,
+        "hunger": 0.28257863702891584,
+        "toilet_urgency": 0.18424729533122244
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A036",
+      "schema_version": 2,
+      "stress_sensitivity": 0.2298905897685119,
+      "support_need": 0.5481816919165615
+    },
+    {
+      "group_id": "G010",
+      "id": "A037",
+      "initial_needs": {
+        "fatigue": 0.3146154522798082,
+        "hunger": 0.8173906439042012,
+        "toilet_urgency": 0.6532782406210811
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A037",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7571949420490112,
+      "support_need": 0.20124453062546657
+    },
+    {
+      "group_id": "G010",
+      "id": "A038",
+      "initial_needs": {
+        "fatigue": 0.9158615908954937,
+        "hunger": 0.6594561867909872,
+        "toilet_urgency": 0.11232426639884223
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A038",
+      "schema_version": 2,
+      "stress_sensitivity": 0.07144075399451068,
+      "support_need": 0.44501443588866607
+    },
+    {
+      "group_id": "G010",
+      "id": "A039",
+      "initial_needs": {
+        "fatigue": 0.3106053370419704,
+        "hunger": 0.8788510943745547,
+        "toilet_urgency": 0.6542100585833864
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A039",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6278271615851303,
+      "support_need": 0.012634177551386006
+    },
+    {
+      "group_id": "G010",
+      "id": "A040",
+      "initial_needs": {
+        "fatigue": 0.6287195472567444,
+        "hunger": 0.03802634917847644,
+        "toilet_urgency": 0.3264438564704227
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A040",
+      "schema_version": 2,
+      "stress_sensitivity": 0.21973141651059136,
+      "support_need": 0.16707214344965257
+    },
+    {
+      "group_id": "G011",
+      "id": "A041",
+      "initial_needs": {
+        "fatigue": 0.990756013245531,
+        "hunger": 0.15178597227056786,
+        "toilet_urgency": 0.7274522331362142
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A041",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8268342277029587,
+      "support_need": 0.13278582814018514
+    },
+    {
+      "group_id": "G011",
+      "id": "A042",
+      "initial_needs": {
+        "fatigue": 0.5891411544165963,
+        "hunger": 0.5609789511292065,
+        "toilet_urgency": 0.3213961606625815
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A042",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6509859871256972,
+      "support_need": 0.2926262281424095
+    },
+    {
+      "group_id": "G011",
+      "id": "A043",
+      "initial_needs": {
+        "fatigue": 0.6214418489554894,
+        "hunger": 0.6304730861610444,
+        "toilet_urgency": 0.8415726052262409
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A043",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7209147558341579,
+      "support_need": 0.5926658441592615
+    },
+    {
+      "group_id": "G011",
+      "id": "A044",
+      "initial_needs": {
+        "fatigue": 0.5759571679594406,
+        "hunger": 0.6357927421399133,
+        "toilet_urgency": 0.3347164912493037
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A044",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8902040972540844,
+      "support_need": 0.06516498270089036
+    },
+    {
+      "group_id": "G012",
+      "id": "A045",
+      "initial_needs": {
+        "fatigue": 0.618156295692107,
+        "hunger": 0.11560915000221939,
+        "toilet_urgency": 0.03390709287741216
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A045",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6960233761112552,
+      "support_need": 0.005284024902721792
+    },
+    {
+      "group_id": "G012",
+      "id": "A046",
+      "initial_needs": {
+        "fatigue": 0.243615890538553,
+        "hunger": 0.2447195583668941,
+        "toilet_urgency": 0.7921486102065393
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A046",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6100926433803024,
+      "support_need": 0.241032209853287
+    },
+    {
+      "group_id": "G012",
+      "id": "A047",
+      "initial_needs": {
+        "fatigue": 0.8715339030721627,
+        "hunger": 0.8414096124013148,
+        "toilet_urgency": 0.11952880349181273
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A047",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3363208843479736,
+      "support_need": 0.13675047603416757
+    },
+    {
+      "group_id": "G012",
+      "id": "A048",
+      "initial_needs": {
+        "fatigue": 0.18755531379676285,
+        "hunger": 0.35966798723673765,
+        "toilet_urgency": 0.38350011087689795
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A048",
+      "schema_version": 2,
+      "stress_sensitivity": 0.23540870591521212,
+      "support_need": 0.5871510429052843
+    },
+    {
+      "group_id": "G013",
+      "id": "A049",
+      "initial_needs": {
+        "fatigue": 0.7387383260318878,
+        "hunger": 0.5647342705400901,
+        "toilet_urgency": 0.45477413760566593
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A049",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6997306660695968,
+      "support_need": 0.07127300643831552
+    },
+    {
+      "group_id": "G013",
+      "id": "A050",
+      "initial_needs": {
+        "fatigue": 0.26672959538283025,
+        "hunger": 0.6658097638017382,
+        "toilet_urgency": 0.2824580501758703
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A050",
+      "schema_version": 2,
+      "stress_sensitivity": 0.4334676087166803,
+      "support_need": 0.43518904258103625
+    },
+    {
+      "group_id": "G013",
+      "id": "A051",
+      "initial_needs": {
+        "fatigue": 0.7567485839856433,
+        "hunger": 0.4414576889135463,
+        "toilet_urgency": 0.05089477144045578
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A051",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3196719161511663,
+      "support_need": 0.04424359590176943
+    },
+    {
+      "group_id": "G013",
+      "id": "A052",
+      "initial_needs": {
+        "fatigue": 0.7272780275448176,
+        "hunger": 0.28057286452931723,
+        "toilet_urgency": 0.13533560794322538
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A052",
+      "schema_version": 2,
+      "stress_sensitivity": 0.38572248577915885,
+      "support_need": 0.014209618514156405
+    },
+    {
+      "group_id": "G014",
+      "id": "A053",
+      "initial_needs": {
+        "fatigue": 0.023741767710655802,
+        "hunger": 0.3956731775935446,
+        "toilet_urgency": 0.018157074593138717
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A053",
+      "schema_version": 2,
+      "stress_sensitivity": 0.170684949010727,
+      "support_need": 0.109460989839563
+    },
+    {
+      "group_id": "G014",
+      "id": "A054",
+      "initial_needs": {
+        "fatigue": 0.43669913325156917,
+        "hunger": 0.9046081829521945,
+        "toilet_urgency": 0.8584995126136756
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A054",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5461144685307323,
+      "support_need": 0.045971767772626446
+    },
+    {
+      "group_id": "G014",
+      "id": "A055",
+      "initial_needs": {
+        "fatigue": 0.5558811190548865,
+        "hunger": 0.4352995938767192,
+        "toilet_urgency": 0.4028549484535214
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A055",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6332358868782161,
+      "support_need": 0.10773798754134717
+    },
+    {
+      "group_id": "G014",
+      "id": "A056",
+      "initial_needs": {
+        "fatigue": 0.009876679570650942,
+        "hunger": 0.8152735788840006,
+        "toilet_urgency": 0.2894401180206103
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A056",
+      "schema_version": 2,
+      "stress_sensitivity": 0.1522388434063527,
+      "support_need": 0.10229314136282647
+    },
+    {
+      "group_id": "G015",
+      "id": "A057",
+      "initial_needs": {
+        "fatigue": 0.7706219897968903,
+        "hunger": 0.5563927490308459,
+        "toilet_urgency": 0.5898964744250872
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A057",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5096884707961556,
+      "support_need": 0.41640973730293745
+    },
+    {
+      "group_id": "G015",
+      "id": "A058",
+      "initial_needs": {
+        "fatigue": 0.028044533164284815,
+        "hunger": 0.19884683305011328,
+        "toilet_urgency": 0.7599168158785433
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A058",
+      "schema_version": 2,
+      "stress_sensitivity": 0.554891962343944,
+      "support_need": 0.5726340182124566
+    },
+    {
+      "group_id": "G015",
+      "id": "A059",
+      "initial_needs": {
+        "fatigue": 0.11533780864325335,
+        "hunger": 0.868710969661535,
+        "toilet_urgency": 0.44968928426785343
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A059",
+      "schema_version": 2,
+      "stress_sensitivity": 0.31418171429933167,
+      "support_need": 0.4288192378866473
+    },
+    {
+      "group_id": "G015",
+      "id": "A060",
+      "initial_needs": {
+        "fatigue": 0.39279228880080114,
+        "hunger": 0.7978973071229368,
+        "toilet_urgency": 0.9998034465756225
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A060",
+      "schema_version": 2,
+      "stress_sensitivity": 0.42357604839478796,
+      "support_need": 0.4706332486045775
+    },
+    {
+      "group_id": "G016",
+      "id": "A061",
+      "initial_needs": {
+        "fatigue": 0.4081925348411267,
+        "hunger": 0.005028341190634134,
+        "toilet_urgency": 0.33182356011709196
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A061",
+      "schema_version": 2,
+      "stress_sensitivity": 0.14834764697942676,
+      "support_need": 0.4067516078435674
+    },
+    {
+      "group_id": "G016",
+      "id": "A062",
+      "initial_needs": {
+        "fatigue": 0.6586926317317834,
+        "hunger": 0.2580615662439584,
+        "toilet_urgency": 0.04078532898489251
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A062",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3414057462566079,
+      "support_need": 0.3751134826017181
+    },
+    {
+      "group_id": "G016",
+      "id": "A063",
+      "initial_needs": {
+        "fatigue": 0.6924623711673882,
+        "hunger": 0.018131537292211664,
+        "toilet_urgency": 0.5880844414594496
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A063",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9357019493062269,
+      "support_need": 0.4336140009146005
+    },
+    {
+      "group_id": "G016",
+      "id": "A064",
+      "initial_needs": {
+        "fatigue": 0.7216016616080293,
+        "hunger": 0.8745077126605364,
+        "toilet_urgency": 0.8519303382001353
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A064",
+      "schema_version": 2,
+      "stress_sensitivity": 0.1911647143520024,
+      "support_need": 0.1673916291333139
+    },
+    {
+      "group_id": "G017",
+      "id": "A065",
+      "initial_needs": {
+        "fatigue": 0.9005084900557827,
+        "hunger": 0.5119243792159993,
+        "toilet_urgency": 0.2674314796235389
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A065",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7460418617089207,
+      "support_need": 0.27702617637471527
+    },
+    {
+      "group_id": "G017",
+      "id": "A066",
+      "initial_needs": {
+        "fatigue": 0.750965895234635,
+        "hunger": 0.43070864338622167,
+        "toilet_urgency": 0.9326548046067896
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A066",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7778228169542717,
+      "support_need": 0.5658005351763873
+    },
+    {
+      "group_id": "G017",
+      "id": "A067",
+      "initial_needs": {
+        "fatigue": 0.662132443458115,
+        "hunger": 0.42351545697284126,
+        "toilet_urgency": 0.7543378589984562
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A067",
+      "schema_version": 2,
+      "stress_sensitivity": 0.018598192653514544,
+      "support_need": 0.139872793140006
+    },
+    {
+      "group_id": "G017",
+      "id": "A068",
+      "initial_needs": {
+        "fatigue": 0.9811907356365231,
+        "hunger": 0.6113204006183477,
+        "toilet_urgency": 0.9736482692693672
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A068",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7218550488288168,
+      "support_need": 0.06737603737463864
+    },
+    {
+      "group_id": "G018",
+      "id": "A069",
+      "initial_needs": {
+        "fatigue": 0.7799534560809466,
+        "hunger": 0.8374748290278481,
+        "toilet_urgency": 0.8994389590339308
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A069",
+      "schema_version": 2,
+      "stress_sensitivity": 0.14137563950147364,
+      "support_need": 0.5900060830673002
+    },
+    {
+      "group_id": "G018",
+      "id": "A070",
+      "initial_needs": {
+        "fatigue": 0.48431995694422014,
+        "hunger": 0.30195431339095025,
+        "toilet_urgency": 0.19571270539308128
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A070",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7330870242063018,
+      "support_need": 0.3467196929752417
+    },
+    {
+      "group_id": "G018",
+      "id": "A071",
+      "initial_needs": {
+        "fatigue": 0.44507612423762316,
+        "hunger": 0.735023869249216,
+        "toilet_urgency": 0.4151421222859475
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A071",
+      "schema_version": 2,
+      "stress_sensitivity": 0.32886074473114624,
+      "support_need": 0.5738100044752541
+    },
+    {
+      "group_id": "G018",
+      "id": "A072",
+      "initial_needs": {
+        "fatigue": 0.847761597138878,
+        "hunger": 0.5338782946822316,
+        "toilet_urgency": 0.8273303020798894
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A072",
+      "schema_version": 2,
+      "stress_sensitivity": 0.45572290810654653,
+      "support_need": 0.22977079168164696
+    },
+    {
+      "group_id": "G019",
+      "id": "A073",
+      "initial_needs": {
+        "fatigue": 0.4384660260332103,
+        "hunger": 0.06991281060159493,
+        "toilet_urgency": 0.2360879444994058
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A073",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9830147769534641,
+      "support_need": 0.5039875139961821
+    },
+    {
+      "group_id": "G019",
+      "id": "A074",
+      "initial_needs": {
+        "fatigue": 0.6575116040547778,
+        "hunger": 0.6778419155665854,
+        "toilet_urgency": 0.9507252478736328
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "wheelchair",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A074",
+      "schema_version": 2,
+      "stress_sensitivity": 0.22036992168535352,
+      "support_need": 0.5851289573462067
+    },
+    {
+      "group_id": "G019",
+      "id": "A075",
+      "initial_needs": {
+        "fatigue": 0.722901537848054,
+        "hunger": 0.6142340231545241,
+        "toilet_urgency": 0.5630018335541254
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A075",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9017224477672331,
+      "support_need": 0.33523951452214157
+    },
+    {
+      "group_id": "G019",
+      "id": "A076",
+      "initial_needs": {
+        "fatigue": 0.10232842839948819,
+        "hunger": 0.2747050876188687,
+        "toilet_urgency": 0.6425960688877853
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A076",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5308549342107426,
+      "support_need": 0.33714271478381486
+    },
+    {
+      "group_id": "G020",
+      "id": "A077",
+      "initial_needs": {
+        "fatigue": 0.7077595136876111,
+        "hunger": 0.43705534426287734,
+        "toilet_urgency": 0.31965160469054116
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A077",
+      "schema_version": 2,
+      "stress_sensitivity": 0.9965844520316066,
+      "support_need": 0.5078064832885003
+    },
+    {
+      "group_id": "G020",
+      "id": "A078",
+      "initial_needs": {
+        "fatigue": 0.21197349537837468,
+        "hunger": 0.5332326804383203,
+        "toilet_urgency": 0.5493678560778559
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A078",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6546841767126577,
+      "support_need": 0.08849865801047595
+    },
+    {
+      "group_id": "G020",
+      "id": "A079",
+      "initial_needs": {
+        "fatigue": 0.504286735740635,
+        "hunger": 0.8400617643160638,
+        "toilet_urgency": 0.34063864693720614
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A079",
+      "schema_version": 2,
+      "stress_sensitivity": 0.3613509895400057,
+      "support_need": 0.07708819519372336
+    },
+    {
+      "group_id": "G020",
+      "id": "A080",
+      "initial_needs": {
+        "fatigue": 0.8925070444684853,
+        "hunger": 0.7213672896354839,
+        "toilet_urgency": 0.7624913560600339
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A080",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7043608879266471,
+      "support_need": 0.5075620154546375
+    },
+    {
+      "group_id": "G021",
+      "id": "A081",
+      "initial_needs": {
+        "fatigue": 0.47656122825214625,
+        "hunger": 0.4668437436085626,
+        "toilet_urgency": 0.6366100069349772
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A081",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6723824452832539,
+      "support_need": 0.34389591686535775
+    },
+    {
+      "group_id": "G021",
+      "id": "A082",
+      "initial_needs": {
+        "fatigue": 0.8421431964792171,
+        "hunger": 0.8188733648794342,
+        "toilet_urgency": 0.16980595672161986
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A082",
+      "schema_version": 2,
+      "stress_sensitivity": 0.040719764039619515,
+      "support_need": 0.5891639949355493
+    },
+    {
+      "group_id": "G021",
+      "id": "A083",
+      "initial_needs": {
+        "fatigue": 0.6339747592238371,
+        "hunger": 0.7345963965770732,
+        "toilet_urgency": 0.7645122087418185
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A083",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7523691837867794,
+      "support_need": 0.560902293202863
+    },
+    {
+      "group_id": "G021",
+      "id": "A084",
+      "initial_needs": {
+        "fatigue": 0.07233140778135463,
+        "hunger": 0.39101375434264884,
+        "toilet_urgency": 0.6670196898071621
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A084",
+      "schema_version": 2,
+      "stress_sensitivity": 0.5412696843213475,
+      "support_need": 0.3117322021379496
+    },
+    {
+      "group_id": "G022",
+      "id": "A085",
+      "initial_needs": {
+        "fatigue": 0.9997272219070735,
+        "hunger": 0.9087301956069035,
+        "toilet_urgency": 0.25343250740861917
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A085",
+      "schema_version": 2,
+      "stress_sensitivity": 0.23631598945527318,
+      "support_need": 0.5327547327566552
+    },
+    {
+      "group_id": "G022",
+      "id": "A086",
+      "initial_needs": {
+        "fatigue": 0.0802482235952305,
+        "hunger": 0.12906268188612932,
+        "toilet_urgency": 0.6300644102736671
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A086",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7114371007214961,
+      "support_need": 0.4126158466427315
+    },
+    {
+      "group_id": "G022",
+      "id": "A087",
+      "initial_needs": {
+        "fatigue": 0.7625931187514068,
+        "hunger": 0.04730610308972561,
+        "toilet_urgency": 0.40045356142138544
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A087",
+      "schema_version": 2,
+      "stress_sensitivity": 0.29762630750861296,
+      "support_need": 0.41958544882129645
+    },
+    {
+      "group_id": "G022",
+      "id": "A088",
+      "initial_needs": {
+        "fatigue": 0.6965293344487989,
+        "hunger": 0.4120283011579541,
+        "toilet_urgency": 0.9262889554898006
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A088",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8213365286881481,
+      "support_need": 0.4491159779744771
+    },
+    {
+      "group_id": "G023",
+      "id": "A089",
+      "initial_needs": {
+        "fatigue": 0.5952103732261347,
+        "hunger": 0.48214073989951345,
+        "toilet_urgency": 0.18910758361451255
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A089",
+      "schema_version": 2,
+      "stress_sensitivity": 0.22140105774610314,
+      "support_need": 0.045769819448873414
+    },
+    {
+      "group_id": "G023",
+      "id": "A090",
+      "initial_needs": {
+        "fatigue": 0.6853249496432872,
+        "hunger": 0.637518662838668,
+        "toilet_urgency": 0.3091364231428141
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A090",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8620343129746114,
+      "support_need": 0.0337809958132812
+    },
+    {
+      "group_id": "G023",
+      "id": "A091",
+      "initial_needs": {
+        "fatigue": 0.5315162144387359,
+        "hunger": 0.6969823124184964,
+        "toilet_urgency": 0.688419393334484
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A091",
+      "schema_version": 2,
+      "stress_sensitivity": 0.041282591321360876,
+      "support_need": 0.08392128244904791
+    },
+    {
+      "group_id": "G023",
+      "id": "A092",
+      "initial_needs": {
+        "fatigue": 0.6219617305501667,
+        "hunger": 0.9181561070955474,
+        "toilet_urgency": 0.41082690809528183
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A092",
+      "schema_version": 2,
+      "stress_sensitivity": 0.1269645997554304,
+      "support_need": 0.13913496318123314
+    },
+    {
+      "group_id": "G024",
+      "id": "A093",
+      "initial_needs": {
+        "fatigue": 0.8834178975591569,
+        "hunger": 0.16909290416055103,
+        "toilet_urgency": 0.9362937408028982
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A093",
+      "schema_version": 2,
+      "stress_sensitivity": 0.054712242013625914,
+      "support_need": 0.5576528546928835
+    },
+    {
+      "group_id": "G024",
+      "id": "A094",
+      "initial_needs": {
+        "fatigue": 0.233786033456822,
+        "hunger": 0.8317112783465492,
+        "toilet_urgency": 0.8947282717328521
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A094",
+      "schema_version": 2,
+      "stress_sensitivity": 0.08165417817269925,
+      "support_need": 0.2022196505295624
+    },
+    {
+      "group_id": "G024",
+      "id": "A095",
+      "initial_needs": {
+        "fatigue": 0.2862378811167854,
+        "hunger": 0.9444865701277608,
+        "toilet_urgency": 0.25993408005360275
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A095",
+      "schema_version": 2,
+      "stress_sensitivity": 0.07442085727916235,
+      "support_need": 0.5855953365866121
+    },
+    {
+      "group_id": "G024",
+      "id": "A096",
+      "initial_needs": {
+        "fatigue": 0.7599881483424089,
+        "hunger": 0.3626906145199251,
+        "toilet_urgency": 0.75065827977536
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A096",
+      "schema_version": 2,
+      "stress_sensitivity": 0.6221646649250715,
+      "support_need": 0.01742742961296186
+    },
+    {
+      "group_id": "G025",
+      "id": "A097",
+      "initial_needs": {
+        "fatigue": 0.6922195883038043,
+        "hunger": 0.4429661068583837,
+        "toilet_urgency": 0.8843728190477261
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "assisted",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A097",
+      "schema_version": 2,
+      "stress_sensitivity": 0.7883767370034677,
+      "support_need": 0.33486429256452543
+    },
+    {
+      "group_id": "G025",
+      "id": "A098",
+      "initial_needs": {
+        "fatigue": 0.706450083172928,
+        "hunger": 0.9688422593832522,
+        "toilet_urgency": 0.10615002687784966
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A098",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8553577293453307,
+      "support_need": 0.15021390048260044
+    },
+    {
+      "group_id": "G025",
+      "id": "A099",
+      "initial_needs": {
+        "fatigue": 0.05893146888589353,
+        "hunger": 0.7903926572504846,
+        "toilet_urgency": 0.29507153952288573
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A099",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8083682472554923,
+      "support_need": 0.02625087769168098
+    },
+    {
+      "group_id": "G025",
+      "id": "A100",
+      "initial_needs": {
+        "fatigue": 0.7175313553281314,
+        "hunger": 0.6182328494187399,
+        "toilet_urgency": 0.6409644337818274
+      },
+      "initial_zone_id": "sleeping",
+      "mobility": "independent",
+      "provenance": {
+        "generator": "synthetic-balanced-v1",
+        "seed": 2026,
+        "source_kind": "synthetic"
+      },
+      "rng_key": "profile:A100",
+      "schema_version": 2,
+      "stress_sensitivity": 0.8383874672410737,
+      "support_need": 0.5369452883162477
+    }
+  ],
+  "provenance": {
+    "description": "Frozen H05 synthetic 100-Agent, seven-day operational scenario family; model values are assumptions, not measured estimates.",
+    "profile_generation": {
+      "generator": "counter-rng-profile-generator-v1",
+      "manual_overrides": [],
+      "profile_count": 100,
+      "rng_algorithm": "sha256-keyed-v1",
+      "schema_version": 2,
+      "seed": 2026,
+      "template": {
+        "agent_id_prefix": "A",
+        "assisted_weight": 0.15,
+        "fatigue_max": 1.0,
+        "fatigue_min": 0.0,
+        "group_id_prefix": "G",
+        "group_size": 4,
+        "hunger_max": 1.0,
+        "hunger_min": 0.0,
+        "id_width": 3,
+        "independent_weight": 0.8,
+        "initial_zone_ids": [
+          "sleeping"
+        ],
+        "stress_sensitivity_max": 1.0,
+        "stress_sensitivity_min": 0.0,
+        "support_need_max": 0.6,
+        "support_need_min": 0.0,
+        "template_id": "synthetic-balanced-v1",
+        "toilet_urgency_max": 1.0,
+        "toilet_urgency_min": 0.0,
+        "wheelchair_weight": 0.05
+      },
+      "zone_ids": [
+        "corridor",
+        "information_desk",
+        "sleeping",
+        "toilet"
+      ]
+    },
+    "model_assumption_ids": [
+      "ASM-SYNTHETIC-PROFILES-V1",
+      "ASM-H02-RESOURCE-SERVICE-V1",
+      "ASM-H03-OPERATIONAL-EVENTS-V1",
+      "ASM-H04-CAUSAL-STRESS-V1",
+      "ASM-H05-OPERATIONAL-CAPACITY-V1",
+      "ASM-H05-OPERATIONAL-STOCK-V1",
+      "ASM-H05-OPERATIONAL-SCHEDULE-V1",
+      "ASM-H05-INTERVENTION-V1"
+    ],
+    "scenario_family": "H05-100-7D-OPERATIONAL-V1",
+    "input_source_ids": {
+      "facility_capacity": [
+        "ASM-H05-OPERATIONAL-CAPACITY-V1"
+      ],
+      "staffing_capacity": [
+        "ASM-H05-OPERATIONAL-CAPACITY-V1"
+      ],
+      "initial_stock": [
+        "ASM-H05-OPERATIONAL-STOCK-V1"
+      ],
+      "resource_service_coefficients": [
+        "ASM-H02-RESOURCE-SERVICE-V1"
+      ],
+      "scenario_model_coefficients": [
+        "ASM-H04-CAUSAL-STRESS-V1"
+      ],
+      "scenario_family_schedules": [
+        "ASM-H05-OPERATIONAL-SCHEDULE-V1",
+        "ASM-H05-INTERVENTION-V1",
+        "ASM-H05-OPERATIONAL-STOCK-V1"
+      ]
+    }
+  },
+  "scheduled_events": [
+    {
+      "id": "shipment-water-day2",
+      "kind": "exogenous",
+      "due_minute": 1440,
+      "priority": 0,
+      "sequence": 0,
+      "event_type": "resource_delivery",
+      "payload": {
+        "warehouse_id": "warehouse-h05",
+        "resource_id": "water_ml",
+        "quantity": 2000000,
+        "shipment_id": "water-shipment-day2"
+      },
+      "source_id": "ASM-H05-OPERATIONAL-STOCK-V1",
+      "causation_id": null,
+      "provenance": {
+        "source_type": "assumption",
+        "source_id": "ASM-H05-OPERATIONAL-STOCK-V1",
+        "scenario_family": "H05-100-7D-OPERATIONAL-V1"
+      }
+    },
+    {
+      "id": "shipment-meals-day2",
+      "kind": "exogenous",
+      "due_minute": 1440,
+      "priority": 0,
+      "sequence": 1,
+      "event_type": "resource_delivery",
+      "payload": {
+        "warehouse_id": "warehouse-h05",
+        "resource_id": "food_meal_units",
+        "quantity": 1000,
+        "shipment_id": "meals-shipment-day2"
+      },
+      "source_id": "ASM-H05-OPERATIONAL-STOCK-V1",
+      "causation_id": null,
+      "provenance": {
+        "source_type": "assumption",
+        "source_id": "ASM-H05-OPERATIONAL-STOCK-V1",
+        "scenario_family": "H05-100-7D-OPERATIONAL-V1"
+      }
+    }
+  ],
+  "schema_version": 3,
+  "seed": 2026,
+  "staff": [
+    {
+      "id": "S01",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S02",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S03",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S04",
+      "skills": [
+        "support",
+        "water_service"
+      ],
+      "zone_id": "sleeping"
+    },
+    {
+      "id": "S05",
+      "skills": [
+        "support",
+        "meal_service"
+      ],
+      "zone_id": "sleeping"
+    }
+  ],
+  "zone_edges": [
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_desk",
+      "to_zone_id": "information_desk",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_sleeping",
+      "to_zone_id": "sleeping",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_toilet",
+      "to_zone_id": "toilet",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "information_desk",
+      "id": "desk_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "sleeping",
+      "id": "sleeping_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "toilet",
+      "id": "toilet_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    }
+  ],
+  "zones": [
+    {
+      "capacity": null,
+      "display_x": 1.0,
+      "display_y": 0.0,
+      "id": "corridor",
+      "name": "Corridor"
+    },
+    {
+      "capacity": 8,
+      "display_x": 1.0,
+      "display_y": 1.0,
+      "id": "information_desk",
+      "name": "Information desk"
+    },
+    {
+      "capacity": 120,
+      "display_x": 0.0,
+      "display_y": 0.0,
+      "id": "sleeping",
+      "name": "Sleeping area"
+    },
+    {
+      "capacity": 20,
+      "display_x": 2.0,
+      "display_y": 0.0,
+      "id": "toilet",
+      "name": "Toilets"
+    }
+  ],
+  "initial_stock": {
+    "schema_version": 1,
+    "warehouse_id": "warehouse-h05",
+    "zone_id": "sleeping",
+    "water_ml": 5000000,
+    "food_meal_units": 120,
+    "source_ids": [
+      "ASM-H05-OPERATIONAL-STOCK-V1"
+    ]
+  }
+}

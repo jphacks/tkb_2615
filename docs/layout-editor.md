@@ -1,0 +1,22 @@
+# 合成layout編集と経路変更
+
+fixtures/layouts/gym_synthetic.jsonは操作・経路のtest用に作成した合成図で、実在施設の図面ではありません。simulation対象Zoneとroute edgeはScenarioのID・向きに対応します。物資配布等を表示するだけの区画はmodelled: falseとし、ZoneGraphへ追加しません。設備の移動先として使う物理Zoneと、図面上の表示位置を分けます。
+
+## 表示配置
+
+AdminのZone mapで「表示位置を編集」を有効にすると、Zoneまたは設備markerをdragできます。Zone polygonの平行移動と設備表示位置はlayout IDごとにlocalStorageへ保存し、browser内表示だけに使います。Zoneは図面境界内、設備markerは図面と指定表示区画の内側に制限します。初期化buttonでそのbrowserの編集を消せます。
+
+表示座標はScenarioSpec、WorldState、正準hash、Agent移動時間に含めません。表示位置のdragでは、物理Zoneやedgeを変更しません。
+
+## 比較可能な経路・設備変更
+
+Adminのlayout編集は選択中のpause Branchから子Branchを作ります。
+
+- set_zone_edge: 有向edgeの所要時間、閉鎖、同時移動Agent数を設定します。空欄は容量上限なしです。
+- relocate_facility: 設備の物理Zoneを移します。利用者、queue、処理中taskがある設備は移動を拒否します。
+
+layout-branch commandは最大10件を検証し、すべて成功した場合だけ子Branchを登録します。失敗時は元BranchのWorldStateとBranch一覧を変更しません。同一idempotency keyの同一要求は既存Branchを返し、異なる要求での再利用を拒否します。変更はBranch command logと介入Eventに残り、更新route edge、facility Zone、state hashをAdminから確認できます。
+
+ZoneGraphはedgeに宣言した整数分の合計で移動時間を決めます。通行枠が埋まる経路は閉鎖扱いにして代替経路を探索します。代替経路もなければ、edge IDとASM-A05-ROUTE-EDIT-V1を記録するzone_edge_capacity_waitを残します。これは仮定した有限移動容量の効果で、現実の人流予測ではありません。Zone/display座標を経路計算に使わず、歩行速度や衝突物理も推定しません。
+
+完了Branchの比較画面は移動回数、合計移動分数、通路容量待ちの観測回数、観測Agent数を表示します。移動分数は到着済み・進行中route eventに宣言された所要時間の合計です。容量待ちは「容量不足で経路要求を止めた記録」の件数であり、実時間の待機分数ではありません。各集計から最大100件のevent ID、edge、source IDを確認でき、上限超過した証拠件数も表示します。

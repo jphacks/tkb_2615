@@ -1,0 +1,48 @@
+# 手動実行の長時間・全件offline回帰suite。
+name: 長時間simulation回帰
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 長時間simulation suiteまたはoffline test全件を選択
+        required: true
+        type: choice
+        default: full
+        options:
+          - long
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  long_simulation:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'long' }}
+    runs-on: ubuntu-latest
+    env:
+      SHELTERSIM_LLM_MODE: offline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: packageと開発toolを導入
+        run: python -m pip install -e ".[dev]"
+      - name: 長時間simulation回帰を実行
+        run: python -m pytest -m long_simulation
+
+  full_release_regression:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'full' }}
+    runs-on: ubuntu-latest
+    env:
+      SHELTERSIM_LLM_MODE: offline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: packageと開発toolを導入
+        run: python -m pip install -e ".[dev]"
+      - name: offline test全件を実行
+        run: python -m pytest

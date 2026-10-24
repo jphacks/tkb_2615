@@ -1,0 +1,79 @@
+{
+  "agent_count": 100,
+  "api_request_count": 0,
+  "baseline_branch_id": "baseline",
+  "baseline_run_id": "baseline",
+  "baseline_scenario_id": "baseline_100_7d",
+  "candidate_branch_id": "plan-d86b41a4101e122b5fefd45b9a6523f1",
+  "candidate_run_id": "day4-toilet-outage",
+  "candidate_scenario_definition_hash": "f864c526703e68ee87a16a37a3fc334c77cb86ddc9c0ca26c2b14a4a0679e340",
+  "candidate_scenario_id": "baseline_100_7d",
+  "changed_metrics_at_first_divergence": {
+    "source_ids_json": {
+      "baseline": "{\"busy_staff\":[\"S01\",\"S02\",\"S03\",\"S04\",\"S05\"],\"high_stress_agents\":[\"A001\",\"A002\",\"A003\",\"A004\",\"A005\",\"A006\",\"A007\",\"A008\",\"A009\",\"A010\",\"A011\",\"A012\",\"A013\",\"A015\",\"A016\",\"A017\",\"A018\",\"A019\",\"A020\",\"A022\",\"A026\",\"A027\",\"A028\",\"A029\",\"A030\",\"A031\",\"A033\",\"A034\",\"A035\",\"A036\",\"A037\",\"A039\",\"A041\",\"A042\",\"A043\",\"A044\",\"A045\",\"A046\",\"A047\",\"A048\",\"A049\",\"A050\",\"A051\",\"A052\",\"A054\",\"A055\",\"A057\",\"A058\",\"A059\",\"A060\",\"A061\",\"A062\",\"A063\",\"A065\",\"A066\",\"A068\",\"A069\",\"A070\",\"A071\",\"A072\",\"A073\",\"A074\",\"A075\",\"A076\",\"A077\",\"A078\",\"A079\",\"A080\",\"A081\",\"A083\",\"A084\",\"A085\",\"A086\",\"A087\",\"A088\",\"A090\",\"A095\",\"A096\",\"A097\",\"A098\",\"A099\",\"A100\"],\"realized_events\":[\"agent-travel-complete-8745\",\"staff-support-complete-8739\",\"staff-support-complete-8740\",\"staff-support-complete-8741\",\"staff-support-complete-8742\",\"staff-support-complete-8743\",\"support-timeout-8596\",\"support-timeout-8597\",\"support-timeout-8599\",\"support-timeout-8600\",\"support-timeout-8601\"],\"staff_tasks\":[\"staff-support-8762\",\"staff-support-8763\",\"staff-support-8764\",\"staff-support-8765\",\"staff-support-8766\"],\"toilet_active_agents\":[],\"toilet_queue_agents\":[],\"unresolved_support_agents\":[\"A002\",\"A004\",\"A005\",\"A007\",\"A008\",\"A009\",\"A012\",\"A015\",\"A018\",\"A019\",\"A022\",\"A027\",\"A028\",\"A034\",\"A036\",\"A043\",\"A048\",\"A057\",\"A058\",\"A060\",\"A061\",\"A066\",\"A069\",\"A071\",\"A073\",\"A074\",\"A076\",\"A081\",\"A085\",\"A087\",\"A100\"]}",
+      "candidate": "{\"busy_staff\":[\"S01\",\"S02\",\"S03\",\"S04\",\"S05\"],\"high_stress_agents\":[\"A001\",\"A002\",\"A003\",\"A004\",\"A005\",\"A006\",\"A007\",\"A008\",\"A009\",\"A010\",\"A011\",\"A012\",\"A013\",\"A015\",\"A016\",\"A017\",\"A018\",\"A019\",\"A020\",\"A022\",\"A026\",\"A027\",\"A028\",\"A029\",\"A030\",\"A031\",\"A033\",\"A034\",\"A035\",\"A036\",\"A037\",\"A039\",\"A041\",\"A042\",\"A043\",\"A044\",\"A045\",\"A046\",\"A047\",\"A048\",\"A049\",\"A050\",\"A051\",\"A052\",\"A054\",\"A055\",\"A057\",\"A058\",\"A059\",\"A060\",\"A061\",\"A062\",\"A063\",\"A065\",\"A066\",\"A068\",\"A069\",\"A070\",\"A071\",\"A072\",\"A073\",\"A074\",\"A075\",\"A076\",\"A077\",\"A078\",\"A079\",\"A080\",\"A081\",\"A083\",\"A084\",\"A085\",\"A086\",\"A087\",\"A088\",\"A090\",\"A095\",\"A096\",\"A097\",\"A098\",\"A099\",\"A100\"],\"realized_events\":[\"agent-travel-complete-8745\",\"effect-event-8746\",\"staff-support-complete-8739\",\"staff-support-complete-8740\",\"staff-support-complete-8741\",\"staff-support-complete-8742\",\"staff-support-complete-8743\",\"support-timeout-8596\",\"support-timeout-8597\",\"support-timeout-8599\",\"support-timeout-8600\",\"support-timeout-8601\"],\"staff_tasks\":[\"staff-support-8763\",\"staff-support-8764\",\"staff-support-8765\",\"staff-support-8766\",\"staff-support-8767\"],\"toilet_active_agents\":[],\"toilet_queue_agents\":[],\"unresolved_support_agents\":[\"A002\",\"A004\",\"A005\",\"A007\",\"A008\",\"A009\",\"A012\",\"A015\",\"A018\",\"A019\",\"A022\",\"A027\",\"A028\",\"A034\",\"A036\",\"A043\",\"A048\",\"A057\",\"A058\",\"A060\",\"A061\",\"A066\",\"A069\",\"A071\",\"A073\",\"A074\",\"A076\",\"A081\",\"A085\",\"A087\",\"A100\"]}"
+    },
+    "toilet_working_units": {
+      "baseline": 4.0,
+      "candidate": 3.0,
+      "delta": -1.0
+    }
+  },
+  "duration_minutes": 10080,
+  "event_windows": {
+    "baseline": [],
+    "candidate": []
+  },
+  "execution_mode": "precomputed_replay",
+  "final_metric_differences": {
+    "source_ids_json": {
+      "baseline": "{\"busy_staff\":[],\"high_stress_agents\":[\"A001\",\"A002\",\"A003\",\"A004\",\"A005\",\"A006\",\"A007\",\"A008\",\"A009\",\"A010\",\"A011\",\"A012\",\"A013\",\"A015\",\"A016\",\"A017\",\"A018\",\"A019\",\"A020\",\"A022\",\"A024\",\"A026\",\"A027\",\"A028\",\"A029\",\"A030\",\"A031\",\"A033\",\"A034\",\"A035\",\"A036\",\"A037\",\"A039\",\"A041\",\"A042\",\"A043\",\"A044\",\"A045\",\"A046\",\"A047\",\"A048\",\"A049\",\"A050\",\"A051\",\"A052\",\"A054\",\"A055\",\"A057\",\"A058\",\"A059\",\"A060\",\"A061\",\"A062\",\"A063\",\"A065\",\"A066\",\"A068\",\"A069\",\"A070\",\"A071\",\"A072\",\"A073\",\"A074\",\"A075\",\"A076\",\"A077\",\"A078\",\"A079\",\"A080\",\"A081\",\"A083\",\"A084\",\"A085\",\"A086\",\"A087\",\"A088\",\"A090\",\"A096\",\"A097\",\"A098\",\"A099\",\"A100\"],\"realized_events\":[\"support-timeout-16949\",\"support-timeout-16950\",\"support-timeout-16951\",\"support-timeout-16952\",\"support-timeout-16953\",\"support-timeout-16954\",\"support-timeout-16960\",\"support-timeout-16961\",\"support-timeout-16962\",\"support-timeout-16963\",\"support-timeout-16964\",\"support-timeout-16965\",\"support-timeout-16971\",\"support-timeout-16972\",\"support-timeout-16973\",\"support-timeout-16974\",\"support-timeout-16976\",\"support-timeout-16984\",\"support-timeout-16986\",\"support-timeout-16987\",\"support-timeout-16988\",\"support-timeout-16993\",\"support-timeout-17011\",\"support-timeout-17012\",\"support-timeout-17013\",\"support-timeout-17015\",\"support-timeout-17016\",\"support-timeout-17030\",\"support-timeout-17031\",\"support-timeout-17032\",\"support-timeout-17033\",\"support-timeout-17035\",\"support-timeout-17047\",\"support-timeout-17049\",\"support-timeout-17050\",\"support-timeout-17051\",\"support-timeout-17059\",\"support-timeout-17062\",\"support-timeout-17063\",\"support-timeout-17064\",\"support-timeout-17075\",\"support-timeout-17076\",\"support-timeout-17077\",\"support-timeout-17078\",\"support-timeout-17079\",\"support-timeout-17080\",\"toilet-complete-17081\"],\"staff_tasks\":[],\"toilet_active_agents\":[],\"toilet_queue_agents\":[],\"unresolved_support_agents\":[]}",
+      "candidate": "{\"busy_staff\":[],\"high_stress_agents\":[\"A001\",\"A002\",\"A003\",\"A004\",\"A005\",\"A006\",\"A007\",\"A008\",\"A009\",\"A010\",\"A011\",\"A012\",\"A013\",\"A015\",\"A016\",\"A017\",\"A018\",\"A019\",\"A020\",\"A021\",\"A022\",\"A024\",\"A026\",\"A027\",\"A028\",\"A029\",\"A030\",\"A031\",\"A033\",\"A034\",\"A035\",\"A036\",\"A037\",\"A039\",\"A041\",\"A042\",\"A043\",\"A044\",\"A045\",\"A046\",\"A047\",\"A048\",\"A049\",\"A050\",\"A051\",\"A052\",\"A054\",\"A055\",\"A057\",\"A058\",\"A059\",\"A060\",\"A061\",\"A062\",\"A063\",\"A065\",\"A066\",\"A068\",\"A069\",\"A070\",\"A071\",\"A072\",\"A073\",\"A074\",\"A075\",\"A076\",\"A077\",\"A078\",\"A079\",\"A080\",\"A081\",\"A083\",\"A084\",\"A085\",\"A086\",\"A087\",\"A088\",\"A090\",\"A094\",\"A096\",\"A097\",\"A098\",\"A099\",\"A100\"],\"realized_events\":[\"support-timeout-16782\",\"support-timeout-16783\",\"support-timeout-16784\",\"support-timeout-16785\",\"support-timeout-16786\",\"support-timeout-16787\",\"support-timeout-16794\",\"support-timeout-16795\",\"support-timeout-16796\",\"support-timeout-16797\",\"support-timeout-16798\",\"support-timeout-16799\",\"support-timeout-16805\",\"support-timeout-16806\",\"support-timeout-16807\",\"support-timeout-16808\",\"support-timeout-16810\",\"support-timeout-16818\",\"support-timeout-16820\",\"support-timeout-16821\",\"support-timeout-16822\",\"support-timeout-16827\",\"support-timeout-16843\",\"support-timeout-16844\",\"support-timeout-16845\",\"support-timeout-16847\",\"support-timeout-16848\",\"support-timeout-16865\",\"support-timeout-16866\",\"support-timeout-16867\",\"support-timeout-16868\",\"support-timeout-16870\",\"support-timeout-16881\",\"support-timeout-16883\",\"support-timeout-16884\",\"support-timeout-16885\",\"support-timeout-16893\",\"support-timeout-16896\",\"support-timeout-16897\",\"support-timeout-16898\",\"support-timeout-16909\",\"support-timeout-16910\",\"support-timeout-16911\",\"support-timeout-16912\",\"support-timeout-16913\",\"support-timeout-16914\"],\"staff_tasks\":[],\"toilet_active_agents\":[],\"toilet_queue_agents\":[\"A021\",\"A041\",\"A072\",\"A094\"],\"unresolved_support_agents\":[]}"
+    },
+    "stress_high_count": {
+      "baseline": 82.0,
+      "candidate": 84.0,
+      "delta": 2.0
+    },
+    "stress_mean": {
+      "baseline": 0.8356485394574564,
+      "candidate": 0.8552198809776713,
+      "delta": 0.01957134152021489
+    },
+    "toilet_queue_length": {
+      "baseline": 0.0,
+      "candidate": 4.0,
+      "delta": 4.0
+    },
+    "toilet_wait_count": {
+      "baseline": 2359.0,
+      "candidate": 2302.0,
+      "delta": -57.0
+    },
+    "toilet_wait_mean_minutes": {
+      "baseline": 3.3853327681220855,
+      "candidate": 3.815377932232841,
+      "delta": 0.43004516411075544
+    },
+    "toilet_wait_total_minutes": {
+      "baseline": 7986.0,
+      "candidate": 8783.0,
+      "delta": 797.0
+    },
+    "toilet_working_units": {
+      "baseline": 4.0,
+      "candidate": 3.0,
+      "delta": -1.0
+    }
+  },
+  "first_divergence_minute": 5160,
+  "fork_minute": 5160,
+  "interpretation": "Observed paired-run difference for the same frozen profiles, model inputs, and seed; event schedules may differ. A single seed is descriptive and is not statistical or causal proof.",
+  "note": "Fixed offline replay of a synthetic scenario. The single-seed comparison is descriptive and is not a prediction or evidence of real-world effects.",
+  "preview_mode": "native",
+  "scenario_definition_hash": "f864c526703e68ee87a16a37a3fc334c77cb86ddc9c0ca26c2b14a4a0679e340",
+  "scenario_family_hash": "c7134aa5fa6aaad5242d4c359e84666cd58e4cbb1e0402a9c236a5b0a49e858d",
+  "scenario_hash": "4877df634afbec04ba8f7bdc11de8dcb8870f43da103871c43120bcb8a039a46",
+  "schema_version": 1,
+  "seed": 2026
+}

@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShelterSim Inspector</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/project.css" />
+  </head>
+  <body data-mode="demo">
+    <header class="topbar">
+      <div class="brand">
+        <p id="page-eyebrow" class="eyebrow">SHELTER SIM / DEMO</p>
+        <h1 id="page-title">避難所運営シナリオ</h1>
+      </div>
+      <nav class="mode-nav" aria-label="表示モード">
+        <span id="mode-description" class="readonly">合成シナリオ・デモモード</span>
+        <a id="mode-switch" class="mode-switch" href="/admin">検証・管理へ</a>
+      </nav>
+    </header>
+
+    <main>
+<section id="project-workspace" class="card" aria-labelledby="workspace-title">
+  <p class="eyebrow">SHELTERSIM / PROJECT</p><h2 id="workspace-title">条件を作り、避難所の時間と世界線を観察する</h2>
+  <p>合成の人物とモデルによる試算です。実際の心理・健康・安全性を予測するものではありません。<a href="/demo?legacy=1">従来の固定デモ</a></p>
+  <div class="workspace-controls"><label>Project ID<input id="ws-project" value="study" maxlength="64"></label><button id="ws-project-open" type="button">開く / 作成</button><label>保存Run<select id="ws-run"></select></label><button id="ws-edit-saved" type="button">保存条件をフォームに読み込んで編集</button><button id="ws-clone" type="button">この条件を複製して新規実行</button><button id="ws-archive" type="button">Runをアーカイブ</button><button id="ws-delete" type="button">Runを削除</button></div>
+  <p id="ws-status" class="workspace-status" role="status">Projectを読み込みます。</p>
+  <details id="ws-create" open><summary>新しいシナリオを作成・編集</summary>
+    <label for="ws-text">地域・災害・人数・期間・施設条件</label><textarea id="ws-text" rows="3" maxlength="4000" placeholder="例: 墨田区で地震、100人、7日間"></textarea>
+    <div class="scenario-editor-grid">
+      <label>自治体名<input id="ws-municipality" maxlength="160" placeholder="例: 墨田区"></label><label>自治体候補<select id="ws-municipality-candidate"><option value="">候補をプレビュー後に選択</option></select></label>
+      <label>対象日（任意）<input id="ws-target-date" type="date"></label><label>気象庁予報ファイル区域コード（6桁・任意）<input id="ws-weather-area-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="候補選択後に確認"></label>
+      <label>災害<input id="ws-disaster" maxlength="80" placeholder="例: 地震"></label><label>避難者数<input id="ws-evacuees" type="number" min="1" max="10000" step="1" placeholder="100"></label>
+      <label>期間（日）<input id="ws-duration" type="number" min="0.01" max="90" step="0.25" placeholder="7"></label><label>延床面積（m²）<input id="ws-area-m2" type="number" min="0.01" max="100000" step="1"></label>
+      <label>利用可能なトイレ基数<input id="ws-toilets" type="number" min="0" max="20" step="1" placeholder="1"></label><label>スタッフ人数<input id="ws-staff-count" type="number" min="0" max="100" step="1"></label>
+      <label>行動選択モデル<select id="ws-behavior-policy"><option value="utility-softmax-v1">効用 softmax</option><option value="priority-rule-v1">優先順位ルール</option></select></label>
+      <label>感情伝播モデル<select id="ws-social-policy"><option value="sparse-family-zone-contact-v1">家族・同室の接触</option><option value="degroot-contact-v1">DeGroot接触平均</option></select></label>
+      <label>情報伝播モデル<select id="ws-information-policy"><option value="sparse-information-contact-v1">接触ごとの確率伝播</option><option value="hazard-information-v1">接触ハザード伝播</option></select></label>
+      <label class="scenario-checkbox"><input id="ws-social-propagation-enabled" type="checkbox">感情伝播を有効にする</label>
+      <label class="scenario-checkbox"><input id="ws-information-spread-enabled" type="checkbox">情報伝播を有効にする</label>
+      <p class="muted">感情・情報の伝播は初期状態で無効です。有効化しても記録した接触・構造化イベントに限って伝播し、係数と応答は実測校正されていない実験仮定です。</p>
+      <label>施設待機列モデル<select id="ws-queue-policy"><option value="need-weighted-physical-queue-v1">需要優先・待機時間加算（実験仮定）</option><option value="strict-fifo-queue-v1">厳密FIFO</option></select></label>
+      <label>関係信頼モデル<select id="ws-relationship-policy"><option value="distance-duration-repeat-trust-v1">距離・時間・反復接触（実験仮定）</option><option value="duration-contact-trust-v1">接触時間のみ（旧式）</option></select></label>
+      <label>物理的近接観測<select id="ws-social-proximity-policy"><option value="disabled-proximity-v1">無効</option><option value="distance-sampled-proximity-v1">距離ベースの観測（15分ごと・1.5m・最大500組、未校正）</option></select></label>
+      <details class="scenario-model-options"><summary>身体・スタッフ・環境の実験モデル</summary><p class="muted">式を切り替えると計算結果とCheckpointのモデル署名が変わります。係数は避難所の実測値で校正されていません。</p><div class="scenario-editor-grid">
+        <label>身体ストレス式<select id="ws-body-dynamics-policy"><option value="body-feedback-complete-v1">身体・不確実性・衛生の複合フィードバック</option><option value="body-feedback-sleep-debt-v1">睡眠負債のみ</option></select></label>
+        <label>支援後の状態応答式<select id="ws-care-outcome-policy"><option value="typed-care-support-response-v1">支援種別ごとの心理状態応答（実験仮定・未校正）</option><option value="hygiene-support-fixed-relief-v1">固定量の衛生ニーズ低下（実験仮定）</option><option value="hygiene-support-proportional-relief-v1">ニーズに比例した低下（実験仮定）</option></select></label>
+        <label>スタッフ業務の優先<select id="ws-staff-operations-policy"><option value="staff-urgency-first-v1">緊急度を優先</option><option value="staff-travel-first-v1">移動時間を優先</option></select></label>
+        <label>スタッフ疲労式<select id="ws-staff-fatigue-policy"><option value="staff-fatigue-linear-v1">勤務時間に比例</option><option value="staff-fatigue-saturating-v1">漸近的に飽和</option></select></label>
+        <label>気温ストレス式<select id="ws-zone-temperature-policy"><option value="zone-temperature-comfort-band-v1">快適帯を外れた分のみ</option><option value="zone-temperature-midpoint-v1">快適帯の中点からの差</option></select></label>
+        <label>休息環境式<select id="ws-zone-rest-policy"><option value="zone-rest-multiplicative-v1">騒音と照明の複合作用</option><option value="zone-rest-limiting-v1">大きい方の作用を採用</option></select></label>
+        <label>換気・衛生式<select id="ws-zone-hygiene-policy"><option value="zone-hygiene-linear-v1">換気不足に比例</option><option value="zone-hygiene-quadratic-v1">換気不足の二乗</option></select></label>
+        <label>プライバシー式<select id="ws-zone-privacy-policy"><option value="zone-privacy-threshold-v1">閾値を下回る分のみ</option><option value="zone-privacy-proportional-v1">不足分に比例</option></select></label>
+      </div><label>選択モデルの係数上書き JSON<textarea id="ws-policy-parameter-overrides" rows="3" placeholder='{"behavior.decision_interval_minutes_by_agent.*":{"A001":30},"behavior.temperature_by_agent.*":{"A001":0.35},"body_dynamics.sleep_debt_stress_rate":0.002,"psychology.toilet_growth_by_agent.*":{"A001":0.002},"psychology.hunger_growth_by_agent.*":{"A001":0.001},"psychology.awake_fatigue_growth_by_agent.*":{"A001":0.0012},"body_dynamics.sleep_debt_stress_rate_by_agent.*":{"A001":0.003},"body_dynamics.negative_affect_stress_rate_by_agent.*":{"A001":0.004},"body_dynamics.discontent_stress_rate_by_agent.*":{"A001":0.006},"body_dynamics.complaint_reassurance_gain_by_agent.*":{"A001":0.04},"body_dynamics.hygiene_support_relief_by_agent.*":{"A001":0.3},"body_dynamics.privacy_accommodation_discontent_relief_by_agent.*":{"A001":0.05},"body_dynamics.dependent_assistance_stress_relief_by_agent.*":{"A001":0.06},"staff_dynamics.max_continuous_work_minutes_by_staff.*":{"staff_001":120},"staff_dynamics.shift_windows_by_staff.*":{"staff_001":[{"start_minute":0,"end_minute":480}]},"facility_queues.abandon_after_minutes_by_service.*":{"toilet":60},"zone_environment.baseline_by_zone.*":{"sleeping":{"privacy_level":0.2,"temperature_c":22}},"staff_operations.thresholds_by_zone.*":{"sleeping":{"patrol_stress_at_least":0.55}},"staff_operations.effects_by_zone.*":{"sleeping":{"cleaning_sanitation_recovery":0.25,"patrol_reassurance":0.02}},"staff_operations.task_duration_minutes.*":{"cleaning":20,"maintenance":25}}'></textarea></label><p class="muted">Model Catalogに登録済みで、選択した式が実際に消費する係数だけを指定できます。単位・上下限、実在する避難者・職員・ゾーンID、許可されたサービス名・業務種別とゾーン別フィールドを検証し、設定と出典をScenario/Checkpointに保存します。個人別係数の未指定者は共有値を使います。スタッフ交代区間はstaff_dynamics v2で週内の[開始,end)分をスタッフID別に指定し、最大21区間・重複なしで入力できます。住民別の意思決定間隔は1〜1440分で指定でき、後から到着する人は共有間隔を使います。選択が効用softmaxの場合は住民別選択温度も指定できます。値は実験仮定で、実測校正を意味しません。</p></details>
+      <p class="muted">移動速度も移動区分別に上書きできます（例: <code>movement_model.speed_m_per_minute_by_mobility.assisted</code>）。単位はm/分で、値は移動時間計算とCheckpointに反映されます。</p>
+    </div>
+    <label for="ws-facility-conditions">施設・運営の補足（自由記述）</label><textarea id="ws-facility-conditions" rows="2" maxlength="2000" placeholder="例: 車椅子で通れる通路を確保。受付は22時まで。"></textarea>
+    <fieldset class="scenario-fields"><legend>人口・世帯条件</legend><div class="scenario-editor-grid">
+      <label>医療支援が必要な割合<input id="ws-medical-rate" type="number" min="0" max="1" step="0.01" placeholder="未指定"></label>
+      <label>服薬支援が必要な割合<input id="ws-medication-rate" type="number" min="0" max="1" step="0.01" placeholder="未指定"></label>
+      <label>ペット世帯の割合<input id="ws-pet-rate" type="number" min="0" max="1" step="0.01" placeholder="未指定"></label>
+      <label>医療以外の支援ニーズ割合 JSON<input id="ws-care-support-rates" placeholder='{"hygiene_support":0.2,"privacy_accommodation":0.05,"mobility_assistance":0.1,"dependent_assistance":0.08}'></label>
+      <label>追加の配慮ニーズ割合 JSON<input id="ws-access-rates" placeholder='{"wheelchair":0.08,"hearing":0.03}'></label>
+      <label>使用言語の構成 JSON<input id="ws-language-weights" placeholder='{"ja":0.9,"en":0.1}'></label>
+      <label>情報アクセス構成 JSON<input id="ws-information-weights" placeholder='{"smartphone":0.7,"paper":0.3}'></label>
+    </div><p class="muted">医療以外の支援率は各合成人物に独立して適用する入力仮定です。許可される種別は caregiver_assistance、dependent_assistance、privacy_accommodation、mobility_assistance、hygiene_support、emotional_support、language_access です。dependent_assistanceは入力対象本人へ届く支援で、世帯関係からは自動推定しません。地域の実測割合や支援の効果を示す値ではありません。医療評価・服薬は上の別項目で指定します。</p><label>生活リズム（任意）JSON<textarea id="ws-daily-rhythms" rows="2" placeholder='[{"rhythm_id":"day","wake_minute":360,"sleep_minute":1320}]'></textarea></label><div class="household-editor"><h4>世帯テンプレートと明示する関係</h4><p class="muted">年齢や同居から親子・介護・配偶者を推定しません。関係が分からない場合は未設定のままにできます。入力は匿名の合成世帯に使われ、未成年者や支援ニーズの確認ブロックを解除しません。ブロックされた個別Profileは確認できますが、人物IDを直接修正するAPIはありません。テンプレート・条件を修正して必ず再プレビューしてください。</p><div id="ws-household-template-list" class="equipment-rows"></div><button id="ws-household-template-add" type="button">世帯テンプレートを追加</button><details><summary>世帯人数の重み（任意）</summary><p>選択した世帯サイズの相対重みです。関係入力と一緒に使うには少なくとも1つの世帯テンプレートが必要です。空欄のサイズは分布へ追加しません。</p><div id="ws-household-size-weights" class="household-size-weights"></div></details><details><summary>高度な世帯構成 JSON</summary><textarea id="ws-household-composition" rows="5" aria-label="高度な世帯構成JSON"></textarea></details><p id="ws-household-status" class="workspace-status" aria-live="polite">テンプレートはまだ追加されていません。未入力の関係は不明として扱います。</p><p id="ws-household-review-status" class="workspace-status" aria-live="polite" hidden></p><button id="ws-household-repreview" type="button" hidden>修正内容を再プレビュー</button></div></fieldset>
+    <fieldset class="scenario-fields"><legend>備蓄・設備・運営時間</legend><div class="scenario-editor-grid">
+      <label>初期在庫の状態<select id="ws-stock-status"><option value="unknown">不明（ゼロとみなさない）</option><option value="incomplete">一部だけ入力</option><option value="entered">水・食料を入力済み</option></select></label>
+      <label>水（mL）<input id="ws-water-ml" type="number" min="0" step="1"></label><label>食料（食分）<input id="ws-food-units" type="number" min="0" step="1"></label>
+      <label>倉庫ID（任意）<input id="ws-warehouse-id" maxlength="64"></label><label>保管Zone ID（任意）<input id="ws-stock-zone" maxlength="64"></label>
+    </div><h4>設備の状態・数量</h4><div id="ws-equipment-rows" class="equipment-rows" aria-live="polite"></div><button id="ws-equipment-add" type="button">設備を追加</button>
+    <label>スタッフの不在・休憩予定</label><div id="ws-shift-rows" class="equipment-rows" aria-live="polite"></div><button id="ws-shift-add" type="button">勤務予定を追加</button><p class="muted">この入力はスタッフが対応できない時間を保存します。勤務可能時間は下の勤務予定JSONで別途指定します。役割・技能の割当てをこの欄で変更することはできません。時刻は開始からの分で、繰返しは24時間単位です。</p>
+    <h4>スタッフの勤務可能時間</h4><p class="muted">Scenarioプレビュー後に表示される合成スタッフIDを選び、Simulation開始からの週内1〜7日目と時刻を入力します。実際の曜日や日付とは同期しません。日をまたぐ勤務は翌週内の区間へ分割します。役割・技能は変更しません。不在・休憩予定は上の別入力で指定します。</p><div id="ws-positive-shift-rows" class="equipment-rows"></div><button id="ws-positive-shift-add" type="button">勤務時間を追加</button><details><summary>勤務時間 JSON（上級者向け）</summary><textarea id="ws-staff-positive-shifts" rows="4" aria-label="スタッフ勤務時間JSON"></textarea></details><p id="ws-positive-shift-status" class="workspace-status" aria-live="polite">勤務時間を指定しない場合は、既存モデルの勤務規則を使います。</p>
+    <label>停電・断水・配送などの予定 JSON<textarea id="ws-scheduled-conditions" rows="4" placeholder='[{"kind":"facility_outage","facility_id":"toilet_1","start_minute":600,"end_minute":720,"source_id":"operator_condition","source_kind":"operator"}]'></textarea></label><p class="muted">時刻はシミュレーション開始からの分です。設備IDやZone IDが存在しない場合はPreviewの阻害理由を確認してください。</p></fieldset>
+    <p class="muted">対象日は地域資料/予報の検索条件です。シミュレーション日付や実際の避難開始時刻には同期しません。自治体名は候補一覧から明示選択できます。気象庁区域コードは利用者が資料で確認して指定します。細分区域/観測所の候補を選んでも、現在のAPIは自治体への適用確認や気象のScenario条件への結び付けを行いません（出典と未知状態を下で確認できます）。</p><div id="ws-region-review" class="workspace-preview" aria-live="polite"></div>
+    <div class="workspace-controls"><label>e-Stat表ID（選択した場合）<input id="ws-table"></label><label>e-Stat地域コード<input id="ws-area"></label><label>e-Stat期間コード<input id="ws-period" maxlength="32"></label><label>統計区分コード JSON（任意）<input id="ws-categories" placeholder='{"cat01":"選択コード"}'></label><label>避難所候補<select id="ws-shelter-candidate"><option value="">候補をプレビュー後に選択</option></select></label><button id="ws-preview" type="button">条件・出典をプレビュー</button></div>
+    <details><summary>詳細条件 JSON</summary><p>上の入力欄にないモデル設定を確認・修正する場合に使用します。プレビュー後は編集すると承認が解除されます。</p><textarea id="ws-request" rows="7" aria-label="編集する構造化条件JSON"></textarea></details>
+    <details><summary>避難所図面の補正・取り込み</summary><p>対応形式: PDF (1 asset 15 MiB以下、選択ページは0始まり・最大200ページ範囲)、PNG/JPEG/WebP (画像ページ0)、GeoJSON/JSON (ベクター候補)。PDFページ表示にはローカル同梱のPDF.jsを使い、PDF内容を外部へ送信しません。サーバーの任意依存 sheltersim[plan-import] (Pillow + pypdfium2) があれば抽出時の候補rasterも作ります。抽出は壁・開口の低信頼ヒューリスティックで、OCR、部屋名・設備・寸法の完全認識、縮尺推定はしません。rendererがない場合も表示中ページを背景に手動トレースできます。候補は未確定で、縮尺とGeometryは人が確認します。ベクターGeoJSON/JSONを使う場合は座標系がメートルであることを確認してください。確定Geometryは明示承認後に保存します。図面の権利・実在施設への適用性は運営者が確認してください。</p><label>図面ファイル（PDF / PNG / JPEG / WebP / GeoJSON / JSON）<input id="ws-plan-file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,application/geo+json,application/json"></label><label><input id="ws-plan-permission" type="checkbox">この図面をProjectに保存する権限があります（機微な建物資料として扱います）</label><button id="ws-plan-upload" type="button">選択図面を安全に保存</button><p id="ws-plan-status" class="workspace-status" aria-live="polite">ファイル未選択</p>
+      <div id="ws-plan-pdf-preview" class="plan-pdf-preview" hidden></div>
+      <div class="plan-editor-tools"><label>PDFページ（0始まり）<input id="ws-plan-page-index" type="number" min="0" max="199" step="1" value="0"></label><label>候補画像の最大幅px<input id="ws-plan-max-dimension" type="number" min="64" max="2400" step="1" value="1600"></label><button id="ws-plan-extract" type="button">抽出候補を作る</button></div><p id="ws-plan-extract-status" class="workspace-status" aria-live="polite">ローカル同梱PDF.jsはPDFを表示し、選択ページ上の手動トレースに使えます。抽出は任意のサーバーPDFium/Pillow rendererを利用し、低信頼の壁・開口候補だけを返します。OCR・部屋名・設備・寸法の完全認識や縮尺推定は行いません。rendererがない場合は候補抽出が使えませんが、PDF.jsページ上の手動編集はできます。</p><p class="muted">選択ページ番号・raster参照・縮尺・候補・修正座標はProject草案に保存します。現在の確定Geometry APIには元PDFのページ番号フィールドがないため、最終Geometry単体ではPDFのどのページから作成したかを保持できません。</p>
+      <div class="plan-editor-tools"><label>トレース対象<select id="ws-plan-tool"><option value="zone">部屋・区画</option><option value="wall">壁</option><option value="door">扉・開口</option><option value="route">通路・経路</option><option value="facility">設備位置</option><option value="calibrate">縮尺補正の2点</option></select></label><label>距離/幅（m）<input id="ws-plan-distance" type="number" min="0.01" step="0.01" placeholder="実測距離"></label><label>部屋/設備名<input id="ws-plan-feature-name" maxlength="80" value="zone-1"></label><label>Zone ID（部屋作成時、例: sleeping）<input id="ws-plan-zone-id" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,63}" placeholder="空欄なら自動生成"></label><label>部屋有効面積比（仮定）<input id="ws-plan-usable-fraction" type="number" min="0.01" max="1" step="0.01" value="0.9"></label><label>設備容量<input id="ws-plan-capacity" type="number" min="0" step="1"></label><label><input id="ws-plan-accessible" type="checkbox">この経路をバリアフリーとして確認</label><label>扉を紐づける壁<select id="ws-plan-wall"><option value="">壁を選択</option></select></label><label>設備Zone/経路始点<select id="ws-plan-from"><option value="">Zone</option></select></label><label>経路終点Zone<select id="ws-plan-to"><option value="">Zone</option></select></label><button id="ws-plan-delete" type="button">選択項目を削除</button><button id="ws-plan-clear" type="button">確定トレースを消去</button></div>
+      <canvas id="ws-plan-canvas" class="plan-editor-canvas" width="900" height="560" aria-label="図面上でクリックして部屋・壁・扉・通路・設備をトレース"></canvas><p id="ws-plan-editor-status" class="workspace-status" aria-live="polite">図面を選ぶか、標準図面を表示してください。手動確定した図形と抽出候補を分けて表示します。</p><div id="ws-plan-feature-list" class="workspace-events"></div>
+      <label>確定トレース JSON（確認・草案保存用）<textarea id="ws-plan-trace-json" rows="5" readonly aria-label="校正済み手動トレースJSON"></textarea></label>
+      <div class="workspace-controls"><label>実測建物幅（m）<input id="ws-plan-building-width" type="number" min="0.01" max="2000" step="0.01"></label><label>実測建物奥行（m）<input id="ws-plan-building-height" type="number" min="0.01" max="2000" step="0.01"></label><label>作業者ID（記録用）<input id="ws-plan-operator" maxlength="120" value="operator"></label><button id="ws-plan-review" type="button">候補を確定/補正して保存</button><button id="ws-plan-reviewed-trace" type="button">確認済み候補からGeometryを検証</button><button id="ws-plan-manual-trace" type="button">手動トレースをGeometry検証</button></div>
+      <pre id="ws-plan-validation-result" class="workspace-preview" aria-live="polite">Geometry検証結果はまだありません。</pre><label><input id="ws-plan-geometry-approve-check" type="checkbox">図面・寸法・経路・制約を確認しました。表示された構造検証結果を承認します。</label><button id="ws-plan-geometry-approve" type="button" disabled>確定Geometryを保存</button><button id="ws-plan-apply-geometry" type="button" disabled>次のScenarioプレビューにGeometryを指定</button><p id="ws-plan-geometry-status" class="workspace-status" aria-live="polite">確定GeometryはimmutableなProject記録として保存されます。runtimeでの到達可能性検証は別途必要です。</p><input id="ws-geometry-id" type="hidden">
+      <div class="plan-route-editor"><label>外部到着経路 JSON<textarea id="ws-plan-arrival-routes" rows="5" disabled placeholder='[{"route_id":"gate-to-sleeping","destination_zone_id":"sleeping","points_m":[{"x":2,"y":2},{"x":6,"y":8}],"walking_speed_m_per_min":1.2,"source_kind":"operator","source_ids":["SRC-SURVEY-2026-01"]}]'></textarea></label><button id="ws-plan-route-preview" type="button" disabled>承認済みGeometryから経路付き新Revisionをプレビュー</button><p id="ws-plan-route-status" class="workspace-status" aria-live="polite">最初のGeometryを保存した後、測量・運営者が記録した外部経路を追加し、新しいGeometry Revisionとして検証できます。既存Geometryは変更されません。</p><p class="muted">各経路の始点は全Zoneの外、終点は指定したdestination_zone_id内に置きます。全点はFacilityGeometryのメートル境界内で、source_kindとsource_idsには実際の根拠を記録してください。座標や入口までの距離は推測せず、検証後に新しいRevisionを明示承認してください。</p></div>
+      <label>確定済み ImportedPlanGeometry JSON（確認・読み取り用）<textarea id="ws-plan-json" rows="4" readonly placeholder="検証済み Geometry がここに表示されます"></textarea></label></details>
+    <details><summary>標準施設のGeometryを補正・再検証</summary>
+      <p>標準施設のプレビュー後、キャンバス上の点をドラッグして部屋・通路・設備の形状や位置を調整できます。壁・扉・開口・設備 footprint も選択して頂点を編集します。検証は新しいScenario候補を作り、元のScenario/Runは変更しません。容量不足・通行不能・幾何の不整合は承認前に具体的な指摘として表示します。</p>
+      <canvas id="ws-facility-canvas" class="facility-editor-canvas" width="1000" height="620" tabindex="0" aria-label="標準施設Geometry編集。選択した部屋や設備の頂点をドラッグできます"></canvas><div id="ws-facility-features" class="workspace-entity-list" role="group" aria-label="編集可能な標準施設Geometry要素"></div><div class="workspace-controls"><button id="ws-facility-add-vertex" type="button" disabled>選択形状に頂点を追加</button><button id="ws-facility-delete-vertex" type="button" disabled>選択頂点を削除</button><button id="ws-facility-reset" type="button" disabled>元の標準図面に戻す</button></div><p id="ws-facility-canvas-status" class="workspace-status" aria-live="polite">標準施設のプレビュー後に図面編集ができます。点をドラッグするとJSON草案に反映されます。</p>
+      <details><summary>標準施設のgeometry / editable_geometry JSON（上級者向け）</summary><p class="muted">外部到着の経路を設定する場合は <code>geometry.arrival_approach_routes</code> に、route_id・destination_zone_id・points_m・walking_speed_m_per_min・source_kind・source_ids を入力します。各点はこの図面のメートル座標範囲内に置き、始点を全Zoneの外、終点を指定Zone内にします。図面範囲の外やZoneへの入口までを実測できていない場合は値を推測せず、経路なしで実行してください。保存前にScenario全体を再検証し、到着介入でroute_idを明示選択します。</p><textarea id="ws-facility-edit-json" rows="10" aria-label="標準施設Geometry補正JSON"></textarea></details>
+      <button id="ws-facility-edit-check" type="button" disabled>Geometryを再検証しScenario候補を更新</button>
+      <pre id="ws-facility-edit-status" class="workspace-preview">先に標準施設のScenarioをプレビューしてください。</pre>
+      <h4>複数の設備サービス点</h4><p class="muted">各点はfacility ID、位置 (m)、アクセス条件、同時利用容量、queue IDを保存します。容量は1時間当たりの処理数ではありません。queue IDが既存runtime FIFOへ接続されない場合、待ち人数・サービス実績は不明のままです。追加・変更後は上のGeometry再検証を実行してください。</p><div id="ws-service-points" class="workspace-events" aria-live="polite"></div><button id="ws-service-point-add" type="button" disabled>サービス点を追加</button><p id="ws-service-point-status" class="workspace-status" aria-live="polite">標準施設のPreview後にサービス点を編集できます。</p>
+    </details>
+    <div id="ws-preview-result" class="workspace-preview" aria-live="polite">入力・出典・仮定・不足条件をここに表示します。</div><section id="ws-household-correction" class="workspace-preview" hidden><h3>生成済み人物・世帯の関係修正</h3><p>合成人物IDと初期世帯IDを確認し、同じ世帯内の保護者・介護関係を修正できます。送信すると元のPreviewを保ったまま、新しいPreviewをサーバーで検証します。未成年者の承認ブロックは、サーバーの再検証結果でのみ更新されます。</p><div id="ws-household-correction-list" class="workspace-events"></div><button id="ws-household-correction-preview" type="button" disabled>選択した関係を検証し新しいPreviewを作る</button><p id="ws-household-correction-status" class="workspace-status" aria-live="polite">生成済み人物が表示されると編集できます。</p><pre id="ws-household-correction-result" class="workspace-preview"></pre></section><label><input id="ws-approve-check" type="checkbox">表示された条件・仮定・制約を確認しました</label><button id="ws-approve" type="button" disabled>承認して新しいRunを作成</button>
+  </details>
+  <div class="workspace-controls"><label>Branch<select id="ws-branch"></select></label><label>計算する最終minute<input id="ws-target" type="number" min="1"></label><label><input id="ws-measure-performance" type="checkbox">この計算区間のCPU・保存量を計測（追加走査あり）</label><button id="ws-compute" type="button">この地点まで計算</button><button id="ws-cancel" type="button">計算を中断・保存</button></div>
+  <div class="workspace-controls"><label><input id="ws-measure-render" type="checkbox">可視タブで地図・比較を再描画してFPS計測</label><button id="ws-telemetry-load" type="button">Run計測記録を読む</button><button id="ws-render-telemetry-save" type="button">現在の画面FPSを保存</button><span id="ws-telemetry-status" class="workspace-status" aria-live="polite">CPU/wall time・Project保存量・Checkpoint書込量は計算区間ごとに任意計測。RSSはRun別ではなくサーバーprocess累積high-water。描画FPSはブラウザー依存の参考値です。</span></div><div id="ws-telemetry-result" class="workspace-preview"></div>
+  <div class="workspace-controls"><button id="ws-play" type="button">記録を再生</button><button id="ws-pause" type="button">再生を停止</button><label>再生間隔<select id="ws-speed"><option value="1">1分ずつ</option><option value="5">5分ずつ</option><option value="30">30分ずつ</option></select></label><label>表示minute<input id="ws-minute" type="number" min="0" value="0"></label><span id="ws-range"></span></div>
+  <input id="ws-seek" type="range" min="0" max="0" value="0" aria-label="計算済み時刻を正確に復元">
+  <div class="workspace-controls"><label>レイヤー<select id="ws-layer"><option value="normal">通常 / 行動</option><option value="stress">ストレス</option><option value="crowd">混雑 / 実動線</option><option value="health">健康 / 生活のモデル状態</option><option value="social">社会 / 世帯・接触</option><option value="operations">運営 / 設備</option></select></label><label><input id="ws-routes" type="checkbox" checked>実記録の経路</label><label><input id="ws-staff" type="checkbox" checked>スタッフ</label><label><input id="ws-facilities" type="checkbox" checked>設備</label><label>人物ID検索<input id="ws-search" placeholder="合成ID"></label><label>世帯を強調<select id="ws-household"><option value="">世帯を選択</option></select></label><button id="ws-reset-view" type="button">表示範囲を戻す</button></div>
+  <p id="ws-legend" class="workspace-legend">レイヤー凡例を読み込みます。</p><div id="ws-kpis" class="workspace-kpis"></div>
+  <div class="workspace-grid"><div><canvas id="ws-map" class="workspace-map" width="1000" height="620" tabindex="0" aria-label="選択Runとminuteの避難所マップ。人物リストからキーボードで対象を選べます"></canvas><p id="ws-missing"></p><h3>人物・世帯・スタッフ・設備の一覧</h3><div id="ws-entity-list" class="workspace-entity-list" role="group" aria-label="記録済みの人物と施設"></div><details><summary>同じ時刻の出来事</summary><div id="ws-events" class="workspace-events" aria-live="polite"></div></details></div><aside><h3>選択対象の記録</h3><p>未記録の会話・家族関係・スタッフ移動を補って表示しません。LLMが生成する台詞は実装時も「架空の発言」と区別します。</p><div id="ws-detail" class="workspace-detail" aria-live="polite">地図または対象一覧から選択してください。</div></aside></div>
+  <details><summary>選択minuteから世界線を分岐</summary><textarea id="ws-intervention" rows="3" maxlength="4000" placeholder="例: スタッフを2人追加。空欄なら無介入の独立Branch"></textarea><details><summary>型付きEffectProgram JSONを直接指定（上級者向け）</summary><p>自然言語Previewを使わず、登録済みPrimitiveだけで作ったJSONをサーバー検証できます。到着経路は承認済みGeometryの <code>arrival_approach_routes</code> を先に設定し、add_evacuees.parameters.approach_route_id で選択します。分岐・適用前に必ず作用Previewと明示承認が必要です。</p><textarea id="ws-intervention-program" rows="9" placeholder='{"schema_version":1,"program_id":"arrival-example","narrative":"到着を一人追加","source_text":"運営者が指定した条件","simulation_start_minute":10,"effects":[{"effect_id":"arrival-1","op":"add_evacuees","target_selector":{"kind":"zone","target_id":"corridor"},"start_minute":10,"parameters":{"count":1,"approach_route_id":"arrival-to-corridor"},"units":"evacuee","source_id":"SRC-OPERATOR-ARRIVAL","policy_dependencies":["population_dynamics_v1"],"reversible":false}],"assumptions":[],"support_mode":"native","compiler_provenance":{"compiler_kind":"offline_rule","compiler_version":"operator-v1"}}'></textarea><p class="muted">Operator入力も同じEffectProgram型・対象・単位・policy・Geometry・上限で検証します。未知の操作や未宣言の効果は実行されません。座標は承認Geometryの範囲内で、測量・設定根拠は運営者が記録してください。</p><p class="muted"><code>staff_task_order</code> は現在minuteの指示に限り、待機中で資格を持つスタッフを到達可能なZoneへ移動させ、登録済みの清掃・修理・情報支援・受付・巡回を実行して完了履歴を残します。修理は同じZone内の修理可能な設備IDが必要です。</p></details><button id="ws-intervention-preview" type="button" disabled>作用をプレビュー</button><pre id="ws-intervention-result" class="workspace-preview"></pre><div id="ws-effect-explanation" class="workspace-preview" aria-live="polite">作用Preview後に、実行可能な操作と契約のみの操作を区別して表示します。</div><label><input id="ws-fork-check" type="checkbox">分岐条件・作用を確認しました</label><button id="ws-fork" type="button" disabled>承認して新Branchを作成</button></details>
+  <details><summary>登録モデル・係数・型付き作用の説明</summary><p>登録済みモデルの式、実装版、係数・単位・出典・適用条件を確認できます。出典や証拠グレードは校正や予測精度の保証ではありません。型付きEffectProgramの実行可能操作と、JSONスキーマだけが公開された未実装操作を区別します。</p><button id="ws-model-contract-load" type="button">登録済みモデルと作用契約を読む</button><p id="ws-model-contract-status" class="workspace-status" aria-live="polite">共通contracts APIから取得します。</p><div id="ws-model-contract-result" class="workspace-preview" aria-live="polite"></div></details>
+  <details><summary>2〜8世界線の同期比較</summary><p>同一Run内のBranchを共通計算範囲の同じminuteに揃えます。比較時は現在の範囲・ズーム・レイヤーを共有します。</p><label>比較Branch（複数選択）<select id="ws-compare-ids" multiple size="4"></select></label><button id="ws-compare" type="button">選択minuteで比較</button><p id="ws-compare-status" aria-live="polite"></p><div class="workspace-chart-wrap"><canvas id="ws-kpi-chart" width="1000" height="300" aria-label="同期Branchの選択minuteにおけるKPI比較"></canvas><p>KPIの時系列は保存されたend_of_tick記録、地図はbefore_tick境界です。サーバー走査による厳密初回差分と、取得間隔ごとの最初のサンプル差を区別して表示します。人物・世帯の軌跡は保存位置の標本点を結び、間の移動は補いません。</p></div><div id="ws-comparison" class="workspace-comparison"></div></details>
+  <details><summary>出典・モデル・仮定・評価状態</summary><p>Aは適用条件の一致する実測、Bは文献・行政資料の文脈、Cは合成条件・仮定です。文献があることは心理係数が実測済みであることを意味しません。</p><div id="ws-evidence" class="workspace-preview"></div></details>
+  <details><summary>保存履歴・草案・費用</summary>
+  <p>履歴は計算済み範囲のみ取得します。KPIはtick終了時、人物はtick開始前の状態です。社会・スタッフ履歴は保存上限内の記録です。</p>
+  <div class="workspace-controls"><button id="ws-history-index-status" type="button">履歴索引の状態</button><button id="ws-history-index-rebuild" type="button">既存Runの履歴索引を再構築</button><span id="ws-history-index-result" class="workspace-status" aria-live="polite">索引状態はまだ取得していません。</span></div>
+  <label>履歴種類<select id="ws-history-kind"><option value="kpis">時系列KPI</option><option value="people">人物</option><option value="households">世帯</option><option value="events">イベント</option><option value="causal">因果trace</option><option value="social">社会・身体状態の接触記録</option><option value="staff">スタッフ作業</option><option value="actions">行動履歴（提案・完了・中断）</option><option value="care">介護・支援の記録</option><option value="operations">スタッフ・設備運営記録</option><option value="transitions">在籍・移動</option><option value="dialogue">構造化相互作用（発言記録とは区別）</option><option value="conversations">結果Q&amp;A</option></select></label>
+  <label>開始minute<input id="ws-history-start" type="number" min="0" value="0"></label><label>終了minute（空欄は現在）<input id="ws-history-end" type="number" min="0"></label><label>間隔<input id="ws-history-step" type="number" min="1" value="1"></label><label><input id="ws-history-related" type="checkbox" disabled>因果traceに関連する行動・支援・運営・人口記録を含める</label>
+  <label>対象IDの種類<select id="ws-history-id-kind"><option value="agent_id">人物ID</option><option value="household_id">世帯ID</option><option value="staff_id">スタッフID</option><option value="event_id">Event ID</option></select></label><label>対象ID（種類で選んだID）<input id="ws-history-id" maxlength="64"></label><label>Event種別<input id="ws-history-event-type" maxlength="64"></label><label>Source ID<input id="ws-history-source" maxlength="64"></label><label>状態<input id="ws-history-status" maxlength="64"></label><label>Zone ID<input id="ws-history-zone" maxlength="64"></label><label>文字列token<input id="ws-history-text" maxlength="160"></label><label>会話ID<input id="ws-history-conversation" maxlength="64"></label>
+  <button id="ws-history-load" type="button">履歴を取得</button><button id="ws-history-next" type="button" disabled>次のページ</button><div id="ws-storyline" class="workspace-preview" aria-live="polite"></div><pre id="ws-history-result" class="workspace-preview"></pre>
+  <button id="ws-usage-load" type="button">Project全工程の費用・使用量</button><p class="muted">Project・CLI・従来Demoは同じ予約/精算Ledger形式を使いますが、scope別に表示し、異なる保存root間は合算しません。履歴がない値は未使用/$0ではなく未記録で、過去の未記録呼出しを推測しません。</p><pre id="ws-usage-result" class="workspace-preview"></pre>
+  <label>草案ID<input id="ws-draft-id" maxlength="64" value="editor"></label><button id="ws-draft-save" type="button">編集中の条件を保存</button><button id="ws-draft-restore" type="button">草案を復旧</button><p id="ws-draft-status" aria-live="polite"></p>
+  </details>
+  <details><summary>完了Branchのレポート・根拠付きQ&amp;A</summary><p>現在のRun/Branch/正確なminuteと任意の人物を対象にします。LLMは説明文・仮説・検討案を作れますが、数値と出典はサーバーが記録と照合します。確認できない因果は仮説として表示します。合成会話は実際の発言ではありません。読み取り専用で、質問だけでWorldStateは変わりません。人物名や連絡先を入力しないでください。区間・世帯・接触・スタッフ・因果traceは下の履歴条件から選べます。</p><label><input id="ws-chat-use-history" type="checkbox">直前に取得したこのBranchの履歴ページを根拠に含める（最大10件）</label><label>Q&amp;A対象人物<select id="ws-chat-person"><option value="">全体</option></select></label><label>質問<textarea id="ws-question" rows="3" maxlength="2000" placeholder="この時刻の課題と、記録上の根拠は？"></textarea></label><button id="ws-ask" type="button">記録を根拠に質問</button><p id="ws-chat-status" class="workspace-status" aria-live="polite">モデル・費用・通信状態は回答後に表示します。</p><div id="ws-chat" class="workspace-chat" aria-live="polite"></div><pre id="ws-report" class="workspace-preview"></pre></details>
+  <details id="ws-round3-comparison"><summary>複数Run・Branchを同じ時刻で比較</summary>
+    <p>同一Project内のRun/Branchを最大8本、同じ計算済みminuteに揃えます。KPI・モデル適用条件・出来事を比較し、曲線上で最初に観測できたKPI差を示します。差の発生は現実の因果を証明しません。</p>
+    <div class="scenario-editor-grid"><label>比較対象Run（複数選択）<select id="ws-r3-runs" multiple size="5"></select></label><label>同期minute<input id="ws-r3-minute" type="number" min="0" step="1"></label><label>開始minute<input id="ws-r3-start" type="number" min="0" step="1" value="0"></label><label>KPI曲線の間隔（分）<input id="ws-r3-step" type="number" min="1" step="1" value="60"></label><label>人物ID（軌跡）<input id="ws-r3-agent" maxlength="64" placeholder="A001"></label><label>世帯ID（軌跡）<input id="ws-r3-household" maxlength="64"></label></div><div id="ws-r3-branch-targets" class="workspace-controls"></div>
+    <button id="ws-r3-compare" type="button">Run/Branch・KPI・出来事を比較</button><button id="ws-r3-traj-agent" type="button">人物の時系列位置を取得</button><button id="ws-r3-traj-household" type="button">世帯の時系列位置を取得</button><div class="workspace-controls"><label>厳密差分の対象<select id="ws-r4-div-mode"><option value="world">WorldState全体</option><option value="kpis">選択KPI（end_of_tick）</option><option value="person">人物状態（before_tick）</option></select></label><label>人物ID（人物比較時）<input id="ws-r4-div-person" maxlength="64"></label><label>KPI名、カンマ区切り（空欄は数値KPI全項目）<input id="ws-r4-div-metrics" maxlength="1000" placeholder="stress_mean,toilet_queue_length"></label><label>厳密走査の開始minute<input id="ws-r4-div-start" type="number" min="0" step="1" value="0"></label><button id="ws-r4-exact-divergence" type="button">正確な初回差分を検索</button><button id="ws-r4-divergence-next" type="button" disabled>走査を続ける</button><button id="ws-r4-condition-diff" type="button">介入・条件の記録diffを取得</button><button id="ws-r4-condition-next" type="button" disabled>条件diffの次ページ</button></div><div id="ws-r4-exact-results" class="workspace-preview" aria-live="polite"></div><p id="ws-r3-status" class="workspace-status" aria-live="polite">Projectを選択すると保存Runを読み込みます。</p><div id="ws-r3-map-grid" class="worldline-map-grid"></div><canvas id="ws-r3-kpi-chart" width="1200" height="480" aria-label="同期世界線のKPI時系列曲線"></canvas><div id="ws-r3-divergence" class="workspace-preview"></div><div id="ws-r3-events" class="workspace-events"></div><div id="ws-r3-trajectories" class="workspace-preview"></div>
+  </details>
+  <details id="ws-round3-projects"><summary>保存Project・Asset・草案・評価・費用の管理</summary>
+    <div class="workspace-controls"><label>保存Project<select id="ws-r3-projects"></select></label><button id="ws-r3-project-open" type="button">選択Projectを開く</button><button id="ws-r3-refresh" type="button">管理情報を更新</button><button id="ws-r3-rerun" type="button">選択Runを同じ条件で再実行</button></div><p id="ws-r3-management-status" class="workspace-status" aria-live="polite">Projectを選択してください。</p>
+    <div class="workspace-grid"><section><h3>保存Asset（図面・草案素材）</h3><div id="ws-r3-assets" class="workspace-events"></div></section><section><h3>草案・履歴</h3><div id="ws-r3-drafts" class="workspace-events"></div></section><section><h3>評価レポート</h3><div id="ws-r3-evaluations" class="workspace-events"></div></section><section><h3>Run根拠・費用監査</h3><button id="ws-r3-audit" type="button">選択Runの根拠・履歴・LLM台帳を表示</button><p class="muted">API key、raw prompt、raw responseは表示しません。承認時刻が記録されていない場合はそのまま表示します。</p><pre id="ws-r3-run-audit" class="workspace-preview"></pre><div class="workspace-controls"><label>工程<select id="ws-r4-audit-stage"><option value="">全工程</option><option value="prepare">PREPARE / Event Compiler</option><option value="runtime">RUNTIME</option><option value="review">REVIEW / Q&amp;A</option></select></label><label>状態<select id="ws-r4-audit-status"><option value="">すべて</option><option value="settled">settled</option><option value="uncertain">uncertain</option><option value="pending">pending</option></select></label><button id="ws-r4-audit-load" type="button">Run呼出し明細</button><button id="ws-r4-audit-next" type="button" disabled>次ページ</button></div><div id="ws-r4-audit-result" class="workspace-preview" aria-live="polite"></div></section><section><h3>Project全体のLLM費用・工程・障害状況</h3><pre id="ws-r3-usage" class="workspace-preview"></pre></section></div>
+    <section class="experiment-workbench"><h3>複数seed・モデル評価実験</h3><p class="muted">Plan作成・cell準備・集計は保存APIを使います。cellの計算はRun画面で明示的に実行してください。seed間隔は選択した合成モデル内の記録値のばらつきで、実環境の信頼区間ではありません。モデルIDはModel CatalogのIDを指定します。下の初期Planは心理・行動・社会・情報モデルを2構成で比較します（すべて仮定・未検証）。</p><div class="scenario-editor-grid"><label>Experiment ID<input id="ws-r4-experiment-id" maxlength="64" value="experiment-1"></label><label>目的<select id="ws-r4-experiment-purpose"><option value="model_comparison">モデル比較</option><option value="sensitivity">感度分析</option><option value="calibration">校正候補（未検証）</option></select></label><label>評価Plan JSON<textarea id="ws-r4-experiment-plan" rows="8">{"seeds":[2026,2027,2028],"variants":[{"id":"baseline","policies":{"psychology":"causal-stress-v1","behavior":"utility-softmax-v1","social":"sparse-family-zone-contact-v1","information":"sparse-information-contact-v1"},"parameters":{}},{"id":"candidate","policies":{"psychology":"bounded-stress-v1","behavior":"priority-rule-v1","social":"degroot-contact-v1","information":"hazard-information-v1"},"parameters":{}}],"metrics":["stress_mean","toilet_queue_length","staff_load_ratio"]}</textarea></label><label>観測データtargets JSON（登録済みdatasetのみ）<textarea id="ws-r4-experiment-observations" rows="5" placeholder='[{"dataset_id":"dataset-id","metric":"stress_mean","value":0.4,"scale":0.1,"weight":1,"role":"training"}]'></textarea></label></div><button id="ws-r4-experiment-create" type="button">選択Runの保存ScenarioからPlan作成</button><label><input id="ws-r4-experiment-approve" type="checkbox">表示されたPlan hash・seed・variant・dataset適用範囲を確認</label><div class="workspace-controls"><label>保存Experiment<select id="ws-r4-experiment-select"><option value="">選択してください</option></select></label><label>Evaluation ID<input id="ws-r4-evaluation-id" maxlength="64" value="evaluation-1"></label><button id="ws-r4-experiment-load" type="button">cellと結果を表示</button><button id="ws-r4-experiment-fit" type="button" disabled>校正候補を計算（元Runは変更しない）</button><button id="ws-r4-experiment-finalize" type="button">評価レポートを保存</button></div><p id="ws-r4-experiment-status" class="workspace-status" aria-live="polite">実験Planは未作成です。</p><div id="ws-r4-experiment-results" class="workspace-events"></div><pre id="ws-r4-experiment-detail" class="workspace-preview"></pre></section>
+  </details>
+</section>
+
+      <section class="card demo-intro demo-only" aria-labelledby="demo-welcome-title">
+        <div>
+          <p class="eyebrow">避難所運営を試す</p>
+          <h2 id="demo-welcome-title">出来事を選び、対応の違いを比べます</h2>
+          <p class="muted">合成シナリオを動かし、スタッフや設備を加えた場合の変化を確認できます。実在の避難所を予測するものではありません。</p>
+        </div>
+        <ol class="demo-steps">
+          <li><strong>開始</strong><span>シナリオを動かす</span></li>
+          <li><strong>対応</strong><span>スタッフや設備を追加する</span></li>
+          <li><strong>比較</strong><span>結果の違いを確認する</span></li>
+        </ol>
+      </section>
+
+      <section class="card demo-only precomputed-replay-card" aria-labelledby="precomputed-replay-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">FIXED OFFLINE REPLAY</p><h2 id="precomputed-replay-title">事前計算したDay 4故障比較</h2></div>
+          <span class="readonly">合成100人 · 7日 · 外部API未使用</span>
+        </div>
+        <p class="muted">固定シナリオのリプレイです。現在の入力やライブ計算の結果ではありません。Day 4 14:00 の toilet_1 故障を同じCheckpointから分岐して比較します。</p>
+        <button id="precomputed-replay-load" type="button">固定リプレイを表示</button>
+        <p id="precomputed-replay-status" class="muted" aria-live="polite">リプレイを読み込みます。</p>
+        <div id="precomputed-replay-result" class="precomputed-replay-result" hidden aria-live="polite"></div>
+        <a id="precomputed-replay-admin" class="mode-switch" href="/admin" hidden>このリプレイを管理画面で確認</a>
+      </section>
+
+      <section class="toolbar card admin-only">
+        <label>Run<select id="run-select"><option value="">読み込み中…</option></select></label>
+        <div id="run-summary" class="summary">Runを選択してください。</div>
+      </section>
+      <nav class="admin-tabs admin-only" role="tablist" aria-label="監査カテゴリ">
+        <button id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="admin-panel-overview" data-admin-tab="overview">Overview / 生成</button>
+        <button id="tab-profiles" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-profiles" data-admin-tab="profiles" tabindex="-1">Profiles</button>
+        <button id="tab-world" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-world" data-admin-tab="world" tabindex="-1">WorldState / KPI</button>
+        <button id="tab-decisions" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-decisions" data-admin-tab="decisions" tabindex="-1">Agent decisions</button>
+        <button id="tab-events" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-events" data-admin-tab="events" tabindex="-1">Events</button>
+        <button id="tab-llm" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-llm" data-admin-tab="llm" tabindex="-1">LLM</button>
+        <button id="tab-branches" type="button" role="tab" aria-selected="false" aria-controls="admin-panel-branches" data-admin-tab="branches" tabindex="-1">Branch / Compare</button>
+      </nav>
+      <section id="admin-panel-overview" class="card admin-only admin-tab-panel" data-admin-panel="overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="section-heading"><div><p class="eyebrow">RUN OVERVIEW</p><h2>生成条件・出所</h2></div></div>
+        <p class="muted">保存済みRunの記録だけを表示します。欠けている記録を補って生成しません。</p>
+        <section class="story-card behavior-policy-card" aria-labelledby="behavior-policy-title">
+          <h3 id="behavior-policy-title">Agent行動Policyの比較</h3>
+          <p class="muted">各Runの選択Policy・仮説値・候補選択ルールを表示します。方針は現実の人間行動を予測する校正済みモデルではありません。</p>
+          <div id="behavior-policy-summary" aria-live="polite">Runを選択してください。</div>
+        </section>
+        <pre id="run-overview" class="detail">Runを選択してください。</pre>
+        <section class="product-chat saved-run-chat" aria-labelledby="saved-run-chat-title">
+          <div class="section-heading"><div><p class="eyebrow">READ-ONLY RESULT CHAT</p><h3 id="saved-run-chat-title">このRunの結果を質問</h3></div><span id="saved-run-chat-scope" class="muted">Runを選択してください。</span></div>
+          <p class="muted">回答は保存済みKPI、出来事、モデル根拠を参照します。質問はシミュレーション状態を変更しません。個人名や連絡先を入力しないでください。</p>
+          <form id="saved-run-chat-form" class="product-chat-form">
+            <label for="saved-run-chat-question">質問<textarea id="saved-run-chat-question" rows="3" maxlength="2000" placeholder="例: 最終時点で残っている運営上の課題と、その根拠を説明してください。"></textarea></label>
+            <button type="submit" disabled>記録を根拠に質問</button>
+          </form>
+          <div id="saved-run-chat-log" class="product-chat-log" aria-live="polite"><p class="muted">Runを選択してください。</p></div>
+        </section>
+      </section>
+      <section class="card demo-card demo-only" aria-labelledby="demo-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">OFFLINE BRANCH DEMO</p><h2 id="demo-title">Day 3 分岐実験</h2></div>
+          <span class="readonly">オフライン対応</span>
+        </div>
+        <p class="muted">合成100人シナリオを進め、Day 3 の設備停止直前で保存・分岐し、スタッフやトイレを追加して比較します。</p>
+        <section class="scenario-editor-panel" aria-labelledby="scenario-editor-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">FROZEN SCENARIO / HUMAN INPUTS</p><h3 id="scenario-editor-title">新しいシナリオを準備</h3></div>
+            <span class="readonly">最大100人 · ライブ計算</span>
+          </div>
+          <p class="muted">プリセットを選び、変更値をpreviewしてから固定します。固定後の条件は現在のRunにだけ適用され、開始後は編集できません。事前計算リプレイとは別の新規計算です。</p>
+          <label for="scenario-request-text">地域・災害・避難者・期間の希望を文章で補足</label>
+          <textarea id="scenario-request-text" rows="3" maxlength="1200" placeholder="例: 海沿いの地域で台風後の停電を想定。高齢者や子どもを含む世帯の生活需要を確認したい。"></textarea>
+          <p class="muted">AIは現在、選択したプリセットの合成世帯・プロフィールと対応済みの施設停止・復旧イベントだけを提案します。新しい地域の地理、任意の災害力学、人数・期間を文章からScenarioへ変換する共通APIは統合待ちです。未対応条件はシミュレーションへ反映されません。</p>
+          <div class="scenario-editor-grid">
+            <label>プリセット<select id="scenario-preset"></select></label>
+            <label>スタッフ数<input id="scenario-staff-count" type="number" min="0" max="20" step="1" required /></label>
+            <label>トイレ稼働基数<input id="scenario-toilet-units" type="number" min="0" max="100" step="1" required /></label>
+            <label>初期水量（mL）<input id="scenario-water-ml" type="number" min="0" max="100000000" step="1" required /></label>
+            <label>初期食料（食）<input id="scenario-food-units" type="number" min="0" max="1000000" step="1" required /></label>
+            <label>予定イベント<select id="scenario-event-frequency"><option value="preset">プリセットの予定を使う</option><option value="disabled">予定イベントなし</option></select></label>
+            <label>Agent行動Policy<select id="scenario-behavior-policy"><option value="preset">プリセットの設定を使う</option><option value="utility-softmax-v1">効用 softmax</option><option value="priority-rule-v1">優先順位ルール</option></select></label>
+            <label class="scenario-checkbox"><input id="scenario-social-enabled" type="checkbox" />感情伝播を有効にする</label>
+          </div>
+          <div class="search-row">
+            <button id="scenario-preview" type="button">条件を検証してpreview</button>
+            <button id="scenario-freeze" type="button" disabled>新規Runとして固定</button>
+          </div>
+          <p id="scenario-editor-status" class="muted" aria-live="polite">プリセットを読み込みます。</p>
+          <div id="scenario-editor-summary" class="detail" hidden aria-live="polite"></div>
+        </section>
+        <div class="demo-controls">
+          <button id="demo-start" type="button">デモ開始</button>
+          <button id="demo-day3" type="button">Day 3 まで進めて停止</button>
+          <label><span id="demo-branch-label">操作する案</span><select id="demo-branch"><option value="">未開始</option></select></label>
+          <label class="admin-only">介入先Zone<select id="demo-zone"></select></label>
+          <button id="demo-pause" type="button">一時停止</button>
+          <button id="demo-resume" type="button">再開</button>
+          <button class="admin-only" id="demo-checkpoint" type="button">Checkpoint保存</button>
+          <label class="admin-only">復元先<select id="demo-checkpoint-select"><option value="">最新</option></select></label>
+          <button class="admin-only" id="demo-rewind" type="button">Checkpointへ戻す</button>
+          <button id="demo-fork" type="button">対応案を作る</button>
+          <button id="demo-staff" type="button">スタッフを2人追加</button>
+          <button id="demo-toilet" type="button">トイレを2基追加</button>
+          <button id="demo-finish" type="button">選択Branchを最後まで実行</button>
+          <button id="demo-compare" type="button">baseline / staff-plus 比較</button>
+        </div>
+        <section class="nl-preview-panel" aria-labelledby="nl-preview-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">NATURAL LANGUAGE / APPROVAL</p><h3 id="nl-preview-title">出来事を入力して対応案をプレビュー</h3></div>
+          </div>
+          <p class="muted">選択Branchを一時停止してから入力してください。previewはWorldStateを変更しません。Opusが設定されている場合は「提案」でAPIを利用し、使用量と推定費用を表示します。オフライン時は認識できる入力だけを規則で提案します。</p>
+          <label for="nl-text">何が起きたら？</label>
+          <textarea id="nl-text" rows="3" maxlength="4000" placeholder="例: Day 4 14:00 に toilet_1 が故障したら"></textarea>
+          <div class="nl-preview-controls">
+            <label for="nl-fork-minute">分岐元の時刻（minute）</label>
+            <input id="nl-fork-minute" type="number" min="0" step="1" value="0" />
+            <button id="nl-preview" type="button">作用案を提案してプレビュー</button>
+          </div>
+          <p id="nl-status" class="muted" aria-live="polite">Branchを選択して一時停止すると提案できます。</p>
+          <div id="nl-result" class="nl-result" hidden aria-live="polite">
+            <div class="nl-result-heading"><strong id="nl-mode"></strong><span id="nl-usage" class="muted"></span></div>
+            <p id="nl-summary"></p>
+            <p id="nl-preview-notice" class="muted"></p>
+            <h4>モデルに適用する作用</h4>
+            <ul id="nl-effects"></ul>
+            <h4>仮定・未対応事項</h4>
+            <ul id="nl-assumptions"></ul>
+            <ul id="nl-limitations" class="muted"></ul>
+            <button id="nl-approve" type="button" disabled>このpreviewを承認して新Branchを作る</button>
+          </div>
+          <section id="nl-multi-editor" class="nl-multi-editor" hidden aria-labelledby="nl-multi-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">MULTI-PLAN / BRANCH VARIANTS</p><h4 id="nl-multi-title">比較案を編集</h4></div>
+              <button id="nl-multi-add-branch" type="button">比較案を複製</button>
+            </div>
+            <p class="muted">複数の作用をまとめた案を複製し、各作用の時刻・対象・設定を編集できます。全案は同じ分岐時刻・保存状態から作られます。曖昧さが残る案や同じ作用の重複案は承認できません。</p>
+            <label for="nl-multi-fork-minute">全案共通の分岐時刻（minute）</label>
+            <input id="nl-multi-fork-minute" type="number" min="0" step="1" />
+            <div id="nl-multi-branches" class="nl-multi-branches"></div>
+            <div class="search-row filters">
+              <button id="nl-multi-validate" type="button">全案を再検証</button>
+              <button id="nl-multi-approve" type="button" disabled>比較Branch群を作成</button>
+            </div>
+            <p id="nl-multi-status" class="muted" aria-live="polite">案を2つ以上用意してから再検証してください。</p>
+          </section>
+        </section>
+        <p id="demo-execution-mode" class="muted" aria-live="polite">ライブ計算 · オフライン・LLM未使用</p>
+        <p class="muted">費用台帳の範囲: Project画面のLLM費用はProject用Ledgerから取得します。CLIと従来Demoは別の会計経路で、ここには合算されません。値が表示されない場合も「未使用」や$0を意味せず、過去に記録されなかった呼出しの費用は復元できません。</p>
+        <p id="demo-branch-status" class="muted demo-only" aria-live="polite">デモを開始すると進行状況を表示します。</p>
+        <progress id="demo-progress" max="10080" value="0"></progress>
+        <div class="demo-columns">
+          <div class="admin-only"><h3>Branch・親子関係</h3><div id="demo-branch-tree" class="branch-tree" aria-live="polite">デモ開始前です。</div><pre id="demo-branches" class="detail">デモ開始前です。</pre></div>
+          <div class="demo-only"><h3>対応の違い</h3><p id="demo-comparison-summary" class="muted">元のシナリオと対応案を最後まで動かして、比較できます。</p></div>
+          <div class="admin-only">
+            <h3>A/B比較</h3>
+            <button id="demo-story-review" type="button" disabled>Opusで根拠レビュー（API利用の可能性あり）</button>
+            <p id="demo-story-review-status" class="muted" aria-live="polite">Opusレビューは押したときだけ実行します。</p>
+            <pre id="demo-comparison" class="detail">両Branchの完了後に比較できます。</pre>
+          </div>
+        </div>
+        <section class="story-card" aria-live="polite">
+          <h3>根拠付きのストーリー</h3>
+          <div id="demo-story-card"><p class="muted">Branchを比較すると、記録済みイベントとKPI差から短い説明を作ります。</p></div>
+        </section>
+        <section id="demo-multi-comparison-panel" class="story-card admin-only" aria-labelledby="demo-multi-comparison-title">
+          <h3 id="demo-multi-comparison-title">複数Branch比較</h3>
+          <p class="muted">同じMultiPlanから作った2案以上を共通の元Branchと比較します。各案は同じseed・Checkpoint・モデル設定であることを確認します。</p>
+          <label for="demo-multi-compare-branches">比較する代替案（複数選択）</label>
+          <select id="demo-multi-compare-branches" multiple size="4"></select>
+          <button id="demo-multi-compare" type="button" disabled>選択案をまとめて比較</button>
+          <pre id="demo-multi-comparison" class="detail">MultiPlanの代替案を選択してください。</pre>
+        </section>
+        <div class="admin-only"><h3>操作ログ</h3><pre id="demo-operations" class="detail operation-log">操作ログはありません。</pre></div>
+        <details class="admin-only nl-audit-card">
+          <summary>自然言語preview・承認の監査</summary>
+          <pre id="nl-audit" class="detail">自然言語の提案はまだありません。</pre>
+        </details>
+      </section>
+      <section class="grid two-columns admin-only" data-admin-panel="world" id="admin-panel-world" role="tabpanel" aria-labelledby="tab-world" hidden>
+        <article class="card">
+          <div class="section-heading">
+            <div><p class="eyebrow">SPACE</p><h2>Zoneマップ</h2></div>
+            <span id="map-note" class="muted"></span>
+          </div>
+          <fieldset class="map-controls" aria-label="マップ表示レイヤー">
+            <legend>表示レイヤー</legend>
+            <label><input id="map-show-agents" type="checkbox" checked /> Agent位置</label>
+            <label><input id="map-show-facilities" type="checkbox" checked /> 設備</label>
+            <label><input id="map-show-queues" type="checkbox" checked /> 行列・利用中</label>
+            <label><input id="map-show-stress" type="checkbox" /> ストレス</label>
+            <label><input id="map-show-stops" type="checkbox" checked /> 停止・閉鎖</label>
+            <label class="layout-edit-toggle"><input id="layout-visual-edit" type="checkbox" /> 表示位置を編集</label>
+            <button id="layout-visual-reset" type="button">表示位置を初期化</button>
+          </fieldset>
+          <canvas id="zone-map" width="1000" height="560" aria-label="合成体育館図面。表示編集を有効にするとZoneや設備をドラッグできます。表示位置の編集はブラウザ内だけに保存され、シミュレーション条件には使われません。"></canvas>
+          <p id="selected-location" class="muted"></p>
+          <p id="map-agent-detail" class="map-agent-detail muted" aria-live="polite">Agentの点を選ぶと、選択時刻の記録を表示します。</p>
+          <section class="layout-branch-editor admin-only" aria-labelledby="layout-branch-title">
+            <div class="section-heading"><div><p class="eyebrow">LAYOUT / ROUTE BRANCH</p><h3 id="layout-branch-title">経路・設備位置を比較Branchへ反映</h3></div></div>
+            <p class="muted">一時停止中の案から子Branchを作ります。経路時間・通行容量・閉鎖、または設備の所属Zoneがシミュレーション条件に反映されます。</p>
+            <div class="layout-editor-grid">
+              <label>編集する経路<select id="demo-layout-edge"></select></label>
+              <label>移動時間（分）<input id="demo-layout-travel" type="number" min="1" max="1440" step="1" /></label>
+              <label>同時通行枠（空欄は無制限）<input id="demo-layout-capacity" type="number" min="1" max="100" step="1" /></label>
+              <label class="layout-checkbox"><input id="demo-layout-closed" type="checkbox" /> この経路を閉鎖</label>
+              <button id="demo-layout-route-apply" type="button">経路変更Branchを作成</button>
+            </div>
+            <div class="layout-editor-grid facility-layout-editor">
+              <label>移動する設備<select id="demo-layout-facility"></select></label>
+              <label>所属Zone<select id="demo-layout-zone"></select></label>
+              <button id="demo-layout-facility-apply" type="button">設備移動Branchを作成</button>
+            </div>
+            <p id="demo-layout-status" class="muted" aria-live="polite">変更を適用する前に、元の案を一時停止してください。</p>
+          </section>
+        </article>
+        <article class="card">
+          <div class="section-heading">
+            <div><p class="eyebrow">STATUS</p><h2>主な指標</h2></div>
+            <span id="kpi-snapshot-time" class="muted">記録を読み込みます</span>
+          </div>
+          <div id="primary-kpis" class="primary-kpis" aria-live="polite"></div>
+          <div class="section-heading timeline-heading">
+            <div><p class="eyebrow">KPI / TIME</p><h3>時間軸</h3></div>
+            <label class="inline-label">推移<select id="metric-select">
+            <option value="stress_mean">平均ストレス</option>
+            <option value="toilet_queue_length">トイレ待ち行列</option>
+            <option value="toilet_active_users">トイレ利用中</option>
+            <option value="toilet_working_units">使用可能なトイレ</option>
+            <option value="water_ml_remaining">水の残量</option>
+            <option value="food_meal_units_remaining">食料単位の残量</option>
+            <option value="staff_load_ratio">スタッフ稼働率</option>
+            <option value="unresolved_support_request_count">未解決の支援要請</option>
+            <option value="support_no_qualified_worker_count">資格のあるスタッフがいない支援依頼</option>
+            <option value="support_no_qualified_worker_request_minutes">資格のあるスタッフがいない依頼分数</option>
+            <option value="support_fairness_promoted_assignment_count">公平性ルールで優先された依頼</option>
+            <option value="support_wait_staff_busy_request_minutes">対応中の資格者がいる支援待ち依頼分数</option>
+            <option value="support_wait_staff_off_shift_request_minutes">勤務時間外の資格者がいる支援待ち依頼分数</option>
+            </select></label>
+          </div>
+          <canvas id="timeline" width="720" height="240" aria-label="KPI時系列"></canvas>
+          <p class="muted">支援待ちの理由別依頼分数は、各時点で観測した重なりのある指標です。合計は排他的ではなく、特定の原因や因果効果を示しません。</p>
+          <label class="slider-label">表示時刻 <output id="minute-label">0 分</output>
+            <input id="minute-slider" type="range" min="0" max="0" value="0" />
+          </label>
+          <div class="timeline-events-heading">
+            <h3>この時刻の前後に記録された出来事</h3>
+            <span id="timeline-event-count" class="muted"></span>
+          </div>
+          <div id="timeline-events" class="timeline-events" aria-live="polite">
+            <p class="muted">出来事を読み込みます。</p>
+          </div>
+        </article>
+      </section>
+
+      <section id="admin-panel-profiles" class="card admin-only admin-tab-panel" data-admin-panel="profiles" role="tabpanel" aria-labelledby="tab-profiles" hidden>
+        <div class="section-heading"><div><p class="eyebrow">AGENTS</p><h2>生成プロフィール</h2></div><span id="profile-count" class="muted"></span></div>
+        <p class="muted">検索・ページ送りで最大100人の合成プロフィールを確認できます。</p>
+        <form id="profile-search" class="search-row">
+          <input id="profile-query" type="search" placeholder="Agent / group / Zone" />
+          <button type="submit">検索</button>
+        </form>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Group</th><th>Zone</th><th>状態</th></tr></thead><tbody id="profiles"></tbody></table></div>
+        <div class="pager"><button id="profiles-prev" type="button">前へ</button><span id="profiles-page"></span><button id="profiles-next" type="button">次へ</button></div>
+      </section>
+
+      <section id="admin-panel-decisions" class="card admin-only admin-tab-panel" data-admin-panel="decisions" role="tabpanel" aria-labelledby="tab-decisions" hidden>
+        <div class="section-heading"><div><p class="eyebrow">AGENT TRACE</p><h2>Agentの状態・判断理由</h2></div></div>
+        <section class="story-card" aria-labelledby="agent-story-title">
+          <h3 id="agent-story-title">根拠から選んだ合成Agent</h3>
+          <p class="muted">選定条件を明示したサンプルです。状態・判断・Event IDは保存Runの記録だけから構成します。人物の発言や性格は生成していません。</p>
+          <div id="agent-story-cards" aria-live="polite">RunのAgent記録を読み込みます。</div>
+        </section>
+        <form id="agent-search" class="search-row">
+          <input id="agent-id" type="search" placeholder="例: A001" />
+          <button type="submit">表示</button>
+        </form>
+        <p id="decision-coverage" class="muted">保存された判断記録を読み込みます。</p>
+        <pre id="agent-detail" class="detail muted">プロフィールかAgent IDを選ぶと記録を表示します。</pre>
+        <pre id="decision-audit" class="detail muted">このRunの判断記録を読み込みます。</pre>
+      </section>
+
+      <details id="admin-panel-llm" class="card audit-card admin-only admin-tab-panel" data-admin-panel="llm" role="tabpanel" aria-labelledby="tab-llm" open hidden>
+        <summary>LLM call / social decision audit</summary>
+        <p id="llm-coverage" class="muted">LLM利用記録を読み込みます。</p>
+        <pre id="run-audit" class="detail">監査情報を読み込みます。</pre>
+      </details>
+
+      <section id="admin-panel-events" class="card admin-only admin-tab-panel" data-admin-panel="events" role="tabpanel" aria-labelledby="tab-events" hidden>
+        <div class="section-heading"><div><p class="eyebrow">EVENTS</p><h2>予定・実行イベント</h2></div><span id="event-count" class="muted"></span></div>
+        <form id="event-search" class="search-row filters">
+          <input id="event-query" type="search" placeholder="Event ID / 種別" />
+          <input id="branch-query" type="search" placeholder="Branch (省略可)" />
+          <input id="event-agent-query" type="search" placeholder="Agent ID (省略可)" />
+          <input id="event-zone-query" type="search" placeholder="Zone ID (省略可)" />
+          <input id="event-start-minute" type="number" min="0" step="1" placeholder="開始分 (省略可)" />
+          <input id="event-end-minute" type="number" min="0" step="1" placeholder="終了分 (省略可)" />
+          <select id="event-status"><option value="all">予定と実績</option><option value="planned">予定</option><option value="realized">実績</option></select>
+          <button type="submit">絞り込み</button>
+        </form>
+        <div id="events" class="event-list"></div>
+        <div class="pager"><button id="events-prev" type="button">前へ</button><span id="events-page"></span><button id="events-next" type="button">次へ</button></div>
+      </section>
+
+      <section id="admin-panel-branches" class="card admin-only admin-tab-panel" data-admin-panel="branches" role="tabpanel" aria-labelledby="tab-branches" hidden>
+        <div class="section-heading"><div><p class="eyebrow">BRANCH SNAPSHOT</p><h2>読み取り専用 Branch / 比較</h2></div></div>
+        <p class="muted">ライブBranchは保存済みCheckpointから複製したスナップショットを表示します。指定時刻のCheckpointがない場合は、実際の取得時刻を明示します。</p>
+        <div class="search-row filters">
+          <label>Branch<select id="admin-branch-select"></select></label>
+          <label>表示時刻（分）<input id="admin-snapshot-minute" type="number" min="0" step="1" /></label>
+          <label>Agent ID<input id="admin-snapshot-agent" type="search" placeholder="例: A001" /></label>
+          <button id="admin-snapshot-load" type="button">Snapshotを読む</button>
+        </div>
+        <pre id="admin-branch-snapshot" class="detail">ライブBranchの記録はありません。</pre>
+        <div class="section-heading"><div><p class="eyebrow">SAVED RUN</p><h3>保存Runの親Branch記録</h3></div></div>
+        <pre id="run-branch-lineage" class="detail">Runを選択してください。</pre>
+        <div class="section-heading"><div><p class="eyebrow">A/B</p><h3>完了済みライブBranchを比較</h3></div></div>
+        <div class="search-row filters">
+          <label>Baseline<select id="compare-baseline"></select></label>
+          <label>Candidate<select id="compare-candidate"></select></label>
+          <button id="admin-compare-load" type="button">比較を読む</button>
+        </div>
+        <pre id="admin-comparison" class="detail">比較可能なBranchを選択してください。</pre>
+      </section>
+      <p id="error" class="error" role="status"></p>
+    </main>
+    <script src="/app.js" defer></script>
+    <script src="/performance.js" defer></script>
+    <script src="/map-lod.js" defer></script>
+    <script src="/project.js" defer></script>
+    <script src="/project-round3.js" defer></script>
+  </body>
+</html>

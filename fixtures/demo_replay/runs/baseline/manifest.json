@@ -1,0 +1,315 @@
+{
+  "application_version": "0.1.0",
+  "artifact_schema_version": 1,
+  "branch_id": "baseline",
+  "decision_count": 0,
+  "duration_minutes": 10080,
+  "execution_mode": "precomputed_replay",
+  "facilities": [
+    {
+      "capacity": 1,
+      "id": "toilet_1",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_2",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_3",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    },
+    {
+      "capacity": 1,
+      "id": "toilet_4",
+      "kind": "toilet",
+      "working_units": 1,
+      "zone_id": "toilet"
+    }
+  ],
+  "final_minute": 10080,
+  "final_state_hash": "15ef95ea7ea2c86cc476bacff5910e7a17a4ed782c1dbc2bde74bd76d0d3ec71",
+  "llm_usage": {
+    "api_request_count": 0,
+    "cache_hits": 0,
+    "estimated_cost_usd": 0,
+    "failures": 0,
+    "input_tokens": 0,
+    "models": [],
+    "output_tokens": 0
+  },
+  "metric_snapshot_count": 10080,
+  "model_assumptions": {
+    "behavior": {
+      "policy_version": "utility-softmax-v1",
+      "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+      "source_type": "assumption",
+      "values": {
+        "decision_interval_minutes": 60,
+        "temperature": 0.2
+      }
+    },
+    "event_triggered_social_limits": {
+      "enabled": true,
+      "policy_version": "event-triggered-social-v1",
+      "source_id": "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1",
+      "source_type": "assumption",
+      "values": {
+        "cooldown_minutes": 240,
+        "event_delay_minutes": 1,
+        "global_per_day": 4,
+        "per_agent_per_day": 3,
+        "stress_threshold": 0.65
+      }
+    },
+    "inspector_zone_projection": {
+      "affects_simulation": false,
+      "policy_version": "inspector-zone-grid-v1",
+      "source_id": "ASM-SYNTHETIC-ZONE-DISPLAY-V1",
+      "source_type": "assumption"
+    },
+    "profile_generation": {
+      "generator": "counter-rng-profile-generator-v1",
+      "source_id": "ASM-SYNTHETIC-PROFILES-V1",
+      "source_type": "assumption",
+      "template": {
+        "agent_id_prefix": "A",
+        "assisted_weight": 0.15,
+        "fatigue_max": 1.0,
+        "fatigue_min": 0.0,
+        "group_id_prefix": "G",
+        "group_size": 4,
+        "hunger_max": 1.0,
+        "hunger_min": 0.0,
+        "id_width": 3,
+        "independent_weight": 0.8,
+        "initial_zone_ids": [
+          "sleeping"
+        ],
+        "stress_sensitivity_max": 1.0,
+        "stress_sensitivity_min": 0.0,
+        "support_need_max": 0.6,
+        "support_need_min": 0.0,
+        "template_id": "synthetic-balanced-v1",
+        "toilet_urgency_max": 1.0,
+        "toilet_urgency_min": 0.0,
+        "wheelchair_weight": 0.05
+      }
+    },
+    "psychology": {
+      "policy_version": "causal-stress-v1",
+      "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+      "source_type": "assumption",
+      "values": {
+        "awake_fatigue_growth": 0.0008,
+        "hunger_growth": 0.0005,
+        "need_pressure_threshold": 0.35,
+        "queued_stress": 0.002,
+        "resting_fatigue_recovery": 0.004,
+        "resting_stress_recovery": 0.003,
+        "sleeping_fatigue_recovery": 0.01,
+        "sleeping_stress_recovery": 0.006,
+        "stress_pressure": 0.012,
+        "support_wait_stress": 0.001,
+        "toilet_growth": 0.001
+      }
+    },
+    "social_propagation": {
+      "coefficients": {
+        "cooldown_minutes": 30,
+        "enabled": false,
+        "max_agent_stress_increase_per_minute": 0.05,
+        "max_contacts_per_agent": 3,
+        "max_pair_stress_increase": 0.05,
+        "minimum_contact_minutes": 5,
+        "natural_recovery_per_minute": 0.0005,
+        "stress_spread_per_minute": 0.001
+      },
+      "notes": "Experimental coefficients for sensitivity analysis; not empirically calibrated or validated for real populations.",
+      "policy_version": "sparse-family-zone-contact-v1",
+      "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+      "source_type": "assumption"
+    },
+    "staff_support": {
+      "policy_version": "staff-support-fifo-v1",
+      "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "source_type": "assumption",
+      "values": {
+        "support_cooldown_minutes": 30,
+        "support_task_minutes": 10,
+        "unresolved_after_minutes": 90
+      }
+    },
+    "toilet_service": {
+      "policy_version": "toilet-service-uniform-v1",
+      "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+      "source_type": "assumption",
+      "values": {
+        "distribution": "discrete_uniform_inclusive",
+        "maximum_minutes": 8,
+        "minimum_minutes": 4
+      }
+    },
+    "zone_routing": {
+      "edge_travel_minutes": {
+        "corridor_desk": 1,
+        "corridor_sleeping": 1,
+        "corridor_toilet": 1,
+        "desk_corridor": 1,
+        "sleeping_corridor": 1,
+        "toilet_corridor": 1
+      },
+      "policy_version": "shortest-travel-time-v1",
+      "source_id": "ASM-ZONE-ROUTING-V1",
+      "source_type": "assumption"
+    }
+  },
+  "model_configs": {
+    "behavior": {
+      "decision_interval_minutes": 60,
+      "mode": "offline",
+      "policy": "utility-softmax-v1",
+      "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+      "source_type": "assumption"
+    },
+    "social_propagation": {
+      "cooldown_minutes": 30,
+      "enabled": false,
+      "max_agent_stress_increase_per_minute": 0.05,
+      "max_contacts_per_agent": 3,
+      "max_pair_stress_increase": 0.05,
+      "minimum_contact_minutes": 5,
+      "natural_recovery_per_minute": 0.0005,
+      "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+      "source_type": "assumption",
+      "stress_spread_per_minute": 0.001
+    },
+    "staff": {
+      "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "source_type": "assumption",
+      "support_cooldown_minutes": 30,
+      "support_task_minutes": 10,
+      "unresolved_after_minutes": 90
+    },
+    "toilet_service": {
+      "duration_distribution": "discrete_uniform_inclusive",
+      "maximum_minutes": 8,
+      "minimum_minutes": 4,
+      "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+      "source_type": "assumption"
+    }
+  },
+  "parent_branch_id": null,
+  "psychology_trace_minute_count": 0,
+  "realized_event_count": 17082,
+  "rng_algorithm": "sha256-keyed-v1",
+  "run_id": "baseline",
+  "run_status": "completed",
+  "scenario_definition_hash": "f864c526703e68ee87a16a37a3fc334c77cb86ddc9c0ca26c2b14a4a0679e340",
+  "scenario_family_hash": "c7134aa5fa6aaad5242d4c359e84666cd58e4cbb1e0402a9c236a5b0a49e858d",
+  "scenario_hash": "4877df634afbec04ba8f7bdc11de8dcb8870f43da103871c43120bcb8a039a46",
+  "scenario_id": "baseline_100_7d",
+  "scenario_input_source_ids": {},
+  "scenario_provenance": {
+    "description": "Synthetic contract fixture; values are illustrative, not measured.",
+    "model_assumption_ids": [
+      "ASM-SYNTHETIC-PROFILES-V1",
+      "ASM-SIMPLE-PSYCHOLOGY-RATES-V1",
+      "ASM-UTILITY-BEHAVIOR-V1",
+      "ASM-TOILET-SERVICE-DURATION-V1",
+      "ASM-SPACE-AND-STAFF-CAPACITY-V1",
+      "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "ASM-SOCIAL-PROPAGATION-V1",
+      "ASM-ZONE-ROUTING-V1"
+    ],
+    "profile_generation": {
+      "generator": "counter-rng-profile-generator-v1",
+      "manual_overrides": [],
+      "profile_count": 100,
+      "rng_algorithm": "sha256-keyed-v1",
+      "schema_version": 2,
+      "seed": 2026,
+      "template": {
+        "agent_id_prefix": "A",
+        "assisted_weight": 0.15,
+        "fatigue_max": 1.0,
+        "fatigue_min": 0.0,
+        "group_id_prefix": "G",
+        "group_size": 4,
+        "hunger_max": 1.0,
+        "hunger_min": 0.0,
+        "id_width": 3,
+        "independent_weight": 0.8,
+        "initial_zone_ids": [
+          "sleeping"
+        ],
+        "stress_sensitivity_max": 1.0,
+        "stress_sensitivity_min": 0.0,
+        "support_need_max": 0.6,
+        "support_need_min": 0.0,
+        "template_id": "synthetic-balanced-v1",
+        "toilet_urgency_max": 1.0,
+        "toilet_urgency_min": 0.0,
+        "wheelchair_weight": 0.05
+      },
+      "zone_ids": [
+        "corridor",
+        "information_desk",
+        "sleeping",
+        "toilet"
+      ]
+    }
+  },
+  "scenario_schema_version": 3,
+  "scheduled_event_source_ids": [],
+  "seed": 2026,
+  "social_contact_trace_count": 0,
+  "social_decision_count": 0,
+  "staff": [
+    {
+      "id": "S01",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S02",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S03",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S04",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    },
+    {
+      "id": "S05",
+      "skills": [
+        "support"
+      ],
+      "zone_id": "information_desk"
+    }
+  ],
+  "trace_level": "off",
+  "world_state_schema_version": 5
+}

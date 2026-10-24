@@ -1,0 +1,93 @@
+{
+  "baseline_100_7d": {
+    "checkpoint_schema_version": 1,
+    "duration_minutes": 10080,
+    "model_assumption_ids": [
+      "ASM-SYNTHETIC-PROFILES-V1",
+      "ASM-SIMPLE-PSYCHOLOGY-RATES-V1",
+      "ASM-UTILITY-BEHAVIOR-V1",
+      "ASM-TOILET-SERVICE-DURATION-V1",
+      "ASM-SPACE-AND-STAFF-CAPACITY-V1",
+      "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "ASM-SOCIAL-PROPAGATION-V1",
+      "ASM-ZONE-ROUTING-V1"
+    ],
+    "model_configs_sha256": "22db4320a1feccbadfcccc7d61d6c2796bc89daad73a2744b8a8785d8718ee99",
+    "model_policy_versions": {
+      "behavior": "utility-softmax-v1",
+      "event_triggered_social_limits": "event-triggered-social-v2",
+      "event_triggered_social_interactions": "event-triggered-social-v2",
+      "inspector_zone_projection": "inspector-zone-grid-v1",
+      "profile_generation": "counter-rng-profile-generator-v1",
+      "psychology": "causal-stress-v1",
+      "social_propagation": "sparse-family-zone-contact-v1",
+      "staff_support": "staff-support-fifo-aging-v2",
+      "toilet_service": "toilet-service-uniform-v1",
+      "zone_routing": "shortest-travel-time-v1"
+    },
+    "planned_event_ids": [],
+    "profile_count": 100,
+    "scenario_id": "baseline_100_7d",
+    "scenario_schema_version": 3,
+    "scenario_sha256": "4877df634afbec04ba8f7bdc11de8dcb8870f43da103871c43120bcb8a039a46",
+    "seed": 2026,
+    "source_categories": {
+      "model_configs": [
+        "assumption"
+      ],
+      "planned_events": [],
+      "profiles": [
+        "synthetic"
+      ]
+    },
+    "world_state_schema_version": 5
+  },
+  "schema_version": 1,
+  "small_replay": {
+    "checkpoint_schema_version": 1,
+    "duration_minutes": 45,
+    "event_source_categories": [
+      "assumption"
+    ],
+    "event_source_ids": [
+      "ASM-ACTION-LIFECYCLE-V1",
+      "ASM-H00-REGRESSION-OUTAGE-V1",
+      "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "ASM-TOILET-SERVICE-DURATION-V1",
+      "ASM-ZONE-ROUTING-V1"
+    ],
+    "expected_final_state_sha256": "4b044090d38231f521122a781ca3b2b1df47718cf48449f613c30d2e8fc33736",
+    "planned_event_ids": [
+      "h00-toilet-outage"
+    ],
+    "profile_count": 4,
+    "realized_event_ids": [
+      "action-lifecycle-2",
+      "action-lifecycle-4",
+      "action-lifecycle-6",
+      "action-lifecycle-8",
+      "agent-travel-complete-5",
+      "agent-travel-complete-10",
+      "agent-travel-complete-12",
+      "agent-travel-complete-14",
+      "toilet-complete-15",
+      "action-lifecycle-17",
+      "agent-travel-complete-16",
+      "staff-support-complete-9",
+      "staff-support-complete-11",
+      "staff-support-complete-13",
+      "action-lifecycle-18",
+      "action-lifecycle-19",
+      "action-lifecycle-20",
+      "h00-toilet-outage",
+      "support-timeout-1",
+      "support-timeout-3",
+      "support-timeout-7"
+    ],
+    "scenario_id": "h00-small-replay",
+    "scenario_schema_version": 3,
+    "scenario_sha256": "4db8e423c6fecc2c9d7529fd4622911afa2a988c70f3d57194b984d2945c07e0",
+    "seed": 2026,
+    "world_state_schema_version": 5
+  }
+}

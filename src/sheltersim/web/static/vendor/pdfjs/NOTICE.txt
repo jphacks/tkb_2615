@@ -1,0 +1,6 @@
+pdfjs-dist 4.10.38
+
+Locally bundled from the published npm package pdfjs-dist@4.10.38. The upstream
+LICENSE is included beside these files. This offline renderer is used only to
+rasterize the operator-selected PDF page for local display and manual geometry
+tracing. It does not perform OCR or certify PDF contents.

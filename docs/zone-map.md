@@ -1,0 +1,9 @@
+# 合成gym map
+
+fixtures/layouts/gym_synthetic.jsonは表示用の合成図です。実在避難所の平面図ではありません。座標はZonePolicy、移動時間、event処理、乱数状態、保存simulation stateに影響しません。選択Runに対応するZoneがない区画は表示専用と明記します。
+
+Agent markerは、記録済みZone polygon内にAgent ID、Zone ID、選択minuteの安定hashを使って配置します。同じ状態なら同じ分布となり、simulation乱数は消費しません。markerは選択minute以前の最新decision前snapshotを使います。その時点の記録がなければ初期profile位置を使います。
+
+施設状態はRun manifestから始め、選択minute以前に正常適用された施設停止・復旧eventだけを反映します。便器queueと使用中数は選択時刻以前で最も近いmetrics rowを使います。これらはZone単位集計で、個別便器のqueueではありません。座標、marker位置、混雑overlayは説明用表示です。物理距離、定員推奨、現実環境を示す根拠にはなりません。
+
+map契約はofflineのtests/test_map_layout.pyとtests/test_web_inspector.pyで確認します。Scenarioを変更せず、long simulation regressionも必要ありません。

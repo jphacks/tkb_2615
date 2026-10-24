@@ -1,0 +1,292 @@
+{
+  "benchmark_schema_version": 1,
+  "duration_minutes": 1440,
+  "environment": {
+    "cpu_count": 3,
+    "execution_mode": "offline",
+    "git_sha": "19e5cde0a4d59de140582e45b6c9dce3e2b04b7b",
+    "git_worktree_dirty": false,
+    "implementation": "CPython",
+    "machine": "x86_64",
+    "model_versions": {
+      "behavior": "utility-softmax-v1",
+      "psychology": "causal-stress-v1",
+      "space": "shortest-travel-time-v1",
+      "toilet_service": "toilet-service-uniform-v1"
+    },
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "python_version": "3.12.14",
+    "rng_algorithm": "sha256-keyed-v1",
+    "source_tree_hash": "aedc603ac5704d09e3fa703c2226aec812bdd180c86be592c8a9bb2575b8b604"
+  },
+  "runs": [
+    {
+      "agent_count": 30,
+      "artifact_bytes": 4479723,
+      "cpu_seconds": 6.282992757,
+      "duration_minutes": 1440,
+      "events_per_tick": 1.3902777777777777,
+      "final_state_hash": "791407f32860522e72a9d7009bc652de4a112be32304877037d3d8bddfbd8815",
+      "model_configs": {
+        "behavior": {
+          "decision_interval_minutes": 60,
+          "mode": "offline",
+          "policy": "utility-softmax-v1",
+          "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+          "source_type": "assumption"
+        },
+        "social_propagation": {
+          "cooldown_minutes": 30,
+          "enabled": false,
+          "max_agent_stress_increase_per_minute": 0.05,
+          "max_contacts_per_agent": 3,
+          "max_pair_stress_increase": 0.05,
+          "minimum_contact_minutes": 5,
+          "natural_recovery_per_minute": 0.0005,
+          "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+          "source_type": "assumption",
+          "stress_spread_per_minute": 0.001
+        },
+        "staff": {
+          "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+          "source_type": "assumption",
+          "support_cooldown_minutes": 30,
+          "support_task_minutes": 10,
+          "unresolved_after_minutes": 90
+        },
+        "toilet_service": {
+          "duration_distribution": "discrete_uniform_inclusive",
+          "maximum_minutes": 8,
+          "minimum_minutes": 4,
+          "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+          "source_type": "assumption"
+        }
+      },
+      "peak_rss_mib": 49.765625,
+      "realized_event_count": 2002,
+      "run_status": "completed",
+      "scenario_hash": "384bb56164064b012c5391061a3fd0c6651a102cd8c41e4f834cea78c5becca1",
+      "scenario_id": "benchmark-30-1440-2026",
+      "seed": 2026,
+      "trace_bytes": 1900650,
+      "trace_level": "off",
+      "wall_seconds": 6.287512857998081
+    },
+    {
+      "agent_count": 100,
+      "artifact_bytes": 12740586,
+      "cpu_seconds": 18.084717717,
+      "duration_minutes": 1440,
+      "events_per_tick": 3.9145833333333333,
+      "final_state_hash": "5c0be0e28aa2577b1b021755ebabd763b3e52a8bec96cca74007ed92e6682742",
+      "model_configs": {
+        "behavior": {
+          "decision_interval_minutes": 60,
+          "mode": "offline",
+          "policy": "utility-softmax-v1",
+          "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+          "source_type": "assumption"
+        },
+        "social_propagation": {
+          "cooldown_minutes": 30,
+          "enabled": false,
+          "max_agent_stress_increase_per_minute": 0.05,
+          "max_contacts_per_agent": 3,
+          "max_pair_stress_increase": 0.05,
+          "minimum_contact_minutes": 5,
+          "natural_recovery_per_minute": 0.0005,
+          "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+          "source_type": "assumption",
+          "stress_spread_per_minute": 0.001
+        },
+        "staff": {
+          "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+          "source_type": "assumption",
+          "support_cooldown_minutes": 30,
+          "support_task_minutes": 10,
+          "unresolved_after_minutes": 90
+        },
+        "toilet_service": {
+          "duration_distribution": "discrete_uniform_inclusive",
+          "maximum_minutes": 8,
+          "minimum_minutes": 4,
+          "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+          "source_type": "assumption"
+        }
+      },
+      "peak_rss_mib": 76.671875,
+      "realized_event_count": 5637,
+      "run_status": "completed",
+      "scenario_hash": "9323a79a5190bcc84b84c9f11166d8dff310d31ef66efc01d42911c4594b58e4",
+      "scenario_id": "benchmark-100-1440-2026",
+      "seed": 2026,
+      "trace_bytes": 5515480,
+      "trace_level": "off",
+      "wall_seconds": 18.094564689003164
+    },
+    {
+      "agent_count": 500,
+      "artifact_bytes": 50791810,
+      "cpu_seconds": 123.56220862800001,
+      "duration_minutes": 1440,
+      "events_per_tick": 11.470138888888888,
+      "final_state_hash": "90d48aaf50b9067139c4489d2e44c3f73ad049d8a50f87ce4dbe71eb476d64a1",
+      "model_configs": {
+        "behavior": {
+          "decision_interval_minutes": 60,
+          "mode": "offline",
+          "policy": "utility-softmax-v1",
+          "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+          "source_type": "assumption"
+        },
+        "social_propagation": {
+          "cooldown_minutes": 30,
+          "enabled": false,
+          "max_agent_stress_increase_per_minute": 0.05,
+          "max_contacts_per_agent": 3,
+          "max_pair_stress_increase": 0.05,
+          "minimum_contact_minutes": 5,
+          "natural_recovery_per_minute": 0.0005,
+          "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+          "source_type": "assumption",
+          "stress_spread_per_minute": 0.001
+        },
+        "staff": {
+          "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+          "source_type": "assumption",
+          "support_cooldown_minutes": 30,
+          "support_task_minutes": 10,
+          "unresolved_after_minutes": 90
+        },
+        "toilet_service": {
+          "duration_distribution": "discrete_uniform_inclusive",
+          "maximum_minutes": 8,
+          "minimum_minutes": 4,
+          "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+          "source_type": "assumption"
+        }
+      },
+      "peak_rss_mib": 202.08203125,
+      "realized_event_count": 16517,
+      "run_status": "completed",
+      "scenario_hash": "0c3fe666e22042443963167652c59da83b51ea637534193fc514ebf150c80649",
+      "scenario_id": "benchmark-500-1440-2026",
+      "seed": 2026,
+      "trace_bytes": 16329804,
+      "trace_level": "off",
+      "wall_seconds": 123.71327145100076
+    },
+    {
+      "agent_count": 1000,
+      "artifact_bytes": 81856038,
+      "cpu_seconds": 274.811642736,
+      "duration_minutes": 1440,
+      "events_per_tick": 16.054166666666667,
+      "final_state_hash": "20ef959d3eaa2bf82b8d2e7f600b8300473a1149c02d44a15a77cd1516bdca7d",
+      "model_configs": {
+        "behavior": {
+          "decision_interval_minutes": 60,
+          "mode": "offline",
+          "policy": "utility-softmax-v1",
+          "source_id": "ASM-UTILITY-BEHAVIOR-V1",
+          "source_type": "assumption"
+        },
+        "social_propagation": {
+          "cooldown_minutes": 30,
+          "enabled": false,
+          "max_agent_stress_increase_per_minute": 0.05,
+          "max_contacts_per_agent": 3,
+          "max_pair_stress_increase": 0.05,
+          "minimum_contact_minutes": 5,
+          "natural_recovery_per_minute": 0.0005,
+          "source_id": "ASM-SOCIAL-PROPAGATION-V1",
+          "source_type": "assumption",
+          "stress_spread_per_minute": 0.001
+        },
+        "staff": {
+          "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+          "source_type": "assumption",
+          "support_cooldown_minutes": 30,
+          "support_task_minutes": 10,
+          "unresolved_after_minutes": 90
+        },
+        "toilet_service": {
+          "duration_distribution": "discrete_uniform_inclusive",
+          "maximum_minutes": 8,
+          "minimum_minutes": 4,
+          "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+          "source_type": "assumption"
+        }
+      },
+      "peak_rss_mib": 316.03515625,
+      "realized_event_count": 23118,
+      "run_status": "completed",
+      "scenario_hash": "b598bd89bfccdad879a3d5a9bd92a646352efe4dac50940c14390eedfecf89ab",
+      "scenario_id": "benchmark-1000-1440-2026",
+      "seed": 2026,
+      "trace_bytes": 22899581,
+      "trace_level": "off",
+      "wall_seconds": 275.311410839
+    }
+  ],
+  "scenario_source": "fixtures/scenarios/baseline_100_7d.json",
+  "summaries": [
+    {
+      "agent_count": 30,
+      "artifact_bytes_mean": 4479723.0,
+      "cpu_seconds_mean": 6.282992757,
+      "cpu_seconds_stdev": null,
+      "events_per_tick_mean": 1.3902777777777777,
+      "events_per_tick_stdev": null,
+      "peak_rss_mib_mean": 49.765625,
+      "peak_rss_mib_stdev": null,
+      "seed_count": 1,
+      "trace_bytes_mean": 1900650.0,
+      "wall_seconds_mean": 6.287512857998081,
+      "wall_seconds_stdev": null
+    },
+    {
+      "agent_count": 100,
+      "artifact_bytes_mean": 12740586.0,
+      "cpu_seconds_mean": 18.084717717,
+      "cpu_seconds_stdev": null,
+      "events_per_tick_mean": 3.9145833333333333,
+      "events_per_tick_stdev": null,
+      "peak_rss_mib_mean": 76.671875,
+      "peak_rss_mib_stdev": null,
+      "seed_count": 1,
+      "trace_bytes_mean": 5515480.0,
+      "wall_seconds_mean": 18.094564689003164,
+      "wall_seconds_stdev": null
+    },
+    {
+      "agent_count": 500,
+      "artifact_bytes_mean": 50791810.0,
+      "cpu_seconds_mean": 123.56220862800001,
+      "cpu_seconds_stdev": null,
+      "events_per_tick_mean": 11.470138888888888,
+      "events_per_tick_stdev": null,
+      "peak_rss_mib_mean": 202.08203125,
+      "peak_rss_mib_stdev": null,
+      "seed_count": 1,
+      "trace_bytes_mean": 16329804.0,
+      "wall_seconds_mean": 123.71327145100076,
+      "wall_seconds_stdev": null
+    },
+    {
+      "agent_count": 1000,
+      "artifact_bytes_mean": 81856038.0,
+      "cpu_seconds_mean": 274.811642736,
+      "cpu_seconds_stdev": null,
+      "events_per_tick_mean": 16.054166666666667,
+      "events_per_tick_stdev": null,
+      "peak_rss_mib_mean": 316.03515625,
+      "peak_rss_mib_stdev": null,
+      "seed_count": 1,
+      "trace_bytes_mean": 22899581.0,
+      "wall_seconds_mean": 275.311410839,
+      "wall_seconds_stdev": null
+    }
+  ],
+  "trace_level": "off"
+}

@@ -3,22 +3,49 @@ requires = ["setuptools==75.8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sheltersim-foundation"
+name = "sheltersim"
 version = "0.1.0"
-description = "ShelterSimのシミュレーション基盤とpipelineの作業用骨格"
+description = "避難所運営条件を検討するためのoffline-first実験用シミュレーター"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic==2.11.9",
+]
 
 [project.optional-dependencies]
-dev = ["pytest==8.3.5", "ruff==0.11.0"]
+dev = [
+    "pytest==8.3.5",
+    "ruff==0.11.0",
+]
+llm = [
+    "anthropic>=1.0,<2",
+]
+plan-import = [
+    "Pillow>=10,<13",
+    "pypdfium2>=4.30,<5",
+]
+
+[project.scripts]
+sheltersim = "sheltersim.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"sheltersim.contracts" = ["*.json"]
+"sheltersim.web" = [
+    "static/*.html", "static/*.js", "static/*.css", "examples/*.json",
+    "static/vendor/pdfjs/*.mjs", "static/vendor/pdfjs/LICENSE", "static/vendor/pdfjs/NOTICE.txt",
+    "static/vendor/pdfjs/cmaps/*", "static/vendor/pdfjs/standard_fonts/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "live_api: paid integration tests requiring an explicit dev-environment gate",
+    "long_simulation: full-duration seven-day simulation regressions run in the long CI lane",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,0 +1,77 @@
+{
+  "edges": [
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_desk",
+      "to_zone_id": "information_desk",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_sleeping",
+      "to_zone_id": "sleeping",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "corridor",
+      "id": "corridor_toilet",
+      "to_zone_id": "toilet",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "information_desk",
+      "id": "desk_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "sleeping",
+      "id": "sleeping_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    },
+    {
+      "closed": false,
+      "from_zone_id": "toilet",
+      "id": "toilet_corridor",
+      "to_zone_id": "corridor",
+      "travel_minutes": 1
+    }
+  ],
+  "schema_version": 1,
+  "zones": [
+    {
+      "capacity": null,
+      "display_x": 1.0,
+      "display_y": 0.0,
+      "id": "corridor",
+      "name": "Corridor"
+    },
+    {
+      "capacity": 8,
+      "display_x": 1.0,
+      "display_y": 1.0,
+      "id": "information_desk",
+      "name": "Information desk"
+    },
+    {
+      "capacity": 120,
+      "display_x": 0.0,
+      "display_y": 0.0,
+      "id": "sleeping",
+      "name": "Sleeping area"
+    },
+    {
+      "capacity": 20,
+      "display_x": 2.0,
+      "display_y": 0.0,
+      "id": "toilet",
+      "name": "Toilets"
+    }
+  ]
+}
