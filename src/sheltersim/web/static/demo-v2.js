@@ -4,6 +4,10 @@
   const $ = (id) => document.getElementById(id);
   const enc = encodeURIComponent;
   const json = (value) => JSON.stringify(value, null, 2);
+  const llmModeLabel = (mode) =>
+    ({ record: "Claude API接続", offline: "API未接続", replay: "記録応答リプレイ" })[
+      mode
+    ] || mode || "未記録";
   const query = new URLSearchParams(location.search);
   let saved = {};
   try {
@@ -579,7 +583,7 @@
     $("scenario-check").checked = false;
     $("scenario-check").disabled = !p.can_start;
     state.mode = p.llm_usage?.mode ?? "未記録";
-    $("mode-badge").textContent = `LLM: ${state.mode}`;
+    $("mode-badge").textContent = llmModeLabel(state.mode);
     drawMap(
       $("preview-map"),
       {
@@ -1260,7 +1264,7 @@
     state.evidence = evidence;
     state.mode = llm.mode;
     $("mode-badge").textContent =
-      `LLM: ${llm.mode || "記録なし"} / fallback ${llm.outcomes?.fallback_count ?? "集計を参照"}`;
+      `${llmModeLabel(llm.mode)} / fallback ${llm.outcomes?.fallback_count ?? "集計を参照"}`;
     $("report-status").textContent =
       report.status === "not_generated"
         ? "計算途中 · レポート未生成"
@@ -2126,7 +2130,7 @@
         await refreshRun();
         const llm = await api(`${branchBase()}/llm-status`);
         state.mode = llm.mode;
-        $("mode-badge").textContent = `LLM: ${llm.mode || "未記録"}`;
+        $("mode-badge").textContent = llmModeLabel(llm.mode);
       }
     } else if (state.run) {
       state.run = null;

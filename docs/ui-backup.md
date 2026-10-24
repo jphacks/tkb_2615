@@ -4,12 +4,18 @@
 
 ## 起動
 
-バックアップworktree内に専用venvを用意します。既存ディレクトリのvenvへeditable installして、既存作業の参照先を変更しないでください。
+バックアップworktree内に専用venvを用意します。既存ディレクトリのvenvへeditable installして、既存作業の参照先を変更しないでください。デモはClaude APIへ接続する`record` modeで起動し、APIエラー時にoffline fallbackせず理由を表示します。API keyはGit管理外の環境変数またはローカルの`.env`から読み込ませてください（アプリは`.env`を自動読込しません）。
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-SHELTERSIM_LLM_MODE=offline .venv/bin/python -m sheltersim web \
+.venv/bin/python -m pip install -e '.[dev,llm]'
+# keyを保管したローカル.envを使う場合。パスは手元の保存先に合わせます。
+set -a
+. /path/to/local/.env
+set +a
+test -n "${ANTHROPIC_API_KEY:-}" || { echo 'ANTHROPIC_API_KEY is required' >&2; exit 1; }
+SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
+  .venv/bin/python -m sheltersim web \
   --runs-dir /tmp/hinanjo-if-backup-runs --host 127.0.0.1 --port 8876
 ```
 
@@ -49,7 +55,7 @@ SHELTERSIM_LLM_MODE=offline .venv/bin/python -m sheltersim web \
 3. 確認チェックを選択して承認するとRunを作成します。計算目標を経過分で指定して計算します。短い動作確認には100人・0.025日（36分）を利用できます。長期・大人数は計算と保存量が増えます。
 4. 再生・シークで計算済み時刻を確認し、介入文を入力します。追加先が曖昧な場合は、APIが返した候補から明示的に選択します。選択結果を `zone_id: ...` として指示へ追記し、作用を再プレビューします。作用を確認・承認すると独立分岐が生成されます。
 5. 分岐比較の「両分岐を指定時刻まで計算」で両方を共通目標へ進めます。比較画面の計算目標（経過分）を指定します。シミュレーション画面の目標欄とも同期します。未指定時は両者の先へ60分（期間上限まで）進めます。
-6. レポート画面で記録の時系列、人物状態、イベント、出典を確認します。最後まで計算するとBranch reportが生成されます。Q&Aはoffline時には生成されません。有料ProviderをこのUI検証のために有効化しないでください。
+6. レポート画面で記録の時系列、人物状態、イベント、出典を確認します。最後まで計算するとBranch reportが生成されます。結果Q&Aと自然言語機能はClaude APIを呼び出します。API接続、利用枠、応答検証で失敗した場合はfallbackせず、エラー理由を表示します。
 
 ## 設計・表示上の境界
 
@@ -64,6 +70,8 @@ SHELTERSIM_LLM_MODE=offline .venv/bin/python -m sheltersim web \
 
 ## 検証
 
+通常のpytestはofflineで実行します。実APIの有効性確認には、ローカルに設定したAPI keyと、既存の上限付きlive integration testを使用します。デモ起動とは別工程です。
+
 ```sh
 SHELTERSIM_LLM_MODE=offline PYTHONPATH=src python -m pytest \
   tests/test_web_routes.py tests/test_demo_v2.py tests/test_web_demo.py \
@@ -77,10 +85,10 @@ SHELTERSIM_LLM_MODE=offline PYTHONPATH=src python -m pytest \
 ## このブランチで実施した検証
 
 - Python: UI配信、parser、既存Web、永続化、Q&A、Checkpoint、EffectProgram、厳密timelineのofflineテスト95件が通過。
-- Chrome headless: 実HTTP APIによるE2E、承認無効化、巻戻し、自然言語の曖昧性解消、元Branchのhash不変、両Branchの計算・同期再生、report取得、offline質問、JSON保存、復元が通過。
+- Chrome headless: 実HTTP APIによるE2E、承認無効化、巻戻し、自然言語の曖昧性解消、元Branchのhash不変、両Branchの計算・同期再生、report取得、質問UI、JSON保存、復元が通過（offline modeによる既存検証）。
 - 表示: 1440×900 / 1920×1080の4画面を撮影し目視確認。800px / 390pxでも横方向にはみ出さないことを確認。
 - JS構文チェックとgit diff --checkが通過。新規Pythonテストはruffを通過。既存のserver.py（13件）とnatural_language.py（14件）のlint指摘は起点mainと同じで、新規指摘はありません。
-- 有料Providerは呼び出していません。live AI回答の品質、長期7日・大人数での性能は今回未検証です。offline reportはrule_fallback、Q&Aは生成不可として表示します。
+- 上記pytestはoffline専用です。live APIの確認は利用者が明示した予算上限と`SHELTERSIM_ALLOW_LIVE_API_TESTS=1`を使う別コマンドで実施します。長期7日・大人数での性能は未検証です。
 
 今回のローカル環境では、既存venvの依存だけを読み取り、`PYTHONPATH=src` でバックアップworktreeを優先する次の起動も確認済みです（既存venvへのinstallや設定変更は行いません）。
 

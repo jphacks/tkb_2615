@@ -2,7 +2,9 @@
 
 ## Providerとの境界
 
-Claude連携は任意です。llm extraを導入し、ANTHROPIC_API_KEYをGit外に設定します。SHELTERSIM_LLM_MODEを省略するとauto modeになり、keyが設定されている場合、対応workflowがProviderを呼ぶことがあります。すべてローカルで行う場合はSHELTERSIM_LLM_MODE=offline、またはcommandの--offlineを指定します。同梱.env.exampleはofflineを選びます。
+Claude連携は任意です。llm extraを導入し、ANTHROPIC_API_KEYをGit外に設定します。SHELTERSIM_LLM_MODEを省略するとauto modeになり、keyが設定されている場合、対応workflowがProviderを呼ぶことがあります。すべてローカルで行う場合はSHELTERSIM_LLM_MODE=offline、またはcommandの--offlineを指定します。同梱.env.exampleは`record`と`stop`で、API接続失敗時のoffline fallbackを防ぎます。
+
+`/demo-v2`の利用者向けデモはAPI接続を必須とし、`SHELTERSIM_LLM_MODE=record`と`SHELTERSIM_LLM_ERROR_POLICY=stop`で起動します。key不足やAPIエラーをoffline動作へ黙って切り替えず、処理失敗として表示します。オフラインmodeは自動テストなど、コマンドで明示した場合だけに使用します。
 
 Anthropicへ接続するのはsrc/sheltersim/llm/anthropic_adapter.pyだけです。simulation coreにProvider依存はありません。requestはrouter、型付きtask schema、呼出し・token・同時実行・費用上限、usage ledger、cache、response tapeを通ります。
 
