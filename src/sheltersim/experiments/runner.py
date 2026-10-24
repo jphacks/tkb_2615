@@ -59,6 +59,7 @@ from sheltersim.domain.movement import (
 )
 from sheltersim.domain.population import admit_pending_arrivals
 from sheltersim.domain.population_lifecycle import current_household_id
+from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
 from sheltersim.domain.resource_service import ResourceServiceManager
 from sheltersim.domain.simulator_state import (
     initialize_simulator_extensions,
@@ -509,7 +510,7 @@ class OfflineSimulationController:
                     zone_neighbors=self.zone_neighbors,
                     runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
                 )
-                apply_state_deltas(world, result.deltas)
+                final_deltas = result.deltas
                 world.model_state[SOCIAL_RUNTIME_STATE_KEY] = result.runtime_state
                 for contact in result.contacts if "social_network_v1" in world.model_state else ():
                     record_observed_contact(
@@ -521,7 +522,16 @@ class OfflineSimulationController:
                 if self.artifacts.trace_level is not TraceLevel.OFF:
                     self.artifacts.record_social_contact_trace(result.trace_document(minute))
             else:
-                apply_state_deltas(world, base_deltas)
+                final_deltas = base_deltas
+            update_long_term = getattr(self.psychology, "update_long_term_state", None)
+            if callable(update_long_term):
+                runtime_state = world.model_state.get(PSYCHOLOGICAL_STATE_KEY)
+                if not isinstance(runtime_state, dict):
+                    raise ValueError("mean-reverting psychology runtime state is missing")
+                world.model_state[PSYCHOLOGICAL_STATE_KEY] = update_long_term(
+                    runtime_state, minute, final_deltas
+                )
+            apply_state_deltas(world, final_deltas)
         elif phase is TickPhase.PROPOSE_ACTIONS:
             view = WorldView.from_world(world)
             for proposal in self.decisions.propose_due(view, rng):

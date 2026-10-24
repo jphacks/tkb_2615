@@ -585,13 +585,16 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
     )
     toilet = configs.get("toilet_service", {})
     staff = configs.get("staff", {})
-    social = SocialPropagationParameters.from_mapping(configs.get("social_propagation"))
+    selected = selected_models(configs)
+    installed_catalog = model_catalog()
+    social = SocialPropagationParameters.from_mapping(
+        configs.get("social_propagation"),
+        source_id=installed_catalog[selected["social"]]["assumption_source_id"],
+    )
     information_config = InformationSpreadConfig.from_mapping(configs.get("information_spread"))
     limits = asdict(SocialRuntimeLimits())
     psychology_config = PsychologyModelConfig.model_validate(configs.get("psychology", {}))
     psychology_values = psychology_config.coefficient_values()
-    selected = selected_models(configs)
-    installed_catalog = model_catalog()
     assumptions = {
         "profile_generation": {
             "source_type": "assumption",

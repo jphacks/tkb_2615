@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.body_state import BODY_SOURCE_ID, canonical_body_config
 from sheltersim.domain.models import Activity, NeedState, validate_unit_interval
+from sheltersim.domain.psychological_state import update_psychological_state
 from sheltersim.policies.behavior import WorldView
 
 
@@ -109,6 +110,7 @@ class AgentPsychologyTrace:
     condition_modifier_event_ids: tuple[str, ...] = ()
     condition_assumption_ids: tuple[str, ...] = ()
     life_state_feedback_stress: float = 0.0
+    natural_recovery_stress: float = 0.0
     life_state_before: tuple[tuple[str, float], ...] = ()
     life_state_after: tuple[tuple[str, float], ...] = ()
 
@@ -175,6 +177,7 @@ class AgentPsychologyTrace:
             "facility_queue_wait": self.queue_wait_stress,
             "staff_support_wait": self.support_wait_stress,
             "recovery": self.recovery_stress,
+            "natural_recovery": self.natural_recovery_stress,
         }
         if self.life_state_feedback_stress:
             components["life_state_feedback"] = self.life_state_feedback_stress
@@ -217,6 +220,7 @@ class AgentPsychologyTrace:
                     + self.queue_wait_stress
                     + self.support_wait_stress
                     + self.recovery_stress
+                    + self.natural_recovery_stress
                     + self.life_state_feedback_stress
                 ),
             },
@@ -287,6 +291,9 @@ class PsychologyUpdateResult:
             "facility_queue_wait": math.fsum(item.queue_wait_stress for item in self.traces),
             "staff_support_wait": math.fsum(item.support_wait_stress for item in self.traces),
             "recovery": math.fsum(item.recovery_stress for item in self.traces),
+            "natural_recovery": math.fsum(
+                item.natural_recovery_stress for item in self.traces
+            ),
             "applied_stress_delta": math.fsum(
                 item.stress_after - item.stress_before for item in self.traces
             ),
@@ -340,6 +347,13 @@ class PsychologyParameters:
     toilet_growth_by_agent: dict[str, float] = field(default_factory=dict)
     hunger_growth_by_agent: dict[str, float] = field(default_factory=dict)
     awake_fatigue_growth_by_agent: dict[str, float] = field(default_factory=dict)
+    natural_recovery_rate_per_minute: float = 0.01
+    natural_recovery_rate_by_agent: dict[str, float] = field(default_factory=dict)
+    baseline_distress_by_agent: dict[str, float] = field(default_factory=dict)
+    chronic_retention: float = 0.90
+    chronic_acute_weight: float = 0.08
+    chronic_high_distress_weight: float = 0.02
+    high_distress_threshold: float = 0.70
 
     def __post_init__(self) -> None:
         for name in (
@@ -355,6 +369,7 @@ class PsychologyParameters:
             "need_pressure_threshold",
             "hydration_growth",
             "support_wait_stress",
+            "natural_recovery_rate_per_minute",
         ):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
@@ -378,6 +393,33 @@ class PsychologyParameters:
                 for agent_id, value in values.items()
             ):
                 raise ValueError(f"{field_name} must contain finite Agent rates in [0, 0.25]")
+        for name in (
+            "chronic_retention",
+            "chronic_acute_weight",
+            "chronic_high_distress_weight",
+            "high_distress_threshold",
+        ):
+            validate_unit_interval(name, getattr(self, name))
+        if len(self.baseline_distress_by_agent) > 10_000 or any(
+            not isinstance(agent_id, str)
+            or not agent_id
+            or type(value) not in (int, float)
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+            for agent_id, value in self.baseline_distress_by_agent.items()
+        ):
+            raise ValueError("baseline_distress_by_agent must contain values in [0, 1]")
+        if len(self.natural_recovery_rate_by_agent) > 10_000 or any(
+            not isinstance(agent_id, str)
+            or not agent_id
+            or type(value) not in (int, float)
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 0.25
+            for agent_id, value in self.natural_recovery_rate_by_agent.items()
+        ):
+            raise ValueError("natural_recovery_rate_by_agent must contain rates in [0, 0.25]")
 
 
 class SimplePsychologyPolicy:
@@ -536,6 +578,71 @@ class SimplePsychologyPolicy:
                 )
             )
         return PsychologyUpdateResult(tuple(deltas), tuple(traces))
+
+
+class MeanRevertingDistressPolicy(SimplePsychologyPolicy):
+    """Continuous-time mean reversion plus a separately checkpointed daily latent state."""
+
+    policy_version = "mean-reverting-distress-v1"
+    source_id = "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1"
+
+    def __init__(self, parameters: PsychologyParameters | None = None) -> None:
+        super().__init__(parameters, source_id=self.source_id)
+
+    def explain_update(self, view: WorldView, minute: int) -> PsychologyUpdateResult:
+        baseline = super().explain_update(view, minute)
+        deltas: list[AgentStateDelta] = []
+        traces: list[AgentPsychologyTrace] = []
+        for delta, trace in zip(baseline.deltas, baseline.traces, strict=True):
+            kappa = self.parameters.natural_recovery_rate_by_agent.get(
+                delta.agent_id, self.parameters.natural_recovery_rate_per_minute
+            )
+            personal_baseline = self.parameters.baseline_distress_by_agent.get(
+                delta.agent_id, 0.0
+            )
+            natural_only = mean_reverting_step(
+                trace.stress_before, personal_baseline, 0.0, kappa, 1.0
+            )
+            forcing = (
+                trace.need_pressure_stress
+                + trace.queue_wait_stress
+                + trace.support_wait_stress
+                + trace.environmental_stress
+                + trace.recovery_stress
+                + trace.life_state_feedback_stress
+            )
+            stress = mean_reverting_step(
+                trace.stress_before, personal_baseline, forcing, kappa, 1.0
+            )
+            deltas.append(replace(delta, stress=stress))
+            traces.append(
+                replace(
+                    trace,
+                    stress_after=stress,
+                    natural_recovery_stress=natural_only - trace.stress_before,
+                )
+            )
+        return PsychologyUpdateResult(
+            tuple(deltas), tuple(traces), policy_version=self.policy_version
+        )
+
+    def update_long_term_state(
+        self,
+        runtime_state: dict[str, Any],
+        minute: int,
+        final_deltas: tuple[AgentStateDelta, ...],
+    ) -> dict[str, Any]:
+        """Accumulate acute distress after social influence and update D once per day."""
+        return update_psychological_state(
+            runtime_state,
+            minute=minute,
+            acute_by_agent={delta.agent_id: delta.stress for delta in final_deltas},
+            retention=self.parameters.chronic_retention,
+            acute_weight=self.parameters.chronic_acute_weight,
+            high_distress_weight=self.parameters.chronic_high_distress_weight,
+            high_distress_threshold=self.parameters.high_distress_threshold,
+            baseline_by_agent=self.parameters.baseline_distress_by_agent,
+        )
 
 
 class LifeStatePsychologyPolicy:
@@ -796,3 +903,34 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
 
 def _clamp(value: float) -> float:
     return min(1.0, max(0.0, value))
+
+
+def mean_reverting_step(
+    value: float,
+    baseline: float,
+    forcing_per_minute: float,
+    recovery_rate_per_minute: float,
+    delta_minutes: float,
+) -> float:
+    """Exact one-step solution for constant forcing over a finite interval."""
+    for name, item in (("value", value), ("baseline", baseline)):
+        validate_unit_interval(name, item)
+    if (
+        not math.isfinite(forcing_per_minute)
+        or not math.isfinite(recovery_rate_per_minute)
+        or recovery_rate_per_minute < 0.0
+        or not math.isfinite(delta_minutes)
+        or delta_minutes <= 0.0
+    ):
+        raise ValueError("mean-reversion forcing, rate, or interval is invalid")
+    decay = math.exp(-recovery_rate_per_minute * delta_minutes)
+    if recovery_rate_per_minute == 0.0:
+        result = value + forcing_per_minute * delta_minutes
+    else:
+        forcing_integral = -math.expm1(-recovery_rate_per_minute * delta_minutes)
+        result = (
+            baseline
+            + (value - baseline) * decay
+            + forcing_per_minute * forcing_integral / recovery_rate_per_minute
+        )
+    return _clamp(result)

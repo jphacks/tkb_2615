@@ -20,6 +20,7 @@ from sheltersim.domain.infrastructure import (
     infrastructure_event_context_ids,
 )
 from sheltersim.domain.models import Activity, Mobility
+from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,12 @@ class AgentView:
     usual_sleep_minute: int | None = None
     required_sleep_minutes: int | None = None
     personal_context_present: bool = False
+    chronic_distress: float = 0.0
+
+    @property
+    def acute_distress(self) -> float:
+        """Compatibility name for the existing, single `stress` field."""
+        return self.stress
 
 
 @dataclass(frozen=True)
@@ -160,6 +167,10 @@ class WorldView:
                 queue_tasks.setdefault(task.agent_id, []).append(task)
         body_state = world.model_state.get("body_state_v1", {})
         body_agents = body_state.get("agents", {}) if isinstance(body_state, dict) else {}
+        psychology_state = world.model_state.get(PSYCHOLOGICAL_STATE_KEY, {})
+        psychology_agents = (
+            psychology_state.get("agents", {}) if isinstance(psychology_state, dict) else {}
+        )
         presence_state = world.model_state.get("population_presence_v1", {})
         presence_people = presence_state.get("people", {}) if isinstance(presence_state, dict) else {}
         context_people = {
@@ -217,6 +228,9 @@ class WorldView:
                     hydration_need=agent.needs.hydration_need,
                 ),
                 stress=agent.stress,
+                chronic_distress=psychology_agents.get(agent_id, {}).get(
+                    "long_term_distress", 0.0
+                ),
                 trust=agent.trust,
                 next_decision_at=agent.next_decision_at,
                 resource_service_enabled=world.schema_version == 6,
@@ -780,6 +794,7 @@ class UtilityBehaviorPolicy:
         distress = max(
             *distress_needs,
             agent.stress,
+            agent.chronic_distress,
             agent.discontent * 0.75,
             agent.negative_affect * 0.6,
         )

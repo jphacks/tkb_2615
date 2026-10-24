@@ -47,6 +47,12 @@ from sheltersim.domain.operational import (
     uses_operational_events,
     validate_operational_events_state,
 )
+from sheltersim.domain.psychological_state import (
+    PSYCHOLOGICAL_STATE_KEY,
+    PSYCHOLOGICAL_STATE_POLICY_VERSION,
+    create_psychological_state,
+    validate_psychological_state,
+)
 from sheltersim.domain.resources import (
     RESOURCE_LEDGER_KEY,
     create_resource_ledger,
@@ -220,6 +226,15 @@ class WorldState:
             world.model_state[INFORMATION_SPREAD_STATE_KEY] = create_information_runtime_state(
                 set(world.agents)
             )
+        if selected_models(world.model_configs)["psychology"] == PSYCHOLOGICAL_STATE_POLICY_VERSION:
+            psychology_config = world.model_configs.get("psychology", {})
+            baselines = {
+                agent_id: psychology_config.get("baseline_distress_by_agent", {}).get(
+                    agent_id, 0.0
+                )
+                for agent_id in world.agents
+            }
+            world.model_state[PSYCHOLOGICAL_STATE_KEY] = create_psychological_state(baselines)
         from sheltersim.domain.simulator_state import initialize_simulator_extensions
         initialize_simulator_extensions(world)
         from sheltersim.contracts.runtime import initialize_declared_states
@@ -426,6 +441,13 @@ class WorldState:
             raise StateInvariantError(
                 "information-spread state requires an enabled information_spread model"
             )
+        if selected_models(self.model_configs)["psychology"] == PSYCHOLOGICAL_STATE_POLICY_VERSION:
+            try:
+                validate_psychological_state(self.model_state.get(PSYCHOLOGICAL_STATE_KEY))
+            except ValueError as exc:
+                raise StateInvariantError(f"invalid psychological distress state: {exc}") from exc
+        elif PSYCHOLOGICAL_STATE_KEY in self.model_state:
+            raise StateInvariantError("psychological distress state requires its registered model")
         try:
             validate_operational_events_state(
                 self,

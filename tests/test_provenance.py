@@ -166,7 +166,9 @@ def test_optional_and_runtime_assumptions_match_the_implemented_defaults() -> No
     active_social_defaults = asdict(SocialPropagationParameters())
     active_information_defaults = InformationSpreadConfig().to_dict()
     assert social["enabled_by_default"] is False
-    assert social["coefficients"] == active_social_defaults
+    assert social["coefficients"] == {
+        key: value for key, value in active_social_defaults.items() if key != "source_id"
+    }
     assert information["enabled_by_default"] is False
     expected_information = {
         key: value
@@ -224,9 +226,11 @@ def test_run_manifest_and_decision_trace_include_source_ids(tmp_path: Path) -> N
     )
     assert model_assumptions["zone_routing"]["source_id"] == "ASM-ZONE-ROUTING-V1"
     assert model_assumptions["inspector_zone_projection"]["affects_simulation"] is False
-    assert model_assumptions["social_propagation"]["coefficients"] == asdict(
-        SocialPropagationParameters()
-    )
+    assert model_assumptions["social_propagation"]["coefficients"] == {
+        key: value
+        for key, value in asdict(SocialPropagationParameters()).items()
+        if key != "source_id"
+    }
     assumption_ids = {
         item["source_id"]
         for item in model_assumptions.values()

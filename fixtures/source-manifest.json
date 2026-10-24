@@ -253,6 +253,26 @@
       "notes": "Need pressure, queue wait and staff support wait are reported as separate direct contributions. Coefficients are bounded software hypotheses and are not clinical estimates or fitted to interview data."
     },
     {
+      "id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+      "source_type": "assumption",
+      "target": "MeanRevertingDistressPolicy and psychological_distress_v1",
+      "model_version": "mean-reverting-distress-v1",
+      "values": {
+        "natural_recovery_rate_per_minute": 0.01,
+        "natural_recovery_rate_by_agent": {},
+        "baseline_distress_default": 0.0,
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+        "high_distress_threshold_interpretation": "internal simulation indicator only; not a clinical cutoff"
+      },
+      "context_sources": [],
+      "conceptual_reference": "Kuppens et al. (2010), Emotional Inertia and Psychological Maladjustment, doi:10.1177/0956797610372634; Feelings Change, doi:10.1037/a0020962",
+      "calibration_status": "uncalibrated literature-inspired structure and software assumptions",
+      "notes": "The references motivate temporal persistence and recovery structure only. All rates, baselines, thresholds, and daily weights are ShelterSim assumptions, not estimates from those studies or shelter data."
+    },
+    {
       "id": "ASM-SOCIAL-PROPAGATION-V1",
       "source_type": "assumption",
       "target": "SocialPropagationParameters and model_configs.social_propagation",
@@ -266,6 +286,10 @@
         "cooldown_minutes": 30,
         "max_pair_stress_increase": 0.05,
         "max_agent_stress_increase_per_minute": 0.05,
+        "source_expressiveness_by_agent": {},
+        "family_channel_strength": 1.0,
+        "same_zone_channel_strength": 0.75,
+        "nearby_zone_channel_strength": 0.5,
         "contact_bases": [
           "family",
           "same-zone",
@@ -279,7 +303,11 @@
           "natural_recovery_per_minute": 0.0005,
           "cooldown_minutes": 30,
           "max_pair_stress_increase": 0.05,
-          "max_agent_stress_increase_per_minute": 0.05
+          "max_agent_stress_increase_per_minute": 0.05,
+          "source_expressiveness_by_agent": {},
+          "family_channel_strength": 1.0,
+          "same_zone_channel_strength": 0.75,
+          "nearby_zone_channel_strength": 0.5
         }
       },
       "context_sources": [],
@@ -741,6 +769,17 @@
         "query_pressure_relief_per_correction": 0.5,
         "query_threshold": 0.45,
         "query_utility_weight": 0.8,
+        "correction_acceptance_probability": 0.7,
+        "correction_trust_sensitivity": 0.2,
+        "correction_source_sensitivity": 0.2,
+        "rumor_belief_probability": 0.5,
+        "rumor_trust_sensitivity": 0.2,
+        "rumor_source_sensitivity": 0.2,
+        "default_source_reliability": 0.7,
+        "correction_source_reliability_by_id": {},
+        "distress_sharing_sensitivity": 0.5,
+        "share_propensity_decay_per_minute": 0.002,
+        "forgetting_rate_per_minute": 0.0,
         "maximum_messages_per_run": 1024
       },
       "context_sources": [],
@@ -803,6 +842,26 @@
       "notes": "Experimental shelter adaptation, not measured. The reference motivates an operator, not the numerical coefficients or real-world validity."
     },
     {
+      "id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+      "source_type": "assumption",
+      "target": "ExpressivenessChannelOpennessPolicy and model_configs.social_propagation",
+      "model_version": "expressiveness-channel-openness-v1",
+      "values": {
+        "stress_spread_per_minute": 0.001,
+        "family_channel_strength": 1.0,
+        "same_zone_channel_strength": 0.75,
+        "nearby_zone_channel_strength": 0.5,
+        "default_sender_expressiveness": 1.0,
+        "recipient_openness_mapping": "AgentProfile.stress_sensitivity",
+        "natural_recovery_owner": "mean-reverting-distress-v1 psychology policy",
+        "contact_duration_semantics": "eligibility threshold; not multiplied again into per-minute rate"
+      },
+      "context_sources": [],
+      "conceptual_reference": "Bosse et al. (2013), Modelling collective decision making in groups and crowds, https://link.springer.com/article/10.1007/s10458-012-9201-1; Bosse et al. (2015), Agent-Based Modelling of Emotion Contagion in Groups",
+      "calibration_status": "not empirically calibrated; expressiveness-channel-openness structure adapted for bounded shelter synchrony",
+      "notes": "Only the three-factor interaction structure is research-inspired. Channel weights, stress_sensitivity as openness, default expressiveness, and all numerical rates are ShelterSim assumptions; staff contacts and unsupplied relationships are not inferred."
+    },
+    {
       "id": "ASM-HAZARD-INFORMATION-V1",
       "source_type": "assumption",
       "target": "src/sheltersim/policies/alternatives.py",
@@ -815,6 +874,29 @@
       "conceptual_reference": "Daley & Kendall (1965), Stochastic Rumours, doi:10.1093/imamat/1.1.42",
       "calibration_status": "not empirically calibrated; literature-inspired operator adaptation",
       "notes": "Experimental shelter adaptation, not measured. The reference motivates an operator, not the numerical coefficients or real-world validity."
+    },
+    {
+      "id": "ASM-EVIDENCE-AWARE-RUMOR-V1",
+      "source_type": "assumption",
+      "target": "EvidenceAwareInformationPolicy, AgentInformationState and information_correction handler",
+      "model_version": "evidence-aware-rumor-v1",
+      "values": {
+        "correction_acceptance_probability": 0.7,
+        "correction_trust_sensitivity": 0.2,
+        "correction_source_sensitivity": 0.2,
+        "rumor_belief_probability": 0.5,
+        "rumor_trust_sensitivity": 0.2,
+        "rumor_source_sensitivity": 0.2,
+        "default_source_reliability": 0.7,
+        "distress_sharing_sensitivity": 0.5,
+        "share_propensity_decay_per_minute": 0.002,
+        "forgetting_rate_per_minute": 0.0,
+        "maximum_correction_acceptance_probability": 0.95
+      },
+      "context_sources": [],
+      "conceptual_reference": "Daley & Kendall (1965), Stochastic Rumours, doi:10.1093/imamat/1.1.42; Nekovee et al. (2007), Theory of rumour spreading in complex social networks",
+      "calibration_status": "uncalibrated literature-inspired process structure and software assumptions",
+      "notes": "Exposure, belief strength, sharing propensity and correction acceptance are separate state/processes. References motivate spreading-process structure only; all shelter-specific probabilities and trust responses remain uncalibrated assumptions."
     }
   ]
 }

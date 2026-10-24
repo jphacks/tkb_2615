@@ -54,6 +54,14 @@ _PSYCHOLOGY_AGENT_RATE_FIELDS = (
     "toilet_growth_by_agent",
     "hunger_growth_by_agent",
     "awake_fatigue_growth_by_agent",
+    "natural_recovery_rate_by_agent",
+)
+_PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS = (
+    "natural_recovery_rate_per_minute",
+    "chronic_retention",
+    "chronic_acute_weight",
+    "chronic_high_distress_weight",
+    "high_distress_threshold",
 )
 
 
@@ -206,6 +214,23 @@ class PsychologyModelConfig(ContractModel):
     awake_fatigue_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
         default_factory=dict
     )
+    natural_recovery_rate_per_minute: float | None = Field(
+        default=None, ge=0.0, le=0.25, allow_inf_nan=False
+    )
+    natural_recovery_rate_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
+        default_factory=dict
+    )
+    baseline_distress_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
+        default_factory=dict
+    )
+    chronic_retention: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    chronic_acute_weight: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    chronic_high_distress_weight: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    high_distress_threshold: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def bounded_agent_rates(self) -> PsychologyModelConfig:
@@ -218,6 +243,15 @@ class PsychologyModelConfig(ContractModel):
                 for value in values.values()
             ):
                 raise ValueError(f"{field_name} must contain at most 10000 finite rates in [0, 0.25]")
+        if len(self.baseline_distress_by_agent) > 10_000 or any(
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+            for value in self.baseline_distress_by_agent.values()
+        ):
+            raise ValueError(
+                "baseline_distress_by_agent must contain at most 10000 values in [0, 1]"
+            )
         return self
 
     def to_model_config(self) -> dict[str, Any]:
@@ -225,6 +259,11 @@ class PsychologyModelConfig(ContractModel):
         values = self.model_dump(mode="json")
         for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
             if not values[field_name]:
+                values.pop(field_name)
+        if not values["baseline_distress_by_agent"]:
+            values.pop("baseline_distress_by_agent")
+        for field_name in _PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS:
+            if values[field_name] is None:
                 values.pop(field_name)
         return values
 
@@ -236,6 +275,11 @@ class PsychologyModelConfig(ContractModel):
         )
         for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
             if not values[field_name]:
+                values.pop(field_name)
+        if not values["baseline_distress_by_agent"]:
+            values.pop("baseline_distress_by_agent")
+        for field_name in _PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS:
+            if values[field_name] is None:
                 values.pop(field_name)
         return values
 
@@ -873,7 +917,7 @@ class ScenarioSpec(ContractModel):
         if "psychology" in self.model_configs:
             config = PsychologyModelConfig.model_validate(self.model_configs["psychology"])
             profile_ids = {profile.id for profile in self.profiles}
-            for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
+            for field_name in (*_PSYCHOLOGY_AGENT_RATE_FIELDS, "baseline_distress_by_agent"):
                 unknown_ids = set(getattr(config, field_name)) - profile_ids
                 if unknown_ids:
                     raise ValueError(

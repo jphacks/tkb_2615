@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sheltersim.contracts.policies import (
@@ -20,14 +20,19 @@ from sheltersim.policies.alternatives import (
     HazardInformationPolicy,
 )
 from sheltersim.policies.behavior import BehaviorPolicy, create_behavior_policy
-from sheltersim.policies.information import InformationSpreadPolicy
+from sheltersim.policies.information import EvidenceAwareInformationPolicy, InformationSpreadPolicy
 from sheltersim.policies.psychology import (
     LifeStatePsychologyPolicy,
+    MeanRevertingDistressPolicy,
     PsychologyParameters,
     PsychologyPolicy,
     SimplePsychologyPolicy,
 )
-from sheltersim.policies.social import SocialPropagationParameters, StressPropagationPolicy
+from sheltersim.policies.social import (
+    ExpressivenessChannelOpennessPolicy,
+    SocialPropagationParameters,
+    StressPropagationPolicy,
+)
 
 # Installed factories only. There is no scenario-supplied import or eval path.
 _INSTALLED_FACTORIES: dict[tuple[str, str], Callable[..., Any]] = {}
@@ -380,9 +385,9 @@ def register_policy(model_id: str, definition: dict[str, Any], factory: Callable
 
 
 _BUILTIN_FACTORIES={"behavior":frozenset({"utility-softmax-v1","priority-rule-v1"}),
-    "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1"}),
-    "social":frozenset({"sparse-family-zone-contact-v1","degroot-contact-v1"}),
-    "information":frozenset({"sparse-information-contact-v1","hazard-information-v1"})}
+    "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1","mean-reverting-distress-v1"}),
+    "social":frozenset({"sparse-family-zone-contact-v1","degroot-contact-v1","expressiveness-channel-openness-v1"}),
+    "information":frozenset({"sparse-information-contact-v1","hazard-information-v1","evidence-aware-rumor-v1"})}
 
 
 def has_installed_factory(domain: str, model_id: str) -> bool:
@@ -480,6 +485,8 @@ def create_psychology(configs: dict[str, dict[str, Any]], *, resource_service_en
     if resource_service_enabled:
         values["hydration_growth"] = configs["resource_service"].get("hydration_growth_per_minute", 0.0)
     parameters = PsychologyParameters(**values)
+    if selected == "mean-reverting-distress-v1":
+        return MeanRevertingDistressPolicy(parameters)
     if selected == "life-state-feedback-v1":
         return LifeStatePsychologyPolicy(
             parameters,
@@ -494,8 +501,18 @@ def create_social(configs: dict[str, dict[str, Any]]) -> StressPropagationPolicy
     selected = selected_models(configs)["social"]
     if ("social", selected) in _INSTALLED_FACTORIES:
         return create_installed_model("social", configs)
-    factory = {"sparse-family-zone-contact-v1": StressPropagationPolicy, "degroot-contact-v1": DeGrootContactPolicy}[selected]
-    return factory(SocialPropagationParameters.from_mapping(configs.get("social_propagation")))
+    factories = {
+        "sparse-family-zone-contact-v1": StressPropagationPolicy,
+        "degroot-contact-v1": DeGrootContactPolicy,
+        "expressiveness-channel-openness-v1": ExpressivenessChannelOpennessPolicy,
+    }
+    expected_source = MODEL_DEFINITIONS[selected]["assumption_source_id"]
+    parameters = SocialPropagationParameters.from_mapping(
+        configs.get("social_propagation"), source_id=expected_source
+    )
+    if selected_models(configs)["psychology"] == "mean-reverting-distress-v1":
+        parameters = replace(parameters, natural_recovery_per_minute=0.0)
+    return factories[selected](parameters)
 
 
 def create_information(configs: dict[str, dict[str, Any]]) -> InformationSpreadPolicy | None:
@@ -505,7 +522,11 @@ def create_information(configs: dict[str, dict[str, Any]]) -> InformationSpreadP
     config = InformationSpreadConfig.from_mapping(configs.get("information_spread"))
     if not config.enabled:
         return None
-    factory = {"sparse-information-contact-v1": InformationSpreadPolicy, "hazard-information-v1": HazardInformationPolicy}[selected]
+    factory = {
+        "sparse-information-contact-v1": InformationSpreadPolicy,
+        "hazard-information-v1": HazardInformationPolicy,
+        "evidence-aware-rumor-v1": EvidenceAwareInformationPolicy,
+    }[selected]
     return factory(config)
 
 

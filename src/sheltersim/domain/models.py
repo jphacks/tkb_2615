@@ -111,13 +111,18 @@ class TypedMessage:
 
 @dataclass(frozen=True)
 class AgentInformationState:
-    """One Agent's evidence-linked belief and latest information contact."""
+    """Exposure, subjective belief, sharing tendency, and correction record for one claim."""
 
     message_id: str
     belief: InformationBeliefStatus
     source: str
     last_contact: int
     last_event_id: str
+    exposed: bool = True
+    belief_strength: float = 0.5
+    share_propensity: float = 0.5
+    correction_exposed: bool = False
+    correction_accepted: bool = False
 
     def __post_init__(self) -> None:
         for name in ("message_id", "source", "last_event_id"):
@@ -129,6 +134,20 @@ class AgentInformationState:
             or self.last_contact < 0
         ):
             raise ValueError("last_contact must be a non-negative integer")
+        if not isinstance(self.exposed, bool):
+            raise ValueError("information exposure state must be boolean")
+        if not isinstance(self.correction_exposed, bool) or not isinstance(
+            self.correction_accepted, bool
+        ):
+            raise ValueError("correction exposure and acceptance must be boolean")
+        if self.correction_accepted and not self.correction_exposed:
+            raise ValueError("a correction cannot be accepted before exposure")
+        validate_unit_interval("belief_strength", self.belief_strength)
+        validate_unit_interval("share_propensity", self.share_propensity)
+        if not self.exposed:
+            raise ValueError("stored information states must identify an exposure")
+        if self.belief is InformationBeliefStatus.UNKNOWN and self.share_propensity != 0.0:
+            raise ValueError("unknown or forgotten information must have zero share propensity")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,14 +156,37 @@ class AgentInformationState:
             "source": self.source,
             "last_contact": self.last_contact,
             "last_event_id": self.last_event_id,
+            "exposed": self.exposed,
+            "belief_strength": self.belief_strength,
+            "share_propensity": self.share_propensity,
+            "correction_exposed": self.correction_exposed,
+            "correction_accepted": self.correction_accepted,
         }
 
     @classmethod
     def from_dict(cls, document: dict[str, Any]) -> AgentInformationState:
-        expected = {"message_id", "belief", "source", "last_contact", "last_event_id"}
-        if not isinstance(document, dict) or set(document) != expected:
+        legacy_fields = {"message_id", "belief", "source", "last_contact", "last_event_id"}
+        current_fields = legacy_fields | {
+            "exposed", "belief_strength", "share_propensity", "correction_exposed",
+            "correction_accepted",
+        }
+        if not isinstance(document, dict) or set(document) not in (legacy_fields, current_fields):
             raise ValueError("AgentInformationState fields do not match the supported schema")
-        return cls(**document)
+        values = dict(document)
+        if set(document) == legacy_fields:
+            belief = InformationBeliefStatus(document["belief"])
+            corrected = belief in (
+                InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED
+            )
+            values.update(
+                exposed=True,
+                belief_strength=(1.0 if belief is InformationBeliefStatus.VERIFIED else
+                                 0.0 if belief is InformationBeliefStatus.REJECTED else 0.5),
+                share_propensity=(0.0 if belief is InformationBeliefStatus.UNKNOWN else 0.5),
+                correction_exposed=corrected,
+                correction_accepted=corrected,
+            )
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -165,6 +207,17 @@ class InformationSpreadConfig:
     query_pressure_relief_per_correction: float = 0.5
     query_threshold: float = 0.45
     query_utility_weight: float = 0.8
+    correction_acceptance_probability: float = 0.7
+    correction_trust_sensitivity: float = 0.2
+    correction_source_sensitivity: float = 0.2
+    rumor_belief_probability: float = 0.5
+    rumor_trust_sensitivity: float = 0.2
+    rumor_source_sensitivity: float = 0.2
+    default_source_reliability: float = 0.7
+    correction_source_reliability_by_id: dict[str, float] = field(default_factory=dict)
+    distress_sharing_sensitivity: float = 0.5
+    share_propensity_decay_per_minute: float = 0.002
+    forgetting_rate_per_minute: float = 0.0
     schema_version: int = 1
     policy_version: str = "sparse-information-contact-v1"
     source_type: str = "assumption"
@@ -197,6 +250,16 @@ class InformationSpreadConfig:
             "query_pressure_relief_per_correction",
             "query_threshold",
             "query_utility_weight",
+            "correction_acceptance_probability",
+            "correction_trust_sensitivity",
+            "correction_source_sensitivity",
+            "rumor_belief_probability",
+            "rumor_trust_sensitivity",
+            "rumor_source_sensitivity",
+            "default_source_reliability",
+            "distress_sharing_sensitivity",
+            "share_propensity_decay_per_minute",
+            "forgetting_rate_per_minute",
         ):
             value = getattr(self, name)
             maximum = (
@@ -210,6 +273,15 @@ class InformationSpreadConfig:
                 else 4.0
                 if name == "query_utility_weight"
                 else 1.0
+                if name in {
+                    "correction_acceptance_probability", "correction_trust_sensitivity",
+                    "correction_source_sensitivity", "rumor_belief_probability",
+                    "rumor_trust_sensitivity", "rumor_source_sensitivity",
+                    "default_source_reliability",
+                    "distress_sharing_sensitivity", "share_propensity_decay_per_minute",
+                    "forgetting_rate_per_minute",
+                }
+                else 1.0
             )
             if (
                 not isinstance(value, (int, float))
@@ -220,6 +292,21 @@ class InformationSpreadConfig:
                 raise ValueError(
                     f"information_spread {name} must be finite and between 0 and {maximum}"
                 )
+        if (
+            len(self.correction_source_reliability_by_id) > 100
+            or any(
+                not isinstance(source_id, str)
+                or not _INFORMATION_ID.fullmatch(source_id)
+                or type(value) not in (int, float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0.0 <= value <= 1.0
+                for source_id, value in self.correction_source_reliability_by_id.items()
+            )
+        ):
+            raise ValueError(
+                "correction source reliability must map up to 100 source IDs to [0, 1]"
+            )
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -261,6 +348,19 @@ class InformationSpreadConfig:
             "query_pressure_relief_per_correction": self.query_pressure_relief_per_correction,
             "query_threshold": self.query_threshold,
             "query_utility_weight": self.query_utility_weight,
+            "correction_acceptance_probability": self.correction_acceptance_probability,
+            "correction_trust_sensitivity": self.correction_trust_sensitivity,
+            "correction_source_sensitivity": self.correction_source_sensitivity,
+            "rumor_belief_probability": self.rumor_belief_probability,
+            "rumor_trust_sensitivity": self.rumor_trust_sensitivity,
+            "rumor_source_sensitivity": self.rumor_source_sensitivity,
+            "default_source_reliability": self.default_source_reliability,
+            "correction_source_reliability_by_id": dict(
+                sorted(self.correction_source_reliability_by_id.items())
+            ),
+            "distress_sharing_sensitivity": self.distress_sharing_sensitivity,
+            "share_propensity_decay_per_minute": self.share_propensity_decay_per_minute,
+            "forgetting_rate_per_minute": self.forgetting_rate_per_minute,
             "schema_version": self.schema_version,
             "policy_version": self.policy_version,
             "source_type": self.source_type,
@@ -361,6 +461,16 @@ class AgentState:
     def id(self) -> str:
         """Return the stable profile ID used as the world's mapping key."""
         return self.profile.id
+
+    @property
+    def acute_distress(self) -> float:
+        """Compatibility name for the single acute state historically called stress."""
+        return self.stress
+
+    @acute_distress.setter
+    def acute_distress(self, value: float) -> None:
+        validate_unit_interval("acute_distress", value)
+        self.stress = value
 
     def __post_init__(self) -> None:
         if isinstance(self.activity, (list, tuple, set, frozenset)):
