@@ -12,12 +12,14 @@
 | ID / version | 設定例 | 単位 | 理論・公的根拠 | 校正 |
 |---|---|---|---|---|
 | `PSY-RECOVERY-KAPPA` / `mean-reverting-distress-v1` | 0.01 | 1/minute | emotional inertia/mean reversionの構造 | 未校正 |
+| `ASM-MEAN-REVERTING-LIFE-STATE-V1` / `mean-reverting-life-state-v1` | recovery 0.01、body feedbackは既存config値 | 1/minute + 各body unit | 平均回帰と既存life-state式を組み合わせたShelterSim統合 | 未校正 |
 | `natural_recovery_rate_by_agent` | 空mapなら共有率、個別指定時に優先 | 1/minute/Agent | 個人差を表す構造 | 未校正 |
 | `PSY-DAILY-RETENTION` | 0.90 | 日ごとの保持率 | AR(1)型潜在状態構造 | 未校正 |
 | `SOCIAL-AFFECT-GAMMA` / `expressiveness-channel-openness-v1` | existing spread rate | 1/minute | Bosse expressiveness/channel/openness構造 | 未校正 |
 | `INFO-CORRECTION-ACCEPTANCE` / `evidence-aware-rumor-v1` | 0.70 | 確率/曝露 | 噂訂正過程の構造、source trust | 未校正 |
 | `INFO-RUMOR-BELIEF` / `evidence-aware-rumor-v1` | 0.50 | 確率/曝露 | 噂伝播・信頼構造 | 未校正 |
 | `INFO-FORGETTING-RATE` | 0 | 1/minute | exponential hazard形式 | 未校正 |
+| false-belief uncertainty input / integrated policy | `min(1, Σ 2(b-0.5))`; `uncertainty_drift_per_minute`を適用 | 正規化belief pressure、uncertainty/分 | belief updateと不確実性をつなぐ統合上の仮定 | 未校正 |
 | action utility / temperature | existing model coefficients | dimensionless | Conditional Logit | 未校正 |
 | toilet target ratios | 50 / 20 people per unit | people/unit | 内閣府計画ガイドライン | 個人行動モデルではない |
 | toilet service duration | 4–8 | minute | 合成ソフトウェア設定 | 未校正 |

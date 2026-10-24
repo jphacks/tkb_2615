@@ -17,6 +17,10 @@
 
 ## 適用範囲
 
-研究モデルは `model_configs.policy_registry` から選択します。デフォルトの心理・社会・情報モデルは維持され、比較対象として使えます。係数は `fixtures/source-manifest.json` と `src/sheltersim/contracts/model-catalog.json` に単位、範囲、出典ID、未校正の説明を記録しています。
+研究モデルは `model_configs.policy_registry` から選択します。心理状態には `mean-reverting-distress-v1`、従来の`life-state-feedback-v1`、両方を合成する明示的な `mean-reverting-life-state-v1` があります。社会・情報モデルも従来Policyを残して研究版と比較できます。係数は `fixtures/source-manifest.json` と `src/sheltersim/contracts/model-catalog.json` に単位、範囲、出典ID、未校正の説明を記録しています。
+
+統合版では既存body/affect状態を再利用し、false情報への現在の信念を不確実性・心理更新へ接続します。Traceはclip前の心理寄与、clip後の値、社会差分、実適用差分を分け、情報効果はrumor originとbelief更新eventへ遡れます。Traceを保存しない7日間run用に、高負荷の連続時間と回復回数を定数個の指標でオンライン集計します。
 
 検証はコード上の性質、再現性、状態不変条件、合成シナリオへの適用に限ります。実測データによる校正と外部検証は行っていません。高ストレス指標は臨床診断や公衆衛生の閾値ではありません。
+
+最新の統合版比較・感度分析は [`research-validation-a02.json`](research-validation-a02.json)、100人・7日間の再現性runは [`research-validation-7day-a02.json`](research-validation-7day-a02.json) に保存しています。方法と実際の結果、失敗/未観測指標は [内部検証](09-internal-validation.md) に記録します。

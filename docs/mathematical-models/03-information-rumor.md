@@ -8,6 +8,8 @@ Daley–Kendallの噂伝播過程とネットワーク上の噂伝播研究を�
 
 各Agent–主張ごとに曝露 \(E_i^m\)、信念区分 \(B_i^m\)、連続的信念強度 \(b_i^m\)、共有傾向 \(s_i^m\)、訂正曝露 \(C_i^m\)、訂正受容 \(R_i^m\) を保持します。保存状態は `AgentInformationState` です。新規の主張曝露時には、信頼度で調整した確率で信念強度を0または1に標本化します。曝露したことだけで信じたことにはなりません。`UNKNOWN` も曝露後の忘却として保存でき、共有傾向は0です。
 
+情報runtime stateはschema 2です。schema 1の保存状態は検証・読み込みでき、次にevidence-aware更新/イベント処理を行うときに cumulative fields 付きへ明示移行します。`ever_misbelieved` と `ever_forgotten` は各Agent–claimの履歴flagです。既存schema 1からの移行では、保存された信念強度・真偽・UNKNOWN状態から復元できる範囲のみ初期化します。
+
 対面接触の候補選択確率は、設定済みの基礎率・時間・相手信頼度・関係倍率で構成します。研究用variantではさらに共有傾向と急性心理状態を掛けます。
 \[
 p_{ji}^m=\min(1,p_0 f_{duration} f_{trust} f_{channel} f_{correction}\; s_j^m\min(1,1+\xi A_j)).
@@ -34,6 +36,12 @@ p_{accept}=\operatorname{clip}_{[0,0.95]}\{p_b+2\eta_t(T_i-0.5)+2\eta_s(R_m-0.5)
 
 信念と共有は別です。心理状態は共有傾向へ影響し、受容訂正は身体/感情状態と問い合わせ圧力を下げ得ます。正解ラベル自体はAgentの信念ではなく、Scenarioで設定するシミュレーション側の真偽です。
 
+選択した心理policyが `mean-reverting-life-state-v1` の場合、falseと定義された主張に対する現在の信念強度が0.5を超えると、不確実性更新に持続的なbelief pressureが入ります。これは `information_query_pressure`（曝露・問い合わせ由来）とは別の状態入力で、上限1に集約します。訂正を受容すると信念強度が訂正結果へ移り、false claimのpressureは消えます。拒否した人には訂正のbody-state安心効果を与えません。訂正eventによる不確実性低下・安心増加はevent時に一度記録し、その後の心理更新は更新後の身体状態を読みます。持続する誤信念によるtickごとの影響は、event replayではなく有効な信念状態から生じるper-minute inputです。
+
+Traceには対象Agent、event minute、message ID、rumor origin event ID、beliefを最後に更新したevent ID、情報source ID、pressure、心理への不確実性経由の寄与を記録します。event-level correctionの状態差分は既存body/social historyにもevent IDとdeltaとして残ります。
+
 ## 内部検証と限界
 
-テストはlegacyモデルの既存挙動、誤情報の訂正、曝露と受容の区別、受容者と非受容者の存在、同seed再現を確認します。比較に使う接触・信頼・受容・忘却係数は未校正仮定です。曝露率や受容率を現実の避難所の予測と解釈しません。
+集計では現在の誤信念Agent数・Agent-message数、過去に誤信念を保持したAgent数、訂正曝露/受容者数、現在/過去の忘却者数を分けます。忘却後に残る数値的なbelief_strengthは履歴として保持されますが、現在の誤信念には数えません。
+
+`tests/test_information_spread.py` と `tests/test_research_models.py` はlegacy挙動、誤情報訂正、曝露と受容の分離、受容者/非受容者、忘却後集計、schema移行、誤信念から不確実性・心理状態へ入る経路、同seed再現を確認します。接触・信頼・受容・忘却係数は未校正仮定です。曝露率や受容率を現実の避難所の予測と解釈しません。

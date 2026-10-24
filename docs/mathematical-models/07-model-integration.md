@@ -5,82 +5,87 @@
 ```mermaid
 flowchart TD
   ENV[環境・設備・資源] --> NEED[身体ニーズ・待ち時間]
-  NEED --> ACUTE[急性負荷 A_i]
-  ENV --> ACUTE
-  ACUTE <--> SOCIAL[家族・近接接触の同調]
-  INFO[情報曝露・信念・訂正] <--> ACUTE
+  NEED --> PSY[心理Policy: 平均回帰＋選択した身体 feedback]
+  INFO[情報曝露・信念・訂正] --> UNC[問い合わせ圧力・不確実性]
+  UNC --> PSY
+  BODY[睡眠負債・安心・不満・感情・衛生] <--> PSY
+  PSY <--> SOCIAL[家族・近接接触の同調]
+  PSY --> DAILY[日内積分・潜在状態 D_i]
   INFO --> CHOICE[適格候補と効用 Softmax]
-  ACUTE --> CHOICE
+  PSY --> CHOICE
   CHOICE --> MOVE[Zone移動・施設利用・休息・交流]
   MOVE --> ENV
   MOVE --> NEED
-  ACUTE --> DAILY[日内積分・潜在状態 D_i]
+  MOVE --> SOCIAL
+  MOVE --> INFO
 ```
+
+`mean-reverting-life-state-v1` は平均回帰と既存のbody/affect状態を合成する明示的policyです。既存の `mean-reverting-distress-v1` と `life-state-feedback-v1` の意味は変更しません。false claimを信じることは不確実性へ入り、受容した訂正が信念状態を変え、訂正eventはbody stateに一度だけ反映されます。
 
 ## ODD Protocol
 
 ### Purpose
 
-避難所運営条件と方針を、明示した合成Scenario内で比較し、資源・行列・行動・心理状態のコード上の相互作用を調べます。現実の個人行動や心理的転帰を予測しません。
+明示したScenario内で避難所運営条件、行動、待ち行列、資源、心理・社会・情報機構のコード上の相互作用を比較します。現実の個人行動、心理的転帰、医療診断は予測しません。
 
 ### Entities and state variables
 
-- Agent: needs, activity, acute stress/distress, optional daily latent distress, information belief, household/zone, mobility and support state.
-- Facility: capacity, working units, FIFO queue, active service, outages.
-- Staff: skills, shift, assignment, fatigue/support state.
-- Zone and edge: adjacency, declared minutes, optional geometry/capacity/environment.
-- Information claim: simulation truth, Agent exposure, belief, share propensity, correction exposure/acceptance.
-- Resource ledger: stock, reservation, issue, consume, loss, release.
+- Agent: needs, activity, acute `stress`/distress、任意の日単位潜在状態、information beliefs、household/zone、mobility、body/affect、support state。
+- Facility: capacity、working units、FIFO queue、active service、outages。
+- Staff: skills、shift、assignment、fatigue/support state。
+- Zone/edge: adjacency、宣言された移動時間、任意のgeometry/capacity/environment。
+- Information claim: シミュレーション上の真偽、曝露、信念、共有、訂正曝露/受容、履歴flag。
+- Resource ledger: stock、reservation、issue、consume、loss、release。
 
 ### Process overview and scheduling
 
-Simulation clock is integer minutes. A tick dispatches due events atomically, updates movement and agent state, proposes due actions from an immutable view, arbitrates queues/staff/resource capacity, samples social contacts and records metrics. Contact and message transfers are generally scheduled for the next tick; they do not mutate agents during their sender loop. Psychological daily accumulator observes post-social acute state once per tick and updates (D) at minute boundaries 1439, 2879, etc.
+時計は整数分です。due event処理、移動・状態更新、候補行動とcapacity arbitration、記録と次tickへのcontact schedulingを実行します。情報訂正はdue eventの中で受容判定とbelief/body-state変化を一度だけ適用します。一般の対面情報伝播は候補確率から次tickに反映します。急性psychologyの入力と社会同調は同じtick開始 `WorldView` から計算します。日単位状態は社会更新後のfinal acute値を各分ちょうど一度積分し、1440分境界で更新します。
 
 ### Design concepts
 
-Emergence is represented only within a synthetic bounded contact network. Adaptation is represented by actions and state-dependent choices. Objectives are relative utilities/urgencies, not learned preferences. Prediction is not claimed. Sensing is limited to stored state and explicit messages. Interaction is local sampled contact or typed event. Stochasticity uses `CounterRNG` keys for order-independent reproducibility. Collectives are modeled through family/zone membership, not emergent group identity. Observation is through metrics and trace artifacts.
+Emergenceは合成・疎接触network内に限ります。適応は行動選択と状態依存効用で表し、目的は学習済み選好ではありません。Agentは保存状態、明示情報、施設/身体状態を使います。乱数はstable key付き `CounterRNG` を利用します。感情同調と積極的支援は別の作用です。Traceと実行指標は内部状態の観察であり、実測妥当性を示しません。
 
 ### Initialization and input data
 
-Scenario profiles, capacity, routes, facilities, scheduled events, policy versions and seeds initialize the world. The repository's standard 100-agent fixture is synthetic. There is no empirical population or distress calibration dataset.
+Scenario profiles、容量、route、施設、予定event、policy versions、seedからWorldStateを生成します。100人fixtureは合成入力です。実測の心理・関係・サービス時間校正データはありません。schema 1情報checkpointは互換読込し、情報更新時にschema 2へ移行できます。
 
 ### Submodels
 
-Submodels are listed in `01`–`06`. The formula registry validates the selected model and coefficient signature. Legacy policies remain available for controlled comparisons.
+詳細は `01`–`06` を参照してください。policy registryは選択IDと係数signatureを検証します。従来Policy IDと新しい統合版は明示選択により比較できます。
 
-## 1 tick responsibility order
+## 1 tickの責任・更新順序
 
-1. Dispatch due events, including completed service, delivery, rumor/correction, recovery, support and movement events.
-2. Refresh routing if geometry changed and admit valid arrivals.
-3. Update movement progress and construct a read-only `WorldView` snapshot.
-4. Compute psychology inputs and acute update. Sample the contact graph from the same snapshot, then calculate signed social deltas without in-loop Agent mutation.
-5. Accumulate the final post-social acute values into daily statistics exactly once.
-6. Apply state deltas.
-7. Propose choices for Agents whose scheduled decision is due; filter unavailable or ineligible actions before softmax.
-8. Arbitrate facility/resource queues and staff; reservations prevent simultaneous double allocation.
-9. Sample information and proximity contacts and schedule accepted proposals for a later tick.
-10. Capture metrics and trace outputs.
+1. due eventsを処理します。rumor/correction、サービス完了、資源配布、支援、移動等を適用し、受容された訂正のbody state変化はここで一度記録します。
+2. 必要なroute/arrival更新を行い、movementを1分進めます。
+3. 更新前のAgent・設備・body・information beliefを参照する `WorldView` を生成します。統合版用のfalse-claim pressureは現在信じているfalse主張から算出し、message ID、origin event、belief event、sourceを保持します。
+4. 心理Policyがニーズ・queue・support・環境および選択policyに応じたbody/uncertainty inputを計算します。平均回帰policyでは自然回復と定係数外力の解析積分を一度適用し、最終stressをclipします。
+5. 有効なsocial policyは同じtick開始snapshotの近隣stressを使ってsigned同調差分を計算し、心理値へ一度適用します。心理Traceに心理差分・clip差分・社会差分・実適用差分を分けて記録し、social Traceにはpair式を記録します。
+6. オンライン高負荷時間monitorはpost-social心理値から軽量なepisode/recovery指標を更新します。これは心理状態を変えません。daily latent accumulatorもpost-social値を一度受け取ります。
+7. 全Agentの検証済みstate deltaを適用します。
+8. 適格な候補に対して行動効用/Softmaxを計算します。
+9. 施設、資源、staff capacityをarbitrationし、必要なreservationとservice eventを予定します。
+10. 情報・proximity contactを抽選し、適用対象がいるcontactは次tick以降に処理します。成果物へmetrics/Traceを記録します。
 
-## 二重計上を防ぐ責務
+各更新は同じsnapshotを参照し、Agent順にstressを書き戻す処理はありません。correction eventは別にevent境界で状態を変え、その差分にevent provenanceを残します。
 
-急性 `stress` の唯一の書き手は state-delta適用です。平均回帰は選択された心理policyが1回適用します。`expressiveness-channel-openness-v1` は自然回復を適用しません。legacy social modelは互換のため独自回復を持ちますが、新心理policyと組み合わせた場合に回復係数を0にします。社会支援、休息/睡眠、訂正効果は異なる明示イベント/入力として扱い、同じ回復率へ重ねません。
+## 自然回復・休息・支援の重複防止
 
-情報訂正は新モデルでは受容確率に成功したAgentだけを信念訂正・安心効果・query pressure reliefへ結びます。曝露だけで信念は反転しません。心理状態は情報共有確率へ、情報結果は次回の心理入力へ戻るため、イベント境界を通したfeedbackです。
+急性stressの唯一の保存先は `AgentState.stress`、適用責任は `apply_state_deltas` です。選択した心理policyだけが自然回復を持ちます。Bosse-inspired同調版に自然回復はありません。旧社会policyと平均回帰policyを組み合わせる場合もsocial側の自然回復率を0にします。
 
-行動選択はstate snapshotを使い、設備利用は次のarbitrationでcapacity/FIFOを確認します。実際のservice完了まで在庫consumeを確定しません。
+統合版は旧life-state直接sleep/rest stress recoveryを0にします。睡眠・休息は睡眠負債/疲労、安心・positive affectなどの状態を変える経路で残し、それらから心理feedbackを作ります。受容済み訂正はevent時にbody uncertainty/reassuranceを一度変えます。以後、残存する信念のpressureは持続状態として不確実性への分単位入力となり、訂正を受け入れるとfalse-belief pressureが消えます。event pulseを毎tick再生していません。社会同調はさらに別のsnapshot差分です。
 
-## 更新時間とfeedback
+## 時間単位とfeedback
 
-| 状態 | 更新間隔 | 単位 |
+| 状態 | 更新 | 単位/意味 |
 |---|---:|---|
-| acute (A_i), need, contact duration | 1分tick | 正規化値 / minute |
-| contact-based information | 1分ごとに抽出、次tickで反映 | hazard / probability per contact |
-| latent (D_i) | 1440分ごと | 日単位の潜在状態 |
-| facility/resource/service | due event時 | 分、個、ml、meal unit |
-| route | 移動開始時とroute変更時 | m, m/min, minute |
-
-急性・日単位パラメータの時間単位は混在させず、移動・資源はそれぞれの物理/計数単位を維持します。
+| acute `A_i`, needs, contact state | 1分tick | 正規化値、必要圧力は正規化値/分 |
+| natural recovery `κ` | 1分tick解析解 | `1/minute` |
+| belief pressure | 毎tickの有効信念状態 | 不確実性に入る持続的状態圧力。イベント一回適用ではない |
+| long-term `D_i` | 1440分ごと | 日ごとの潜在状態 |
+| distress online monitor | 1分tick | 閾値以上の分数、episode/回復回数。閾値0.70は非臨床の内部指標 |
+| facility/resource/service | due event | minute、個、ml、meal unit |
+| movement | 移動開始/route変更 | 宣言距離・速度・分。実距離がなければ固定移動時間 |
 
 ## 再現性・互換性
 
-同seedはCounterRNGの安定キーでAgent処理順への依存を避けます。policy id・全設定値・source provenance・model signatureをrun artifactへ保存します。旧 `stress` APIは急性状態として保ち、デフォルトモデルの既存挙動を比較対象に残します。Checkpointsは心理・情報の追加runtime stateを含みます。
+同seed・同Scenario・同モデル設定はkeyed RNGと安定した順序により再現します。Trace ON/OFFは状態更新や乱数消費を変えません。model ID、設定、seed、source provenance、signatureはrun artifactへ記録します。従来の `stress` APIと旧policy IDを保持します。情報runtime stateはv1入力を検証でき、更新時のv2移行を用意します。

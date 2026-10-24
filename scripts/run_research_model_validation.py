@@ -10,12 +10,14 @@ import json
 import math
 import statistics
 import tempfile
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from sheltersim.core.engine import TraceLevel
-from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
+from sheltersim.domain.distress_monitor import distress_monitor_summary
+from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY, information_spread_summary
 from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -49,6 +51,7 @@ def _scenario(
         document["staff"] = []
 
     is_legacy = variant == "legacy-comparator"
+    is_acute_only = variant in {"research-acute-only", "service-long-acute-only"}
     no_correction = variant == "no-correction"
     document["model_configs"]["psychology"] = {
         "natural_recovery_rate_per_minute": 0.01,
@@ -86,7 +89,13 @@ def _scenario(
     }
     document["model_configs"]["policy_registry"] = {
         "schema_version": 1,
-        "psychology": "causal-stress-v1" if is_legacy else "mean-reverting-distress-v1",
+        "psychology": (
+            "causal-stress-v1"
+            if is_legacy
+            else "mean-reverting-distress-v1"
+            if is_acute_only
+            else "mean-reverting-life-state-v1"
+        ),
         "social": "sparse-family-zone-contact-v1"
         if is_legacy
         else "expressiveness-channel-openness-v1",
@@ -162,7 +171,7 @@ def _scenario(
         document["model_configs"]["information_spread"]["correction_acceptance_probability"] = 0.95
     elif variant == "temperature-one":
         document["model_configs"].setdefault("behavior", {})["temperature"] = 1.0
-    elif variant == "service-long":
+    elif variant in {"service-long", "service-long-acute-only"}:
         document["model_configs"]["toilet_service"] = {
             "duration_distribution": "discrete_uniform_inclusive",
             "minimum_minutes": 8,
@@ -184,9 +193,11 @@ def _summary(world: Any, *, variant: str, seed: int, run_dir: Path) -> dict[str,
             if isinstance(record.get("action"), str):
                 actions[record["action"]] += 1
     info = world.model_state.get(INFORMATION_SPREAD_STATE_KEY, {})
-    belief_records = [
-        item for values in info.get("beliefs", {}).values() for item in values.values()
-    ]
+    information_summary = (
+        information_spread_summary(info, agent_count=len(world.agents))
+        if info
+        else {}
+    )
     summary: dict[str, Any] = {
         "variant": variant,
         "seed": seed,
@@ -198,18 +209,19 @@ def _summary(world: Any, *, variant: str, seed: int, run_dir: Path) -> dict[str,
         if acute
         else 0.0,
         "action_records": dict(sorted(actions.items())),
-        "information_exposure_count": sum(item.get("exposed", False) for item in belief_records),
-        "wrong_belief_count": sum(
-            item.get("belief_strength", 0.5) > 0.5
-            for agent_beliefs in info.get("beliefs", {}).values()
-            for message_id, item in agent_beliefs.items()
-            if info.get("messages", {}).get(message_id, {}).get("truth_status") == "false"
+        "information_exposure_count": information_summary.get("exposure_count", 0),
+        "wrong_belief_count": information_summary.get("wrong_belief_count", 0),
+        "current_wrong_belief_count": information_summary.get(
+            "current_wrong_belief_count", 0
         ),
-        "correction_exposure_count": sum(
-            item.get("correction_exposed", False) for item in belief_records
+        "ever_wrong_belief_count": information_summary.get("ever_wrong_belief_count", 0),
+        "correction_exposure_count": information_summary.get("correction_exposures", 0),
+        "correction_acceptance_count": information_summary.get(
+            "correction_acceptances", 0
         ),
-        "correction_acceptance_count": sum(
-            item.get("correction_accepted", False) for item in belief_records
+        "forgotten_information_count": information_summary.get("ever_forgotten_count", 0),
+        "currently_forgotten_information_count": information_summary.get(
+            "currently_forgotten_count", 0
         ),
         "toilet_units": sum(
             f.working_units for f in world.facilities.values() if "toilet" in f.kind.casefold()
@@ -231,6 +243,7 @@ def _summary(world: Any, *, variant: str, seed: int, run_dir: Path) -> dict[str,
         values = [row["long_term_distress"] for row in psychology["agents"].values()]
         summary["long_term_distress_mean"] = statistics.fmean(values) if values else 0.0
     summary.update(_trace_metrics(run_dir, agent_count=len(acute)))
+    summary["online_distress_monitor"] = distress_monitor_summary(world.metric_state)
     return summary
 
 
@@ -348,6 +361,7 @@ def run_sweep(output: Path, *, seed_values: tuple[int, ...]) -> dict[str, Any]:
     ablations = (
         "legacy-comparator",
         "research-full",
+        "research-acute-only",
         "no-recovery",
         "no-contagion",
         "no-staff-support",
@@ -366,7 +380,7 @@ def run_sweep(output: Path, *, seed_values: tuple[int, ...]) -> dict[str, Any]:
         "correction-low",
         "correction-high",
         "temperature-one",
-        "service-long",
+        "service-long-acute-only",
     )
     rows = []
     for seed, variants in [
@@ -386,10 +400,11 @@ def run_sweep(output: Path, *, seed_values: tuple[int, ...]) -> dict[str, Any]:
                 rows.append(_summary(world, variant=variant, seed=seed, run_dir=run_dir))
     return {
         "schema_version": 1,
-        "study_id": "research-model-ablation-sensitivity-a01",
+        "study_id": "research-model-ablation-sensitivity-a02",
         "design": (
-            "Matched seeds; 12 synthetic Agents; 180 minutes; one listed model mechanism "
-            "varied by ablation."
+            "Matched seeds; 12 synthetic Agents; 180 minutes; legacy causal comparator, "
+            "mean-reverting acute-only comparator, integrated mean-reverting life-state "
+            "research model, one-factor ablations and sensitivities."
         ),
         "seed_values": list(seed_values),
         "ablation_variants": list(ablations),
@@ -406,11 +421,30 @@ def run_seven_day(output: Path) -> dict[str, Any]:
     scenario = _scenario(seed=2026, profiles=None, duration=10_080, variant="research-full")
     with tempfile.TemporaryDirectory(prefix=f"{output.stem}-long-") as scratch:
         run_dir = Path(scratch) / "run"
+        first_started = time.perf_counter()
         world = run_scenario(scenario, run_dir, trace_level=TraceLevel.OFF)
+        first_runtime_seconds = time.perf_counter() - first_started
+        first_state = world.to_dict()
+        repeat_dir = Path(scratch) / "repeat"
+        repeat_started = time.perf_counter()
+        repeated_world = run_scenario(scenario, repeat_dir, trace_level=TraceLevel.OFF)
+        repeat_runtime_seconds = time.perf_counter() - repeat_started
+        repeat_matches = first_state == repeated_world.to_dict()
+        if not repeat_matches:
+            raise RuntimeError("same-seed seven-day state was not reproducible")
         summary = _summary(world, variant="research-full", seed=2026, run_dir=run_dir)
-    summary["scenario_hash"] = hashlib.sha256(
-        scenario.canonical_json().encode("utf-8")
-    ).hexdigest()
+        state_hash = hashlib.sha256(
+            json.dumps(
+                first_state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    summary["same_seed_reproducible"] = repeat_matches
+    summary["final_world_state_sha256"] = state_hash
+    summary["runtime_seconds_per_run"] = {
+        "first": first_runtime_seconds,
+        "repeat": repeat_runtime_seconds,
+    }
+    summary["scenario_hash"] = hashlib.sha256(scenario.canonical_json().encode("utf-8")).hexdigest()
     summary["scenario_id"] = scenario.id
     summary["model_versions"] = scenario.model_configs["policy_registry"]
     summary["model_state_keys"] = sorted(world.model_state)
@@ -419,10 +453,12 @@ def run_seven_day(output: Path) -> dict[str, Any]:
     )
     return {
         "schema_version": 1,
-        "study_id": "research-model-seven-day-check-a01",
+        "study_id": "research-model-seven-day-check-a02",
         "design": (
-            "100 synthetic Agents x 10,080 integer-minute ticks; seed 2026; trace and "
-            "decision artifacts off."
+            "100 synthetic Agents x 10,080 integer-minute ticks per run; two repetitions "
+            "with seed 2026; integrated "
+            "mean-reverting life-state psychology with body/affect feedback; online "
+            "distress monitoring; trace and decision artifacts off."
         ),
         "result": summary,
         "interpretation": "Internal completion and invariant check only; no external validation.",

@@ -1,48 +1,77 @@
-# 01. 心理状態
+# 01. 心理状態モデル
 
 ## 目的と限界
 
-心理モデルは未充足ニーズ、行列待ち、支援待ち、環境負荷、休息による急性の心理的負荷を表します。病名、PTSD、K6の個人得点や診断を出すモデルではありません。
+急性状態 `A_i(t)` は、ニーズ・待ち時間・環境・身体/感情状態・情報不確実性に応じて分単位で変わる心理的負荷です。日単位潜在状態 `D_i(d)` は、日中の急性負荷と高負荷時間から更新する内部状態です。病名、PTSD、K6の個人得点、診断結果は出しません。
 
-既存の `AgentState.stress` を急性状態 (A_i(t)in[0,1]) として維持します。`acute_distress` は同じ値を読む・設定する互換propertyであり、独立した状態ではありません。政策により、日単位以上の潜在状態 (D_i(d)in[0,1]) を `psychological_distress_v1` に保存します。
+`AgentState.stress` が急性状態の唯一の保存先です。`acute_distress` は同じ値の互換propertyで、独立状態ではありません。日単位状態は該当Policyが選ばれた場合だけ `psychological_distress_v1` に保存されます。
 
-## 根拠と数式
+## 理論と状態方程式
 
-Kuppens et al. (2010) の感情変化・個人差・感情慣性の議論は平均回帰を使う構造上の根拠です。実装式は複数の影響を避難所シミュレーションへ組み合わせた提案モデルで、論文にそのまま載る式ではありません。
-
-急性状態は1分刻みで一定のtick内負荷 (F_i(t)) を仮定した厳密な平均回帰解です。
+Kuppens et al. (2010) の感情の時間的慣性・個人差は平均回帰構造を考える理論的動機です。以下は避難所シミュレーション向けに複数の項を統合した提案式で、論文にそのまま掲載された式ではありません。
 
 \[
-A_i(t+\Delta t)=\operatorname{clip}_{[0,1]}\left[A_{0i}+(A_i(t)-A_{0i})e^{-\kappa_i\Delta t}+\frac{F_i(t)}{\kappa_i}(1-e^{-\kappa_i\Delta t})\right].
+\frac{dA_i}{dt}=-\kappa_i(A_i-A_{0i})+F_i(t)
 \]
 
-\(\kappa_i\) が0なら最後の項は極限 \(F_i\Delta t\) です。分単位の \(\kappa_i\) と \(F_i\) は未校正仮定です。設定既定の自然回復率は `0.01 / minute`、基準状態は既定 `0` です。負荷は既存のNeed、待ち時間、支援待ち、環境、休息・身体状態feedbackの寄与を合計します。ランダム雑音 \(\sigma\epsilon\) は標準モデルには実装せず、seedだけで再現できる決定的演算です。
+1分tick内で外力 `F_i` を一定と置き、解析解を計算します。
 
-日単位の状態は、日内の最終急性状態の平均と高負荷分数で更新します。
+\[
+A_i(t+\Delta t)=\operatorname{clip}_{[0,1]}\left[A_{0i}+(A_i(t)-A_{0i})e^{-\kappa_i\Delta t}+F_i(t)\frac{1-e^{-\kappa_i\Delta t}}{\kappa_i}\right].
+\]
+
+`κ_i` の単位は `1/minute`、`F_i` は正規化状態/分、`A_i` と `A_0i` は `[0,1]` です。`κ_i=0` では外力項は極限 `F_i Δt` です。初期条件はシナリオの `stress`、基準値は個人別設定、未設定時0です。上下境界では最終状態を `[0,1]` にclipします。
+
+## 外力とモデル構成
+
+| 入力 | 主な元 | 重複を避ける責務 |
+|---|---|---|
+| ニーズ・行列・支援待ち・環境 | `SimplePsychologyPolicy` | 各tickの率として一度入力 |
+| 自然回復 | `MeanRevertingDistressPolicy` または統合版 | 心理policyだけが平均回帰を計算 |
+| 睡眠負債・不確実性・安心・不満・感情・衛生 | `LifeStatePsychologyPolicy` | 身体/感情の既存状態からfeedbackを作る |
+| 誤情報を信じること | 統合版の不確実性更新 | 有効な信念状態を不確実性の率に加える。真偽イベント自体は再適用しない |
+| 他者との感情同調 | `ExpressivenessChannelOpennessPolicy` | 同じtick開始snapshotから社会差分を計算。自然回復は含めない |
+| 社会的支援・訂正 | 型付き交流/訂正event | 一度のeventで安心・不確実性などの状態を変える |
+
+### 選択可能なPolicy
+
+- `mean-reverting-distress-v1`: 基本ニーズ等と厳密な平均回帰、日単位潜在状態を扱います。既存の身体状態Policyとは合成しません。
+- `life-state-feedback-v1`: 既存の睡眠負債、安心感、不確実性、感情等を扱います。従来モデルの互換性を維持します。
+- `mean-reverting-life-state-v1`: 新しい明示的な統合版です。平均回帰と身体/感情状態を一つの心理更新に合成し、日単位潜在状態も更新します。旧Policyの意味は書き換えません。
+
+統合版では睡眠・休息の直接stress回復項を0にします。睡眠による睡眠負債の減少、睡眠で維持/回復する感情や安心状態は残します。これにより同じ睡眠を直接stress回復と睡眠負債feedbackの両方で加算しません。統合版のdiscontent・negative affect計算はtick開始の心理状態を読み、計算途中の値を再参照しない同期更新です。
+
+誤情報に関する有効な圧力は、誤った主張がfalseと定義され、現在の信念強度が0.5を超えるとき `min(1, Σ 2(b_i^m-0.5))` で集約します。これは不確実性を押し上げる持続入力であり、rumor eventの一回効果を毎tick再生するものではありません。訂正を受容すると信念強度が訂正側へ移り、この圧力が消えます。係数は未校正で、直接の臨床効果を意味しません。
+
+## 日単位潜在状態
 
 \[
 D_i(d+1)=\operatorname{clip}_{[0,1]}\{\mu_i+\phi_i(D_i(d)-\mu_i)+\theta_A(\bar A_i(d)-\mu_i)+\theta_H H_i(d)\}.
 \]
 
-\(\bar A\) は観測された分の平均、\(H\) は高負荷閾値を超えた観測分の割合です。コード既定は \(\phi=0.90,\theta_A=0.08,\theta_H=0.02\)、閾値0.70で、すべて未校正仮定です。1日は1440分として日境界で一度更新します。部分的な最終日は更新されません。
+`D` は日単位の潜在状態、`μ` は基準、`φ` は日次保持率、`Ā` は観測した分の急性状態平均、`H` は便宜的閾値を超えた分の割合です。1日を1440分とし、各日の終端で一度更新します。部分的な最終日は更新しません。既定値は `φ=0.90, θ_A=0.08, θ_H=0.02, threshold=0.70` で未校正です。
+
+この `D` はK6推定値ではありません。日本語版K6は過去30日間の症状を参照する尺度であり、7日シミュレーションの日次状態と同一視しません。
 
 ## 計算例
 
-仮の値 \(A=0.60,A_0=0.10,\kappa=0.01/分,F=0,\Delta t=1分\) なら、
-\(A'=0.10+0.50e^{-0.01}\approx0.5950\) です。これは説明用の数値で実測値ではありません。
+仮に `A=0.60, A0=0.10, κ=0.01/min, F=0, Δt=1 min` なら `A'=0.10+0.50e^-0.01≈0.5950` です。説明用であり、観測データではありません。
 
-## 実装・連携
+統合版ではclip前の寄与を `自然回復 + Σ(各外力率 × (1-exp(-κΔt))/κ)` と分けます。たとえば外力率が `0.002/min`、`κ=0.02/min`、`Δt=1min` なら、その寄与は `0.002×(1-exp(-0.02))/0.02≈0.00198` です。
 
-- `src/sheltersim/policies/psychology.py`: `MeanRevertingDistressPolicy`, `mean_reverting_step`, `PsychologyParameters`
+## Traceと実装対応
+
+- `src/sheltersim/policies/psychology.py`: `MeanRevertingDistressPolicy`, `LifeStatePsychologyPolicy`, `IntegratedDistressLifeStatePolicy`, `mean_reverting_step`
 - `src/sheltersim/domain/psychological_state.py`: 日内積分、日境界更新、checkpoint検証
-- `src/sheltersim/domain/models.py`: `AgentState.stress` と `acute_distress` の単一状態alias
-- `src/sheltersim/policies/behavior.py`: 行動効用で急性・長期状態の最大値を負荷入力に使う
-- version: `mean-reverting-distress-v1`; 状態schema: 1
+- `src/sheltersim/domain/body_state.py`: 身体・不確実性・安心・感情状態と訂正eventの一回適用
+- `src/sheltersim/policies/behavior.py`: 情報beliefをsnapshotへ投影し、Trace用の情報event出典を保持
+- `src/sheltersim/experiments/runner.py`: 心理・社会更新、Trace、日内積分を同じtickで順序制御
+- model version: `mean-reverting-distress-v1`, `life-state-feedback-v1`, `mean-reverting-life-state-v1`; 潜在状態schema: 1
 
-1分tickでは心理policyが基礎更新を計算し、社会policyがあれば同じ更新前スナップショットから差分を適用します。その最終値を一度だけ日積分へ加算します。支持の声掛けは身体状態/社会イベントを通じて影響し、自然回復率と同じ項には加えません。睡眠や休息による既存recovery寄与は別の明示的入力です。
+心理Traceは各入力の寄与、解析的な平均回帰分、clip前候補、clip後の心理差分、社会差分、実際の適用差分を別々に記録します。平均回帰Policyでは各forcing寄与へ解析解の積分係数を掛けます。したがって寄与合計はclip前差分と一致し、clip差分と社会差分を合わせると実際の適用差分になります。
 
-## 内部検証と限界
+## 内部検証
 
-`tests/test_research_models.py` で無刺激の減衰、刻み幅整合性、持続負荷の平衡、個人回復係数、非有限値拒否、日単位蓄積とcheckpoint復元を検査します。時間刻み整合性は定係数の解析解に対する数値検査です。
+`tests/test_research_models.py` は無刺激回帰、回復率差、刻み幅整合性、持続負荷平衡、範囲と有限値、統合版の睡眠負債と平均回帰の共存、睡眠stress回復の二重計上防止、情報圧力から不確実性/急性状態への経路、Traceの寄与再構成を確認します。`distress_monitor_v1` 相当のオンライン集計は急性状態を変更せず、閾値以上の連続時間・回復回数を少数の数値指標としてcheckpoint可能なmetric stateに記録します。
 
-中長期状態は短い避難期間の臨床指標ではありません。日本語版K6は過去30日を参照する尺度であり、この7日以内の (D_i(d)) をK6得点や推定値と呼びません。基準、回復、日積分係数の外部校正は未実施です。
+内部テストは数式実装やプログラム上の一貫性を確認するもので、日本の避難所での外部妥当性は示しません。全係数は未校正です。0.70はソフトウェア指標で、臨床閾値ではありません。

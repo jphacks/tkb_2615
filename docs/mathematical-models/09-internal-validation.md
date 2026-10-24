@@ -23,20 +23,20 @@
 最新 `main` を起点とする作業ブランチ上で実行しました。
 
 ```text
-.venv/bin/pytest -q tests/test_research_models.py tests/test_information_spread.py tests/test_sanitation_diagnostics.py tests/test_provenance.py tests/test_policy_registry_full.py tests/test_policy_parameter_overrides.py::test_selected_formula_overrides_reach_runtime_config_and_checkpoint_signature
-30 passed
+.venv/bin/pytest -q tests/test_research_models.py tests/test_information_spread.py tests/test_provenance.py
+36 passed
 
 .venv/bin/pytest -q
-603 passed, 3 skipped in 610.68s
+632 passed, 3 skipped in 662.77s
 ```
 
 skip 3件は環境ゲートされたlive API試験で、offlineの標準テストから有料APIを呼んでいません。
 
-新規ファイルおよび変更したsocial policyへのRuff検査は `All checks passed!` でした。変更した17個の既存PythonファイルをまとめたRuffでは既存長行・import整形指摘が132件残ります。同じファイルの `origin/main` 版は141件で、file/rule/source-line/messageによる比較で新規指摘は0件、9件を解消しています。`git diff --check` と `model-catalog.json` / `source-manifest.json` のJSON構文検査も通過しました。
+新規 `distress_monitor.py` と新規research test fileはRuff検査に通過しました。変更した既存Pythonファイルでは115件のRuff既存指摘があり、同じファイルの作業開始時点は116件でした。rule/message比較で新規指摘は0件です。`git diff --check` と `model-catalog.json` / `source-manifest.json` のJSON構文検査も通過しました。
 
-全体テストは、社会モデルのprovenance ID互換修正後に最新 `main` 起点の作業ブランチで完走しました。
+全体テストは最新 `origin/main` のmerge後に完走しました。全体実行後に追加した2つのテスト条件を含む36件は別途再実行して通過しました。
 
-## 比較実験と感度分析
+## A01: 初回比較実験と感度分析（急性心理Policy）
 
 再実行可能なスクリプトは `scripts/run_research_model_validation.py`、保存結果は [`research-validation-a01.json`](research-validation-a01.json) です。31 runで、12人の合成Agent、180分、同一Scenario/seedの6条件ablation（seed 3, 4, 5）と、seed 3の13条件one-factor感度分析を実施しました。
 
@@ -61,7 +61,7 @@ one-factor感度では、回復率を0.005から0.02/minへ上げた条件で急
 
 短いA01 runには物資ledgerがないため、物資不足時間は `null` です。資源保存則は既存の資源serviceテストで別途確認します。7日runはTraceをOFFにしており、高負荷episode・社会影響のTrace指標は `null` とし、仮に0だったかのように扱いません。
 
-## 100人・7日間のrun
+## A01: 初回100人・7日間run（統合Policy追加前）
 
 再実行コマンド:
 
@@ -87,3 +87,49 @@ one-factor感度では、回復率を0.005から0.02/minへ上げた条件で急
 100人では長期目安が5基、Scenarioでは4基なので全期間不足となります。これは計画目安との比較であり、利用可能性、アクセス可能性、個々の排泄行動を予測しません。高負荷episodeの連続時間と社会伝播Traceはこの長時間runで記録していないため、JSONの値は `null` です。物資ledgerはScenarioに含まれず、物資不足時間も `null` です。
 
 外部データによる係数校正・検証、K6値との対応、現地妥当性は実施していません。
+
+## A02: 身体・感情統合版の追試
+
+前節のA01は `mean-reverting-distress-v1` を使った初回比較です。統合Policy追加後の追試は [`research-validation-a02.json`](research-validation-a02.json) に保存し、以下のコマンドで再実行できます。
+
+```text
+.venv/bin/python scripts/run_research_model_validation.py --mode sweep --output docs/mathematical-models/research-validation-a02.json --seeds 3 4 5
+```
+
+合計34 runです。12人・180分の7条件ablationをseed 3, 4, 5で実行し、seed 3で13条件の一要因感度分析を行いました。`research-full` は `mean-reverting-life-state-v1`、`research-acute-only` は `mean-reverting-distress-v1`、`legacy-comparator` は旧心理・社会・情報Policyです。サービス時間比較は急性のみの同seed対照で実施し、実際に待ち行列が発生する条件を使いました。
+
+| 条件 | 終了時急性状態平均 | p95 | (A≥0.7)最終割合 | 高負荷episode | 最大連続分 |
+|---|---:|---:|---:|---:|---:|
+| 旧モデル | 0.1679 | 0.3016 | 0% | 0 | 0 |
+| 急性心理のみ | 0.0747 | 0.1541 | 0% | 0 | 0 |
+| 身体・感情統合版 | 0.3198 | 0.4867 | 0% | 0 | 0 |
+| 統合版・自然回復なし | 0.6552 | 0.9728 | 36.1% | 4.67/seed | 48分 |
+
+統合版の平均・p95が急性のみより高いのは、この合成scenarioで身体・感情feedbackが働き、統合版が休息負債・不確実性などを状態更新へ含めるためです。これはモデル間の差であり、現実のアウトカムに対する優劣を示しません。回復率を0.005から0.02/minへ変えるseed 3の条件では平均が0.4194から0.1826へ動き、同seedの基準統合版は0.3019でした。基準の3 seed条件では0.7を超えるepisodeがなかったため、回復時間の分布は得られていません。自然回復なしでは継続・再上昇episodeが現れ、最長48分でした。
+
+Bosse型伝播の正負の影響総量は、基準統合版でそれぞれ0.061、0.157（正規化状態単位の累積）でした。このscenarioでは鎮静方向の影響量が上回りました。伝播なしは平均0.3244で、基準0.3198との差は小さく、実地因果効果とは解釈しません。情報感度では噂の信念形成確率0/1の条件で終了時誤信念者が0/8人、訂正受容確率0.05/0.95で訂正受容agent-messageが0/4件でしたが、急性平均の差は小さいままでした。
+
+設備感度の同seed比較では、急性のみモデルの既定4–8分サービス時間でqueue person-minutesが23、終了時平均待ちが1.92分、最大8分でした。サービス時間を8–12分へ変更すると、それぞれ58、4.83分、12分になりました。統合版の180分runではトイレサービスが発生しなかったため、この設備感度値には急性のみ対照を使っています。
+
+追加した統合テストは高状態0.8からの自然回復とオンライン回復記録、社会同調と自然回復の同時作用、誤情報信念からの心理Trace、訂正受容時のfalse-claim圧力解消、訂正拒否時には安心効果を加えないことを確認します。これらは実装経路の確認であり、係数校正ではありません。
+
+## A02: 100人・7日間の統合版追試
+
+100人・10,080分・seed 2026の `mean-reverting-life-state-v1` を同一条件で2回実行しました。両方とも全tickの `WorldState.validate` と最終化を通過し、最終WorldStateは完全一致しました。結果は [`research-validation-7day-a02.json`](research-validation-7day-a02.json) に保存しています。Scenario hashは `0bd348c6f7810d95f9e3dc4c3c7f4ae5beb31d2a3521b795e4a8f020988c340a`、比較した最終状態hashは `52a720d432444c2813c23651447619148040b81edd8b111697c37d101aba7e7` です。
+
+| 指標 | 結果 |
+|---|---:|
+| 終了時の急性状態平均 / p95 | 0.8588 / 1.0000 |
+| 終了時 (A≥0.7) の割合 | 80% |
+| 日単位潜在状態平均 | 0.4140 |
+| 誤情報曝露 / 現在の誤信念者 / 過去に誤信念 | 92 / 0 / 1 Agent |
+| 訂正受容 | 88 Agent-message |
+| オンライン高負荷episode / 再上昇 | 147 / 65 |
+| 最長高負荷連続 / 完了した回復episode | 9,906分 / 67 |
+| 完了episodeの平均回復時間 | 66.55分 |
+| 4基のトイレ利用 / 完了サービス | 利用なし / 0 |
+| 長期計画目安に対する不足 | 10,080分 |
+
+急性状態の高値は数値発散ではなく、状態値が `[0,1]` に収まったまま生じた継続負荷です。このScenarioには物資配布ledgerがなく、初期空腹等も7日間続きます。また、life-state policyを有効にすると生成されるAgent facility-awareness状態は初期位置の施設のみを既知とするため、この構成では別zoneにあるトイレが未利用のままでした。したがってこのrunは心理状態・状態不変条件・再現性の長期確認として解釈し、トイレ待ち行列/利用の検証とはしません。後者は短時間の急性のみ対照シナリオで別途確認しました。
+
+Trace artifactは出力せず、Agentごとの高負荷連続時間・回復episodeをonline集計します。1回目は843.27秒（14分03秒）、同seed再実行は787.86秒（13分08秒）で、2回の合計は27分11秒でした。両方の状態hashは一致しました。これはこの実行環境での絶対時間です。A01に対応する実行時間記録がないため、旧版との性能差や「劣化なし」は定量結論できません。外部データによる係数校正、K6得点との対応、現地妥当性は未検証です。
