@@ -88,13 +88,13 @@ fallbackの理由はoutcome別（max_api_calls、shared_allowance_unavailable、
 - 結果Q&Aはread-onlyとし、保存証拠に結び付けます。
 - 標準pytest、lint、CIからlive Providerを呼びません。
 
-API keyはprocess環境変数から読みます。.env.exampleは設定名の参考であり、dotenv loaderではありません。Provider requestはrouterごとの予算と、ローカルProject・process間で共有するコード定義の累積50ドルusage ledgerに対して予約します。この上限はソフトウェアの制限であり、利用承認ではありません。API callにはプロジェクトオーナーの都度の承認が必要です。別taskの予算や承認は引き継がれません。公開前に累積上限の実装を再検討してください。
+API keyはprocess環境変数から読みます。.env.exampleは設定名の参考であり、dotenv loaderではありません。Provider requestはrouterごとの予算と、ローカルProject・process間で共有する既定50ドルのusage ledgerに対して予約します。端末の共有上限を明示的に増やす場合は`usage --increase-budget task-global-v1 --new-budget-usd <新しい合計額> --confirm task-global-v1 --reason "承認理由"`を使います。変更理由と旧・新上限は端末内の監査記録に残り、Git管理の既定上限には反映されません。この上限はソフトウェアの制限であり、利用承認ではありません。API callにはプロジェクトオーナーの都度の承認が必要です。別taskの予算や承認は引き継がれません。公開前に累積上限の実装を再検討してください。
 
 ## 利用記録とlive連携test
 
 CLI usage commandと/api/v1/usage/runtimeは上限付きusage receiptを表示します。Project RunにもRun単位の会計情報と操作recordが保存されます。
 
-CLIはprepareとrunのたびに新しい利用枠（cli-prepare-…、cli-run-…）を作り、その時点の設定を上限として固定します。reviewは対象Runの利用枠を引き継ぎます。以前は全CLI実行が固定の cli-default を共有していました。一度使い切ると、それ以降はAPIを呼ばずに全taskがfallbackしていました。既存の cli-default は使われなくなるだけで、記録は残ります。Run間の合計は、引き続き累積50ドルのledgerで制限されます。
+CLIはprepareとrunのたびに新しい利用枠（cli-prepare-…、cli-run-…）を作り、その時点の設定を上限として固定します。reviewは対象Runの利用枠を引き継ぎます。以前は全CLI実行が固定の cli-default を共有していました。一度使い切ると、それ以降はAPIを呼ばずに全taskがfallbackしていました。既存の cli-default は使われなくなるだけで、記録は残ります。Run間の合計は、既定50ドルまたは端末台帳の監査済み増額により制限されます。
 
 live連携testは標準testとは別です。ANTHROPIC_API_KEYとSHELTERSIM_ALLOW_LIVE_API_TESTS=1の両方が必要です。設定の既定値は2 call、test budget 0.01ドルですが、OpusとSonnetの呼出しはthinking用の余裕を予約するため、この既定値ではOpusを1回も呼べません。そのため各testは、上限を自分で設定します。
 

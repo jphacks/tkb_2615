@@ -82,7 +82,8 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_
         )
         assert record.output_tokens <= limit
     assert router.spent_usd <= settings.budget_usd
-    assert task_campaign_ledger(store).summary()["estimated_cost_usd"] <= 50.0
+    campaign_summary = task_campaign_ledger(store).summary()
+    assert campaign_summary["estimated_cost_usd"] <= campaign_summary["limits"]["budget_usd"]
 
     replay = LLMRouter(
         settings,

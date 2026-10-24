@@ -53,6 +53,22 @@ def _unfreeze_usage_account(account_id: str, *, confirm: str, reason: str) -> di
     return ledger.unfreeze(confirm_account_id=confirm, reason=reason)
 
 
+def _increase_usage_budget(
+    account_id: str, *, confirm: str, new_budget_usd: float, reason: str
+) -> dict[str, Any]:
+    from sheltersim.storage.usage import TASK_CAMPAIGN_ACCOUNT_ID, UsageLedger, task_campaign_store
+
+    if account_id != TASK_CAMPAIGN_ACCOUNT_ID:
+        raise ValueError("only task-global-v1 supports an operator-approved budget increase")
+    store = task_campaign_store()
+    ledger = UsageLedger(store, "runtime-accounts", account_id)
+    if not ledger.path.exists():
+        raise ValueError("usage account does not exist")
+    return ledger.increase_budget(
+        confirm_account_id=confirm, new_budget_usd=new_budget_usd, reason=reason
+    )
+
+
 def _cli_usage_account_path(run_path: Path) -> Path:
     return run_path.parent / f".{run_path.name}.llm-usage-account.json"
 
@@ -82,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_parser(subparsers)
 
     usage = subparsers.add_parser(
-        "usage", help="show bounded CLI and legacy-Demo LLM accounting receipts"
+        "usage", help="show or explicitly maintain bounded LLM accounting receipts"
     )
     usage.add_argument(
         "--unfreeze",
@@ -92,8 +108,23 @@ def build_parser() -> argparse.ArgumentParser:
             "why actual usage exceeded its reservation; recorded spend is kept"
         ),
     )
-    usage.add_argument("--confirm", metavar="ACCOUNT_ID", help="repeat the account ID to unfreeze")
-    usage.add_argument("--reason", help="why unfreezing is safe (recorded, at most 200 chars)")
+    usage.add_argument(
+        "--confirm", metavar="ACCOUNT_ID", help="repeat the account ID for confirmation"
+    )
+    usage.add_argument(
+        "--reason",
+        help="why the account operation is approved (recorded, at most 200 chars)",
+    )
+    usage.add_argument(
+        "--increase-budget",
+        metavar="ACCOUNT_ID",
+        help="explicitly raise task-global-v1's shared total budget (audit logged)",
+    )
+    usage.add_argument(
+        "--new-budget-usd",
+        type=float,
+        help="new total dollar limit, greater than the existing limit",
+    )
 
     catalog = subparsers.add_parser(
         "model-catalog", help="show installed model equations, sources and limits"
@@ -240,12 +271,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command == "usage":
-        from sheltersim.llm.accounting import runtime_usage_summary, runtime_usage_store
+        from sheltersim.llm.accounting import runtime_usage_store, runtime_usage_summary
+
+        if arguments.unfreeze is not None and arguments.increase_budget is not None:
+            parser.error("usage --unfreeze and --increase-budget are mutually exclusive")
+        if arguments.increase_budget is not None:
+            if (
+                arguments.new_budget_usd is None
+                or arguments.confirm is None
+                or arguments.reason is None
+            ):
+                parser.error(
+                    "usage --increase-budget requires --new-budget-usd, --confirm, and --reason"
+                )
+            try:
+                event = _increase_usage_budget(
+                    arguments.increase_budget,
+                    confirm=arguments.confirm,
+                    new_budget_usd=arguments.new_budget_usd,
+                    reason=arguments.reason,
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                parser.error(f"could not increase usage budget: {exc}")
+            print(
+                _json_text(
+                    {"account_id": arguments.increase_budget, "budget_increase_event": event}
+                )
+            )
+            return 0
         if arguments.unfreeze is None:
-            if arguments.confirm is not None or arguments.reason is not None:
-                parser.error("usage --confirm and --reason require --unfreeze")
+            if (
+                arguments.confirm is not None
+                or arguments.reason is not None
+                or arguments.new_budget_usd is not None
+            ):
+                parser.error("usage --confirm/--reason require an explicit account operation")
             print(_json_text(runtime_usage_summary(runtime_usage_store())))
             return 0
+        if arguments.new_budget_usd is not None:
+            parser.error("usage --new-budget-usd requires --increase-budget")
         try:
             event = _unfreeze_usage_account(
                 arguments.unfreeze, confirm=arguments.confirm or "", reason=arguments.reason or ""
