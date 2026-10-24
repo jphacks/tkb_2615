@@ -719,3 +719,34 @@ def test_cli_unfreezes_the_campaign_ledger(
     printed = json.loads(capsys.readouterr().out)
     assert printed["unfreeze_event"]["reason"] == "server-tool passes reviewed"
     assert campaign.summary()["frozen"] is False
+
+
+def test_ledger_keeps_requested_calls_free_for_later_work(tmp_path: Path) -> None:
+    store = store_at(tmp_path)
+    ledger = UsageLedger(store, "project", "shared-run")
+    ledger.create(UsageLimits(max_calls=5, max_input_tokens=10_000, max_output_tokens=10_000,
+                              budget_usd=1))
+
+    def reserve(index: int, keep: int) -> str:
+        receipt = ledger.reserve(request_key=f"k{index}", operation="runtime", branch_id=None,
+            stage="runtime", model_id="m", input_tokens=1, output_tokens=1, cost_usd=0.0001,
+            keep_calls_free=keep)
+        ledger.settle(receipt, input_tokens=1, output_tokens=1, cost_usd=0.0001,
+                      outcome="settled")
+        return receipt
+
+    reserve(0, keep=3)
+    reserve(1, keep=3)
+    with pytest.raises(StorageError, match="usage_runtime_share_exhausted"):
+        reserve(2, keep=3)
+    for index in (3, 4, 5):  # the report and questions may use the held-back calls
+        reserve(index, keep=0)
+    with pytest.raises(StorageError, match="usage_limit_exceeded"):
+        reserve(6, keep=0)
+
+    single = UsageLedger(store, "project", "single-call")
+    single.create(UsageLimits(max_calls=1, max_input_tokens=10, max_output_tokens=10,
+                              budget_usd=1))
+    single.reserve(request_key="only", operation="runtime", branch_id=None, stage="runtime",
+                   model_id="m", input_tokens=1, output_tokens=1, cost_usd=0.0001,
+                   keep_calls_free=3)

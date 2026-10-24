@@ -430,3 +430,37 @@ def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
     # Before stored compiler tapes, the ledger refused this identical paid request.
     assert second["fallback_used"] is False
     assert len(calls) == calls_after_first
+
+
+def test_runtime_calls_leave_the_review_its_allowance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sheltersim.llm.accounting import (
+        ANALYSIS_RESERVED_CALLS,
+        AccountedProvider,
+        usage_limits,
+    )
+    from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    store = ProjectStore(tmp_path / "projects")
+    store.create_project("project")
+    settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=4,
+                           budget_usd=10.0)
+    ledger = UsageLedger(store, "project", "cli-run-week")
+    ledger.create(usage_limits(settings))
+    router = LLMRouter(settings, provider=AccountedProvider(
+        AcceptingProvider(), ledger, settings, "runtime", "main",
+        campaign_ledger=task_campaign_ledger(store)), tape=ResponseTape())
+
+    run_scenario(_scenario(200), tmp_path / "run", llm_router=router)
+
+    runtime = [record for record in router.records if record.stage == "runtime"]
+    review = [record for record in router.records if record.stage == "review"]
+    accepted_runtime = [record for record in runtime if record.outcome == "recorded"]
+    assert len(accepted_runtime) == settings.max_api_calls - ANALYSIS_RESERVED_CALLS
+    assert {record.outcome for record in runtime} - {"recorded"} == {
+        "runtime_call_share_exhausted"
+    }
+    # Before the reserve, runtime decisions used every call and the review fell back.
+    assert [record.outcome for record in review] == ["recorded"]

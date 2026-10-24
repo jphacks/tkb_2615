@@ -108,7 +108,8 @@ class UsageLedger:
 
     def reserve(self, *, request_key: str, operation: str, branch_id: str | None,
                 stage: str, model_id: str, input_tokens: int, output_tokens: int,
-                cost_usd: float, identity: dict[str, Any] | None = None) -> str:
+                cost_usd: float, identity: dict[str, Any] | None = None,
+                keep_calls_free: int = 0) -> str:
         with self.store.transaction():
             document = self.store._read(self.path)
             limits = UsageLimits.model_validate(document["limits"])
@@ -131,6 +132,11 @@ class UsageLedger:
             amount = money(cost_usd)
             if document["frozen"] or pending >= limits.max_concurrency:
                 raise StorageError("usage_busy_or_frozen")
+            # A caller may require calls to remain for later work on the same account;
+            # an account with a single call cannot hold any back.
+            spare = min(keep_calls_free, limits.max_calls - 1)
+            if spare > 0 and sum(r["calls"] for r in receipts) + 1 > limits.max_calls - spare:
+                raise StorageError("usage_runtime_share_exhausted")
             requested = {
                 "calls": (1, limits.max_calls),
                 "input_tokens": (input_tokens, limits.max_input_tokens),
