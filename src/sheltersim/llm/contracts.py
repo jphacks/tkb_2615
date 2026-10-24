@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -247,27 +248,50 @@ def _validate_schema_definition(schema: dict[str, Any]) -> None:
         raise ValueError("output schema must reject additional properties")
 
 
-def _validate_value(value: Any, schema: dict[str, Any], *, path: str) -> None:
+def _validate_value(
+    value: Any, schema: dict[str, Any], *, path: str, root: dict[str, Any] | None = None
+) -> None:
+    # Pydantic-generated schemas share definitions through "#/$defs/..." references.
+    root = schema if root is None else root
+    if "$ref" in schema:
+        _validate_value(value, _resolve_ref(schema["$ref"], root, path), path=path, root=root)
+        return
     if "anyOf" in schema:
         for candidate in schema["anyOf"]:
             try:
-                _validate_value(value, candidate, path=path)
+                _validate_value(value, candidate, path=path, root=root)
                 return
             except LLMContractError:
                 pass
         raise LLMContractError(f"{path} does not match an allowed structured type")
+    if "oneOf" in schema:
+        matches = 0
+        for candidate in schema["oneOf"]:
+            try:
+                _validate_value(value, candidate, path=path, root=root)
+                matches += 1
+            except LLMContractError:
+                pass
+        if matches != 1:
+            raise LLMContractError(f"{path} must match exactly one structured type")
+        return
     expected_type = schema.get("type")
-    type_valid = {
-        "object": isinstance(value, dict),
-        "array": isinstance(value, list),
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "null": value is None,
-    }.get(expected_type, False)
-    if not type_valid:
-        raise LLMContractError(f"{path} must be {expected_type}")
+    if expected_type is not None:
+        type_valid = {
+            "object": isinstance(value, dict),
+            "array": isinstance(value, list),
+            "string": isinstance(value, str),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "boolean": isinstance(value, bool),
+            "null": value is None,
+        }.get(expected_type, False)
+        if not type_valid:
+            raise LLMContractError(f"{path} must be {expected_type}")
+    if "const" in schema and (
+        value != schema["const"] or isinstance(value, bool) != isinstance(schema["const"], bool)
+    ):
+        raise LLMContractError(f"{path} must equal its fixed value")
     if "enum" in schema and value not in schema["enum"]:
         raise LLMContractError(f"{path} is outside the allowed values")
     if expected_type in ("integer", "number"):
@@ -275,24 +299,43 @@ def _validate_value(value: Any, schema: dict[str, Any], *, path: str) -> None:
             raise LLMContractError(f"{path} must be finite")
         if value < schema.get("minimum", value) or value > schema.get("maximum", value):
             raise LLMContractError(f"{path} is outside the permitted range")
+        if ("exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]) or (
+            "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]
+        ):
+            raise LLMContractError(f"{path} is outside the permitted range")
     if expected_type == "object":
         properties = schema.get("properties", {})
         required = schema.get("required", [])
-        if set(value) - set(properties):
+        extra_schema = schema.get("additionalProperties")
+        # Unknown fields stay rejected unless a schema explicitly types them.
+        if set(value) - set(properties) and not isinstance(extra_schema, dict):
             raise LLMContractError(f"{path} contains unknown fields")
         if set(required) - set(value):
             raise LLMContractError(f"{path} is missing required fields")
         for key, item in value.items():
-            _validate_value(item, properties[key], path=f"{path}.{key}")
+            item_schema = properties.get(key, extra_schema)
+            _validate_value(item, item_schema, path=f"{path}.{key}", root=root)
     if expected_type == "array":
         if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", 1_000_000):
             raise LLMContractError(f"{path} has an invalid number of items")
         item_schema = schema.get("items")
         if item_schema is not None:
             for index, item in enumerate(value):
-                _validate_value(item, item_schema, path=f"{path}[{index}]")
-    if expected_type == "string" and len(value) > schema.get("maxLength", 1_000_000):
-        raise LLMContractError(f"{path} is too long")
+                _validate_value(item, item_schema, path=f"{path}[{index}]", root=root)
+    if expected_type == "string":
+        if not schema.get("minLength", 0) <= len(value) <= schema.get("maxLength", 1_000_000):
+            raise LLMContractError(f"{path} has an invalid length")
+        if "pattern" in schema and re.search(schema["pattern"], value) is None:
+            raise LLMContractError(f"{path} does not match its required pattern")
+
+
+def _resolve_ref(reference: Any, root: dict[str, Any], path: str) -> dict[str, Any]:
+    for prefix, container in (("#/$defs/", "$defs"), ("#/definitions/", "definitions")):
+        if isinstance(reference, str) and reference.startswith(prefix):
+            target = root.get(container, {}).get(reference[len(prefix):])
+            if isinstance(target, dict):
+                return target
+    raise LLMContractError(f"{path} references an unknown schema definition")
 
 
 def _digest(value: Any) -> str:

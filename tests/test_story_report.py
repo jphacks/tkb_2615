@@ -112,7 +112,7 @@ def test_opus_story_uses_validated_codes_and_allowlisted_prompt_only() -> None:
     }
     provider = ReviewProvider(response)
     router = LLMRouter(
-        LLMSettings(mode=LLMMode.RECORD, api_key="test-only", budget_usd=0.25),
+        LLMSettings(mode=LLMMode.RECORD, api_key="test-only", budget_usd=0.5),
         provider=provider,
         tape=ResponseTape(),
     )

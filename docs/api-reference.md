@@ -29,6 +29,7 @@ Scenario JSON、Run manifest、CheckpointはJSONを使います。eventとdecisi
 - model-catalog: 選択モデル、係数、単位、範囲、source分類を表示します。
 - evaluate-models: 明示的に依頼されたoffline対応比較実験を実行します。
 - web: ローカルブラウザーworkspaceとInspectorを起動します。
+- usage: CLI/Demoの利用記録と、PC全体の累積上限の記録を表示します。--unfreeze ACCOUNT_ID --confirm ACCOUNT_ID --reason TEXT で、凍結された利用記録を解除します（llm-integration.md参照）。
 
 実行例はREADME.mdとdevelopment.mdにあります。
 

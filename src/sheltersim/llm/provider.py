@@ -81,6 +81,10 @@ class AnthropicProvider:
                 # These short, schema-bound decisions do not need a reasoning trace.
                 # Haiku can spend a small output budget on thinking and return no text.
                 request["thinking"] = {"type": "disabled"}
+            elif task.stage is LLMStage.PREPARE:
+                # Opus cannot disable thinking; keep it brief for bounded extraction and
+                # synthetic drafting so the answer, not the reasoning, uses the budget.
+                request["output_config"] = {"effort": "low"}
             if task.max_web_searches:
                 request["tools"] = [{
                     "type": "web_search_20250305",
@@ -247,7 +251,7 @@ class LLMRouter:
             output_cap = min(
                 task.max_output_tokens or self.settings.max_output_tokens,
                 self.settings.max_output_tokens,
-            )
+            ) + _thinking_headroom(task)
             try:
                 price = self.settings.price_for(model_id)
             except ValueError as exc:
@@ -255,7 +259,7 @@ class LLMRouter:
             reserve = (
                 (1_000_000 if task.max_web_searches else self.settings.max_input_tokens + 256)
                 * price.cache_creation_1h_usd_per_million
-                + output_cap * price.output_usd_per_million
+                + output_reservation_tokens(task, output_cap) * price.output_usd_per_million
             ) / 1_000_000
             reserve += task.max_web_searches * 0.01
             if self.spent_usd + reserve > self.settings.budget_usd:
@@ -470,6 +474,20 @@ class LLMRouter:
         self.records.append(record)
         if self.observer is not None:
             self.observer(record)
+
+
+# Stages other than runtime use models whose thinking cannot be disabled, and thinking
+# tokens count toward max_tokens. Reserve room for them on top of the answer size.
+THINKING_HEADROOM_TOKENS = 4_096
+
+
+def _thinking_headroom(task: LLMTask) -> int:
+    return 0 if task.stage is LLMStage.RUNTIME else THINKING_HEADROOM_TOKENS
+
+
+def output_reservation_tokens(task: LLMTask, max_tokens: int) -> int:
+    """Bound billed output: each server-tool use adds a sampling pass capped at max_tokens."""
+    return max_tokens * (task.max_web_searches + 1)
 
 
 class _CallLimitError(ValueError):

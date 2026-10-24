@@ -236,3 +236,41 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path)
     assert status["outcomes"]["fallback_count"] == len(router.records) > 0
     # Reading the status is observational and leaves the branch head unchanged.
     assert store.branch_reference("project", "run", "main").checkpoint_hash == head_before
+
+
+class TruncatedProvider:
+    """Reply with cut-off JSON, as a response stopped at max_tokens would."""
+
+    def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+        del max_output_tokens, timeout_seconds
+        return ProviderResponse(text='{"profiles":[{"profile_index":0,', model_id=model_id,
+                                input_tokens=10, output_tokens=5, elapsed_ms=0.0)
+
+
+def test_prepare_cli_warns_when_scenario_draft_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "scenario.json"
+    source.write_text(_scenario(30).canonical_json(), encoding="utf-8")
+    monkeypatch.setattr(cli, "_cli_accounted_router",
+                        lambda *_args, **_kwargs: _router(TruncatedProvider()))
+    arguments = ["prepare", "--scenario", str(source), "--generate-scenario",
+                 "--output", str(tmp_path / "draft.json")]
+
+    assert cli.main(arguments) == 0
+
+    captured = capsys.readouterr()
+    preview = json.loads(captured.out)
+    assert preview["generation_manifest"]["status"] == "rule_fallback"
+    assert "warning: LLM fallback:" in captured.err and "invalid_output" in captured.err
+
+
+def test_scenario_text_parse_warns_on_rule_fallback() -> None:
+    from sheltersim.llm.region_prepare import parse_scenario_text
+
+    parsed = parse_scenario_text("横浜市で地震が発生。避難者30人、期間は1日。",
+                                 router=_router(TruncatedProvider()))
+
+    assert parsed.source == "rules_fallback"
+    assert "AIの入力整理を利用できず、明示された値のみを使用します。" in parsed.warnings
+    assert parsed.request is not None  # explicitly stated values remain usable

@@ -40,6 +40,9 @@ class UsageLedger:
     def __init__(self, store: ProjectStore, project_id: str, account_id: str) -> None:
         self.store, self.project_id, self.account_id = store, project_id, account_id
         self.path = store._path(project_id, "usage", f"{account_id}.json")
+        # Unfreeze audit lives beside, not inside, the v1 ledger so older readers of a
+        # machine-wide ledger keep working and account listings never see it.
+        self.audit_path = store._path(project_id, "usage-audit", f"{account_id}.json")
 
     def create(self, limits: UsageLimits) -> None:
         with self.store.transaction():
@@ -86,6 +89,9 @@ class UsageLedger:
             "estimated_cost_usd": totals["cost_nusd"] / 1_000_000_000,
             "uncertain_calls": uncertain, "coverage": document["coverage"],
             "frozen": document["frozen"],
+            "unfreeze_events": (
+                self.store._read(self.audit_path)["events"] if self.audit_path.exists() else []
+            ),
             "remaining_allowance": {
                 "calls":max(0,document["limits"]["max_calls"]-totals["calls"]),
                 "input_tokens":max(0,document["limits"]["max_input_tokens"]-totals["input_tokens"]),
@@ -173,6 +179,37 @@ class UsageLedger:
             if error_code is not None:
                 receipt["error_code"] = error_code
             self.store._write(self.path, document)
+
+    def unfreeze(self, *, confirm_account_id: str, reason: str) -> dict[str, Any]:
+        """Re-open a frozen account after an operator reviewed why usage exceeded a reservation.
+
+        Recorded spend is kept; only the freeze flag changes, and the event is logged.
+        """
+        if confirm_account_id != self.account_id:
+            raise StorageError("usage_unfreeze_confirmation_mismatch")
+        reason = reason.strip()
+        if not reason or len(reason) > 200:
+            raise StorageError("usage_unfreeze_reason_required")
+        with self.store.transaction():
+            document = self.store._read(self.path)
+            if not document["frozen"]:
+                raise StorageError("usage_account_not_frozen")
+            if any(receipt["status"] == "pending" for receipt in document["receipts"].values()):
+                raise StorageError("usage_unfreeze_pending_reservations")
+            event = {
+                "unfrozen_at": datetime.now(UTC).isoformat(),
+                "reason": reason,
+                "receipt_count": len(document["receipts"]),
+            }
+            audit = (
+                self.store._read(self.audit_path) if self.audit_path.exists()
+                else {"schema_version": 1, "account_id": self.account_id, "events": []}
+            )
+            audit["events"] = [*audit["events"], event]
+            self.store._write(self.audit_path, audit)
+            document["frozen"] = False
+            self.store._write(self.path, document)
+        return event
 
     def cancel_before_provider(self, receipt_id: str) -> None:
         """Release a reservation only when a later local preflight blocked the call."""

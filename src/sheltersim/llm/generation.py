@@ -56,7 +56,9 @@ def generate_initial_needs(
         schema_version=1,
         output_schema=initial_needs_schema(len(scenario.profiles)),
         fallback_text="",
-        max_output_tokens=min(2048, max(128, len(scenario.profiles) * 24)),
+        # About 30 tokens per compact profile entry; leave room for spacing. The router
+        # caps this at SHELTERSIM_LLM_MAX_OUTPUT_TOKENS and adds thinking headroom.
+        max_output_tokens=max(256, len(scenario.profiles) * 48 + 256),
     )
     output = router.complete(task)
     result: Any = json.loads(output)

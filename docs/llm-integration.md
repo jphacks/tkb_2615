@@ -21,6 +21,27 @@ Anthropicへ接続するのはsrc/sheltersim/llm/anthropic_adapter.pyだけで�
 
 構造化responseをparseし、検証します。Provider error、不正形式、rate limit、offline mode、budget超過では、定義済みfallbackを使うか、利用不可を返します。選択された動作と利用量を記録します。
 
+検証器は、Pydanticが生成するschemaで使う構文（`$ref`/`$defs`、`oneOf`、`const`、schemaとして与えた`additionalProperties`、数値・文字列の上下限、`pattern`）を扱います。以前は`$ref`を解決できず、Webの自由文読み取り（region-scenario-extraction-v1）は応答の内容にかかわらず必ず不合格になっていました。
+
+### thinkingと出力上限
+
+runtime以外のstage（準備、介入、review）が使うOpusは、thinkingを無効にできません。thinkingのtokenはAPIの`max_tokens`に含まれます。そのためrouterは、各taskの回答の大きさ（`max_output_tokens`、設定の`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`で上限）に、thinking用の余裕として4,096 tokenを加えて要求し、その分の費用も予約します。準備stageでは`effort: low`を指定し、thinkingを短くします。runtimeのHaikuは従来どおりthinkingを無効にします。
+
+Opus呼出し1回の予約額は、既定設定でtaskの回答上限に応じておよそ$0.2〜0.4になりました（review約$0.26、シナリオ下書き最大約$0.38）。runの予算（`SHELTERSIM_LLM_BUDGET_USD`）がこれより小さいと、Opusの呼出しは`budget_exceeded`としてfallbackします。100人規模のシナリオ下書きは、回答が既定の出力上限（8,192）を超える見込みです。その場合は`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`を上げてください。
+
+web searchのようなserver toolを使う呼出しでは、APIが検索の前後でモデルを複数回実行し、`usage.output_tokens`はその合計になります。予約は「検索回数＋1」回分の`max_tokens`で計算します。実際の使用量が予約を超えると、利用記録は安全のため凍結（frozen）され、以後その記録を共有するすべての有料呼出しが拒否されます。
+
+凍結の原因を確認したら、次のコマンドで解除できます。対象は、PC全体で共有する累積上限の記録（task-global-v1）、CLIの利用枠（cli-…）、legacy demoの利用枠（legacy_demo）です。
+
+~~~shell
+sheltersim usage --unfreeze task-global-v1 --confirm task-global-v1 --reason "確認した理由"
+~~~
+
+- 解除で変わるのは凍結フラグだけで、記録済みの利用量は残ります。未決着（pending）の予約が残っている間は解除できません。
+- 解除した日時・理由・その時点のreceipt数は、利用記録とは別の監査ファイル（usage-audit/）に残ります。usage summaryの`unfreeze_events`に表示されます。
+- 利用記録の形式はv1のままです。PC全体で共有する記録なので、古い版のShelterSimからも引き続き読めます。
+- Project Runの利用枠は、このコマンドの対象外です。
+
 ### fallbackの可視化
 
 fallbackしたtaskはruleの既定値で進むため、その分の結果はofflineと同じになります。API modeのRunが実際にはClaudeの応答を使っていない状態を見落とさないよう、呼出し記録からoutcome集計を作ります。集計はsrc/sheltersim/llm/outcomes.pyの1関数に統一し、model出力本文は読みません。
