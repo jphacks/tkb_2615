@@ -13,8 +13,8 @@ from sheltersim.contracts.policies import selected_models
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import ACTION_LIFECYCLE_POLICY_VERSION
 from sheltersim.domain.agent_dynamics import (
-    AGENT_DYNAMICS_POLICY_VERSION,
     AGENT_DYNAMICS_STATE_KEY,
+    canonical_agent_dynamics_config,
     create_agent_dynamics_state,
     validate_agent_dynamics_state,
 )
@@ -127,7 +127,9 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
             standalone["operator:zone_environment"] = f"{environment.policy_version}@1:state1"
         return standalone
     versions = {
-        AGENT_DYNAMICS_STATE_KEY: AGENT_DYNAMICS_POLICY_VERSION,
+        AGENT_DYNAMICS_STATE_KEY: canonical_agent_dynamics_config(
+            configs.get("agent_dynamics")
+        )["policy_version"],
         POPULATION_DYNAMICS_STATE_KEY: POPULATION_DYNAMICS_POLICY_VERSION,
         SOCIAL_NETWORK_STATE_KEY: SOCIAL_NETWORK_POLICY_VERSION,
         STAFF_DYNAMICS_STATE_KEY: STAFF_DYNAMICS_POLICY_VERSION,
