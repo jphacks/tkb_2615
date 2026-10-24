@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "study_id": "research-model-seven-day-check-a01",
+  "design": "100 synthetic Agents x 10,080 integer-minute ticks; seed 2026; trace and decision artifacts off.",
+  "result": {
+    "variant": "research-full",
+    "seed": 2026,
+    "minute": 10080,
+    "agent_count": 100,
+    "acute_distress_mean": 0.2954379044805351,
+    "acute_distress_p95": 0.6670713364533218,
+    "high_distress_share_ge_0_7": 0.04,
+    "action_records": {},
+    "information_exposure_count": 99,
+    "wrong_belief_count": 2,
+    "correction_exposure_count": 97,
+    "correction_acceptance_count": 96,
+    "toilet_units": 4,
+    "toilet_queue_count": 2,
+    "service_events_applied": 3192,
+    "long_term_distress_mean": 0.12291696859672166,
+    "high_distress_episode_count_ge_0_7": null,
+    "high_distress_longest_run_minutes": null,
+    "high_distress_mean_recovery_minutes": null,
+    "high_distress_reascent_count": null,
+    "social_positive_stress_influence": null,
+    "social_negative_stress_influence_magnitude": null,
+    "toilet_queue_mean_length": 0.2636904761904762,
+    "toilet_queue_person_minutes": 2658,
+    "toilet_wait_mean_minutes_final": 0.8305137844611529,
+    "toilet_wait_max_minutes": 29.0,
+    "toilet_utilization_mean": 0.4767609126984127,
+    "toilet_long_term_planning_shortage_minutes": 10080,
+    "resource_shortage_minutes": null,
+    "scenario_hash": "e918499a32ce29fd9f82aa74dc923a851f8a303a0951de0391ea93b9ac92eb13",
+    "scenario_id": "research-validation-research-full-2026",
+    "model_versions": {
+      "schema_version": 1,
+      "psychology": "mean-reverting-distress-v1",
+      "social": "expressiveness-channel-openness-v1",
+      "information": "evidence-aware-rumor-v1"
+    },
+    "model_state_keys": [
+      "information_spread_v1",
+      "psychological_distress_v1",
+      "social_propagation_v1"
+    ],
+    "checkpoint_state_validation": "WorldState.validate completed during every tick and run finalization"
+  },
+  "interpretation": "Internal completion and invariant check only; no external validation."
+}
