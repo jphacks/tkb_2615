@@ -324,7 +324,9 @@ class RegionResearchService:
                 warnings.append(
                     "GSI避難所データの再取得に失敗したため、プロセス内キャッシュの古いスナップショットを表示しています。"
                 )
-            if not shelter_lookup.complete:
+            # An unresolved or ambiguous municipality is also incomplete; it is reported
+            # in the unknowns, so only actual unreadable rows are warned about here.
+            if shelter_lookup.invalid_record_count:
                 warnings.append(
                     f"GSI避難所CSVで共通ID等を解釈できない行が{shelter_lookup.invalid_record_count}件あり、取得範囲は完全ではありません。"
                 )
