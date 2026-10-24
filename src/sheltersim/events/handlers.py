@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from sheltersim.contracts.operations import NumericStateChange
+from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.care_receipts import (
     care_receipt_for_request,
@@ -17,7 +18,10 @@ from sheltersim.domain.care_receipts import (
     make_staff_support_continuity_record,
 )
 from sheltersim.domain.facilities import ToiletServiceManager, complete_toilet_service
-from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
+from sheltersim.domain.information import (
+    INFORMATION_SPREAD_STATE_KEY,
+    upgrade_information_runtime_state,
+)
 from sheltersim.domain.infrastructure import (
     INFRASTRUCTURE_STATE_KEY,
     ScenarioInfrastructureSpec,
@@ -313,6 +317,7 @@ class InformationRumorHandler:
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         state = _information_runtime_state(world)
+        from sheltersim.contracts.policies import selected_models
         if set(event.payload) != {"message_id", "truth_status", "origin_agent_id"}:
             raise EventApplicationError("information_rumor payload fields do not match")
         if event.source_id is None:
@@ -342,14 +347,27 @@ class InformationRumorHandler:
             origin_agent_id=origin_agent_id,
         )
         state["messages"][message.id] = message.to_dict()
+        config = InformationSpreadConfig.from_mapping(world.model_configs["information_spread"])
+        belief_strength = 0.5
+        if selected_models(world.model_configs)["information"] == "evidence-aware-rumor-v1":
+            belief_strength = _sample_claim_belief_strength(
+                world,
+                config,
+                agent_id=origin_agent_id,
+                source_id=message.source_id,
+                event_id=event.event_id,
+                minute=event.due_minute,
+                message_id=message.id,
+            )
         state["beliefs"][origin_agent_id][message.id] = AgentInformationState(
             message_id=message.id,
             belief=InformationBeliefStatus.HEARD,
             source=origin_agent_id,
             last_contact=event.due_minute,
             last_event_id=event.event_id,
+            belief_strength=belief_strength,
+            ever_misbelieved=_claim_is_misbelieved(message.truth_status, belief_strength),
         ).to_dict()
-        config = InformationSpreadConfig.from_mapping(world.model_configs["information_spread"])
         state["query_pressure"][origin_agent_id] = min(
             1.0,
             state["query_pressure"][origin_agent_id] + config.query_pressure_per_claim,
@@ -362,6 +380,7 @@ class InformationCorrectionHandler:
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         state = _information_runtime_state(world)
+        from sheltersim.contracts.policies import selected_models
         if set(event.payload) != {"message_id", "zone_id", "belief"}:
             raise EventApplicationError("information_correction payload fields do not match")
         if event.source_id is None:
@@ -394,19 +413,47 @@ class InformationCorrectionHandler:
             raise EventApplicationError("information correction conflicts with message truth")
 
         config = InformationSpreadConfig.from_mapping(world.model_configs["information_spread"])
+        evidence_aware = (
+            selected_models(world.model_configs)["information"] == "evidence-aware-rumor-v1"
+        )
+        source_reliability = config.correction_source_reliability_by_id.get(
+            event.source_id, config.default_source_reliability
+        )
         targets = sorted(agent.id for agent in world.agents.values() if agent.zone_id == zone_id)
         changes: list[str] = []
+        acceptances: dict[str, bool] = {}
         for agent_id in targets:
             previous = state["beliefs"][agent_id].get(message_id)
+            prior_state = (
+                AgentInformationState.from_dict(previous) if previous is not None else None
+            )
+            if evidence_aware:
+                trust = world.agents[agent_id].trust
+                probability = min(
+                    0.95,
+                    max(
+                        0.0,
+                        config.correction_acceptance_probability
+                        + 2.0 * config.correction_trust_sensitivity * (trust - 0.5)
+                        + 2.0 * config.correction_source_sensitivity * (source_reliability - 0.5),
+                    ),
+                )
+                acceptances[agent_id] = (
+                    CounterRNG(world.seed).random(
+                        "correction-acceptance-v1", event.due_minute, event.event_id,
+                        agent_id, message_id,
+                    ) < probability
+                )
             if previous is not None:
-                old_belief = AgentInformationState.from_dict(previous).belief
+                old_belief = prior_state.belief
                 if old_belief in (
                     InformationBeliefStatus.VERIFIED,
                     InformationBeliefStatus.REJECTED,
                 ):
                     if old_belief is not belief:
                         raise EventApplicationError("conflicting verified information state")
-                    continue
+                    if not evidence_aware:
+                        continue
             changes.append(agent_id)
         if message.truth_status is InformationTruthStatus.UNKNOWN:
             truth_status = {
@@ -415,18 +462,57 @@ class InformationCorrectionHandler:
             }[belief]
             state["messages"][message_id] = replace(message, truth_status=truth_status).to_dict()
         for agent_id in changes:
+            previous = state["beliefs"][agent_id].get(message_id)
+            previous_state = (
+                AgentInformationState.from_dict(previous) if previous is not None else None
+            )
+            accepted = acceptances.get(agent_id, True)
             state["beliefs"][agent_id][message_id] = AgentInformationState(
                 message_id=message_id,
-                belief=belief,
+                belief=(
+                    belief
+                    if accepted
+                    else previous_state.belief
+                    if previous_state is not None
+                    else InformationBeliefStatus.HEARD
+                ),
                 source=event.source_id,
                 last_contact=event.due_minute,
                 last_event_id=event.event_id,
+                exposed=True,
+                belief_strength=(
+                    (1.0 if belief is InformationBeliefStatus.VERIFIED else 0.0)
+                    if accepted
+                    else previous_state.belief_strength
+                    if previous_state is not None
+                    else 0.5
+                ),
+                share_propensity=(
+                    previous_state.share_propensity if previous_state is not None else 0.5
+                ),
+                correction_exposed=True,
+                correction_accepted=accepted or bool(
+                    previous_state is not None and previous_state.correction_accepted
+                ),
+                last_correction_accepted=accepted,
+                ever_misbelieved=(
+                    bool(previous_state and previous_state.ever_misbelieved)
+                    or (
+                        not accepted
+                        and _claim_is_misbelieved(
+                            message.truth_status,
+                            previous_state.belief_strength if previous_state else 0.5,
+                        )
+                    )
+                ),
+                ever_forgotten=bool(previous_state and previous_state.ever_forgotten),
             ).to_dict()
-            state["query_pressure"][agent_id] = max(
-                0.0,
-                state["query_pressure"][agent_id] - config.query_pressure_relief_per_correction,
-            )
-            state["counters"]["correction_deliveries"] += 1
+            if accepted:
+                state["query_pressure"][agent_id] = max(
+                    0.0,
+                    state["query_pressure"][agent_id] - config.query_pressure_relief_per_correction,
+                )
+                state["counters"]["correction_deliveries"] += 1
 
 
 @dataclass(frozen=True)
@@ -449,10 +535,13 @@ class InformationContactHandler:
             raise EventApplicationError("information contact updates must be endogenous")
         if event.due_minute != world.minute_index:
             raise EventApplicationError("information contact update must run at its due minute")
+        from sheltersim.contracts.policies import selected_models
+
         if (
             event.provenance.get("source_type") != "assumption"
             or event.provenance.get("source_id") != "ASM-INFORMATION-SPREAD-V1"
-            or event.provenance.get("policy_version") != "sparse-information-contact-v1"
+            or event.provenance.get("policy_version")
+            != selected_models(world.model_configs)["information"]
         ):
             raise EventApplicationError(
                 "information contact provenance is missing its assumption ID"
@@ -517,6 +606,9 @@ class InformationContactHandler:
             if truth_belief is not belief:
                 raise EventApplicationError("transmitted correction conflicts with message truth")
 
+        evidence_aware = (
+            selected_models(world.model_configs)["information"] == "evidence-aware-rumor-v1"
+        )
         previous = state["beliefs"][recipient_id].get(message_id)
         if previous is not None:
             previous_belief = AgentInformationState.from_dict(previous).belief
@@ -526,21 +618,103 @@ class InformationContactHandler:
                 InformationBeliefStatus.VERIFIED: 2,
                 InformationBeliefStatus.REJECTED: 2,
             }
-            if rank[previous_belief] >= rank[belief]:
+            if rank[previous_belief] >= rank[belief] and not (
+                evidence_aware
+                and belief
+                in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+            ):
                 raise EventSuppressed("recipient already has an equally strong belief")
+        accepted = True
+        if evidence_aware and belief in (
+            InformationBeliefStatus.VERIFIED,
+            InformationBeliefStatus.REJECTED,
+        ):
+            sender_reliability = config.correction_source_reliability_by_id.get(
+                sender_belief.source, config.default_source_reliability
+            )
+            probability = min(
+                0.95,
+                max(
+                    0.0,
+                    config.correction_acceptance_probability
+                    + 2.0 * config.correction_trust_sensitivity * (recipient.trust - 0.5)
+                    + 2.0 * config.correction_source_sensitivity * (sender_reliability - 0.5),
+                ),
+            )
+            accepted = (
+                CounterRNG(world.seed).random(
+                    "contact-correction-acceptance-v1",
+                    event.due_minute,
+                    event.event_id,
+                    recipient_id,
+                    message_id,
+                )
+                < probability
+            )
+        previous_state = AgentInformationState.from_dict(previous) if previous is not None else None
+        belief_strength = (
+            _sample_claim_belief_strength(
+                world,
+                config,
+                agent_id=recipient_id,
+                source_id=message.source_id,
+                event_id=event.event_id,
+                minute=event.due_minute,
+                message_id=message_id,
+            )
+            if evidence_aware and belief is InformationBeliefStatus.HEARD
+            else previous_state.belief_strength if previous_state else 0.5
+        )
         state["beliefs"][recipient_id][message_id] = AgentInformationState(
             message_id=message_id,
-            belief=belief,
+            belief=(
+                belief
+                if accepted
+                else previous_state.belief
+                if previous_state
+                else InformationBeliefStatus.HEARD
+            ),
             source=sender_id,
             last_contact=event.due_minute,
             last_event_id=event.event_id,
+            exposed=True,
+            belief_strength=(
+                (1.0 if belief is InformationBeliefStatus.VERIFIED else 0.0)
+                if accepted
+                and belief
+                in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+                else belief_strength
+            ),
+            share_propensity=(previous_state.share_propensity if previous_state else 0.5),
+            correction_exposed=(
+                belief in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+                or bool(previous_state and previous_state.correction_exposed)
+            ),
+            correction_accepted=(
+                accepted
+                and belief in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+                or bool(previous_state and previous_state.correction_accepted)
+            ),
+            last_correction_accepted=(
+                accepted
+                if belief in (
+                    InformationBeliefStatus.VERIFIED,
+                    InformationBeliefStatus.REJECTED,
+                )
+                else bool(previous_state and previous_state.last_correction_accepted)
+            ),
+            ever_misbelieved=(
+                bool(previous_state and previous_state.ever_misbelieved)
+                or _claim_is_misbelieved(message.truth_status, belief_strength)
+            ),
+            ever_forgotten=bool(previous_state and previous_state.ever_forgotten),
         ).to_dict()
         if belief is InformationBeliefStatus.HEARD:
             state["query_pressure"][recipient_id] = min(
                 1.0,
                 state["query_pressure"][recipient_id] + config.query_pressure_per_claim,
             )
-        else:
+        elif accepted:
             state["query_pressure"][recipient_id] = max(
                 0.0,
                 state["query_pressure"][recipient_id] - config.query_pressure_relief_per_correction,
@@ -557,7 +731,50 @@ def _information_runtime_state(world: WorldState) -> dict[str, Any]:
     state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
     if not config.enabled or not isinstance(state, dict):
         raise EventApplicationError("information spread is not enabled for this run")
-    return state
+    try:
+        return upgrade_information_runtime_state(state)
+    except ValueError as exc:
+        raise EventApplicationError(f"invalid information-spread state: {exc}") from exc
+
+
+def _claim_is_misbelieved(truth_status: Any, belief_strength: float) -> bool:
+    from sheltersim.domain.models import InformationTruthStatus
+
+    return (
+        truth_status is InformationTruthStatus.TRUE and belief_strength < 0.5
+    ) or (
+        truth_status is InformationTruthStatus.FALSE and belief_strength > 0.5
+    )
+
+
+def _sample_claim_belief_strength(
+    world: WorldState,
+    config: InformationSpreadConfig,
+    *,
+    agent_id: str,
+    source_id: str,
+    event_id: str,
+    minute: int,
+    message_id: str,
+) -> float:
+    """Sample claimed-true belief independently from exposure and sharing."""
+    reliability = config.correction_source_reliability_by_id.get(
+        source_id, config.default_source_reliability
+    )
+    trust = world.agents[agent_id].trust
+    probability = min(
+        1.0,
+        max(
+            0.0,
+            config.rumor_belief_probability
+            + 2.0 * config.rumor_trust_sensitivity * (trust - 0.5)
+            + 2.0 * config.rumor_source_sensitivity * (reliability - 0.5),
+        ),
+    )
+    draw = CounterRNG(world.seed).random(
+        "rumor-belief-acceptance-v1", minute, event_id, agent_id, message_id
+    )
+    return 1.0 if draw < probability else 0.0
 
 
 def _current_information_contact_basis(

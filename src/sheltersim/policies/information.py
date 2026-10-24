@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 from sheltersim.core.rng import KeyedRandom
+from sheltersim.domain.information import upgrade_information_runtime_state
 from sheltersim.domain.models import (
     AgentInformationState,
     InformationBeliefStatus,
@@ -112,6 +114,7 @@ class InformationSpreadPolicy:
         if not self.config.enabled:
             return InformationSpreadResult(deepcopy(dict(runtime_state)), (), ())
         state = deepcopy(dict(runtime_state))
+        upgrade_information_runtime_state(state)
         messages = {
             message_id: TypedMessage.from_dict(raw) for message_id, raw in state["messages"].items()
         }
@@ -225,6 +228,10 @@ class InformationSpreadPolicy:
                     contact_minutes,
                     correction=correction,
                 )
+                probability = min(
+                    1.0,
+                    probability * self._sender_sharing_factor(sender_belief, sender),
+                )
                 selected_transfer = (
                     rng.random(
                         "information-contact-transfer-v1",
@@ -285,6 +292,10 @@ class InformationSpreadPolicy:
         )
         return InformationSpreadResult(state, tuple(proposals), tuple(traces))
 
+    def _sender_sharing_factor(self, belief: AgentInformationState, sender: Any) -> float:
+        """Return a multiplicative propensity; the legacy model shares as before."""
+        return 1.0
+
     def record_support_request(
         self,
         runtime_state: dict[str, Any],
@@ -339,6 +350,56 @@ class InformationSpreadPolicy:
             * basis_factor
             * correction_factor,
         )
+
+
+class EvidenceAwareInformationPolicy(InformationSpreadPolicy):
+    """Separate exposure, belief, sharing, and forgetting as explicit processes."""
+
+    policy_version = "evidence-aware-rumor-v1"
+
+    def update(
+        self,
+        view: WorldView,
+        runtime_state: Mapping[str, Any],
+        rng: KeyedRandom,
+        *,
+        zone_neighbors: Mapping[str, tuple[str, ...]],
+    ) -> InformationSpreadResult:
+        state = deepcopy(dict(runtime_state))
+        decay = self.config.share_propensity_decay_per_minute
+        forget_probability = -math.expm1(-self.config.forgetting_rate_per_minute)
+        for agent_id, agent_beliefs in state["beliefs"].items():
+            for message_id, raw in list(agent_beliefs.items()):
+                belief = AgentInformationState.from_dict(raw)
+                propensity = max(0.0, belief.share_propensity - decay)
+                forget_draw = rng.random(
+                    "information-forgetting-v1", view.minute_index, agent_id, message_id
+                )
+                if forget_draw < forget_probability:
+                    updated = AgentInformationState(
+                        message_id=message_id, belief=InformationBeliefStatus.UNKNOWN,
+                        source=belief.source, last_contact=belief.last_contact,
+                        last_event_id=belief.last_event_id, exposed=True,
+                        belief_strength=belief.belief_strength, share_propensity=0.0,
+                        correction_exposed=belief.correction_exposed,
+                        correction_accepted=belief.correction_accepted,
+                        ever_misbelieved=belief.ever_misbelieved,
+                        ever_forgotten=True,
+                        last_correction_accepted=belief.last_correction_accepted,
+                    )
+                else:
+                    updated = AgentInformationState(
+                        **{**belief.to_dict(), "share_propensity": propensity}
+                    )
+                agent_beliefs[message_id] = updated.to_dict()
+        result = super().update(view, state, rng, zone_neighbors=zone_neighbors)
+        return InformationSpreadResult(
+            result.runtime_state, result.proposals, result.contacts, self.policy_version
+        )
+
+    def _sender_sharing_factor(self, belief: AgentInformationState, sender: Any) -> float:
+        distress_multiplier = 1.0 + self.config.distress_sharing_sensitivity * sender.stress
+        return min(1.0, belief.share_propensity * distress_multiplier)
 
 
 def _contact_buckets(

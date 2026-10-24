@@ -28,6 +28,10 @@ from sheltersim.domain.common_operations import (
     create_shared_operations_state,
     validate_shared_operations_state,
 )
+from sheltersim.domain.facility_awareness import (
+    FACILITY_AWARENESS_POLICY_VERSION,
+    canonical_facility_awareness_config,
+)
 from sheltersim.domain.facility_queues import (
     FACILITY_QUEUES_LEGACY_MODE_KEY,
     FACILITY_QUEUES_POLICY_VERSION,
@@ -63,6 +67,7 @@ from sheltersim.domain.population_lifecycle import (
     create_population_lifecycle_state,
     validate_population_lifecycle_state,
 )
+from sheltersim.domain.psychological_state import LIFE_STATE_PSYCHOLOGY_POLICIES
 from sheltersim.domain.social_network import (
     PROXIMITY_CONTACT_POLICY_VERSION,
     SOCIAL_NETWORK_POLICY_VERSION,
@@ -99,13 +104,15 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         raise ValueError("geometry_overlay requires facility_geometry")
     if "shared_operations" in configs:
         validate_shared_operations_config(configs["shared_operations"])
-    body_policy_enabled = selected_models(configs)["psychology"] == BODY_POLICY_VERSION
+    body_policy_enabled = (
+        selected_models(configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
+    )
     proximity = canonical_proximity_contact_config(configs.get("social_proximity"))
     if proximity is not None and (
         "facility_geometry" not in configs or not body_policy_enabled
     ):
         raise ValueError(
-            "social_proximity requires facility_geometry and life-state-feedback-v1"
+            "social_proximity requires facility_geometry and a life-state psychology policy"
         )
     if (
         not configs.get("simulator_extensions", {}).get("enabled", False)
@@ -114,6 +121,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         and "staff_operations" not in configs
         and "staff_dynamics" not in configs
         and "shared_operations" not in configs
+        and "facility_awareness" not in configs
         and not body_policy_enabled
     ):
         standalone = {
@@ -185,6 +193,17 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
         environment = ScenarioZoneEnvironmentConfig.model_validate(configs["zone_environment"])
         signatures["operator:zone_environment"] = f"{environment.policy_version}@1:state1"
+    if "facility_awareness" in configs:
+        import hashlib
+        import json
+
+        awareness = canonical_facility_awareness_config(configs["facility_awareness"])
+        awareness_hash = hashlib.sha256(
+            json.dumps(awareness, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        signatures["operator:facility_awareness"] = (
+            f"{FACILITY_AWARENESS_POLICY_VERSION}@1:{awareness_hash}"
+        )
     if proximity is not None:
         signatures["operator:social_proximity"] = (
             f"{PROXIMITY_CONTACT_POLICY_VERSION}@1:state1:"
@@ -223,7 +242,10 @@ def _simulator_signature(key: str, version: str) -> str:
 def initialize_simulator_extensions(world: WorldState) -> None:
     """Create opt-in runtime namespaces before initial checkpoint capture."""
     enabled = world.model_configs.get("simulator_extensions", {}).get("enabled", False)
-    body_policy_enabled = selected_models(world.model_configs)["psychology"] == BODY_POLICY_VERSION
+    body_policy_enabled = (
+        selected_models(world.model_configs)["psychology"]
+        in LIFE_STATE_PSYCHOLOGY_POLICIES
+    )
     if (
         not enabled
         and "facility_geometry" not in world.model_configs
@@ -231,11 +253,12 @@ def initialize_simulator_extensions(world: WorldState) -> None:
         and "staff_operations" not in world.model_configs
         and "staff_dynamics" not in world.model_configs
         and "shared_operations" not in world.model_configs
+        and "facility_awareness" not in world.model_configs
         and not body_policy_enabled
     ):
         return
     if "body_dynamics" in world.model_configs and not body_policy_enabled:
-        raise ValueError("body_dynamics config requires the life-state-feedback-v1 psychology policy")
+        raise ValueError("body_dynamics config requires a life-state psychology policy")
     factories = {
         AGENT_DYNAMICS_STATE_KEY: lambda: create_agent_dynamics_state(world),
         POPULATION_DYNAMICS_STATE_KEY: lambda: create_population_dynamics_state(world),
@@ -327,7 +350,10 @@ def simulator_state_catalog() -> dict[str, Any]:
         BODY_STATE_KEY: {
             "schema_version": 1, "implementation_id": BODY_POLICY_VERSION,
             "implementation_version": "3", "entity_kind": "agent",
-            "enabled_by": "policy_registry.psychology=life-state-feedback-v1",
+            "enabled_by": (
+                "policy_registry.psychology=life-state-feedback-v1 "
+                "or mean-reverting-life-state-v1"
+            ),
             "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
             "fields": {"sleep_debt_minutes": {"unit": "minute", "lower": 0, "upper": 1440},
                 **{key: {"unit": "normalized_0_1", "lower": 0, "upper": 1}

@@ -225,6 +225,81 @@
         }
       }
     },
+    "mean-reverting-distress-v1": {
+      "domain": "psychology",
+      "reference": "Kuppens et al. (2010), Emotional Inertia and Psychological Maladjustment, doi:10.1177/0956797610372634; Feelings Change, doi:10.1037/a0020962",
+      "formula": "A(t+dt)=clip[A0+(A(t)-A0)exp(-kappa*dt)+f(t)(1-exp(-kappa*dt))/kappa]; daily D=clip[mu+phi(D-mu)+theta_A(mean(A)-mu)+theta_H(high_fraction)]",
+      "assumption_source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+      "implementation_version": "1",
+      "state_schema_version": 1,
+      "parameters": {
+        "psychology.natural_recovery_rate_per_minute": {
+          "default": 0.01,
+          "unit": "1/minute",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated ShelterSim mean-reversion rate; the literature motivates temporal recovery structure, not this value"
+        },
+        "psychology.natural_recovery_rate_by_agent.*": {
+          "default": {},
+          "unit": "1/minute_by_agent_id",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional assumed individual recovery rate; falls back to the shared rate and is not measured"
+        },
+        "psychology.baseline_distress_by_agent.*": {
+          "default": {},
+          "unit": "normalized_0_1_by_agent_id",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional assumed acute baseline by resident; defaults to zero and is not measured"
+        },
+        "psychology.chronic_retention": {
+          "default": 0.9,
+          "unit": "dimensionless_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated one-day latent-state retention assumption"
+        },
+        "psychology.chronic_acute_weight": {
+          "default": 0.08,
+          "unit": "normalized_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated daily mean acute-load contribution"
+        },
+        "psychology.chronic_high_distress_weight": {
+          "default": 0.02,
+          "unit": "normalized_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated daily high-load-duration contribution"
+        },
+        "psychology.high_distress_threshold": {
+          "default": 0.7,
+          "unit": "normalized_0_1",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Convenience threshold for an internal duration indicator; not a clinical cutoff"
+        }
+      }
+    },
     "bounded-stress-v1": {
       "domain": "psychology",
       "reference": "McEwen (1998), Protective and Damaging Effects of Stress Mediators, doi:10.1056/NEJM199801153380307",
@@ -859,6 +934,27 @@
         }
       }
     },
+    "expressiveness-channel-openness-v1": {
+      "domain": "social",
+      "reference": "Bosse et al. (2013), Modelling collective decision making in groups and crowds, https://link.springer.com/article/10.1007/s10458-012-9201-1; Bosse et al. (2015), Agent-Based Modelling of Emotion Contagion in Groups",
+      "formula": "w_ji = expressiveness_j * channel_ji * openness_i; W_i = sum_j(w_ji); G_i = min(1, lambda*W_i); pair = clip_pair(G_i*w_ji/W_i*(A_j_snapshot-A_i_snapshot)); aggregate = clip_agent(sum(pair)); applied social delta = clip_state(aggregate)",
+      "assumption_source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+      "implementation_version": "1",
+      "state_schema_version": 1,
+      "parameters": {
+        "social_propagation.enabled": {"default": false, "unit": "boolean", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Opt-in experimental social synchrony"},
+        "social_propagation.max_contacts_per_agent": {"default": 3, "unit": "count", "lower": 0, "upper": 16, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Bounded sampled local neighborhood"},
+        "social_propagation.minimum_contact_minutes": {"default": 5, "unit": "minute", "lower": 1, "upper": 10080, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Synthetic eligibility threshold, not measured conversation duration"},
+        "social_propagation.stress_spread_per_minute": {"default": 0.001, "unit": "1/minute", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Uncalibrated coupling rate"},
+        "social_propagation.family_channel_strength": {"default": 1.0, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed family-contact channel weight"},
+        "social_propagation.same_zone_channel_strength": {"default": 0.75, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed same-zone channel weight"},
+        "social_propagation.nearby_zone_channel_strength": {"default": 0.5, "unit": "dimensionless_0_1", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "ShelterSim assumed adjacent-zone channel weight"},
+        "social_propagation.source_expressiveness_by_agent.*": {"default": {}, "unit": "dimensionless_0_1_by_agent_id", "lower": 0, "upper": 1, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "scope": "per_agent_id", "applicability": "Optional assumed sender expressiveness; unspecified residents use neutral value 1"},
+        "social_propagation.cooldown_minutes": {"default": 30, "unit": "minute", "lower": 1, "upper": 10080, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Synthetic repeat-influence bound"},
+        "social_propagation.max_pair_stress_increase": {"default": 0.05, "unit": "normalized_0_1", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Symmetric per-contact change cap"},
+        "social_propagation.max_agent_stress_increase_per_minute": {"default": 0.05, "unit": "normalized_per_minute", "lower": 0, "upper": 0.25, "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1", "evidence_grade": "C", "applicability": "Symmetric per-agent per-minute change cap"}
+      }
+    },
     "degroot-contact-v1": {
       "domain": "social",
       "reference": "DeGroot (1974), Reaching a Consensus, doi:10.1080/01621459.1974.10480137",
@@ -1204,6 +1300,113 @@
           "source_id": "ASM-HAZARD-INFORMATION-V1",
           "evidence_grade": "C",
           "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        }
+      }
+    },
+    "evidence-aware-rumor-v1": {
+      "domain": "information",
+      "reference": "Daley & Kendall (1965), Stochastic Rumours, doi:10.1093/imamat/1.1.42; Nekovee et al. (2007), Theory of rumour spreading in complex social networks",
+      "formula": "local contact hazard multiplied by separate exposure, belief, sharing propensity, and source/trust weighted correction acceptance; experimental adaptation",
+      "assumption_source_id": "ASM-INFORMATION-SPREAD-V1",
+      "parameters": {
+        "information_spread.correction_acceptance_probability": {
+          "default": 0.7,
+          "unit": "probability_per_correction_exposure",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated correction acceptance assumption; source theory does not estimate shelter-specific coefficient"
+        },
+        "information_spread.rumor_belief_probability": {
+          "default": 0.5,
+          "unit": "probability_of_believing_claim_after_exposure",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated prior for a sampled belief, separate from exposure and sharing"
+        },
+        "information_spread.rumor_trust_sensitivity": {
+          "default": 0.2,
+          "unit": "probability_change_per_trust_unit",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated receiver trust response to a claim source"
+        },
+        "information_spread.rumor_source_sensitivity": {
+          "default": 0.2,
+          "unit": "probability_change_per_reliability_unit",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated source reliability response to initial claim exposure"
+        },
+        "information_spread.correction_trust_sensitivity": {
+          "default": 0.2,
+          "unit": "probability_change_per_trust_unit",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated source-trust response assumption"
+        },
+        "information_spread.correction_source_sensitivity": {
+          "default": 0.2,
+          "unit": "probability_change_per_reliability_unit",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated source-reliability response assumption"
+        },
+        "information_spread.default_source_reliability": {
+          "default": 0.7,
+          "unit": "normalized_0_1_source_reliability",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated default for sources without an explicit reliability setting"
+        },
+        "information_spread.correction_source_reliability_by_id.*": {
+          "default": {},
+          "unit": "normalized_0_1_by_source_id",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Operator-specified synthetic source trust values"
+        },
+        "information_spread.distress_sharing_sensitivity": {
+          "default": 0.5,
+          "unit": "share_propensity_multiplier_per_unit_distress",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated distress-to-sharing assumption for local contact only"
+        },
+        "information_spread.forgetting_rate_per_minute": {
+          "default": 0,
+          "unit": "1/minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated exponential forgetting hazard"
+        },
+        "information_spread.share_propensity_decay_per_minute": {
+          "default": 0.002,
+          "unit": "normalized_share_propensity_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-INFORMATION-SPREAD-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated linear decay of willingness to share"
         }
       }
     },
@@ -2065,6 +2268,489 @@
       "implementation_version": "1",
       "state_schema_version": 1,
       "external_validation": false
+    },
+    "mean-reverting-life-state-v1": {
+      "domain": "psychology",
+      "reference": "Kuppens et al. (2010), Emotional Inertia and Psychological Maladjustment, doi:10.1177/0956797610372634; Feelings Change, doi:10.1037/a0020962; body/affect feedback reuses the installed life-state-feedback-v1 assumptions",
+      "formula": "A(t+dt)=clip[A0+(A-A0)exp(-kappa*dt)+F(1-exp(-kappa*dt))/kappa]; F=needs+queues+environment+sleep-debt/uncertainty/discontent/affect feedback; daily D as mean-reverting-distress-v1; direct sleep/rest stress recovery disabled to avoid double counting with sleep-debt/reassurance dynamics",
+      "assumption_source_id": "ASM-MEAN-REVERTING-LIFE-STATE-V1",
+      "implementation_version": "1",
+      "state_schema_version": 1,
+      "parameters": {
+        "psychology.toilet_growth": {
+          "default": 0.001,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.hunger_growth": {
+          "default": 0.0005,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.awake_fatigue_growth": {
+          "default": 0.0008,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.resting_fatigue_recovery": {
+          "default": 0.004,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.sleeping_fatigue_recovery": {
+          "default": 0.01,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.stress_pressure": {
+          "default": 0.012,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.queued_stress": {
+          "default": 0.002,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.support_wait_stress": {
+          "default": 0.001,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.resting_stress_recovery": {
+          "default": 0.003,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.sleeping_stress_recovery": {
+          "default": 0.006,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 0.25,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "psychology.need_pressure_threshold": {
+          "default": 0.35,
+          "unit": "normalized_0_1",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-H04-CAUSAL-STRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Experimental shelter-model coefficient; not empirically calibrated"
+        },
+        "body_dynamics.awake_sleep_debt_minutes_per_minute": {
+          "default": 1.0,
+          "unit": "sleep_debt_minute_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.rest_sleep_debt_recovery_per_minute": {
+          "default": 0.25,
+          "unit": "sleep_debt_minute_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.sleep_sleep_debt_recovery_per_minute": {
+          "default": 1.0,
+          "unit": "sleep_debt_minute_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.sleep_debt_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.uncertainty_drift_per_minute": {
+          "default": 2e-05,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.uncertainty_decay_per_minute": {
+          "default": 5e-05,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.discontent_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.discontent_queue_rate": {
+          "default": 0.0005,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.discontent_relief_per_minute": {
+          "default": 0.0002,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.reassurance_decay_per_minute": {
+          "default": 0.0003,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.positive_affect_decay_per_minute": {
+          "default": 0.0001,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.negative_affect_stress_rate": {
+          "default": 0.001,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.hygiene_growth_per_minute": {
+          "default": 5e-05,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.sanitation_hygiene_growth_per_minute": {
+          "default": 0.0001,
+          "unit": "normalized_per_minute",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.sanitation_stress_rate": {
+          "default": 0.002,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.affect_transfer_rate": {
+          "default": 0.05,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.relationship_trust_gain": {
+          "default": 0.0005,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.relationship_trust_decay_per_day": {
+          "default": 0.002,
+          "unit": "normalized_per_day",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.cooperation_positive_gain": {
+          "default": 0.03,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.cooperation_negative_reduction": {
+          "default": 0.02,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.cooperation_reassurance_gain": {
+          "default": 0.03,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.cooperation_discontent_reduction": {
+          "default": 0.01,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.social_action_affect_transfer": {
+          "default": 0.02,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.complaint_reassurance_gain": {
+          "default": 0.02,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.complaint_discontent_reduction": {
+          "default": 0.01,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.correction_uncertainty_reduction": {
+          "default": 0.05,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.correction_reassurance_gain": {
+          "default": 0.01,
+          "unit": "normalized_coefficient",
+          "lower": 0,
+          "upper": 1,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "external_validation": false,
+          "applicability": "Installed synthetic life-state hypothesis; not empirically calibrated"
+        },
+        "body_dynamics.social_interaction_minutes": {
+          "default": 5,
+          "unit": "minute",
+          "lower": 1,
+          "upper": 1440,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "applicability": "Synthetic interaction duration; not empirically calibrated"
+        },
+        "psychology.toilet_growth_by_agent.*": {
+          "default": {},
+          "unit": "normalized_per_minute",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "applicability": "per-initial-resident experimental toilet-urgency growth; unseen future arrivals use the shared rate; not empirically calibrated",
+          "scope": "per_agent_id"
+        },
+        "psychology.hunger_growth_by_agent.*": {
+          "default": {},
+          "unit": "normalized_per_minute",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "applicability": "per-initial-resident experimental hunger growth; unseen future arrivals use the shared rate; not empirically calibrated",
+          "scope": "per_agent_id"
+        },
+        "psychology.awake_fatigue_growth_by_agent.*": {
+          "default": {},
+          "unit": "normalized_per_minute",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
+          "evidence_grade": "C",
+          "applicability": "per-initial-resident experimental awake fatigue growth; unseen future arrivals use the shared rate; not empirically calibrated",
+          "scope": "per_agent_id"
+        },
+        "psychology.natural_recovery_rate_per_minute": {
+          "default": 0.01,
+          "unit": "1/minute",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated ShelterSim mean-reversion rate; the literature motivates temporal recovery structure, not this value"
+        },
+        "psychology.natural_recovery_rate_by_agent.*": {
+          "default": {},
+          "unit": "1/minute_by_agent_id",
+          "lower": 0.0,
+          "upper": 0.25,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional assumed individual recovery rate; falls back to the shared rate and is not measured"
+        },
+        "psychology.baseline_distress_by_agent.*": {
+          "default": {},
+          "unit": "normalized_0_1_by_agent_id",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "scope": "per_agent_id",
+          "applicability": "Optional assumed acute baseline by resident; defaults to zero and is not measured"
+        },
+        "psychology.chronic_retention": {
+          "default": 0.9,
+          "unit": "dimensionless_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated one-day latent-state retention assumption"
+        },
+        "psychology.chronic_acute_weight": {
+          "default": 0.08,
+          "unit": "normalized_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated daily mean acute-load contribution"
+        },
+        "psychology.chronic_high_distress_weight": {
+          "default": 0.02,
+          "unit": "normalized_per_day",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Uncalibrated daily high-load-duration contribution"
+        },
+        "psychology.high_distress_threshold": {
+          "default": 0.7,
+          "unit": "normalized_0_1",
+          "lower": 0.0,
+          "upper": 1.0,
+          "source_id": "ASM-MEAN-REVERTING-ACUTE-DISTRESS-V1",
+          "evidence_grade": "C",
+          "applicability": "Convenience threshold for an internal duration indicator; not a clinical cutoff"
+        }
+      }
     }
   }
 }

@@ -10,6 +10,7 @@ import bisect
 import json
 import math
 from dataclasses import asdict, dataclass, replace
+from dataclasses import field as dataclass_field
 from typing import Any, Mapping
 
 from sheltersim.core.rng import KeyedRandom
@@ -18,6 +19,8 @@ from sheltersim.policies.psychology import AgentStateDelta
 
 _STATE_SCHEMA_VERSION = 1
 _SOURCE_ID = "ASM-SOCIAL-PROPAGATION-V1"
+_BOSSE_SOURCE_ID = "ASM-BOSSE-AFFECT-CONTAGION-V1"
+_DEGROOT_SOURCE_ID = "ASM-DEGROOT-CONTACT-V1"
 SOCIAL_RUNTIME_STATE_KEY = "social_propagation_v1"
 
 
@@ -33,6 +36,11 @@ class SocialPropagationParameters:
     cooldown_minutes: int = 30
     max_pair_stress_increase: float = 0.05
     max_agent_stress_increase_per_minute: float = 0.05
+    source_expressiveness_by_agent: dict[str, float] = dataclass_field(default_factory=dict)
+    family_channel_strength: float = 1.0
+    same_zone_channel_strength: float = 0.75
+    nearby_zone_channel_strength: float = 0.5
+    source_id: str = _SOURCE_ID
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -62,9 +70,39 @@ class SocialPropagationParameters:
                 or not 0.0 <= value <= 0.25
             ):
                 raise ValueError(f"{name} must be finite and between 0 and 0.25")
+        for name in (
+            "family_channel_strength",
+            "same_zone_channel_strength",
+            "nearby_zone_channel_strength",
+        ):
+            value = getattr(self, name)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0.0 <= value <= 1.0
+            ):
+                raise ValueError(f"{name} must be finite and between 0 and 1")
+        if len(self.source_expressiveness_by_agent) > 10_000 or any(
+            not isinstance(agent_id, str)
+            or not agent_id
+            or type(value) not in (int, float)
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+            for agent_id, value in self.source_expressiveness_by_agent.items()
+        ):
+            raise ValueError("source_expressiveness_by_agent values must be within 0..1")
+        if self.source_id not in {_SOURCE_ID, _BOSSE_SOURCE_ID, _DEGROOT_SOURCE_ID}:
+            raise ValueError("social propagation source_id is not registered")
 
     @classmethod
-    def from_mapping(cls, document: Mapping[str, Any] | None) -> SocialPropagationParameters:
+    def from_mapping(
+        cls,
+        document: Mapping[str, Any] | None,
+        *,
+        source_id: str | None = None,
+    ) -> SocialPropagationParameters:
         """Validate a scenario's social-propagation model configuration."""
         if document is None:
             return cls()
@@ -76,24 +114,39 @@ class SocialPropagationParameters:
         if unknown:
             raise ValueError(f"unknown social_propagation settings: {sorted(unknown)}")
         source_type = document.get("source_type")
-        source_id = document.get("source_id")
+        configured_source = document.get("source_id")
         if source_type is not None and source_type != "assumption":
             raise ValueError("social_propagation source_type must be assumption")
-        if source_id is not None and source_id != _SOURCE_ID:
+        if configured_source is not None and configured_source not in {
+            _SOURCE_ID, _BOSSE_SOURCE_ID, _DEGROOT_SOURCE_ID
+        }:
             raise ValueError("social_propagation source_id does not match its model assumption")
+        if (
+            source_id is not None
+            and configured_source is not None
+            and configured_source not in {source_id, _SOURCE_ID}
+        ):
+            raise ValueError("social_propagation source_id must match the selected social model")
         try:
             values = {key: value for key, value in document.items() if key in allowed}
+            values["source_id"] = source_id or configured_source or _SOURCE_ID
             return cls(**values)
         except TypeError as exc:
             raise ValueError(f"invalid social_propagation settings: {exc}") from exc
 
     def provenance(self) -> dict[str, Any]:
         """Return source classification and the exact active coefficient values."""
+        coefficients = asdict(self)
+        coefficients.pop("source_id", None)
         return {
             "source_type": "assumption",
-            "source_id": _SOURCE_ID,
-            "policy_version": "sparse-family-zone-contact-v1",
-            "coefficients": asdict(self),
+            "source_id": self.source_id,
+            "policy_version": {
+                _SOURCE_ID: "sparse-family-zone-contact-v1",
+                _DEGROOT_SOURCE_ID: "degroot-contact-v1",
+                _BOSSE_SOURCE_ID: "expressiveness-channel-openness-v1",
+            }[self.source_id],
+            "coefficients": coefficients,
             "notes": (
                 "Experimental coefficients for sensitivity analysis; not empirically "
                 "calibrated or validated for real populations."
@@ -112,6 +165,11 @@ class SocialContactTrace:
     cooldown_remaining_minutes: int
     stress_difference: float
     stress_contribution: float
+    influence_weight: float = 0.0
+    aggregate_rate: float = 0.0
+    pre_pair_cap_contribution: float = 0.0
+    pair_cap_contribution: float = 0.0
+    aggregate_scale: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -133,13 +191,20 @@ class SocialPropagationResult:
         if maximum_contacts < 0:
             raise ValueError("maximum_contacts cannot be negative")
         sample = self.contacts[:maximum_contacts]
-        contributions = [item.to_dict() for item in self.contacts if item.stress_contribution != 0.0]
+        contributions = [
+            item.to_dict() for item in self.contacts if item.stress_contribution != 0.0
+        ]
         return {
             "minute_index": minute,
             "policy_version": self.policy_version,
             "selected_contact_count": len(self.contacts),
             "contributing_contact_count": self.contributing_contact_count,
             "total_stress_added": self.total_stress_added,
+            "aggregation": (
+                "snapshot weighted synchrony; pair cap then recipient cap then [0,1] bound"
+                if self.policy_version == "expressiveness-channel-openness-v1"
+                else "legacy directed positive stress propagation"
+            ),
             "truncated_contact_count": len(self.contacts) - len(sample),
             "contacts": [item.to_dict() for item in sample],
             "contributions": contributions,
@@ -298,6 +363,173 @@ class StressPropagationPolicy:
             contacts=tuple(contacts),
             contributing_contact_count=contributing,
             total_stress_added=total_added,
+        )
+
+
+class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
+    """Bosse-inspired bounded affect synchrony over sparse family/zone contacts.
+
+    The cited expressiveness-channel-openness structure motivates the operator. The
+    contact weights and resident sensitivity mapping below remain ShelterSim
+    assumptions; this is not a calibrated implementation of the published model.
+    """
+
+    policy_version = "expressiveness-channel-openness-v1"
+
+    def update(
+        self,
+        view: WorldView,
+        base_deltas: tuple[AgentStateDelta, ...],
+        rng: KeyedRandom,
+        *,
+        zone_neighbors: Mapping[str, tuple[str, ...]],
+        runtime_state: Mapping[str, Any] | None = None,
+    ) -> SocialPropagationResult:
+        sampled = super().update(
+            view,
+            base_deltas,
+            rng,
+            zone_neighbors=zone_neighbors,
+            runtime_state=runtime_state,
+        )
+        if not self.parameters.enabled:
+            return replace(sampled, policy_version=self.policy_version)
+
+        by_recipient: dict[str, list[SocialContactTrace]] = {}
+        for contact in sampled.contacts:
+            if contact.consecutive_contact_minutes >= self.parameters.minimum_contact_minutes:
+                by_recipient.setdefault(contact.recipient_id, []).append(contact)
+
+        previous_cooldowns = _read_runtime_state(runtime_state)[1]
+        cooldowns = {
+            agent_id: due for agent_id, due in previous_cooldowns.items()
+            if due > view.minute_index
+        }
+        output: list[AgentStateDelta] = []
+        contact_traces: list[SocialContactTrace] = []
+        total_shift = 0.0
+        contributing = 0
+        base_by_id = {delta.agent_id: delta for delta in base_deltas}
+        for agent_id in sorted(base_by_id):
+            delta = base_by_id[agent_id]
+            contacts = by_recipient.get(agent_id, [])
+            recipient = view.agents[agent_id]
+            eligible = (
+                contacts
+                if view.minute_index >= previous_cooldowns.get(agent_id, 0)
+                else []
+            )
+            weights: list[float] = []
+            for contact in eligible:
+                sender = view.agents[contact.source_id]
+                expressiveness = self.parameters.source_expressiveness_by_agent.get(
+                    sender.id, 1.0
+                )
+                channel_strength = {
+                    "family": self.parameters.family_channel_strength,
+                    "same_zone": self.parameters.same_zone_channel_strength,
+                    "nearby_zone": self.parameters.nearby_zone_channel_strength,
+                }.get(contact.contact_basis, 0.0)
+                weights.append(
+                    expressiveness * channel_strength * recipient.stress_sensitivity
+                )
+            weight_total = math.fsum(weights)
+            shift = 0.0
+            pair_shifts: list[float] = []
+            raw_pair_shifts: list[float] = []
+            aggregate_rate = 0.0
+            pair_cap_scale = 1.0
+            if weight_total > 0.0:
+                gamma = min(1.0, self.parameters.stress_spread_per_minute * weight_total)
+                aggregate_rate = gamma
+                current = view.agents[agent_id].stress
+                raw_pair_shifts = [
+                    gamma * weight / weight_total
+                    * (view.agents[contact.source_id].stress - current)
+                    for contact, weight in zip(eligible, weights, strict=True)
+                ]
+                pair_shifts = [
+                    max(
+                        -self.parameters.max_pair_stress_increase,
+                        min(self.parameters.max_pair_stress_increase, value),
+                    )
+                    for value in raw_pair_shifts
+                ]
+                raw_shift = math.fsum(pair_shifts)
+                limit = self.parameters.max_agent_stress_increase_per_minute
+                shift = max(-limit, min(limit, raw_shift))
+                shift = max(-delta.stress, min(1.0 - delta.stress, shift))
+                pair_cap_scale = shift / raw_shift if raw_shift else 0.0
+                pair_shifts = [value * pair_cap_scale for value in pair_shifts]
+            updated = min(1.0, max(0.0, delta.stress + shift))
+            output.append(replace(delta, stress=updated))
+            total_shift += shift
+            if shift:
+                contributing += 1
+                cooldowns[agent_id] = view.minute_index + self.parameters.cooldown_minutes
+            eligible_contributions = {
+                (contact.source_id, contact.contact_basis): (
+                    contribution,
+                    weights[index],
+                    aggregate_rate,
+                    raw_pair_shifts[index],
+                    max(
+                        -self.parameters.max_pair_stress_increase,
+                        min(
+                            self.parameters.max_pair_stress_increase,
+                            raw_pair_shifts[index],
+                        ),
+                    ),
+                    pair_cap_scale,
+                )
+                for index, (contact, contribution) in enumerate(
+                    zip(eligible, pair_shifts, strict=True)
+                )
+            }
+            for contact in contacts:
+                source = view.agents[contact.source_id]
+                raw_difference = source.stress - recipient.stress
+                (
+                    contribution,
+                    weight,
+                    contact_gamma,
+                    raw_pair,
+                    pair_capped,
+                    contact_aggregate_scale,
+                ) = eligible_contributions.get(
+                    (contact.source_id, contact.contact_basis),
+                    (0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                )
+                contact_traces.append(
+                    replace(
+                        contact,
+                        stress_difference=raw_difference,
+                        stress_contribution=contribution,
+                        influence_weight=weight,
+                        aggregate_rate=contact_gamma,
+                        pre_pair_cap_contribution=raw_pair,
+                        pair_cap_contribution=pair_capped,
+                        aggregate_scale=contact_aggregate_scale,
+                        cooldown_remaining_minutes=max(
+                            0, cooldowns.get(agent_id, 0) - view.minute_index
+                        ),
+                    )
+                )
+
+        contact_traces.sort(
+            key=lambda item: (item.recipient_id, item.source_id, item.contact_basis)
+        )
+        runtime = dict(sampled.runtime_state)
+        runtime["agent_cooldown_until"] = {
+            agent_id: due for agent_id, due in sorted(cooldowns.items())
+        }
+        return SocialPropagationResult(
+            deltas=tuple(output),
+            runtime_state=runtime,
+            contacts=tuple(contact_traces),
+            contributing_contact_count=contributing,
+            total_stress_added=total_shift,
+            policy_version=self.policy_version,
         )
 
 

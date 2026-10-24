@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from sheltersim.contracts.extensions import ExtensionModel, Identifier
+from sheltersim.domain.psychological_state import LIFE_STATE_PSYCHOLOGY_POLICIES
 
 # Literature motivates operators, not calibrated shelter coefficients.
 MODEL_DEFINITIONS: dict[str, dict[str, Any]] = json.loads(
@@ -139,10 +140,13 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                 or upper is not None and value > upper
             ):
                 raise ValueError(f"behavior.{field} value is outside its Model Catalog bounds")
-    if "affect" in models and models["psychology"] != "life-state-feedback-v1":
+    if "affect" in models and models["psychology"] not in LIFE_STATE_PSYCHOLOGY_POLICIES:
         raise ValueError("affect model requires the installed life-state psychology operator")
     if "body_dynamics" in models:
-        if models["psychology"] != "life-state-feedback-v1" or "body_dynamics" not in configs:
+        if (
+            models["psychology"] not in LIFE_STATE_PSYCHOLOGY_POLICIES
+            or "body_dynamics" not in configs
+        ):
             raise ValueError(
                 "body_dynamics formula selection requires body_dynamics config and life-state psychology"
             )

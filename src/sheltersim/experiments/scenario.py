@@ -22,6 +22,7 @@ from pydantic import (
 from sheltersim.contracts.extensions import validate_scenario_extensions
 from sheltersim.contracts.policies import selected_models
 from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
+from sheltersim.domain.facility_awareness import canonical_facility_awareness_config
 from sheltersim.domain.infrastructure import (
     INFRASTRUCTURE_COMPLETION_EVENT_TYPES,
     INFRASTRUCTURE_MAX_ROUTE_SHIPMENTS,
@@ -54,6 +55,14 @@ _PSYCHOLOGY_AGENT_RATE_FIELDS = (
     "toilet_growth_by_agent",
     "hunger_growth_by_agent",
     "awake_fatigue_growth_by_agent",
+    "natural_recovery_rate_by_agent",
+)
+_PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS = (
+    "natural_recovery_rate_per_minute",
+    "chronic_retention",
+    "chronic_acute_weight",
+    "chronic_high_distress_weight",
+    "high_distress_threshold",
 )
 
 
@@ -206,6 +215,23 @@ class PsychologyModelConfig(ContractModel):
     awake_fatigue_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
         default_factory=dict
     )
+    natural_recovery_rate_per_minute: float | None = Field(
+        default=None, ge=0.0, le=0.25, allow_inf_nan=False
+    )
+    natural_recovery_rate_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
+        default_factory=dict
+    )
+    baseline_distress_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
+        default_factory=dict
+    )
+    chronic_retention: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    chronic_acute_weight: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    chronic_high_distress_weight: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    high_distress_threshold: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def bounded_agent_rates(self) -> PsychologyModelConfig:
@@ -218,6 +244,15 @@ class PsychologyModelConfig(ContractModel):
                 for value in values.values()
             ):
                 raise ValueError(f"{field_name} must contain at most 10000 finite rates in [0, 0.25]")
+        if len(self.baseline_distress_by_agent) > 10_000 or any(
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+            for value in self.baseline_distress_by_agent.values()
+        ):
+            raise ValueError(
+                "baseline_distress_by_agent must contain at most 10000 values in [0, 1]"
+            )
         return self
 
     def to_model_config(self) -> dict[str, Any]:
@@ -225,6 +260,11 @@ class PsychologyModelConfig(ContractModel):
         values = self.model_dump(mode="json")
         for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
             if not values[field_name]:
+                values.pop(field_name)
+        if not values["baseline_distress_by_agent"]:
+            values.pop("baseline_distress_by_agent")
+        for field_name in _PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS:
+            if values[field_name] is None:
                 values.pop(field_name)
         return values
 
@@ -236,6 +276,11 @@ class PsychologyModelConfig(ContractModel):
         )
         for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
             if not values[field_name]:
+                values.pop(field_name)
+        if not values["baseline_distress_by_agent"]:
+            values.pop("baseline_distress_by_agent")
+        for field_name in _PSYCHOLOGY_OPTIONAL_RESEARCH_FIELDS:
+            if values[field_name] is None:
                 values.pop(field_name)
         return values
 
@@ -376,6 +421,23 @@ class ScenarioSpec(ContractModel):
                     )
             if infrastructure_config.dependency_edges and not dependency_nodes:
                 raise ValueError("infrastructure dependency graph cannot be empty")
+        facility_awareness_config: dict[str, Any] | None = None
+        if "facility_awareness" in self.model_configs:
+            try:
+                facility_awareness_config = canonical_facility_awareness_config(
+                    self.model_configs["facility_awareness"]
+                )
+            except ValueError as exc:
+                raise ValueError(f"invalid facility_awareness config: {exc}") from exc
+            facility_ids = {item.id for item in self.facilities}
+            unknown_facility_ids = (
+                set(facility_awareness_config["initial_known_facility_ids"]) - facility_ids
+            )
+            if unknown_facility_ids:
+                raise ValueError(
+                    "facility_awareness.initial_known_facility_ids references unknown "
+                    f"facilities: {sorted(unknown_facility_ids)[:5]}"
+                )
         canonical_model_configs = dict(self.model_configs)
         if "information_spread" in canonical_model_configs:
             canonical_model_configs["information_spread"] = information_config.to_dict()
@@ -387,6 +449,8 @@ class ScenarioSpec(ContractModel):
             canonical_model_configs["zone_environment"] = zone_environment_config.model_dump(
                 mode="json"
             )
+        if facility_awareness_config is not None:
+            canonical_model_configs["facility_awareness"] = facility_awareness_config
         if canonical_model_configs != self.model_configs:
             object.__setattr__(self, "model_configs", canonical_model_configs)
         shipments: dict[str, PlannedEventSpec] = {}
@@ -873,7 +937,7 @@ class ScenarioSpec(ContractModel):
         if "psychology" in self.model_configs:
             config = PsychologyModelConfig.model_validate(self.model_configs["psychology"])
             profile_ids = {profile.id for profile in self.profiles}
-            for field_name in _PSYCHOLOGY_AGENT_RATE_FIELDS:
+            for field_name in (*_PSYCHOLOGY_AGENT_RATE_FIELDS, "baseline_distress_by_agent"):
                 unknown_ids = set(getattr(config, field_name)) - profile_ids
                 if unknown_ids:
                     raise ValueError(

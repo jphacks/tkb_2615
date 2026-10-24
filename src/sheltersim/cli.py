@@ -95,9 +95,19 @@ def build_parser() -> argparse.ArgumentParser:
     usage.add_argument("--confirm", metavar="ACCOUNT_ID", help="repeat the account ID to unfreeze")
     usage.add_argument("--reason", help="why unfreezing is safe (recorded, at most 200 chars)")
 
-    catalog = subparsers.add_parser("model-catalog", help="show installed model equations, sources and limits")
+    catalog = subparsers.add_parser(
+        "model-catalog", help="show installed model equations, sources and limits"
+    )
     catalog.add_argument("--scenario", required=True, type=Path)
-    evaluation = subparsers.add_parser("evaluate-models", help="run an explicitly requested offline paired model/parameter matrix")
+    toilet_diagnostic = subparsers.add_parser(
+        "toilet-diagnostic", help="compare Scenario toilet capacity with planning benchmarks"
+    )
+    toilet_diagnostic.add_argument("--scenario", required=True, type=Path)
+    toilet_diagnostic.add_argument("--phase", choices=("initial", "long-term"), default="initial")
+    evaluation = subparsers.add_parser(
+        "evaluate-models",
+        help="run an explicitly requested offline paired model/parameter matrix",
+    )
     evaluation.add_argument("--scenario", required=True, type=Path)
     evaluation.add_argument("--plan", required=True, type=Path)
     evaluation.add_argument("--output", required=True, type=Path)
@@ -326,13 +336,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             parser.error(f"could not prepare scenario: {exc}")
         return 0
-    if arguments.command in {"model-catalog", "evaluate-models"}:
-        from sheltersim.experiments.validation import EvaluationPlan, evidence_context, evaluate_models
+    if arguments.command in {"model-catalog", "evaluate-models", "toilet-diagnostic"}:
         try:
             scenario = ScenarioSpec.load(arguments.scenario)
             if arguments.command == "model-catalog":
+                from sheltersim.experiments.validation import evidence_context
+
                 result = evidence_context(scenario)
+            elif arguments.command == "toilet-diagnostic":
+                from sheltersim.experiments.sanitation_diagnostics import toilet_planning_diagnostic
+
+                result = toilet_planning_diagnostic(scenario, phase=arguments.phase)
             else:
+                from sheltersim.experiments.validation import EvaluationPlan, evaluate_models
+
                 plan = EvaluationPlan.model_validate(_read_json_object(arguments.plan))
                 sources = _read_json_object(arguments.sources) if arguments.sources else None
                 result = evaluate_models(scenario, plan, arguments.output, source_manifest=sources)

@@ -100,9 +100,14 @@ def parameter_catalog(scenario: ScenarioSpec) -> list[dict[str, Any]]:
     if "support_fairness_minutes" not in raw_staff:
         timeout_minutes = staff_config["unresolved_after_minutes"]
         staff_config["support_fairness_minutes"] = default_support_fairness_minutes(timeout_minutes)
+    models = selected_models(scenario.model_configs)
+    catalog = model_catalog()
     configs: dict[str, Any] = {
         "psychology": PsychologyModelConfig.model_validate(scenario.model_configs.get("psychology", {})).coefficient_values(),
-        "social_propagation": asdict(SocialPropagationParameters.from_mapping(scenario.model_configs.get("social_propagation"))),
+        "social_propagation": asdict(SocialPropagationParameters.from_mapping(
+            scenario.model_configs.get("social_propagation"),
+            source_id=catalog[models["social"]]["assumption_source_id"],
+        )),
         "information_spread": InformationSpreadConfig.from_mapping(scenario.model_configs.get("information_spread")).to_dict(),
         "behavior": {"temperature": 0.2, "decision_interval_minutes": 15, **scenario.model_configs.get("behavior", {})},
         "toilet_service": ToiletServiceConfig.model_validate(
@@ -113,8 +118,6 @@ def parameter_catalog(scenario: ScenarioSpec) -> list[dict[str, Any]]:
     if "resource_service" in scenario.model_configs:
         configs["resource_service"] = ResourceServiceConfig.model_validate(scenario.model_configs["resource_service"]).model_dump(mode="json")
     sources = {"psychology": "ASM-H04-CAUSAL-STRESS-V1", "social_propagation": "ASM-SOCIAL-PROPAGATION-V1", "information_spread": "ASM-INFORMATION-SPREAD-V1", "behavior": "ASM-UTILITY-BEHAVIOR-V1", "toilet_service": "ASM-TOILET-SERVICE-DURATION-V1", "staff": "ASM-STAFF-SUPPORT-LIFECYCLE-V1", "resource_service": "ASM-H02-RESOURCE-SERVICE-V1"}
-    models = selected_models(scenario.model_configs)
-    catalog = model_catalog()
     for domain, name in (("psychology", "psychology"), ("behavior", "behavior"), ("social", "social_propagation"), ("information", "information_spread")):
         sources[name] = catalog[models[domain]]["assumption_source_id"]
     result = []

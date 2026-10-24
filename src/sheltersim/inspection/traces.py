@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,13 @@ class RunArtifactWriter:
         self._llm_calls: list[dict[str, Any]] = []
         self._social_decisions: list[dict[str, Any]] = []
         self._psychology_trace_minute_count = 0
+        self._psychology_hourly_by_agent: dict[tuple[int, str], dict[str, Any]] = {}
+        configured_threshold = PsychologyModelConfig.model_validate(
+            scenario.model_configs.get("psychology", {})
+        ).high_distress_threshold
+        self._high_distress_threshold = (
+            0.7 if configured_threshold is None else configured_threshold
+        )
         self._llm_review: str | None = None
         self._started = False
         self._finalized = False
@@ -112,6 +120,7 @@ class RunArtifactWriter:
         for filename in ("llm_calls.jsonl", "social_decisions.jsonl"):
             (self.output_directory / filename).unlink(missing_ok=True)
         (self.output_directory / "psychology_contributions.jsonl").unlink(missing_ok=True)
+        (self.output_directory / "psychology_contributions_hourly.jsonl").unlink(missing_ok=True)
         (self.output_directory / "information_contacts.jsonl").unlink(missing_ok=True)
         (self.output_directory / "information_spread.json").unlink(missing_ok=True)
         scenario_hash = hashlib.sha256(self.scenario.canonical_json().encode("utf-8")).hexdigest()
@@ -144,7 +153,7 @@ class RunArtifactWriter:
         ).hexdigest()[:16]
         model_assumptions = _model_assumptions(self.scenario, execution_mode=execution_mode)
         self._base_manifest = {
-            "artifact_schema_version": 1,
+            "artifact_schema_version": 2,
             "application_version": __version__,
             "run_id": run_id,
             "scenario_id": self.scenario.id,
@@ -303,7 +312,12 @@ class RunArtifactWriter:
         assert self._spool is not None
         self._spool.append("information_contacts", _sanitize(dict(trace)))
 
-    def record_psychology_trace(self, trace: Mapping[str, Any]) -> None:
+    def record_psychology_trace(
+        self,
+        trace: Mapping[str, Any],
+        *,
+        agent_contributions: Iterable[Mapping[str, Any]] = (),
+    ) -> None:
         """Collect causal stress contributions independently of social traces."""
         self._require_started()
         if self._finalized:
@@ -312,6 +326,93 @@ class RunArtifactWriter:
             return
         self._append_jsonl_line("psychology_contributions.jsonl", _sanitize(dict(trace)))
         self._psychology_trace_minute_count += 1
+        self._accumulate_psychology_contributions(
+            int(trace["minute_index"]), agent_contributions
+        )
+
+    def _accumulate_psychology_contributions(
+        self,
+        minute: int,
+        agent_contributions: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """Retain bounded per-Agent/hour component totals for summary Trace runs."""
+        hour_index = minute // 60
+        for record in agent_contributions:
+            agent_id = record.get("agent_id")
+            if not isinstance(agent_id, str):
+                raise ValueError("psychology contribution Agent ID must be a string")
+            key = (hour_index, agent_id)
+            bucket = self._psychology_hourly_by_agent.get(key)
+            if bucket is None:
+                bucket = {
+                    "hour_index": hour_index,
+                    "agent_id": agent_id,
+                    "first_minute_index": minute,
+                    "last_minute_index": minute,
+                    "sample_count": 0,
+                    "stress_before_total": 0.0,
+                    "stress_after_total": 0.0,
+                    "high_distress_minutes": 0,
+                    "raw_stress_delta_total": 0.0,
+                    "applied_stress_delta_total": 0.0,
+                    "social_stress_delta_total": 0.0,
+                    "component_totals": {},
+                }
+                self._psychology_hourly_by_agent[key] = bucket
+            bucket["last_minute_index"] = minute
+            bucket["sample_count"] += 1
+            stress_before = float(record["stress_before"])
+            stress_after = float(record["stress_after"])
+            bucket["stress_before_total"] += stress_before
+            bucket["stress_after_total"] += stress_after
+            bucket["high_distress_minutes"] += int(
+                stress_after >= self._high_distress_threshold
+            )
+            raw_stress_delta = record.get("raw_stress_delta")
+            bucket["raw_stress_delta_total"] += float(
+                stress_after - stress_before
+                if raw_stress_delta is None
+                else raw_stress_delta
+            )
+            bucket["applied_stress_delta_total"] += stress_after - stress_before
+            bucket["social_stress_delta_total"] += float(
+                record.get("social_stress_delta", 0.0)
+            )
+            components = record.get("component_contributions", {})
+            if not isinstance(components, Mapping):
+                raise ValueError("psychology component contributions must be an object")
+            totals = bucket["component_totals"]
+            for name, amount in components.items():
+                if not isinstance(name, str):
+                    raise ValueError("psychology component name must be a string")
+                totals[name] = totals.get(name, 0.0) + float(amount)
+
+    def _write_psychology_hourly_contributions(self) -> int:
+        if not self._psychology_hourly_by_agent:
+            return 0
+        rows = []
+        for key in sorted(self._psychology_hourly_by_agent):
+            bucket = self._psychology_hourly_by_agent[key]
+            sample_count = bucket["sample_count"]
+            rows.append(
+                {
+                    "schema_version": 1,
+                    "hour_index": bucket["hour_index"],
+                    "first_minute_index": bucket["first_minute_index"],
+                    "last_minute_index": bucket["last_minute_index"],
+                    "agent_id": bucket["agent_id"],
+                    "sample_count": sample_count,
+                    "mean_stress_before": bucket["stress_before_total"] / sample_count,
+                    "mean_stress_after": bucket["stress_after_total"] / sample_count,
+                    "high_distress_minutes": bucket["high_distress_minutes"],
+                    "raw_stress_delta_total": bucket["raw_stress_delta_total"],
+                    "applied_stress_delta_total": bucket["applied_stress_delta_total"],
+                    "social_stress_delta_total": bucket["social_stress_delta_total"],
+                    "component_totals": bucket["component_totals"],
+                }
+            )
+        self._write_jsonl("psychology_contributions_hourly.jsonl", rows)
+        return len(rows)
 
     def write_llm_review(
         self,
@@ -348,6 +449,7 @@ class RunArtifactWriter:
         self._write_jsonl("llm_calls.jsonl", self._llm_calls)
         self._write_jsonl("social_decisions.jsonl", self._social_decisions)
         self._write_jsonl("social_contacts.jsonl", self._spool.records("social_contacts"))
+        psychology_hourly_count = self._write_psychology_hourly_contributions()
         information_state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
         information_summary = None
         if information_state is not None:
@@ -383,6 +485,7 @@ class RunArtifactWriter:
             "social_decision_count": len(self._social_decisions),
             "social_contact_trace_count": self._spool.counts.get("social_contacts", 0),
             "psychology_trace_minute_count": self._psychology_trace_minute_count,
+            "psychology_hourly_agent_summary_count": psychology_hourly_count,
             "metric_snapshot_count": len(self.metrics.snapshots),
             "llm_usage": _llm_usage_summary(self._llm_calls),
         }
@@ -585,13 +688,16 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
     )
     toilet = configs.get("toilet_service", {})
     staff = configs.get("staff", {})
-    social = SocialPropagationParameters.from_mapping(configs.get("social_propagation"))
+    selected = selected_models(configs)
+    installed_catalog = model_catalog()
+    social = SocialPropagationParameters.from_mapping(
+        configs.get("social_propagation"),
+        source_id=installed_catalog[selected["social"]]["assumption_source_id"],
+    )
     information_config = InformationSpreadConfig.from_mapping(configs.get("information_spread"))
     limits = asdict(SocialRuntimeLimits())
     psychology_config = PsychologyModelConfig.model_validate(configs.get("psychology", {}))
     psychology_values = psychology_config.coefficient_values()
-    selected = selected_models(configs)
-    installed_catalog = model_catalog()
     assumptions = {
         "profile_generation": {
             "source_type": "assumption",
@@ -756,6 +862,28 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
                 "action choice odds. Neither is a physical, medical, or crowd prediction"
             ),
         }
+    facility_awareness = configs.get("facility_awareness")
+    if facility_awareness is not None:
+        from sheltersim.domain.facility_awareness import (
+            FACILITY_AWARENESS_POLICY_VERSION,
+            FacilityAwarenessConfig,
+        )
+
+        awareness_config = FacilityAwarenessConfig.model_validate(facility_awareness)
+        assumptions["facility_awareness"] = {
+            "source_type": awareness_config.source_type,
+            "source_id": awareness_config.source_id,
+            "policy_version": FACILITY_AWARENESS_POLICY_VERSION,
+            "initial_known_facility_ids": list(awareness_config.initial_known_facility_ids),
+            "discover_co_located_facilities_on_arrival": (
+                awareness_config.discover_co_located_facilities_on_arrival
+            ),
+            "interpretation": (
+                "entry orientation grants only listed facility IDs; arrival at a facility can "
+                "reveal other facilities in its zone. This is a scenario assumption, not a "
+                "measured information-access rate."
+            ),
+        }
     if information_config.enabled:
         assumptions["information_spread"] = information_config.provenance()
     for domain, config_name in (("social", "social_propagation"), ("information", "information_spread")):
@@ -781,23 +909,30 @@ def _llm_usage_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _sanitize(value: Any, *, field_name: str = "") -> Any:
-    normalized_name = field_name.casefold().replace("-", "_")
-    if (
-        any(marker in normalized_name for marker in _SENSITIVE_FIELDS)
-        or normalized_name == "token"
-        or normalized_name.endswith("_token")
-    ):
+    if field_name and _is_sensitive_field(field_name):
         return "[REDACTED]"
     if isinstance(value, Enum):
         return value.value
-    if isinstance(value, Mapping):
-        return {str(key): _sanitize(item, field_name=str(key)) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize(item) for item in value]
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
+    if type(value) in (bool, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, str):
         if _EMAIL.search(value) or _PHONE.search(value):
             return "[REDACTED]"
         return value
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize(item, field_name=str(key)) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize(item) for item in value]
     return value
+
+
+@lru_cache(maxsize=256)
+def _is_sensitive_field(field_name: str) -> bool:
+    normalized_name = field_name.casefold().replace("-", "_")
+    return (
+        any(marker in normalized_name for marker in _SENSITIVE_FIELDS)
+        or normalized_name == "token"
+        or normalized_name.endswith("_token")
+    )

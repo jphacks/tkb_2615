@@ -506,9 +506,23 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
             transfers.append((actor, actor, "complaint_response", _body_deltas(before, record)))
     elif event.event_type == "information_correction":
         zone_id = payload.get("zone_id")
+        from sheltersim.contracts.policies import selected_models
+        evidence_aware = (
+            selected_models(world.model_configs)["information"] == "evidence-aware-rumor-v1"
+        )
+        information_state = world.model_state.get("information_spread_v1", {})
+        message_id = payload.get("message_id")
         for actor in sorted(
             agent_id for agent_id, agent in world.agents.items() if agent.zone_id == zone_id
         ):
+            if evidence_aware:
+                raw = information_state.get("beliefs", {}).get(actor, {}).get(message_id)
+                if (
+                    raw is None
+                    or raw.get("last_event_id") != event.event_id
+                    or not raw.get("last_correction_accepted", False)
+                ):
+                    continue
             record = state["agents"][actor]
             before = dict(record)
             record["uncertainty"] = _unit(
@@ -526,7 +540,12 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
         duration = payload.get(
             "interaction_duration_minutes", payload.get("contact_minutes")
         )
-        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration > 0:
+        if (
+            isinstance(duration, (int, float))
+            and not isinstance(duration, bool)
+            and math.isfinite(duration)
+            and duration > 0
+        ):
             deltas["contact_duration_minutes"] = float(duration)
         history = state["history"]
         history.append({

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from sheltersim.domain.models import (
     AgentInformationState,
     InformationBeliefStatus,
+    InformationTruthStatus,
     TypedMessage,
     validate_unit_interval,
 )
 
 INFORMATION_SPREAD_STATE_KEY = "information_spread_v1"
-_STATE_SCHEMA_VERSION = 1
+_STATE_SCHEMA_VERSION = 2
 _COUNTER_FIELDS = {
     "contact_attempts",
     "contact_deliveries",
@@ -42,6 +44,38 @@ def create_information_runtime_state(agent_ids: set[str]) -> dict[str, Any]:
     }
 
 
+def upgrade_information_runtime_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v1 persisted beliefs to the v2 cumulative-summary fields in place."""
+    version = state.get("schema_version")
+    if version == _STATE_SCHEMA_VERSION:
+        return state
+    if version != 1:
+        raise ValueError("unsupported information-spread runtime state schema")
+    state["schema_version"] = _STATE_SCHEMA_VERSION
+    for agent_beliefs in state.get("beliefs", {}).values():
+        for message_id, raw_belief in list(agent_beliefs.items()):
+            belief = AgentInformationState.from_dict(raw_belief)
+            message_raw = state.get("messages", {}).get(message_id)
+            message = TypedMessage.from_dict(message_raw) if message_raw is not None else None
+            ever_misbelieved = belief.ever_misbelieved or (
+                message is not None
+                and (
+                    message.truth_status is InformationTruthStatus.TRUE
+                    and belief.belief_strength < 0.5
+                    or message.truth_status is InformationTruthStatus.FALSE
+                    and belief.belief_strength > 0.5
+                )
+            )
+            agent_beliefs[message_id] = replace(
+                belief,
+                ever_misbelieved=ever_misbelieved,
+                ever_forgotten=(
+                    belief.ever_forgotten or belief.belief is InformationBeliefStatus.UNKNOWN
+                ),
+            ).to_dict()
+    return state
+
+
 def validate_information_runtime_state(
     state: Any,
     *,
@@ -60,11 +94,11 @@ def validate_information_runtime_state(
         "counters",
     }
     if not isinstance(state, dict) or set(state) != expected:
-        raise ValueError("information-spread runtime state fields do not match schema v1")
+        raise ValueError("information-spread runtime state fields do not match the schema")
     if (
         not isinstance(state["schema_version"], int)
         or isinstance(state["schema_version"], bool)
-        or state["schema_version"] != _STATE_SCHEMA_VERSION
+        or state["schema_version"] not in {1, _STATE_SCHEMA_VERSION}
     ):
         raise ValueError("unsupported information-spread runtime state schema")
 
@@ -87,11 +121,29 @@ def validate_information_runtime_state(
         if not isinstance(agent_beliefs, dict):
             raise ValueError("Agent information beliefs must be an object")
         for message_id, raw_belief in agent_beliefs.items():
+            if state["schema_version"] == _STATE_SCHEMA_VERSION and (
+                not isinstance(raw_belief, dict)
+                or set(raw_belief)
+                != {
+                    "message_id",
+                    "belief",
+                    "source",
+                    "last_contact",
+                    "last_event_id",
+                    "exposed",
+                    "belief_strength",
+                    "share_propensity",
+                    "correction_exposed",
+                    "correction_accepted",
+                    "ever_misbelieved",
+                    "ever_forgotten",
+                    "last_correction_accepted",
+                }
+            ):
+                raise ValueError("v2 Agent information belief fields do not match schema")
             belief = AgentInformationState.from_dict(raw_belief)
             if message_id not in messages or belief.message_id != message_id:
                 raise ValueError("Agent information belief references an unknown message")
-            if belief.belief is InformationBeliefStatus.UNKNOWN:
-                raise ValueError("unknown beliefs must be represented by absence")
             if belief.last_contact >= duration_minutes:
                 raise ValueError("information contact time is outside the scenario")
             if not isinstance(agent_id, str):
@@ -173,7 +225,7 @@ def validate_information_runtime_state(
 
     counters = state["counters"]
     if not isinstance(counters, dict) or set(counters) != _COUNTER_FIELDS:
-        raise ValueError("information-spread counters do not match schema v1")
+        raise ValueError("information-spread counters do not match the schema")
     for name, value in counters.items():
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"information-spread counter {name} must be non-negative")
@@ -185,23 +237,81 @@ def information_spread_summary(state: Mapping[str, Any], *, agent_count: int) ->
     """Compute explainable reach/correction rates from persisted Agent-message beliefs."""
     messages = state["messages"]
     beliefs = state["beliefs"]
-    reached = sum(len(agent_beliefs) for agent_beliefs in beliefs.values())
-    corrected = sum(
-        1
-        for agent_beliefs in beliefs.values()
-        for belief in agent_beliefs.values()
-        if belief["belief"] in {"verified", "rejected"}
+    exposed_states = [
+        belief for agent_beliefs in beliefs.values() for belief in agent_beliefs.values()
+    ]
+    reached = sum(
+        1 for belief in exposed_states
+        if AgentInformationState.from_dict(belief).belief is not InformationBeliefStatus.UNKNOWN
     )
+    exposed = len(exposed_states)
+    correction_exposures = sum(
+        1
+        for raw_belief in exposed_states
+        if AgentInformationState.from_dict(raw_belief).correction_exposed
+    )
+    correction_acceptances = sum(
+        1
+        for raw_belief in exposed_states
+        if AgentInformationState.from_dict(raw_belief).correction_accepted
+    )
+    wrong_agent_message_pairs: set[tuple[str, str]] = set()
+    ever_wrong_agents: set[str] = set()
+    forgotten_agents: set[str] = set()
+    currently_forgotten_agents: set[str] = set()
+    correction_exposed_agents: set[str] = set()
+    correction_accepted_agents: set[str] = set()
+    currently_wrong_agents: set[str] = set()
+    for agent_id, agent_beliefs in beliefs.items():
+        for raw_belief in agent_beliefs.values():
+            belief = AgentInformationState.from_dict(raw_belief)
+            message = TypedMessage.from_dict(messages[belief.message_id])
+            if belief.ever_misbelieved:
+                ever_wrong_agents.add(agent_id)
+            if belief.ever_forgotten:
+                forgotten_agents.add(agent_id)
+                if belief.belief is InformationBeliefStatus.UNKNOWN:
+                    currently_forgotten_agents.add(agent_id)
+            if belief.correction_exposed:
+                correction_exposed_agents.add(agent_id)
+            if belief.correction_accepted:
+                correction_accepted_agents.add(agent_id)
+            is_wrong = (
+                message.truth_status is InformationTruthStatus.TRUE
+                and belief.belief_strength < 0.5
+            ) or (
+                message.truth_status is InformationTruthStatus.FALSE
+                and belief.belief_strength > 0.5
+            )
+            if is_wrong:
+                ever_wrong_agents.add(agent_id)
+                if belief.belief is not InformationBeliefStatus.UNKNOWN:
+                    wrong_agent_message_pairs.add((agent_id, belief.message_id))
+                    currently_wrong_agents.add(agent_id)
     possible_pairs = agent_count * len(messages)
     reach_rate = reached / possible_pairs if possible_pairs else 0.0
-    correction_rate = corrected / reached if reached else 0.0
+    correction_rate = correction_acceptances / reached if reached else 0.0
     return {
         "message_count": len(messages),
+        "exposure_count": exposed,
         "agent_message_reach_count": reached,
         "possible_agent_message_pairs": possible_pairs,
         "reach_rate": reach_rate,
-        "correction_count": corrected,
+        "correction_count": correction_acceptances,
+        "correction_exposures": correction_exposures,
+        "correction_acceptances": correction_acceptances,
+        "wrong_belief_count": len(wrong_agent_message_pairs),
+        "current_wrong_belief_count": len(currently_wrong_agents),
+        "current_wrong_agent_message_count": len(wrong_agent_message_pairs),
+        "ever_wrong_belief_count": len(ever_wrong_agents),
+        "currently_forgotten_count": len(currently_forgotten_agents),
+        "ever_forgotten_count": len(forgotten_agents),
+        "correction_exposed_agent_count": len(correction_exposed_agents),
+        "correction_accepted_agent_count": len(correction_accepted_agents),
         "correction_rate": correction_rate,
+        "correction_acceptance_rate": (
+            correction_acceptances / correction_exposures if correction_exposures else 0.0
+        ),
         "support_requests": state["counters"]["support_requests"],
         "counters": dict(state["counters"]),
     }
