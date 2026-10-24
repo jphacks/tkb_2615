@@ -13,7 +13,7 @@ from sheltersim.contracts.workspace import DraftInput
 from sheltersim.events.effects import EffectProgram, validate_effect_program
 from sheltersim.experiments.initial_scenario import InitialScenarioBuilder, InitialScenarioRequest
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.llm.accounting import accounted_router
+from sheltersim.llm.accounting import StoredResponseTape, accounted_router
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.natural_language import compile_natural_language, scenario_summary_from_world
 from sheltersim.llm.provider import LLMRouter
@@ -66,8 +66,11 @@ class ProjectWorkspace:
 
     def analysis_router(self, project_id: str, run_id: str, *, operation: str = "questions",
                         branch_id: str | None = None) -> LLMRouter:
+        tape = StoredResponseTape(
+            self.store, self.store._path(project_id, "runs", run_id, "analysis-tape.json")
+        )
         return accounted_router(self.store, project_id, run_id=run_id,
-                                operation=operation, branch_id=branch_id, tape=ResponseTape())
+                                operation=operation, branch_id=branch_id, tape=tape)
 
     def _preparation_account(self, project_id: str, requested: str | None = None) -> str:
         if requested is not None:
@@ -103,8 +106,11 @@ class ProjectWorkspace:
         fields(body, {"text"}, {"request", "estat_stats_data_id", "estat_area_code", "estat_period_code", "estat_category_codes", "selected_shelter_id", "plan_override", "geometry_id", "draft_id", "target_date", "weather_area_code"})
         self.store.project(project_id)
         draft_id = self._preparation_account(project_id, body.get("draft_id"))
+        tape = StoredResponseTape(
+            self.store, self.store._path(project_id, "usage-tapes", f"{draft_id}.json")
+        )
         router = accounted_router(self.store, project_id, account_id=draft_id,
-                                  operation="scenario_prepare", tape=ResponseTape())
+                                  operation="scenario_prepare", tape=tape)
         text = body["text"]
         if not isinstance(text, str):
             raise StorageError("scenario text must be a string")

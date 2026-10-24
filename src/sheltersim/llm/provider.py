@@ -81,6 +81,10 @@ class AnthropicProvider:
                 # These short, schema-bound decisions do not need a reasoning trace.
                 # Haiku can spend a small output budget on thinking and return no text.
                 request["thinking"] = {"type": "disabled"}
+            elif task.stage is LLMStage.PREPARE:
+                # Opus cannot disable thinking; keep it brief for bounded extraction and
+                # synthetic drafting so the answer, not the reasoning, uses the budget.
+                request["output_config"] = {"effort": "low"}
             if task.max_web_searches:
                 request["tools"] = [{
                     "type": "web_search_20250305",
@@ -118,27 +122,42 @@ class AnthropicProvider:
         cache_5m, cache_1h = _cache_creation_tokens(usage)
         server_usage = getattr(usage, "server_tool_use", None)
         search_requests = int(getattr(server_usage, "web_search_requests", 0) or 0)
+        found = [
+            (getattr(citation, "url", ""), getattr(citation, "title", ""),
+             getattr(citation, "cited_text", "") or "")
+            for block in content_blocks
+            for citation in getattr(block, "citations", ()) or ()
+            if getattr(citation, "type", None) == "web_search_result_location"
+        ]
+        # A JSON-only answer rarely carries citations, so also keep the hosted tool's own
+        # results: they are what the search returned, not claims written by the model.
+        for block in response.content:
+            results = (
+                getattr(block, "content", None)
+                if getattr(block, "type", None) == "web_search_tool_result"
+                else None
+            )
+            if isinstance(results, list):  # an error result is a single object
+                found.extend(
+                    (getattr(result, "url", ""), getattr(result, "title", ""), "")
+                    for result in results
+                    if getattr(result, "type", None) == "web_search_result"
+                )
         citations: list[ProviderCitation] = []
         allowed_domains = tuple(domain.casefold() for domain in task.web_search_allowed_domains)
-        for block in content_blocks:
-            for citation in getattr(block, "citations", ()) or ():
-                if getattr(citation, "type", None) != "web_search_result_location":
-                    continue
-                url = getattr(citation, "url", "")
-                title = getattr(citation, "title", "")
-                cited_text = getattr(citation, "cited_text", "") or ""
-                try:
-                    record = ProviderCitation(url=url, title=title, cited_text=cited_text[:500])
-                except (TypeError, ValueError):
-                    continue
-                host = (urlparse(record.url).hostname or "").casefold()
-                if task.max_web_searches and not any(
-                    host == domain or host.endswith("." + domain) for domain in allowed_domains
-                ):
-                    continue
-                citations.append(record)
-                if len(citations) >= 25:
-                    break
+        for url, title, cited_text in found:
+            try:
+                record = ProviderCitation(url=url, title=title, cited_text=cited_text[:500])
+            except (TypeError, ValueError):
+                continue
+            host = (urlparse(record.url).hostname or "").casefold()
+            if task.max_web_searches and not any(
+                host == domain or host.endswith("." + domain) for domain in allowed_domains
+            ):
+                continue
+            if any(existing.url == record.url for existing in citations):
+                continue
+            citations.append(record)
             if len(citations) >= 25:
                 break
         provider_response = ProviderResponse(
@@ -247,7 +266,7 @@ class LLMRouter:
             output_cap = min(
                 task.max_output_tokens or self.settings.max_output_tokens,
                 self.settings.max_output_tokens,
-            )
+            ) + _thinking_headroom(task)
             try:
                 price = self.settings.price_for(model_id)
             except ValueError as exc:
@@ -255,7 +274,7 @@ class LLMRouter:
             reserve = (
                 (1_000_000 if task.max_web_searches else self.settings.max_input_tokens + 256)
                 * price.cache_creation_1h_usd_per_million
-                + output_cap * price.output_usd_per_million
+                + output_reservation_tokens(task, output_cap) * price.output_usd_per_million
             ) / 1_000_000
             reserve += task.max_web_searches * 0.01
             if self.spent_usd + reserve > self.settings.budget_usd:
@@ -470,6 +489,20 @@ class LLMRouter:
         self.records.append(record)
         if self.observer is not None:
             self.observer(record)
+
+
+# Stages other than runtime use models whose thinking cannot be disabled, and thinking
+# tokens count toward max_tokens. Reserve room for them on top of the answer size.
+THINKING_HEADROOM_TOKENS = 4_096
+
+
+def _thinking_headroom(task: LLMTask) -> int:
+    return 0 if task.stage is LLMStage.RUNTIME else THINKING_HEADROOM_TOKENS
+
+
+def output_reservation_tokens(task: LLMTask, max_tokens: int) -> int:
+    """Bound billed output: each server-tool use adds a sampling pass capped at max_tokens."""
+    return max_tokens * (task.max_web_searches + 1)
 
 
 class _CallLimitError(ValueError):

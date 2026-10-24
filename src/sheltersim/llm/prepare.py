@@ -88,7 +88,9 @@ def generate_scenario_draft(
         schema_version=1,
         output_schema=scenario_draft_schema(scenario, max_events=_MAX_GENERATED_EVENTS),
         fallback_text=fallback_text,
-        max_output_tokens=min(8192, max(512, len(ordered_profiles) * 72 + 256)),
+        # About 95 tokens per compact profile slot plus events. The router caps this at
+        # SHELTERSIM_LLM_MAX_OUTPUT_TOKENS and adds thinking headroom.
+        max_output_tokens=max(512, len(ordered_profiles) * 128 + 512),
     )
     response = router.complete(task)
     record = router.records[-1]

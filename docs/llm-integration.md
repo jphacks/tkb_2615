@@ -21,6 +21,34 @@ Anthropicへ接続するのはsrc/sheltersim/llm/anthropic_adapter.pyだけで�
 
 構造化responseをparseし、検証します。Provider error、不正形式、rate limit、offline mode、budget超過では、定義済みfallbackを使うか、利用不可を返します。選択された動作と利用量を記録します。
 
+検証器は、Pydanticが生成するschemaで使う構文（`$ref`/`$defs`、`oneOf`、`const`、schemaとして与えた`additionalProperties`、数値・文字列の上下限、`pattern`）を扱います。以前は`$ref`を解決できず、Webの自由文読み取り（region-scenario-extraction-v1）は応答の内容にかかわらず必ず不合格になっていました。
+
+### 出典候補・report・結果質問の扱い
+
+- 地域情報の公式ドメイン検索は、応答本文の引用に加えて、web searchが返した検索結果そのもの（URLとタイトル）を出典候補にします。JSONだけを返す応答には引用がほとんど付かず、以前は検索が成功しても候補が常に0件でした。候補は許可ドメイン（go.jp、lg.jp）に限り、重複を除いて最大25件です。ページ本文は取得・照合しません。
+- Project Runの完了時は、reportを書き込んでから（生成できなかった場合はその旨を書き込んでから）Runを`completed`にします。画面は`running`から状態が変わった時点で一度だけreportを取得するためです。
+- 利用記録は、同じ依頼（同じ入力・状態・prompt版）に二度課金しません。Webの下書きプレビューとProject Runの分析（report・結果質問）は、採用された応答を`usage-tapes/<draft>.json`と`runs/<run>/analysis-tape.json`に保存し、同じ依頼にはAPIを呼ばずに保存済みの応答を使います。以前は応答を保存していなかったため、同じ依頼を繰り返すと重複として拒否され、ruleの結果になっていました。保存するのは応答だけで、promptは保存しません。連絡先や秘密情報に見える文字列を含む応答は、保存せずにその場限りで使います。介入の自然言語指示（compiler）は、この保存の対象外です。
+- 結果質問では、各根拠の値が記録値の完全な写しである必要があります。数値はJSONの値として、文字列はJSON形式（引用符付き）でもそのままでも受け付けます。丸めた値、型を変えた値、言い換えた文字列は拒否します。
+
+### thinkingと出力上限
+
+runtime以外のstage（準備、介入、review）が使うOpusは、thinkingを無効にできません。thinkingのtokenはAPIの`max_tokens`に含まれます。そのためrouterは、各taskの回答の大きさ（`max_output_tokens`、設定の`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`で上限）に、thinking用の余裕として4,096 tokenを加えて要求し、その分の費用も予約します。準備stageでは`effort: low`を指定し、thinkingを短くします。runtimeのHaikuは従来どおりthinkingを無効にします。
+
+Opus呼出し1回の予約額は、既定設定でtaskの回答上限に応じておよそ$0.2〜0.4になりました（review約$0.26、シナリオ下書き最大約$0.38）。runの予算（`SHELTERSIM_LLM_BUDGET_USD`）がこれより小さいと、Opusの呼出しは`budget_exceeded`としてfallbackします。100人規模のシナリオ下書きは、回答が既定の出力上限（8,192）を超える見込みです。その場合は`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`を上げてください。
+
+web searchのようなserver toolを使う呼出しでは、APIが検索の前後でモデルを複数回実行し、`usage.output_tokens`はその合計になります。予約は「検索回数＋1」回分の`max_tokens`で計算します。実際の使用量が予約を超えると、利用記録は安全のため凍結（frozen）され、以後その記録を共有するすべての有料呼出しが拒否されます。
+
+凍結の原因を確認したら、次のコマンドで解除できます。対象は、PC全体で共有する累積上限の記録（task-global-v1）、CLIの利用枠（cli-…）、legacy demoの利用枠（legacy_demo）です。
+
+~~~shell
+sheltersim usage --unfreeze task-global-v1 --confirm task-global-v1 --reason "確認した理由"
+~~~
+
+- 解除で変わるのは凍結フラグだけで、記録済みの利用量は残ります。未決着（pending）の予約が残っている間は解除できません。
+- 解除した日時・理由・その時点のreceipt数は、利用記録とは別の監査ファイル（usage-audit/）に残ります。usage summaryの`unfreeze_events`に表示されます。
+- 利用記録の形式はv1のままです。PC全体で共有する記録なので、古い版のShelterSimからも引き続き読めます。
+- Project Runの利用枠は、このコマンドの対象外です。
+
 ### fallbackの可視化
 
 fallbackしたtaskはruleの既定値で進むため、その分の結果はofflineと同じになります。API modeのRunが実際にはClaudeの応答を使っていない状態を見落とさないよう、呼出し記録からoutcome集計を作ります。集計はsrc/sheltersim/llm/outcomes.pyの1関数に統一し、model出力本文は読みません。

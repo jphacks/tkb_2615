@@ -33,6 +33,26 @@ def _new_cli_account_id(scope: str) -> str:
     return f"cli-{scope}-{uuid.uuid4().hex}"
 
 
+def _unfreeze_usage_account(account_id: str, *, confirm: str, reason: str) -> dict[str, Any]:
+    from sheltersim.llm.accounting import RUNTIME_ACCOUNTS_PROJECT_ID, runtime_usage_store
+    from sheltersim.storage.usage import (
+        TASK_CAMPAIGN_ACCOUNT_ID,
+        UsageLedger,
+        task_campaign_store,
+    )
+
+    if account_id == TASK_CAMPAIGN_ACCOUNT_ID:
+        store = task_campaign_store()
+    elif account_id.startswith("cli-") or account_id == "legacy_demo":
+        store = runtime_usage_store()
+    else:
+        raise ValueError("only task-global-v1, cli-* and legacy_demo accounts can be unfrozen here")
+    ledger = UsageLedger(store, RUNTIME_ACCOUNTS_PROJECT_ID, account_id)
+    if not ledger.path.exists():
+        raise ValueError("usage account does not exist")
+    return ledger.unfreeze(confirm_account_id=confirm, reason=reason)
+
+
 def _cli_usage_account_path(run_path: Path) -> Path:
     return run_path.parent / f".{run_path.name}.llm-usage-account.json"
 
@@ -61,7 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
     from sheltersim.storage.commands import configure_parser
     configure_parser(subparsers)
 
-    subparsers.add_parser("usage", help="show bounded CLI and legacy-Demo LLM accounting receipts")
+    usage = subparsers.add_parser(
+        "usage", help="show bounded CLI and legacy-Demo LLM accounting receipts"
+    )
+    usage.add_argument(
+        "--unfreeze",
+        metavar="ACCOUNT_ID",
+        help=(
+            "re-open a frozen ledger (task-global-v1, cli-*, or legacy_demo) after reviewing "
+            "why actual usage exceeded its reservation; recorded spend is kept"
+        ),
+    )
+    usage.add_argument("--confirm", metavar="ACCOUNT_ID", help="repeat the account ID to unfreeze")
+    usage.add_argument("--reason", help="why unfreezing is safe (recorded, at most 200 chars)")
 
     catalog = subparsers.add_parser(
         "model-catalog", help="show installed model equations, sources and limits"
@@ -209,7 +241,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command == "usage":
         from sheltersim.llm.accounting import runtime_usage_summary, runtime_usage_store
-        print(_json_text(runtime_usage_summary(runtime_usage_store())))
+        if arguments.unfreeze is None:
+            if arguments.confirm is not None or arguments.reason is not None:
+                parser.error("usage --confirm and --reason require --unfreeze")
+            print(_json_text(runtime_usage_summary(runtime_usage_store())))
+            return 0
+        try:
+            event = _unfreeze_usage_account(
+                arguments.unfreeze, confirm=arguments.confirm or "", reason=arguments.reason or ""
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            parser.error(f"could not unfreeze usage account: {exc}")
+        print(_json_text({"account_id": arguments.unfreeze, "unfreeze_event": event}))
         return 0
     if arguments.command == "project":
         from sheltersim.storage.commands import execute
@@ -286,6 +329,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.output is not None:
                 _write_atomic(arguments.output, output + "\n")
             print(output)
+            if router is not None:
+                warning = fallback_warning(summarize_call_outcomes(router.records))
+                if warning is not None:
+                    print(f"warning: {warning}", file=sys.stderr)
         except (OSError, ValueError, RuntimeError) as exc:
             parser.error(f"could not prepare scenario: {exc}")
         return 0

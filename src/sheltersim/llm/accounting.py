@@ -10,8 +10,13 @@ from sheltersim.contracts.workspace import UsageLimits
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.contracts import LLMAllowanceError, LLMTask, ProviderResponse
-from sheltersim.llm.provider import LLMRouter, Provider
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.llm.provider import (
+    THINKING_HEADROOM_TOKENS,
+    LLMRouter,
+    Provider,
+    output_reservation_tokens,
+)
+from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger, task_campaign_summary
 
 RUNTIME_ACCOUNTS_PROJECT_ID = "runtime-accounts"
@@ -21,7 +26,9 @@ def usage_limits(settings: LLMSettings) -> UsageLimits:
     return UsageLimits(
         max_calls=settings.max_api_calls,
         max_input_tokens=settings.max_api_calls * max(1_000_000, settings.max_input_tokens + 2048),
-        max_output_tokens=settings.max_api_calls * settings.max_output_tokens,
+        # Reservations include the router's thinking headroom on top of each answer cap.
+        max_output_tokens=settings.max_api_calls
+        * (settings.max_output_tokens + THINKING_HEADROOM_TOKENS),
         budget_usd=settings.budget_usd, max_concurrency=settings.max_concurrency,
     )
 
@@ -40,9 +47,10 @@ class AccountedProvider:
         bound = len(task.input_text.encode()) + len(json.dumps(task.output_schema).encode()) + 1024
         price = self.settings.price_for(model_id)
         input_reservation = max(bound, 1_000_000 if task.max_web_searches else 0)
+        output_reservation = output_reservation_tokens(task, max_output_tokens)
         reserve = (
             input_reservation * price.cache_creation_1h_usd_per_million
-            + max_output_tokens * price.output_usd_per_million
+            + output_reservation * price.output_usd_per_million
         ) / 1_000_000 + task.max_web_searches * 0.01
         key = digest({"task": task.cache_key(model_id), "operation": self.operation,
                       "branch_id": self.branch_id})
@@ -55,7 +63,8 @@ class AccountedProvider:
                 campaign_receipt = self.campaign_ledger.reserve(
                     request_key=campaign_key, operation=self.operation,
                     branch_id=self.branch_id, stage=task.stage.value, model_id=model_id,
-                    input_tokens=input_reservation, output_tokens=max_output_tokens, cost_usd=reserve,
+                    input_tokens=input_reservation, output_tokens=output_reservation,
+                    cost_usd=reserve,
                     identity={"scope": "task_campaign", "input_hash": task.input_hash,
                               "state_hash": task.state_hash,
                               "input_usd_per_million": price.input_usd_per_million,
@@ -70,7 +79,7 @@ class AccountedProvider:
             receipt = self.ledger.reserve(
                 request_key=key, operation=self.operation, branch_id=self.branch_id,
                 stage=task.stage.value, model_id=model_id, input_tokens=input_reservation,
-                output_tokens=max_output_tokens, cost_usd=reserve,
+                output_tokens=output_reservation, cost_usd=reserve,
                 identity={"input_hash": task.input_hash, "state_hash": task.state_hash,
                           "prompt_version": task.prompt_version, "schema_version": task.schema_version,
                           "input_usd_per_million": price.input_usd_per_million,
@@ -118,13 +127,13 @@ class AccountedProvider:
                     )
             else:
                 self.ledger.settle(
-                    receipt, input_tokens=input_reservation, output_tokens=max_output_tokens,
+                    receipt, input_tokens=input_reservation, output_tokens=output_reservation,
                     cost_usd=reserve, outcome="uncertain", error_code=code,
                 )
                 if campaign_receipt is not None:
                     self.campaign_ledger.settle(
                         campaign_receipt, input_tokens=input_reservation,
-                        output_tokens=max_output_tokens, cost_usd=reserve,
+                        output_tokens=output_reservation, cost_usd=reserve,
                         outcome="uncertain", error_code=code,
                     )
             raise
@@ -147,6 +156,27 @@ class AccountedProvider:
                 output_tokens=response.output_tokens, cost_usd=cost, outcome="settled",
             )
         return response
+
+
+class StoredResponseTape(ResponseTape):
+    """Accepted replies kept in the Project store for one draft or Run analysis.
+
+    The ledger never pays twice for an identical request, so without the earlier reply a
+    repeated preview or question could only fall back. A tape whose sanitized copy differs
+    (contact-like or secret-like text) stays in memory and is not written.
+    """
+
+    def __init__(self, store: ProjectStore, path: Path) -> None:
+        self._store, self._file = store, path
+        entries = ResponseTape.from_dict(store._read(path)).entries if path.exists() else {}
+        super().__init__(entries=entries)
+
+    def save(self) -> None:
+        document = self.to_dict()
+        if safe_document(document) != document:
+            return
+        with self._store.transaction():
+            self._store._write(self._file, document)
 
 
 def accounted_router(store: ProjectStore, project_id: str, *, run_id: str | None = None,

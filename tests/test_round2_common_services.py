@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -277,8 +278,9 @@ def test_campaign_retains_uncertain_provider_charge_across_store_roots(
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "global-state"))
     project_store = store_at(tmp_path / "project-root")
     local = UsageLedger(project_store, "project", "uncertain")
+    # Output limits leave room for the router's thinking headroom on non-runtime stages.
     local.create(UsageLimits(max_calls=2, max_input_tokens=2_000_000,
-        max_output_tokens=1000, budget_usd=1))
+        max_output_tokens=10_000, budget_usd=1))
     campaign = task_campaign_ledger(project_store)
 
     class TimeoutProvider:
@@ -357,7 +359,7 @@ def test_campaign_settlement_counts_cache_and_hosted_search_fees(
         max_input_tokens=4096, max_output_tokens=128, budget_usd=10,
         cache_path=tmp_path / "unused.json")
     local.create(UsageLimits(max_calls=2, max_input_tokens=2_000_000,
-        max_output_tokens=1000, budget_usd=10))
+        max_output_tokens=10_000, budget_usd=10))
     campaign = task_campaign_ledger(store)
 
     class SearchProvider:
@@ -380,6 +382,39 @@ def test_campaign_settlement_counts_cache_and_hosted_search_fees(
     receipt, _ = campaign.receipt_records({"operation": "region_search"})
     assert receipt[0]["input_tokens"] == 135
     assert receipt[0]["output_tokens"] == 20
+
+
+def test_search_output_over_one_pass_does_not_freeze_ledgers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "global-state"))
+    store = store_at(tmp_path / "projects")
+    settings = LLMSettings(mode="record", api_key="unused", max_api_calls=2,
+        max_input_tokens=4096, max_output_tokens=256, budget_usd=10,
+        cache_path=tmp_path / "unused.json")
+    from sheltersim.llm.accounting import usage_limits
+    local = UsageLedger(store, "project", "search-passes")
+    local.create(usage_limits(settings))
+    campaign = task_campaign_ledger(store)
+
+    class TwoPassSearchProvider:
+        def complete(self, *, max_output_tokens: int, **_kwargs: object) -> ProviderResponse:
+            # Server tools sample before and after the search; usage sums both passes.
+            return ProviderResponse(text='{"ok":true}', model_id="fake", input_tokens=100,
+                output_tokens=max_output_tokens + 253, elapsed_ms=1, web_search_requests=1)
+
+    task = LLMTask(stage=LLMStage.PREPARE, input_text="official search",
+        state_hash="search-state", prompt_version="search-passes-v1",
+        fallback_text='{"ok":false}', max_output_tokens=256,
+        output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}},
+                       "required": ["ok"], "additionalProperties": False},
+        web_search_allowed_domains=("go.jp",), max_web_searches=1)
+    router = LLMRouter(settings, provider=AccountedProvider(TwoPassSearchProvider(), local,
+        settings, "region_search", "main", campaign_ledger=campaign))
+
+    assert router.complete(task) == '{"ok":true}'
+    assert local.summary()["frozen"] is False
+    assert campaign.summary()["frozen"] is False
 
 
 def test_project_preview_accepts_structured_form_without_free_text(
@@ -600,3 +635,87 @@ def test_run_writer_lease_blocks_second_worker_and_preserves_live_status_on_reco
         store.release_run(lease)
     assert ProjectStore(tmp_path).recover_interrupted() == [("project", "run")]
     assert store.run("project", "run")["status"] == "interrupted"
+
+
+def _frozen_ledger(store: ProjectStore, account_id: str) -> UsageLedger:
+    ledger = UsageLedger(store, "project", account_id)
+    ledger.create(UsageLimits(max_calls=2, max_input_tokens=1000, max_output_tokens=1000,
+                              budget_usd=1))
+    receipt = ledger.reserve(request_key="k", operation="review", branch_id=None,
+        stage="review", model_id="m", input_tokens=10, output_tokens=10, cost_usd=0.001)
+    # Actual output above the reservation freezes the account, as a server-tool call did.
+    ledger.settle(receipt, input_tokens=10, output_tokens=20, cost_usd=0.001, outcome="settled")
+    return ledger
+
+
+def test_unfreeze_requires_confirmation_and_keeps_recorded_spend(tmp_path: Path) -> None:
+    store = store_at(tmp_path)
+    ledger = _frozen_ledger(store, "frozen")
+    assert ledger.summary()["frozen"] is True
+    with pytest.raises(StorageError, match="confirmation_mismatch"):
+        ledger.unfreeze(confirm_account_id="other", reason="reviewed")
+    with pytest.raises(StorageError, match="reason_required"):
+        ledger.unfreeze(confirm_account_id="frozen", reason=" ")
+
+    event = ledger.unfreeze(confirm_account_id="frozen", reason="server-tool passes reviewed")
+
+    summary = ledger.summary()
+    assert summary["frozen"] is False
+    assert summary["totals"]["output_tokens"] == 20  # spend history is untouched
+    assert summary["unfreeze_events"] == [event]
+    assert event["receipt_count"] == 1
+    with pytest.raises(StorageError, match="not_frozen"):
+        ledger.unfreeze(confirm_account_id="frozen", reason="again")
+
+
+def test_unfreeze_refuses_pending_reservations(tmp_path: Path) -> None:
+    store = store_at(tmp_path)
+    ledger = _frozen_ledger(store, "busy")
+    document = store._read(ledger.path)
+    document["receipts"]["open"] = {**next(iter(document["receipts"].values())),
+                                    "status": "pending", "pid": os.getpid()}
+    store._write(ledger.path, document)
+
+    with pytest.raises(StorageError, match="pending_reservations"):
+        ledger.unfreeze(confirm_account_id="busy", reason="reviewed")
+
+
+def test_unfreeze_keeps_the_ledger_v1_and_audits_beside_it(tmp_path: Path) -> None:
+    store = store_at(tmp_path)
+    ledger = _frozen_ledger(store, "audited")
+
+    ledger.unfreeze(confirm_account_id="audited", reason="reviewed")
+
+    # Older readers of a machine-wide ledger only accept schema_version 1.
+    assert store._read(ledger.path)["schema_version"] == 1
+    assert "unfreeze_events" not in store._read(ledger.path)
+    assert len(store._read(ledger.audit_path)["events"]) == 1
+    assert [path.name for path in ledger.path.parent.iterdir()] == ["audited.json"]
+
+
+def test_cli_unfreezes_the_campaign_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from sheltersim import cli
+    from sheltersim.storage.usage import TASK_CAMPAIGN_ACCOUNT_ID
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    campaign = task_campaign_ledger()
+    receipt = campaign.reserve(request_key="k", operation="review", branch_id=None,
+        stage="review", model_id="m", input_tokens=10, output_tokens=10, cost_usd=0.001)
+    campaign.settle(receipt, input_tokens=10, output_tokens=20, cost_usd=0.001,
+                    outcome="settled")
+    assert campaign.summary()["frozen"] is True
+
+    with pytest.raises(SystemExit):
+        cli.main(["usage", "--unfreeze", TASK_CAMPAIGN_ACCOUNT_ID, "--confirm", "wrong",
+                  "--reason", "reviewed"])
+    assert campaign.summary()["frozen"] is True
+
+    assert cli.main(["usage", "--unfreeze", TASK_CAMPAIGN_ACCOUNT_ID, "--confirm",
+                     TASK_CAMPAIGN_ACCOUNT_ID, "--reason", "server-tool passes reviewed"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["unfreeze_event"]["reason"] == "server-tool passes reviewed"
+    assert campaign.summary()["frozen"] is False

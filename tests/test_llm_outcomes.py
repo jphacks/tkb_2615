@@ -236,3 +236,149 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path)
     assert status["outcomes"]["fallback_count"] == len(router.records) > 0
     # Reading the status is observational and leaves the branch head unchanged.
     assert store.branch_reference("project", "run", "main").checkpoint_hash == head_before
+
+
+class TruncatedProvider:
+    """Reply with cut-off JSON, as a response stopped at max_tokens would."""
+
+    def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+        del max_output_tokens, timeout_seconds
+        return ProviderResponse(text='{"profiles":[{"profile_index":0,', model_id=model_id,
+                                input_tokens=10, output_tokens=5, elapsed_ms=0.0)
+
+
+def test_prepare_cli_warns_when_scenario_draft_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "scenario.json"
+    source.write_text(_scenario(30).canonical_json(), encoding="utf-8")
+    monkeypatch.setattr(cli, "_cli_accounted_router",
+                        lambda *_args, **_kwargs: _router(TruncatedProvider()))
+    arguments = ["prepare", "--scenario", str(source), "--generate-scenario",
+                 "--output", str(tmp_path / "draft.json")]
+
+    assert cli.main(arguments) == 0
+
+    captured = capsys.readouterr()
+    preview = json.loads(captured.out)
+    assert preview["generation_manifest"]["status"] == "rule_fallback"
+    assert "warning: LLM fallback:" in captured.err and "invalid_output" in captured.err
+
+
+def test_scenario_text_parse_warns_on_rule_fallback() -> None:
+    from sheltersim.llm.region_prepare import parse_scenario_text
+
+    parsed = parse_scenario_text("横浜市で地震が発生。避難者30人、期間は1日。",
+                                 router=_router(TruncatedProvider()))
+
+    assert parsed.source == "rules_fallback"
+    assert "AIの入力整理を利用できず、明示された値のみを使用します。" in parsed.warnings
+    assert parsed.request is not None  # explicitly stated values remain usable
+
+
+def test_project_report_exists_before_the_run_is_marked_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    scenario = _scenario(30)
+    store = ProjectStore(tmp_path)
+    store.create_project("project")
+    saved = store.save_scenario("project", scenario,
+                                approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("project", "run", scenario.id, saved["scenario_version"])
+    TimelineStore(store, "project", "run").record(
+        BranchRuntime.from_world(WorldState.from_scenario(scenario))
+    )
+    report_present_at_completion = []
+    real_set_status = store.set_status
+
+    def spy(project_id, run_id, status):
+        if status == "completed":
+            report = store._path(project_id, "runs", run_id, "branches", "main", "report.json")
+            report_present_at_completion.append(report.exists())
+        return real_set_status(project_id, run_id, status)
+
+    monkeypatch.setattr(store, "set_status", spy)
+    api = ProjectAPI(store, recover=False)
+    try:
+        api.submit("project", "run", "main", 30)
+        for _ in range(600):
+            if store.run("project", "run")["status"] != "running":
+                break
+            time.sleep(0.1)
+    finally:
+        api.close()
+
+    # The UI fetches the report once when the status leaves "running".
+    assert store.run("project", "run")["status"] == "completed"
+    assert report_present_at_completion == [True]
+
+
+def test_stored_tape_reloads_and_never_writes_sensitive_text(tmp_path: Path) -> None:
+    from sheltersim.llm.accounting import StoredResponseTape
+
+    store = ProjectStore(tmp_path)
+    store.create_project("project")
+    path = store._path("project", "usage-tapes", "draft.json")
+    reply = ProviderResponse(text='{"ok":true}', model_id="m", input_tokens=1, output_tokens=1,
+                             elapsed_ms=0.0)
+
+    StoredResponseTape(store, path).put("key", reply)
+    assert StoredResponseTape(store, path).get("key") == reply
+
+    risky = StoredResponseTape(store, store._path("project", "usage-tapes", "risky.json"))
+    risky.put("key", ProviderResponse(text="call 03-1234-5678", model_id="m", input_tokens=1,
+                                      output_tokens=1, elapsed_ms=0.0))
+    assert risky.get("key") is not None  # still usable within this request
+    assert not store._path("project", "usage-tapes", "risky.json").exists()
+
+
+def test_repeated_identical_preview_reuses_the_saved_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from sheltersim.region.models import RegionResearchResult
+    from sheltersim.web import workspace as workspace_module
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls = []
+
+    class ContractProvider:
+        """Return the task's own contract-shaped answer, as an accepted reply."""
+
+        def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+            del max_output_tokens, timeout_seconds
+            calls.append(task.prompt_version)
+            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
+                                    output_tokens=5, elapsed_ms=0.0)
+
+    real_router = workspace_module.accounted_router
+
+    def live_like_router(*args, **kwargs):
+        settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", budget_usd=10.0)
+        router = real_router(*args, **{**kwargs, "settings": settings})
+        router.provider.provider = ContractProvider()  # keep the real usage ledger
+        return router
+
+    monkeypatch.setattr(workspace_module, "accounted_router", live_like_router)
+    store = ProjectStore(tmp_path / "projects")
+    store.create_project("project")
+    api = ProjectAPI(store, recover=False)
+    monkeypatch.setattr(api.workspace.research, "research",
+                        lambda query, **_kwargs: RegionResearchResult(
+                            request=query, researched_at=datetime.now(UTC)))
+    body = {"text": "横浜市で地震が発生。避難者30人、期間は1日。"}
+    try:
+        first = api.workspace.preview("project", body)
+        second = api.workspace.preview("project", body)
+    finally:
+        api.close()
+
+    source = "extraction_source"
+    assert first["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
+    # Before stored tapes, the ledger refused this identical paid request.
+    assert second["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
+    assert second["llm_usage"]["api_request_count"] == 0
+    assert calls == ["region-scenario-extraction-v1"]
