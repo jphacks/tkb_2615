@@ -4,7 +4,7 @@
 
 1. 最新の`main`から、目的を絞ったfeatureブランチを作ります。
 2. チームメイトがレビューできる大きさにPull Requestを保ちます。
-3. 少なくとも1名のチームメイトにレビューを依頼します。永続スキーマ、Checkpoint互換性、モデル動作、Provider安全性、公開HTTP契約の変更は、その境界に詳しい人に確認を依頼します。
+3. 少なくとも1名のチームメイトにレビューを依頼します。
 4. 必須checkとレビューを終えてからPull Request経由で統合します。
 
 `main`へ実装commitを直接pushしないでください。このリポジトリではGitHub branch protectionとPull Request時の自動CIは設定されていません。Actions workflowは手動実行です。トリガーやリポジトリ設定を変える場合は、プロジェクトオーナーと相談してください。
