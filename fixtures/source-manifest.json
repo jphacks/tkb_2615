@@ -1,0 +1,807 @@
+{
+  "schema_version": 1,
+  "source_type_values": [
+    "measured",
+    "literature",
+    "interview",
+    "assumption"
+  ],
+  "accessed_on": "2026-10-11",
+  "sources": [
+    {
+      "id": "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+      "source_type": "literature",
+      "title": "避難所運営等避難生活支援のためのガイドライン（チェックリスト）",
+      "publisher": "内閣府（防災担当）",
+      "edition": "平成28年4月策定、令和6年12月改定",
+      "published_on": "2024-12",
+      "url": "https://www.bousai.go.jp/taisaku/hinanjo/pdf/2412hinanjo_guideline.pdf",
+      "evidence_scope": [
+        "食料・物資管理、トイレ確保・管理、避難者の健康管理、配慮が必要な人への対応を避難所業務として整理",
+        "運営の各段階に必要な業務と連携体制を扱う"
+      ],
+      "limits": "運営上の確認事項を定めるガイドラインであり、個人の心理係数や施設の処理時間を測定した資料ではない。"
+    },
+    {
+      "id": "SRC-CAO-TOILET-GUIDELINE-2024-12",
+      "source_type": "literature",
+      "title": "避難所におけるトイレの確保・管理ガイドライン",
+      "publisher": "内閣府（防災担当）",
+      "edition": "平成28年4月策定、令和6年12月改定",
+      "published_on": "2024-12",
+      "url": "https://www.bousai.go.jp/taisaku/hinanjo/pdf/2412hinanjo_toilet_guideline.pdf",
+      "evidence_scope": [
+        "断水・停電・排水処理設備の破損・既設便器の被害により水洗トイレが利用できなくなる状況を整理",
+        "災害時のトイレ確保、管理、衛生、必要数の計画を扱う"
+      ],
+      "limits": "設備故障をシナリオに含める根拠として使う。故障の確率や一人当たりの所要時間は校正しない。"
+    },
+    {
+      "id": "SRC-CAO-NOTO-SHELTER-INTERVIEWS-2026-03",
+      "source_type": "interview",
+      "title": "令和6年能登半島地震における避難所運営実態調査報告",
+      "publisher": "内閣府政策統括官（防災担当）",
+      "edition": "令和8年3月",
+      "published_on": "2026-03",
+      "url": "https://www.bousai.go.jp/taisaku/hinanjo/pdf/r6notojishin_hinanjo_chousa.pdf",
+      "method": "奥能登4市町の5事例について、自治体職員、住民、NPO等にWeb会議または対面でヒアリング",
+      "evidence_scope": [
+        "避難所運営の主体、運営方法の移行、外部支援、役割分担、成功点と課題の事例"
+      ],
+      "limits": "事例ヒアリングであり、無作為抽出の標本や心理状態の測定ではない。個別事例から頻度や因果効果を推定しない。"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "ASM-DAY3-TOILET-OUTAGE-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/failure_day3.json:scheduled_events",
+      "values": {
+        "due_minute": 2880,
+        "unavailable_facilities": [
+          "toilet_3",
+          "toilet_4"
+        ],
+        "units_out_per_facility": 1
+      },
+      "context_sources": [
+        "SRC-CAO-TOILET-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic stress-test intervention",
+      "notes": "The event tests a documented category of service disruption. Its timing and two-stall magnitude are not claims about a particular disaster."
+    },
+    {
+      "id": "ASM-H00-REGRESSION-OUTAGE-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/h00_small_replay.json:scheduled_events",
+      "values": {
+        "due_minute": 15,
+        "facility_id": "toilet_1",
+        "units_out": 1
+      },
+      "context_sources": [],
+      "calibration_status": "synthetic deterministic regression fixture",
+      "notes": "This event pins the replay contract only; its timing and magnitude are not a shelter or disaster assumption."
+    },
+    {
+      "id": "ASM-H01-TEST-INITIAL-STOCK-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resources.py:initial_stock",
+      "values": {
+        "units": {
+          "water_ml": "integer milliliters",
+          "food_meal_units": "integer meal units"
+        },
+        "warehouse_id": "warehouse-main",
+        "zone_id": "sleeping (optional existing zone)",
+        "source_ids": [
+          "ASM-H01-TEST-INITIAL-STOCK-V1"
+        ]
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic software test input",
+      "notes": "Quantities, warehouse/zone IDs and source IDs exercise inventory accounting only. The contextual source identifies the operational category and does not calibrate a consumption rate, warehouse layout or shelter stock level."
+    },
+    {
+      "id": "ASM-H01-TEST-RESOURCE-OPERATION-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resources.py:scheduled_events",
+      "values": {
+        "operations": [
+          "delivery",
+          "loss",
+          "reserve",
+          "release",
+          "consume"
+        ],
+        "warehouse_id": "warehouse-main (required in each payload)",
+        "audit_balances": [
+          "initial",
+          "delivered",
+          "served",
+          "losses",
+          "remaining",
+          "reserved"
+        ]
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic software test input",
+      "notes": "Event quantities and timing verify deterministic ledger behavior only; they are not empirical distribution or service assumptions."
+    },
+    {
+      "id": "ASM-H01-TEST-RESOURCE-ALLOCATION-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resources.py:resource_reserve",
+      "values": {
+        "reservation_order": "scheduled event sequence then stable event ID",
+        "ownership": "reservation is bound to one stable Agent ID"
+      },
+      "context_sources": [],
+      "calibration_status": "deterministic software contract",
+      "notes": "This assumption defines test event ordering and reservation ownership. It makes no claim about real allocation practice."
+    },
+    {
+      "id": "ASM-H01-TEST-RESOURCE-SERVICE-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resources.py:resource_consume",
+      "values": {
+        "consumption": "serving consumes reserved integer units"
+      },
+      "context_sources": [],
+      "calibration_status": "deterministic software contract",
+      "notes": "The serving quantity is a synthetic ledger test value, not a human intake estimate."
+    },
+    {
+      "id": "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1",
+      "source_type": "assumption",
+      "target": "SocialRuntimeLimits and event-triggered Haiku proposal policy",
+      "model_version": "event-triggered-social-v2",
+      "values": {
+        "stress_threshold": 0.65,
+        "cooldown_minutes": 240,
+        "per_agent_per_day": 3,
+        "global_per_day": 4,
+        "event_delay_minutes": 1,
+        "complaint_wait_minutes": 30
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated model/API-call budget controls",
+      "notes": "These limits select and bound optional model proposals. They are not a claim that a stress score of 0.65 has a validated real-world interpretation."
+    },
+    {
+      "id": "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
+      "source_type": "assumption",
+      "target": "Typed event effects for complaint response, same-group cooperation and information verification",
+      "model_version": "event-triggered-social-v2",
+      "values": {
+        "complaint_acknowledgement_stress_delta": -0.02,
+        "complaint_acknowledgement_trust_delta": 0.01,
+        "staff_process_explanation_stress_delta": -0.01,
+        "staff_process_explanation_trust_delta": 0.01,
+        "practical_information_trust_delta": 0.005,
+        "mutual_support_stress_delta_per_agent": -0.02,
+        "mutual_support_trust_delta_per_agent": 0.01,
+        "information_verification_changes_belief": false,
+        "information_verification_query_pressure_delta": "configured query_pressure_per_claim, capped at 1.0"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated synthetic effect hypotheses",
+      "notes": "These fixed effects make the event path testable; they are not measured estimates of human response. No generated dialogue or claim content is treated as fact."
+    },
+    {
+      "id": "ASM-SIMPLE-PSYCHOLOGY-RATES-V1",
+      "source_type": "assumption",
+      "target": "SimplePsychologyPolicy.parameters",
+      "model_version": "simple-psychology-v1",
+      "values": {
+        "toilet_growth": 0.001,
+        "hunger_growth": 0.0005,
+        "hydration_growth": 0.0,
+        "awake_fatigue_growth": 0.0008,
+        "resting_fatigue_recovery": 0.004,
+        "sleeping_fatigue_recovery": 0.01,
+        "stress_pressure": 0.012,
+        "queued_stress": 0.002,
+        "resting_stress_recovery": 0.003,
+        "sleeping_stress_recovery": 0.006,
+        "need_pressure_threshold": 0.35
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+        "SRC-CAO-NOTO-SHELTER-INTERVIEWS-2026-03"
+      ],
+      "calibration_status": "uncalibrated hypothesis",
+      "notes": "Sources establish operational context only. They provide no normalized individual stress or need time series for estimating these rates."
+    },
+    {
+      "id": "ASM-H04-CAUSAL-STRESS-V1",
+      "source_type": "assumption",
+      "target": "PsychologyModelConfig and model_configs.psychology",
+      "model_version": "causal-stress-v1",
+      "values": {
+        "toilet_growth": 0.001,
+        "hunger_growth": 0.0005,
+        "awake_fatigue_growth": 0.0008,
+        "resting_fatigue_recovery": 0.004,
+        "sleeping_fatigue_recovery": 0.01,
+        "stress_pressure": 0.012,
+        "queued_stress": 0.002,
+        "support_wait_stress": 0.001,
+        "resting_stress_recovery": 0.003,
+        "sleeping_stress_recovery": 0.006,
+        "need_pressure_threshold": 0.35
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated sensitivity coefficients; per-scenario configurable",
+      "notes": "Need pressure, queue wait and staff support wait are reported as separate direct contributions. Coefficients are bounded software hypotheses and are not clinical estimates or fitted to interview data."
+    },
+    {
+      "id": "ASM-SOCIAL-PROPAGATION-V1",
+      "source_type": "assumption",
+      "target": "SocialPropagationParameters and model_configs.social_propagation",
+      "model_version": "sparse-family-zone-contact-v1",
+      "values": {
+        "enabled_by_default": false,
+        "max_contacts_per_agent": 3,
+        "minimum_contact_minutes": 5,
+        "stress_spread_per_minute": 0.001,
+        "natural_recovery_per_minute": 0.0005,
+        "cooldown_minutes": 30,
+        "max_pair_stress_increase": 0.05,
+        "max_agent_stress_increase_per_minute": 0.05,
+        "contact_bases": [
+          "family",
+          "same-zone",
+          "adjacent-zone"
+        ],
+        "coefficients": {
+          "enabled": false,
+          "max_contacts_per_agent": 3,
+          "minimum_contact_minutes": 5,
+          "stress_spread_per_minute": 0.001,
+          "natural_recovery_per_minute": 0.0005,
+          "cooldown_minutes": 30,
+          "max_pair_stress_increase": 0.05,
+          "max_agent_stress_increase_per_minute": 0.05
+        }
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated experimental sensitivity model",
+      "notes": "The cited public sources do not measure contact-mediated stress transmission. All coefficients are invented for bounded software behavior tests and must not be read as empirical psychological effects."
+    },
+    {
+      "id": "ASM-SPACE-AND-STAFF-CAPACITY-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/*:zones, zone_edges, facilities, staff",
+      "values": {
+        "baseline_agents": 100,
+        "staff": 5,
+        "working_toilet_units": 4,
+        "synthetic_zone_edge_travel_minutes": 1,
+        "travel_time_semantics": "positive integer minutes supplied per zone edge; not measured walking speed",
+        "routing_policy": "shortest total declared edge travel time; stable edge-ID tie-break",
+        "display_coordinates": "presentation-only; never used in route calculation"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+        "SRC-CAO-NOTO-SHELTER-INTERVIEWS-2026-03"
+      ],
+      "calibration_status": "illustrative fixture values",
+      "notes": "These counts and travel times are fixture inputs, not recommendations or estimates of a real shelter."
+    },
+    {
+      "id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+      "source_type": "assumption",
+      "target": "StaffService and staff model_configs",
+      "model_version": "staff-support-fifo-aging-v2",
+      "values": {
+        "support_task_minutes": 10,
+        "unresolved_after_minutes": 90,
+        "support_cooldown_minutes": 30,
+        "support_fairness_minutes": 30,
+        "assignment_order": "priority requests first; ordinary requests are promoted after the configured wait and FIFO ordered by request minute then stable request ID; staff IDs break qualification ties"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12",
+        "SRC-CAO-NOTO-SHELTER-INTERVIEWS-2026-03"
+      ],
+      "calibration_status": "uncalibrated operational assumption",
+      "notes": "Sources describe staff roles and coordination, not request resolution duration, cooldown, or a validated fairness threshold. These values are experiment controls, not staffing guidance. Requests with no skill-qualified staff remain pending until their configured timeout; the run records the request-minute exposure."
+    },
+    {
+      "id": "ASM-SYNTHETIC-PROFILES-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/baseline_100_7d.json:provenance.profile_generation",
+      "model_version": "synthetic-balanced-v1",
+      "values": {
+        "generator": "counter-rng-profile-generator-v1",
+        "rng_algorithm": "sha256-keyed-v1",
+        "template": {
+          "agent_id_prefix": "A",
+          "assisted_weight": 0.15,
+          "fatigue_max": 1.0,
+          "fatigue_min": 0.0,
+          "group_id_prefix": "G",
+          "group_size": 4,
+          "hunger_max": 1.0,
+          "hunger_min": 0.0,
+          "id_width": 3,
+          "independent_weight": 0.8,
+          "initial_zone_ids": [
+            "sleeping"
+          ],
+          "stress_sensitivity_max": 1.0,
+          "stress_sensitivity_min": 0.0,
+          "support_need_max": 0.6,
+          "support_need_min": 0.0,
+          "template_id": "synthetic-balanced-v1",
+          "toilet_urgency_max": 1.0,
+          "toilet_urgency_min": 0.0,
+          "wheelchair_weight": 0.05
+        },
+        "sampling": {
+          "mobility": "categorical according to the template weights",
+          "numeric_attributes": "independent keyed uniform values within each configured inclusive range",
+          "group_assignment": "stable groups of template.group_size in generated profile order"
+        }
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic; not fitted to individuals or a shelter census",
+      "notes": "Template values and distributions are synthetic construction choices. Context sources identify operational needs only; they do not establish these distributions."
+    },
+    {
+      "id": "ASM-SYNTHETIC-ZONE-DISPLAY-V1",
+      "source_type": "assumption",
+      "target": "Saved-run Inspector fallback map projection",
+      "model_version": "inspector-zone-grid-v1",
+      "values": {
+        "sort": "zone ID ascending",
+        "grid_columns": 4,
+        "x_origin": 80,
+        "x_step": 140,
+        "y_origin": 80,
+        "y_step": 110,
+        "coordinates_available_x_range": [
+          80,
+          640
+        ],
+        "coordinates_available_y_range": [
+          55,
+          275
+        ]
+      },
+      "context_sources": [],
+      "calibration_status": "presentation-only deterministic layout",
+      "notes": "Synthetic coordinates are for display only and do not imply physical distance, adjacency or travel time."
+    },
+    {
+      "id": "ASM-TOILET-SERVICE-DURATION-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/*:model_configs.toilet_service",
+      "model_version": "toilet-service-uniform-v1",
+      "values": {
+        "distribution": "discrete uniform, inclusive bounds",
+        "minimum_minutes": 4,
+        "maximum_minutes": 8,
+        "policy_version": "toilet-service-uniform-v1"
+      },
+      "context_sources": [
+        "SRC-CAO-TOILET-GUIDELINE-2024-12",
+        "SRC-CAO-NOTO-SHELTER-INTERVIEWS-2026-03"
+      ],
+      "calibration_status": "uncalibrated operational assumption",
+      "notes": "The sources do not report sampled per-use service durations; the interval must not be described as measured."
+    },
+    {
+      "id": "ASM-UTILITY-BEHAVIOR-V1",
+      "source_type": "assumption",
+      "target": "UtilityBehaviorPolicy and fixtures/scenarios/*:model_configs.behavior",
+      "model_version": "utility-softmax-v1",
+      "values": {
+        "temperature": 0.2,
+        "default_decision_interval_minutes": 15,
+        "fixture_decision_interval_minutes": 60,
+        "utility_weights": {
+          "wait": {
+            "intercept": 0.1,
+            "distress": -0.15
+          },
+          "request_toilet": {
+            "intercept": 0.2,
+            "toilet_urgency": 0.9,
+            "urgent_priority_threshold": 0.8,
+            "priority_bonus": 0.5
+          },
+          "rest": {
+            "intercept": 0.1,
+            "fatigue": 0.45,
+            "hunger": 0.2,
+            "stress": 0.3
+          },
+          "sleep": {
+            "intercept": 0.25,
+            "fatigue": 0.9
+          },
+          "seek_help": {
+            "intercept": 0.15,
+            "distress": 0.65,
+            "support_need": 0.25,
+            "trust": 0.1,
+            "urgent_priority_threshold": 0.8,
+            "priority_bonus": 0.5
+          }
+        },
+        "eligibility_triggers": {
+          "wait": "always",
+          "request_toilet": "toilet_urgency >= 0.25",
+          "rest": "fatigue >= 0.25 or hunger >= 0.70 or stress >= 0.50",
+          "sleep": "fatigue >= 0.65",
+          "seek_help": "support_need >= 0.25 and max(toilet_urgency, hunger, fatigue, stress) >= 0.50"
+        },
+        "distress": "max(toilet_urgency, hunger, fatigue, stress)",
+        "choice": "keyed-random softmax over eligible candidates; priorities add 0.5 before softmax"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "uncalibrated rule baseline",
+      "notes": "All weights, thresholds, intervals and priorities are rule assumptions; they are not estimated from interviews or measurements."
+    },
+    {
+      "id": "ASM-PRIORITY-RULE-BEHAVIOR-V1",
+      "source_type": "assumption",
+      "target": "PriorityRuleBehaviorPolicy and model_configs.behavior.policy=priority-rule-v1",
+      "model_version": "priority-rule-v1",
+      "values": {
+        "candidate_eligibility_and_utility": "shared with UtilityBehaviorPolicy",
+        "selection_order": [
+          "highest urgency priority",
+          "highest utility",
+          "keyed random choice for exact ties only"
+        ],
+        "candidate_choice_does_not_mutate_world": true
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated deterministic rule alternative",
+      "notes": "The ordering and shared utility values are software assumptions for sensitivity comparison. They do not predict real human choices or claim that priority is a preferred outcome."
+    },
+    {
+      "id": "ASM-ZONE-ROUTING-V1",
+      "source_type": "assumption",
+      "target": "ShortestTravelTimePolicy and ScenarioSpec.zone_edges",
+      "model_version": "shortest-travel-time-v1",
+      "values": {
+        "route_cost": "sum of declared edge travel_minutes",
+        "tie_break": "stable edge IDs",
+        "fixture_edge_travel_minutes": 1,
+        "closed_edges": "excluded"
+      },
+      "context_sources": [],
+      "calibration_status": "illustrative graph inputs and deterministic algorithm",
+      "notes": "Travel minutes are explicit fixture inputs. This is not a calibrated walking-speed or mobility-time estimate."
+    },
+    {
+      "id": "ASM-A05-ROUTE-EDIT-V1",
+      "source_type": "assumption",
+      "target": "SetZoneEdgeCommand and capacity-aware ZoneGraph routing for edited layout branches",
+      "model_version": "a05-route-edit-v1",
+      "values": {
+        "route_cost": "sum of declared edge travel_minutes",
+        "tie_break": "stable edge IDs",
+        "capacity_key": "max_agents_in_transit_by_edge",
+        "capacity_semantics": "maximum agents with a pending travel task on an edge",
+        "capacity_full": "search an alternate route; otherwise record zone_edge_capacity_wait",
+        "maximum_capacity": 100,
+        "facility_reachability": "every zone must retain a route to every facility"
+      },
+      "context_sources": [],
+      "calibration_status": "synthetic user-editable route and capacity assumptions",
+      "notes": "Edge travel minutes and transit capacities are explicit synthetic inputs, not measured walking speeds, facility flow rates or real shelter movement estimates."
+    },
+    {
+      "id": "ASM-H02-RESOURCE-SERVICE-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resource_service.py:ScenarioSpec v3 model_configs.resource_service",
+      "model_version": "resource-service-v1",
+      "values": {
+        "service_minutes": 2,
+        "water_ml_per_service": 250,
+        "food_meal_units_per_service": 1,
+        "hydration_growth_per_minute": 0.02,
+        "hydration_action_threshold": 0.25,
+        "hunger_action_threshold": 0.7,
+        "hydration_relief": 0.35,
+        "hunger_relief": 0.5,
+        "water_utility_base": 0.18,
+        "water_utility_need_weight": 1.0,
+        "meal_utility_base": 0.18,
+        "meal_utility_need_weight": 0.85,
+        "water_staff_skill": "water_service",
+        "meal_staff_skill": "meal_service",
+        "staff_per_service": 1,
+        "start_phase": 5,
+        "completion_phase": 1,
+        "queue_order": "request minute then stable Agent ID",
+        "cancellation": "release reservation once; suppress stale completion"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic software test inputs and uncalibrated operational hypotheses",
+      "notes": "The operational source establishes the category of resource and service management only. Service time, resource quantities, need growth/relief, action thresholds/utilities, queue order and staff rules are implementation assumptions. The test quantities are not recommended stock levels or intake estimates."
+    },
+    {
+      "id": "ASM-H02-TEST-INITIAL-STOCK-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resource_service.py:initial_stock",
+      "values": {
+        "warehouse_id": "warehouse-h02",
+        "zone_id": "toilet",
+        "water_ml": 1000,
+        "food_meal_units": 4,
+        "source_ids": [
+          "ASM-H02-TEST-INITIAL-STOCK-V1"
+        ]
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic software test stock only",
+      "notes": "These quantities exercise H02 reservation and consumption paths only. The operational source identifies resource management as a task and does not support these inventory values."
+    },
+    {
+      "id": "ASM-H02-QUEUE-STALLS-V1",
+      "source_type": "assumption",
+      "target": "tests/test_resource_service.py:queue stall and retry cases",
+      "model_version": "resource-service-v1",
+      "values": {
+        "stall_reasons": [
+          "capacity",
+          "staff",
+          "stock",
+          "run_end"
+        ],
+        "queue_policy": "retain FIFO head and retry next tick",
+        "fixture_run_end": "service due minute must be less than duration_minutes"
+      },
+      "context_sources": [],
+      "calibration_status": "deterministic software contract",
+      "notes": "Stall reasons, retry order and run-end behavior specify software observability and make no empirical claim about real queue policy or service availability."
+    },
+    {
+      "id": "ASM-H03-OPERATIONAL-EVENTS-V1",
+      "source_type": "assumption",
+      "target": "operational_events_v1 and tests/test_operational_events.py",
+      "model_version": "operational-events-v1",
+      "values": {
+        "payloads": "strict exact field sets",
+        "shipment_delay": "move pending delivery forward; preserve event ID and sequence",
+        "water_outage": "block new water-service starts only; active services finish",
+        "staff_unavailable": "release interrupted resource reservations once; requeue at prior FIFO arrival",
+        "stale_completion": "suppressed",
+        "water_outage_service_stall_reason": "water_outage",
+        "event_trace": "retain source_id and causation_id for applied, failed, and suppressed records"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "deterministic software contract; no operational calibration",
+      "notes": "The operational source establishes only that resource and outage management are relevant shelter operations. Event timing, IDs, outage targets, staff availability intervals, and queue behavior in tests are synthetic assumptions, not measured availability or response-time evidence. A water outage does not directly add stress; unmet need follows the opted-in need policy."
+    },
+    {
+      "id": "ASM-H03-TEST-STOCK-V1",
+      "source_type": "assumption",
+      "target": "tests/test_operational_events.py:initial_stock",
+      "values": {
+        "warehouse_id": "warehouse-h03-test",
+        "zone_id": "toilet",
+        "water_ml": 1000,
+        "food_meal_units": 5,
+        "source_ids": [
+          "ASM-H03-TEST-STOCK-V1"
+        ]
+      },
+      "context_sources": [],
+      "calibration_status": "synthetic test inventory only",
+      "notes": "These stock amounts exercise event, checkpoint, and service contracts. They are not a recommended shelter inventory or a human consumption estimate."
+    },
+    {
+      "id": "ASM-H03-TEST-EVENT-TIMING-V1",
+      "source_type": "assumption",
+      "target": "tests/test_operational_events.py:scheduled_events",
+      "values": {
+        "duration_minutes": 45,
+        "shipment_delay_minutes": [
+          5,
+          20
+        ],
+        "water_outage_minutes": [
+          0,
+          3
+        ],
+        "staff_unavailability_minutes": [
+          1,
+          5
+        ],
+        "stall_reason": "water_outage"
+      },
+      "context_sources": [],
+      "calibration_status": "synthetic deterministic test schedule",
+      "notes": "These times and the outage stall reason verify deterministic event and retry behavior only; they do not describe real delivery, outage, or staffing timelines."
+    },
+    {
+      "id": "ASM-H05-OPERATIONAL-CAPACITY-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/{baseline_multi_operational,multi_operational,water_outage,water_intervention,delivery_delay,delivery_intervention}.json:facilities and staff",
+      "model_version": "h05-operational-demo-v1",
+      "values": {
+        "water_station_capacity": 1,
+        "meal_distribution_capacity": 1,
+        "water_service_staff": 1,
+        "meal_service_staff": 1,
+        "total_staff": 5,
+        "profiles": 100,
+        "duration_minutes": 10080
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic deterministic demo input; no operational calibration",
+      "notes": "Facility, staffing, population and duration values define a frozen demonstrator. The public guideline motivates studying resource and staff operations but does not establish these capacities or ratios."
+    },
+    {
+      "id": "ASM-H05-OPERATIONAL-STOCK-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/{baseline_multi_operational,multi_operational,water_outage,water_intervention,delivery_delay,delivery_intervention}.json:initial_stock and planned resource_delivery events",
+      "model_version": "resource-ledger-v1",
+      "values": {
+        "warehouse_id": "warehouse-h05",
+        "initial_water_ml": 5000000,
+        "initial_food_meal_units": 120,
+        "day2_delivery_water_ml": 2000000,
+        "day2_delivery_food_meal_units": 1000,
+        "emergency_food_intervention_meal_units": 600
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic scenario quantities; not recommendations or consumption estimates",
+      "notes": "Stock values are selected to exercise ledger conservation, arrival delays, and queue response. They are not measured demand, safe minimum stock, or a recommended inventory."
+    },
+    {
+      "id": "ASM-H05-OPERATIONAL-SCHEDULE-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/{baseline_multi_operational,multi_operational,water_outage,water_intervention,delivery_delay,delivery_intervention}.json:scheduled_events",
+      "model_version": "h05-operational-demo-v1",
+      "values": {
+        "seed": 2026,
+        "delivery_due_minute": 1440,
+        "delay_requested_minute": 720,
+        "delayed_delivery_minute": 5760,
+        "water_outage_minute": 4320,
+        "water_restoration_minute": 5040,
+        "emergency_food_delivery_minute": 2880
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "synthetic event schedule; no empirical timing or causal effect calibration",
+      "notes": "The times and intervention sizes create inspectable software test paths only. The operational guidance gives context for supply and water continuity, not these event timings or measured effects."
+    },
+    {
+      "id": "ASM-H05-INTERVENTION-V1",
+      "source_type": "assumption",
+      "target": "fixtures/scenarios/{water_intervention,delivery_intervention}.json:intervention events",
+      "model_version": "h05-operational-demo-v1",
+      "values": {
+        "water_restoration_minute": 5040,
+        "emergency_food_delivery_minute": 2880,
+        "emergency_food_meal_units": 600
+      },
+      "context_sources": [],
+      "calibration_status": "synthetic intervention setting; not a real-world effect estimate",
+      "notes": "Typed intervention events restore a specific water outage or add food inventory to one new scenario run. KPI changes remain observations of one assumed simulation seed."
+    },
+    {
+      "id": "ASM-INFORMATION-SPREAD-V1",
+      "source_type": "assumption",
+      "target": "InformationSpreadConfig, InformationSpreadPolicy and model_configs.information_spread",
+      "model_version": "sparse-information-contact-v1",
+      "values": {
+        "enabled_by_default": false,
+        "max_contacts_per_agent": 2,
+        "minimum_contact_minutes": 2,
+        "contact_duration_scale_minutes": 5,
+        "base_transmission_probability": 0.2,
+        "correction_transmission_multiplier": 1.25,
+        "trust_sensitivity": 0.5,
+        "family_contact_multiplier": 1.5,
+        "adjacent_zone_contact_multiplier": 0.5,
+        "query_pressure_per_claim": 0.5,
+        "query_pressure_decay_per_minute": 0.002,
+        "query_pressure_relief_per_correction": 0.5,
+        "query_threshold": 0.45,
+        "query_utility_weight": 0.8,
+        "maximum_messages_per_run": 1024
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated experimental software assumptions",
+      "notes": "Contact and inquiry coefficients provide bounded, deterministic test behavior only. They do not estimate how frequently real people share or believe information, seek help, or respond to corrections. Simulation-side claim truth is separate from Agent belief."
+    },
+    {
+      "id": "ASM-A07-SENSITIVITY-CASES-V1",
+      "source_type": "assumption",
+      "target": "scripts/run_model_sensitivity.py and docs/model-sensitivity-a07.json",
+      "model_version": "a07-paired-sensitivity-v1",
+      "values": {
+        "agent_count": 100,
+        "duration_minutes": 10080,
+        "simulation_seeds": [
+          3,
+          4,
+          5
+        ],
+        "cases": [
+          "H04 stress_pressure 0.0 versus 0.012",
+          "social_propagation enabled false versus true",
+          "information base_transmission_probability 0.0 versus 0.2"
+        ],
+        "profile_generation_seed": 2026,
+        "paired_design": "one parameter varies per case; all other inputs are held fixed"
+      },
+      "context_sources": [
+        "SRC-CAO-SHELTER-GUIDELINE-2024-12"
+      ],
+      "calibration_status": "reproducible synthetic software sensitivity protocol; not empirical calibration",
+      "notes": "The guideline supplies operational context only. Sensitivity values and the false-claim event schedule are software assumptions, selected before inspecting outcomes and never tuned to produce a preferred result. Three paired seeds provide descriptive variation, not a confidence interval or evidence about real shelter outcomes."
+    },
+    {
+      "id": "ASM-BOUNDED-STRESS-V1",
+      "source_type": "assumption",
+      "target": "src/sheltersim/policies/alternatives.py",
+      "model_version": "bounded-stress-v1",
+      "values": {
+        "formula": "stress + (1-stress)*(1-exp(-pressure)) - stress*(1-exp(-recovery)); experimental adaptation",
+        "coefficients": "ScenarioSpec model_configs; shared baseline parameter schemas"
+      },
+      "context_sources": [],
+      "conceptual_reference": "McEwen (1998), Protective and Damaging Effects of Stress Mediators, doi:10.1056/NEJM199801153380307",
+      "calibration_status": "not empirically calibrated; literature-inspired operator adaptation",
+      "notes": "Experimental shelter adaptation, not measured. The reference motivates an operator, not the numerical coefficients or real-world validity."
+    },
+    {
+      "id": "ASM-DEGROOT-CONTACT-V1",
+      "source_type": "assumption",
+      "target": "src/sheltersim/policies/alternatives.py",
+      "model_version": "degroot-contact-v1",
+      "values": {
+        "formula": "stress + alpha * mean(neighbor stress - stress); sparse sampled adaptation",
+        "coefficients": "ScenarioSpec model_configs; shared baseline parameter schemas"
+      },
+      "context_sources": [],
+      "conceptual_reference": "DeGroot (1974), Reaching a Consensus, doi:10.1080/01621459.1974.10480137",
+      "calibration_status": "not empirically calibrated; literature-inspired operator adaptation",
+      "notes": "Experimental shelter adaptation, not measured. The reference motivates an operator, not the numerical coefficients or real-world validity."
+    },
+    {
+      "id": "ASM-HAZARD-INFORMATION-V1",
+      "source_type": "assumption",
+      "target": "src/sheltersim/policies/alternatives.py",
+      "model_version": "hazard-information-v1",
+      "values": {
+        "formula": "p=1-exp(-baseline transmission propensity); experimental hazard operator",
+        "coefficients": "ScenarioSpec model_configs; shared baseline parameter schemas"
+      },
+      "context_sources": [],
+      "conceptual_reference": "Daley & Kendall (1965), Stochastic Rumours, doi:10.1093/imamat/1.1.42",
+      "calibration_status": "not empirically calibrated; literature-inspired operator adaptation",
+      "notes": "Experimental shelter adaptation, not measured. The reference motivates an operator, not the numerical coefficients or real-world validity."
+    }
+  ]
+}
