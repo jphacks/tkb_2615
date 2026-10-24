@@ -184,6 +184,7 @@ class ProjectWorkspace:
         result["facility_design"] = design_record
         result["geometry_hash"] = digest(design_record["geometry"]) if design_record else None
         result["preview_id"] = self._cache({"usage_account_id": draft_id, "kind": "scenario", "project_id": project_id, "scenario": scenario, "can_start": draft.can_start, "hash": approval_hash,
+            "approval_blockers": list(draft.approval_blockers),
             "facility_design": design_record, "request": request.model_dump(mode="json"), "research": research_record})
         return result
 
@@ -234,8 +235,12 @@ class ProjectWorkspace:
         except (TypeError, ValueError) as exc:
             raise StorageError(f"household_correction_invalid: {exc}") from exc
         updated_hash = digest(json.loads(corrected.canonical_json()))
+        # Drafts saved before blockers were recorded cannot show which other
+        # blockers still apply, so they are refused rather than read as clear.
+        if not isinstance(preview.get("approval_blockers"), list):
+            raise StorageError("household_correction_stale_preview: generate a fresh Scenario preview")
         blockers = [
-            item for item in preview.get("approval_blockers", [])
+            item for item in preview["approval_blockers"]
             if not item.startswith("同居世帯内の年齢・支援情報から保護者を確認できない未成年者が")
         ]
         context = corrected.model_configs.get("population_context", {}).get("people", {})

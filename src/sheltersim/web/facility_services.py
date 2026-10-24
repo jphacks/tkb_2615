@@ -110,6 +110,7 @@ def facility_preview(workspace: Any, project_id: str, body: dict[str, Any]) -> d
     preview_id = workspace._cache({
         "kind": "scenario", "project_id": project_id, "scenario": scenario,
         "can_start": can_start, "hash": approval_hash,
+        "approval_blockers": approval_blockers,
         "usage_account_id": base["usage_account_id"],
         "facility_design": design_document, "request": base["request"], "research": base["research"],
         "facility_revision": {"base_preview_id": body["base_preview_id"],
