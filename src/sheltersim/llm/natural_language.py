@@ -25,6 +25,7 @@ from sheltersim.events.effects import (
     PrimitiveSpec,
     available_primitives,
 )
+from sheltersim.llm.config import LLMErrorPolicy, LLMMode
 from sheltersim.llm.contracts import LLMStage, LLMTask
 from sheltersim.llm.provider import LLMExecutionError, LLMRouter
 from sheltersim.llm.schemas import (
@@ -867,6 +868,10 @@ def scenario_summary_from_world(
     )
 
 
+class InterventionCompilerUnavailable(LLMExecutionError):
+    """Opus gave no usable proposal under a stop policy; the message is fixed operator text."""
+
+
 def compile_natural_language(
     request: ParseRequest | dict[str, object],
     router: LLMRouter | None = None,
@@ -877,7 +882,8 @@ def compile_natural_language(
 
     Opus receives a bounded snapshot and only primitives whose required policies and target
     kinds are present. On provider failure, the known offline parser is used only when it can
-    produce a context-valid plan; every other narrative returns `not_simulatable`.
+    produce a context-valid plan; every other narrative returns `not_simulatable`. Under a
+    stop error policy outside offline mode, the failure raises InterventionCompilerUnavailable.
     """
     if not isinstance(request, ParseRequest):
         request = ParseRequest.model_validate(request)
@@ -985,6 +991,12 @@ def compile_natural_language(
             if semantic_errors
             else _provider_failure_reason(records)
         )
+        if (
+            active_router.settings.error_policy is LLMErrorPolicy.STOP
+            and active_router.mode is not LLMMode.OFFLINE
+        ):
+            # A stop policy asks for the failure, not a rule plan in place of Opus.
+            raise InterventionCompilerUnavailable(failure_reason[:500])
         return _offline_compiler_result(
             request,
             offline_result,

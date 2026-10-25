@@ -73,6 +73,8 @@ routerは送信文のUTF-8バイト数を`max_input_tokens`（`SHELTERSIM_LLM_MA
 
 介入の変換がruleの結果になったときは、Opusを使わなかった理由を日本語の固定文で`limitations`に入れます。対象はofflineで変換できた案、聞き返し、変換できなかった結果のすべてです。末尾の理由コードは`usage.error_kind`、またはrouterのoutcomeと同じです（例：`offline`、`input_token_limit`、`max_api_calls`、`budget_exceeded`、`rate_limited`、`invalid_output`）。model出力本文やprovider errorの本文は含めません。
 
+`SHELTERSIM_LLM_ERROR_POLICY=stop`のときは、offline mode以外でruleの結果を返さず、同じ理由文で失敗します。Project APIのintervention-previewは409と`code: intervention_compiler_unavailable`、legacy demoの`/api/v1/nl/interpret`は409を返します。以前はstopでもcompilerだけがerrorを捕まえ、ruleの結果を返していました。明示したoffline modeでは、stopでもruleの結果を返します。
+
 ### fallbackの可視化
 
 fallbackしたtaskはruleの既定値で進むため、その分の結果はofflineと同じになります。API modeのRunが実際にはClaudeの応答を使っていない状態を見落とさないよう、呼出し記録からoutcome集計を作ります。集計はsrc/sheltersim/llm/outcomes.pyの1関数に統一し、model出力本文は読みません。

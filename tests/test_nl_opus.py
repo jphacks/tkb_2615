@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from sheltersim.llm.cache import ResponseTape
-from sheltersim.llm.config import LLMMode, LLMSettings, ModelPrice
+from sheltersim.llm.config import LLMErrorPolicy, LLMMode, LLMSettings, ModelPrice
 from sheltersim.llm.contracts import LLMProviderError, LLMStage, ProviderResponse
-from sheltersim.llm.natural_language import compile_natural_language
+from sheltersim.llm.natural_language import (
+    InterventionCompilerUnavailable,
+    compile_natural_language,
+)
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.schemas import FacilityTarget, ParseRequest, ScenarioSummary, ZoneTarget
 
@@ -369,7 +375,8 @@ def test_invalid_model_target_is_rejected_without_mutating_world_state() -> None
     assert world.canonical_json() == before
 
 
-def test_generated_scenario_mid_run_intervention_reaches_opus(tmp_path, monkeypatch) -> None:
+def _generated_mid_run_project(tmp_path, minute: int):
+    """Return a Project store whose generated Scenario's main Branch reached `minute`."""
     from sheltersim.core.world import WorldState
     from sheltersim.experiments.branch import BranchRuntime
     from sheltersim.experiments.initial_scenario import (
@@ -378,8 +385,6 @@ def test_generated_scenario_mid_run_intervention_reaches_opus(tmp_path, monkeypa
     )
     from sheltersim.experiments.timeline import TimelineStore
     from sheltersim.storage.projects import ProjectStore, digest
-    from sheltersim.web import workspace
-    from sheltersim.web.projects import ProjectAPI
 
     scenario = (
         InitialScenarioBuilder()
@@ -402,8 +407,15 @@ def test_generated_scenario_mid_run_intervention_reaches_opus(tmp_path, monkeypa
     store.create_run("project", "run", scenario.id, saved["scenario_version"])
     timeline = TimelineStore(store, "project", "run")
     timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    timeline.advance("main", 60)
-    zone_id = sorted(timeline.seek("main", 60).world.zones)[0]
+    timeline.advance("main", minute)
+    return store, sorted(timeline.seek("main", minute).world.zones)[0]
+
+
+def test_generated_scenario_mid_run_intervention_reaches_opus(tmp_path, monkeypatch) -> None:
+    from sheltersim.web import workspace
+    from sheltersim.web.projects import ProjectAPI
+
+    store, zone_id = _generated_mid_run_project(tmp_path, 60)
     provider = FakeProvider(
         json.dumps(
             {
@@ -472,3 +484,65 @@ def test_rule_fallback_results_say_why_opus_was_not_used() -> None:
     assert "（理由コード: budget_exceeded）" in capped.limitations[-1]
     assert unknown.status == "not_simulatable"
     assert "offline mode" in unknown.limitations[0]
+
+
+def stop_router(provider: FakeProvider) -> LLMRouter:
+    active = router(provider)
+    active.settings = replace(active.settings, error_policy=LLMErrorPolicy.STOP)
+    return active
+
+
+def test_stop_policy_reports_the_failure_instead_of_a_rule_plan() -> None:
+    rate_limited = FakeProvider(error=LLMProviderError("rate limited", status_code=429))
+    with pytest.raises(InterventionCompilerUnavailable, match="429"):
+        compile_natural_language(request("Day 3 toilet 1 outage"), stop_router(rate_limited))
+
+    invalid = json.loads(composite_response())
+    invalid["support_mode"] = "native"
+    invalid["effects"] = [
+        {
+            "op": "water_outage",
+            "target_kind": "facility",
+            "target_id": "toilet-1",
+            "start_minute": 3000,
+            "end_minute": 3120,
+            "parameters": {"outage": True},
+            "assumption_indexes": [],
+        }
+    ]
+    rejected = FakeProvider(json.dumps(invalid), json.dumps(invalid))
+    with pytest.raises(InterventionCompilerUnavailable, match="schema/domain"):
+        compile_natural_language(request("Day 3 toilet 1 outage"), stop_router(rejected))
+    assert len(rejected.calls) == 2  # the one repair still runs before the failure
+
+
+def test_stop_policy_keeps_rule_results_in_explicit_offline_mode() -> None:
+    result = compile_natural_language(
+        request("Day 3 toilet 1 outage"),
+        LLMRouter(LLMSettings(mode=LLMMode.OFFLINE, error_policy=LLMErrorPolicy.STOP)),
+    )
+
+    assert result.status == "compiled"
+    assert result.fallback_used is True
+
+
+def test_project_preview_returns_the_stop_reason_as_a_conflict(tmp_path, monkeypatch) -> None:
+    from sheltersim.storage.projects import StorageError
+    from sheltersim.web import workspace
+    from sheltersim.web.projects import ProjectAPI
+
+    store, _ = _generated_mid_run_project(tmp_path, 30)
+    provider = FakeProvider(error=LLMProviderError("rate limited", status_code=429))
+    monkeypatch.setattr(workspace, "accounted_router", lambda *_a, **_k: stop_router(provider))
+    api = ProjectAPI(store, recover=False)
+    try:
+        with pytest.raises(StorageError) as raised:
+            api.post(
+                ["project", "runs", "run", "branches", "main", "intervention-preview"],
+                {"minute": 30, "text": "スタッフを2人追加"},
+            )
+    finally:
+        api.close()
+
+    assert raised.value.code == "intervention_compiler_unavailable"
+    assert "429" in str(raised.value)
