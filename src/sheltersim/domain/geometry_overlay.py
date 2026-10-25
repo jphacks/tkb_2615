@@ -7,8 +7,10 @@ geometry operator; zone-only capacity never pretends to be a surveyed room.
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from pydantic import Field, model_validator
 
@@ -26,6 +28,42 @@ from sheltersim.contracts.operations import (
 from sheltersim.contracts.spatial import SpatialConstraints, SpatialObstacle
 
 GEOMETRY_OVERLAY_KEY = "geometry_overlay_v1"
+
+# Movement asks for the facility geometry hundreds of times per tick. Inside a
+# config scope (one tick phase), each raw model_configs object is parsed once and
+# the frozen model is shared. Outside a scope every call parses, so a config edited
+# between phases (tests, scenario setup) is always seen. Entries hold the raw object,
+# so its id cannot be reused within the scope.
+_CONFIG_SCOPE: ContextVar[dict[tuple[str, int], tuple[Any, Any]] | None] = ContextVar(
+    "geometry_config_scope", default=None
+)
+_EMPTY_SPATIAL_CONSTRAINTS: dict[str, Any] = {}
+
+
+@contextmanager
+def geometry_config_scope() -> Iterator[None]:
+    """Reuse parsed facility geometry configs while model_configs cannot change."""
+    if _CONFIG_SCOPE.get() is not None:
+        yield
+        return
+    token = _CONFIG_SCOPE.set({})
+    try:
+        yield
+    finally:
+        _CONFIG_SCOPE.reset(token)
+
+
+def _parsed_config(name: str, raw: Any, model: Any) -> Any:
+    scope = _CONFIG_SCOPE.get()
+    if scope is None:
+        return model.model_validate(raw)
+    key = (name, id(raw))
+    entry = scope.get(key)
+    if entry is not None and entry[0] is raw:
+        return entry[1]
+    parsed = model.model_validate(raw)
+    scope[key] = (raw, parsed)
+    return parsed
 GEOMETRY_OVERLAY_POLICY = "bounded-runtime-geometry-v1"
 TEMPORARY_ROOM_BED_POLICY_VERSION = "exclusive-physical-sleep-beds-v1"
 TEMPORARY_ROOM_BED_SOURCE_ID = "ASM-TEMPORARY-ROOM-BEDS-V1"
@@ -469,7 +507,7 @@ def effective_geometry(world: Any) -> FacilityGeometry | None:
     raw = world.model_configs.get("facility_geometry")
     if raw is None:
         return None
-    geometry = FacilityGeometry.model_validate(raw)
+    geometry = _parsed_config("facility_geometry", raw, FacilityGeometry)
     overrides = world.model_state.get(GEOMETRY_OVERLAY_KEY, {}).get("facility_points", {})
     if not overrides:
         return geometry
@@ -492,7 +530,8 @@ def effective_geometry(world: Any) -> FacilityGeometry | None:
 
 
 def effective_spatial_constraints(world: Any) -> SpatialConstraints:
-    constraints = SpatialConstraints.model_validate(world.model_configs.get("spatial_constraints", {}))
+    raw = world.model_configs.get("spatial_constraints", _EMPTY_SPATIAL_CONSTRAINTS)
+    constraints = _parsed_config("spatial_constraints", raw, SpatialConstraints)
     state = world.model_state.get(GEOMETRY_OVERLAY_KEY, {})
     obstacles = (*constraints.obstacles, *(SpatialObstacle(id=key,
         polygon=tuple(Point2D.model_validate(p) for p in row["polygon_m"]),

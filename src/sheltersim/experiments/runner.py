@@ -36,7 +36,11 @@ from sheltersim.domain.care_receipts import (
 from sheltersim.domain.distress_monitor import record_distress_monitor_tick
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import facility_has_independent_queues
-from sheltersim.domain.geometry_overlay import release_sleep_bed, reserve_sleep_bed
+from sheltersim.domain.geometry_overlay import (
+    geometry_config_scope,
+    release_sleep_bed,
+    reserve_sleep_bed,
+)
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.infrastructure import INFRASTRUCTURE_EVENT_TYPES
 from sheltersim.domain.models import (
@@ -403,6 +407,11 @@ class OfflineSimulationController:
         self.staff_space = SpaceRouter(staff_graph, self.space.policy)
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
+        # No phase edits model_configs, so the facility geometry is parsed once per phase.
+        with geometry_config_scope():
+            self._run_phase(phase, world, minute, rng)
+
+    def _run_phase(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
         if world is not self.world:
             raise ValueError("offline simulation controller is bound to a different WorldState")
         if phase is TickPhase.DISPATCH_DUE_EVENTS:
