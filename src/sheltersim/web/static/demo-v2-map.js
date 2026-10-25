@@ -171,66 +171,16 @@
     ctx.restore();
   }
   function person(ctx, x, y, size, color, staff, selected, motion = {}) {
-    ctx.save();
-    ctx.translate(x, y);
-    const phase = motion.phase || 0;
-    const step = motion.walking ? Math.sin(phase * 8) * size * 0.28 : 0;
-    const breathe = motion.active ? Math.sin(phase * 2) * size * 0.035 : 0;
-    ctx.fillStyle = "#203b4936";
-    ctx.beginPath();
-    ctx.ellipse(1, size * 0.85, size * 0.85, size * 0.28, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (selected) {
-      ctx.strokeStyle = "#0878ff";
-      ctx.fillStyle = "#ffffffa8";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.ellipse(0, -size * 0.3, size * 1.1, size * 1.75, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-    ctx.fillStyle = "#314c64";
-    round(ctx, -size * 0.45, size * 0.22 + step, size * 0.36, size * 0.73, 1);
-    ctx.fill();
-    round(ctx, size * 0.09, size * 0.22 - step, size * 0.36, size * 0.73, 1);
-    ctx.fill();
-    ctx.translate(0, breathe);
-    ctx.scale(
-      motion.walking && Math.cos(motion.direction || 0) < 0 ? -0.95 : 1,
-      1,
+    return window.HinanjoSprites.draw(
+      ctx,
+      x,
+      y,
+      size,
+      color,
+      staff,
+      selected,
+      motion,
     );
-    ctx.fillStyle = color;
-    round(ctx, -size * 0.65, -size * 0.62, size * 1.3, size * 1.1, size * 0.28);
-    ctx.fill();
-    ctx.fillStyle = "#f1c39b";
-    round(ctx, -size * 0.82, -size * 0.4 - step, size * 0.22, size * 0.76, 1);
-    ctx.fill();
-    round(ctx, size * 0.6, -size * 0.4 + step, size * 0.22, size * 0.76, 1);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(0, -size * 0.99, size * 0.47, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = staff ? "#ecf8ff" : "#3d444b";
-    ctx.beginPath();
-    ctx.ellipse(
-      0,
-      -size * 1.25,
-      size * 0.49,
-      size * 0.25,
-      0,
-      Math.PI,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    if (staff) {
-      ctx.fillStyle = "#d9ffff";
-      ctx.fillRect(-size * 0.47, -size * 0.4, size * 0.94, size * 0.2);
-    }
-    if (motion.walking) {
-      ctx.fillStyle = "#edbd96";
-      ctx.fillRect(size * 0.35, -size * 0.98, size * 0.3, size * 0.2);
-    }
-    ctx.restore();
   }
   function drawActors(ctx, frame, point, scale, w, h, options, hits) {
     const layer = options.layer || "normal",
@@ -240,15 +190,18 @@
     for (const a of frame.agents || []) {
       if (!a.point || (!options.diagram && a.position_kind === "display_only"))
         continue;
-      const key = `${a.point.x.toFixed(4)},${a.point.y.toFixed(4)}`;
+      const key = options.diagram
+        ? a.agent_id
+        : `${a.point.x.toFixed(4)},${a.point.y.toFixed(4)}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(a);
     }
-    const actorSize = clamp(
-      scale * (options.diagram ? 0.95 : 0.38),
-      compact ? 4.3 : 6,
-      compact ? 6.8 : 9.2,
-    );
+    const actorSize =
+      clamp(
+        (scale / (options.zoom || 1)) * (options.diagram ? 0.95 : 0.38),
+        compact ? 4.3 : 6,
+        compact ? 6.8 : 9.2,
+      ) * (options.zoom || 1);
     const colorOf = (p) => {
       if (layer === "stress" || layer === "health") {
         const needs = [
@@ -266,7 +219,6 @@
           ? `hsl(${120 * (1 - clamp(n, 0, 1))} 72% 43%)`
           : "#8494a5";
       }
-      if (p?.activity === "queued") return "#efa829";
       let seed = 0;
       for (const c of p?.id || "a") seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
       return palette[seed % palette.length];
@@ -278,7 +230,14 @@
         p = point(a.point),
         personData = people.get(a.agent_id),
         selected = group.some((x) => x.agent_id === options.selected);
-      if (p.x < -20 || p.x > w + 20 || p.y < -30 || p.y > h + 30) continue;
+      if (
+        p.x < -actorSize * 2 ||
+        p.x > w + actorSize * 2 ||
+        p.y < -actorSize ||
+        p.y > h + actorSize * 4
+      )
+        continue;
+      let pose;
       if (group.length > 1) {
         // A stacked symbol represents co-located people; these offsets are not world positions.
         for (let i = Math.min(3, group.length - 1); i >= 0; i--) {
@@ -311,29 +270,46 @@
           p.y - actorSize * 2.5 + 14,
         );
       } else {
-        if (options.diagram && a.zone_id === "sleeping") {
-          ctx.fillStyle = "#90b5a470";
-          ctx.strokeStyle = "#fff8e4b0";
-          ctx.lineWidth = 1;
-          round(
-            ctx,
-            p.x - actorSize * 1.4,
-            p.y - actorSize * 0.8,
-            actorSize * 2.8,
-            actorSize * 2.8,
-            3,
-          );
-          ctx.fill();
-          ctx.stroke();
-        }
-        let seed = 0;
-        for (const c of a.agent_id) seed += c.charCodeAt(0);
-        person(ctx, p.x, p.y, actorSize, colorOf(personData), false, selected, {
-          active: options.animate,
-          phase: (options.time || 0) / 1000 + seed,
-          walking: a._walking,
-          direction: a._direction,
-        });
+        let seed = 2166136261;
+        for (const c of a.agent_id)
+          seed = Math.imul(seed ^ c.charCodeAt(0), 16777619) >>> 0;
+        const label =
+          {
+            moving: "移動",
+            queued: "待機",
+            resting: "休息",
+            sleeping: "睡眠",
+            in_service: "利用中",
+            seeking_help: "支援",
+          }[personData?.activity] || "状態記録";
+        pose = person(
+          ctx,
+          p.x,
+          p.y,
+          actorSize,
+          colorOf(personData),
+          false,
+          selected,
+          {
+            variant: seed,
+            time: options.reducedMotion ? 0 : options.time || 0,
+            walking: Boolean(a._walking) && !options.reducedMotion,
+            directionName: a._walking
+              ? window.HinanjoSprites.direction(a._direction)
+              : ["down", "right", "down", "left"][seed % 4],
+            distance:
+              ((options.gaitDistances?.get(a.agent_id) || 0) +
+                (a._distance || 0)) *
+              scale,
+            queued: personData?.activity === "queued",
+            label:
+              a.agent_id +
+              " · " +
+              (a.presentation_queue
+                ? `待機 ${a.presentation_queue.rank + 1}番`
+                : label),
+          },
+        );
       }
       hits.push({
         type: "person",
@@ -341,7 +317,16 @@
         ids: group.map((x) => x.agent_id),
         x: p.x,
         y: p.y,
-        r: Math.max(12, actorSize * 1.8),
+        r: Math.max(13, actorSize * 2.2),
+        hitX: p.x,
+        hitY: p.y - actorSize * 1.2,
+        walking: Boolean(a._walking),
+        spriteFrame: pose?.frame,
+        direction: pose?.direction,
+        distance:
+          ((options.gaitDistances?.get(a.agent_id) || 0) + (a._distance || 0)) *
+          scale,
+        evidence: a._motionEvidence || null,
         label:
           group.length > 1
             ? `同じ記録位置に${group.length}人 · クリックして一覧`
@@ -353,7 +338,7 @@
       if (typeof physical?.x !== "number" || typeof physical?.y !== "number")
         continue;
       const p = point(physical);
-      person(
+      const pose = person(
         ctx,
         p.x,
         p.y,
@@ -362,14 +347,26 @@
         true,
         s.id === options.selected,
         {
-          active: options.animate,
-          phase: (options.time || 0) / 1000 + s.id.length,
+          time: options.reducedMotion ? 0 : options.time || 0,
+          walking: Boolean(s._walking) && !options.reducedMotion,
+          directionName: s._walking
+            ? window.HinanjoSprites.direction(s._direction)
+            : "down",
+          distance:
+            ((options.gaitDistances?.get(s.id) || 0) + (s._distance || 0)) *
+            scale,
+          variant: s.id.length,
+          label: s.id + " · スタッフ",
         },
       );
       hits.push({
         type: "person",
         id: s.id,
         ids: [s.id],
+        walking: Boolean(s._walking),
+        spriteFrame: pose.frame,
+        direction: pose.direction,
+        evidence: s._motionEvidence || null,
         x: p.x,
         y: p.y,
         r: actorSize * 1.8,
@@ -658,6 +655,38 @@
         first.y + 14,
       );
     }
+    if (options.diagram) {
+      for (const [zone, door] of Object.entries(
+        frame.presentation_doors || {},
+      )) {
+        if (!g.zones.some((z) => z.zone_id === zone)) continue;
+        const p = point(door.inside);
+        ctx.fillStyle = "#e2ddc8";
+        ctx.fillRect(
+          p.x - scale * 0.55,
+          p.y - scale * 1.5,
+          scale * 1.1,
+          scale * 3,
+        );
+        ctx.strokeStyle = "#8b7659";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - scale * 1.5);
+        ctx.lineTo(p.x + scale * 1.4, p.y - scale * 0.8);
+        ctx.stroke();
+      }
+      for (const queue of frame.presentation_queues || []) {
+        ctx.beginPath();
+        queue.points
+          .map(point)
+          .forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.strokeStyle = "#e8ad396e";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
     for (const f of frame.facilities || []) {
       const physical = f.point || g.facility_points?.[f.id];
       const positions = f.service_queues?.length
@@ -811,7 +840,8 @@
     }
     return hits;
   }
-  const staticCache = new WeakMap();
+  const staticCache = new WeakMap(),
+    lastDraws = new WeakMap();
   function drawCached(sf, source, options = {}) {
     const frame =
       options.mode === "schematic"
@@ -834,6 +864,8 @@
       g,
       frame.geometry_overlay,
       frame.facilities,
+      frame.presentation_queues,
+      frame.presentation_doors,
       options.layer === "crowd" ? counts : null,
     ]);
     let cache = staticCache.get(ctx.canvas);
@@ -879,7 +911,11 @@
       { ...options, diagram: frame.presentation_mode === "schematic" },
       hits,
     );
+    lastDraws.set(ctx.canvas, hits);
     return hits;
   }
-  window.HinanjoMap = { draw: drawCached };
+  window.HinanjoMap = {
+    draw: drawCached,
+    inspect: (canvas) => lastDraws.get(canvas) || [],
+  };
 })();

@@ -41,6 +41,8 @@
     sceneMode: "schematic",
     motion: null,
     playToken: 0,
+    replay: null,
+    visualMs: 0,
     busy: false,
     page: "scenario",
     inputVersion: 0,
@@ -285,15 +287,25 @@
   function stopPlayback(preserve = false) {
     state.playing = false;
     state.playToken++;
-    if (preserve && state.motion) {
-      state.motion.fraction = Math.min(
-        1,
-        (performance.now() - state.motion.started) / state.motion.duration,
-      );
-      state.motion.paused = true;
-    } else state.motion = null;
+    if (state.replay) {
+      if (preserve) state.replay.pause();
+      else state.replay.dispose();
+    }
+    if (!preserve) {
+      state.replay = null;
+      state.motion = null;
+      state.visualMs = 0;
+    }
     $("play").textContent = "▶ 再生";
     $("timeline-play").textContent = "▶ 再生";
+    $("replay-status").textContent = preserve
+      ? "一時停止 · 位置と姿勢を保持"
+      : "計算済みの記録を再生";
+    if (window.HinanjoReplayView)
+      window.HinanjoReplayView = {
+        ...window.HinanjoReplayView,
+        playing: false,
+      };
   }
   async function action(label, task) {
     if (state.busy) return;
@@ -1044,118 +1056,113 @@
     renderPeople();
     drawAll();
   }
+  function replayTime(minute) {
+    const seconds = Math.floor(minute * 60 + 0.00001),
+      m = Math.floor(seconds / 60);
+    return time(m) + ":" + String(seconds % 60).padStart(2, "0");
+  }
+  function motionFraction() {
+    return state.motion?.fraction || 0;
+  }
   async function togglePlayback() {
     if (state.playing) {
       stopPlayback(true);
       return;
     }
-    if (state.page === "comparison") {
-      if (!state.comparison)
-        throw new Error("比較結果を先に取得してください。");
-      if (state.comparison.minute >= state.comparison.common_range[1])
-        await loadComparison(state.comparison.common_range[0]);
-    } else if (state.minute >= upper()) await seek(lower());
-    state.playing = true;
-    animationStats = { frames: 0, drawMs: 0, fps: 0 };
-    statsStart = 0;
-    const token = ++state.playToken;
-    if (state.motion?.paused) {
-      state.motion.started =
-        performance.now() - state.motion.fraction * state.motion.duration;
-      state.motion.paused = false;
+    const comparing = state.page === "comparison";
+    if (comparing && !state.comparison)
+      throw new Error("比較結果を先に取得してください。");
+    const hi = comparing ? state.comparison.common_range[1] : upper();
+    let current = comparing ? state.comparison.minute : state.minute;
+    if (current >= hi) {
+      state.replay?.dispose();
+      state.replay = null;
+      if (comparing) await loadComparison(state.comparison.common_range[0]);
+      else await seek(lower());
+      current = comparing ? state.comparison.minute : state.minute;
     }
+    if (!state.replay) {
+      const scope = state.scope,
+        root = runBase(),
+        branch = branchBase(),
+        ids = comparing ? pairIds() : [state.branch];
+      state.replay = new window.HinanjoReplayPlayer({
+        minute: current,
+        hi,
+        rate: Number($("speed").value),
+        payload: comparing ? state.comparison : state.frame,
+        mode: () => state.sceneMode,
+        fetch: (minute) =>
+          comparing
+            ? api(
+                `${root}/compare?branch_ids=${enc(ids.join(","))}&minute=${minute}`,
+              )
+            : api(`${branch}/timeline?minute=${minute}`),
+        fetchRange: (start, end) =>
+          api(
+            `${root}/replay-frames?branch_ids=${enc(ids.join(","))}&start=${start}&end=${end}`,
+          ).then((r) => r.samples),
+        onFrame: (payload, minute) => {
+          if (scope !== state.scope) return;
+          state.motion = null;
+          if (comparing) void loadComparison(minute, undefined, payload);
+          else {
+            state.frame = payload;
+            state.minute = minute;
+            invalidateIntervention();
+            state.context = null;
+            renderFrame();
+          }
+        },
+        onDraw: (player) => {
+          state.motion = player.motion;
+          state.visualMs = player.visualMs;
+          window.HinanjoReplayView = {
+            minute: player.clock.position,
+            rate: player.clock.rate,
+            bufferedUntil: player.head,
+            fraction: player.motion?.fraction || 0,
+            from: player.motion?.from.map((f) => f.minute) || [],
+            to: player.motion?.to.map((f) => f.minute) || [],
+            playing: state.playing,
+            comparison: comparing,
+          };
+          drawAll();
+          $("clock").textContent = replayTime(player.clock.position);
+          if (comparing)
+            $("compare-time").textContent = replayTime(player.clock.position);
+          const minute = Math.floor(player.clock.position);
+          $("replay-status").textContent =
+            player.clock.position >= player.head && player.head < player.hi
+              ? "記録を読込中 · 時刻を保持"
+              : `${player.clock.rate}× · 記録 ${minute}→${Math.min(minute + 1, player.hi)}分を補間`;
+        },
+        onState: (status) => {
+          if (status === "paused" || status === "end") {
+            state.playing = false;
+            if (window.HinanjoReplayView)
+              window.HinanjoReplayView = {
+                ...window.HinanjoReplayView,
+                playing: false,
+              };
+            $("replay-status").textContent = "一時停止 · 位置と姿勢を保持";
+            $("play").textContent = "▶ 再生";
+            $("timeline-play").textContent = "▶ 再生";
+          }
+          if (status === "end")
+            $("replay-status").textContent = "計算済み範囲の終点";
+        },
+        onError: (e) => note(e.message, "error"),
+        onStats: (stats) => {
+          window.HinanjoPlayback = { ...stats, comparison: comparing };
+        },
+      });
+    }
+    state.playing = true;
+    state.replay.setRate(Number($("speed").value));
     $("play").textContent = "Ⅱ 一時停止";
     $("timeline-play").textContent = "Ⅱ 一時停止";
-    animatePlayback(token);
-    void playbackLoop(token);
-  }
-  let animationStats = { frames: 0, drawMs: 0, fps: 0 },
-    statsStart = 0;
-  function animatePlayback(token) {
-    if (!state.playing || token !== state.playToken) return;
-    const now = performance.now();
-    if (!statsStart) statsStart = now;
-    drawAll();
-    animationStats.frames++;
-    animationStats.drawMs += performance.now() - now;
-    if (now - statsStart >= 1000) {
-      window.HinanjoPlayback = {
-        fps: (animationStats.frames * 1000) / (now - statsStart),
-        drawMs: animationStats.drawMs / animationStats.frames,
-        minute:
-          state.page === "comparison" ? state.comparison.minute : state.minute,
-        endpoints: state.motion
-          ? {
-              from: state.motion.from.map((f) => f.minute),
-              to: state.motion.to.map((f) => f.minute),
-            }
-          : null,
-        comparison: state.page === "comparison",
-        fraction: motionFraction(),
-        displayMode: state.sceneMode,
-      };
-      animationStats = { frames: 0, drawMs: 0, fps: 0 };
-      statsStart = now;
-    }
-    requestAnimationFrame(() => animatePlayback(token));
-  }
-  function motionFraction() {
-    const m = state.motion;
-    return m
-      ? m.paused
-        ? m.fraction
-        : Math.min(1, (performance.now() - m.started) / m.duration)
-      : 0;
-  }
-  async function playbackLoop(token) {
-    if (!state.playing || token !== state.playToken) return;
-    try {
-      const comparing = state.page === "comparison",
-        minute = comparing ? state.comparison.minute : state.minute,
-        hi = comparing ? state.comparison.common_range[1] : upper(),
-        next = Math.min(hi, minute + Number($("speed").value));
-      if (next === minute) {
-        stopPlayback();
-        return;
-      }
-      if (!state.motion) {
-        const result = comparing
-          ? await api(
-              `${runBase()}/compare?branch_ids=${enc(pairIds().join(","))}&minute=${next}`,
-            )
-          : await api(`${branchBase()}/timeline?minute=${next}`);
-        if (!state.playing || token !== state.playToken) return;
-        state.motion = {
-          from: comparing ? state.comparison.frames : [state.frame],
-          to: comparing ? result.frames : [result],
-          minute: next,
-          started: performance.now(),
-          duration: 700,
-        };
-      }
-      await new Promise((resolve) => {
-        const check = () => {
-          if (
-            token !== state.playToken ||
-            !state.playing ||
-            motionFraction() >= 1
-          )
-            resolve();
-          else requestAnimationFrame(check);
-        };
-        requestAnimationFrame(check);
-      });
-      if (!state.playing || token !== state.playToken) return;
-      const completed = state.motion.minute;
-      if (comparing) await loadComparison(completed, token);
-      else await seek(completed, token);
-      if (token !== state.playToken) return;
-      state.motion = null;
-      if (state.playing) void playbackLoop(token);
-    } catch (e) {
-      stopPlayback();
-      note(e.message, "error");
-    }
+    state.replay.play();
   }
   async function compute(
     target = Number($("target").value),
@@ -1360,7 +1367,7 @@
     if (!b) throw new Error("介入後の分岐を選択してください。");
     return [b.parent_branch_id || "main", child];
   }
-  async function loadComparison(minute, expectedPlayToken) {
+  async function loadComparison(minute, expectedPlayToken, providedResult) {
     const ids = pairIds(),
       refs = ids.map(reference),
       lo = Math.max(...refs.map((r) => r.fork_minute)),
@@ -1374,9 +1381,11 @@
       throw new Error("共通の計算済み範囲だけ比較できます。");
     const scope = state.scope,
       selected = $("compare-branch").value;
-    const result = await api(
-      `${runBase()}/compare?branch_ids=${enc(ids.join(","))}&minute=${m}`,
-    );
+    const result =
+      providedResult ||
+      (await api(
+        `${runBase()}/compare?branch_ids=${enc(ids.join(","))}&minute=${m}`,
+      ));
     if (
       (expectedPlayToken !== undefined &&
         expectedPlayToken !== state.playToken) ||
@@ -1827,9 +1836,9 @@
         animate:
           state.playing &&
           !matchMedia("(prefers-reduced-motion: reduce)").matches,
-        time: state.motion?.paused
-          ? state.motion.started + state.motion.fraction * state.motion.duration
-          : performance.now(),
+        time: state.visualMs,
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        gaitDistances: state.replay?.gaits.get(frame?.branch_id),
         layer,
         zoom,
         selected: state.selected,
@@ -2112,6 +2121,12 @@
   $("timeline-play").addEventListener("click", () => {
     togglePlayback().catch((e) => note(e.message, "error"));
   });
+  $("speed").addEventListener("change", () =>
+    state.replay?.setRate(Number($("speed").value)),
+  );
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && state.playing) stopPlayback(true);
+  });
   $("seek").addEventListener("change", () => {
     stopPlayback();
     void action("記録された時刻へ移動しています…", () =>
@@ -2215,8 +2230,8 @@
         .map((p) => ({
           ...p,
           d: Math.hypot(
-            e.clientX - rect.left - p.x,
-            e.clientY - rect.top - p.y,
+            e.clientX - rect.left - (p.hitX ?? p.x),
+            e.clientY - rect.top - (p.hitY ?? p.y),
           ),
         }))
         .filter((p) => p.d <= p.r)
@@ -2429,6 +2444,7 @@
     document.querySelectorAll("[data-scene-mode]").forEach((select) =>
       select.addEventListener("change", () => {
         state.sceneMode = select.value;
+        state.replay?.gaits.clear();
         document
           .querySelectorAll("[data-scene-mode]")
           .forEach((s) => (s.value = state.sceneMode));

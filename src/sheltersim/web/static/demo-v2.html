@@ -10,6 +10,9 @@
     <title>避難所IF！ | 避難所の「もしも」を、考えよう。</title>
     <link rel="stylesheet" href="/demo-v2.css" />
     <script src="/demo-v2-scene.js" defer></script>
+    <script src="/demo-v2-clock.js" defer></script>
+    <script src="/demo-v2-replay.js" defer></script>
+    <script src="/demo-v2-sprites.js" defer></script>
     <script src="/demo-v2-map.js" defer></script>
     <script src="/demo-v2.js" defer></script>
   </head>
@@ -27,13 +30,16 @@
       </div>
       <div class="clock">
         <small>シミュレーション時刻</small><strong id="clock">開始前</strong>
+        <small id="replay-status">計算済みの記録を再生</small>
       </div>
       <label class="speed-label"
         >再生速度<select id="speed">
           <option value="1">1×</option>
           <option value="5">5×</option>
           <option value="15">15×</option>
-          <option value="60">60×</option>
+          <option value="60" selected>60×</option>
+          <option value="120">120×</option>
+          <option value="240">240×</option>
         </select></label
       ><button id="play" class="primary" disabled>▶ 再生</button>
     </header>

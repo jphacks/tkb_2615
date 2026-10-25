@@ -19,6 +19,9 @@ from sheltersim.web.server import _handler_for
         ("/demo-v2.js", "text/javascript", b"scenario-approve"),
         ("/demo-v2-map.js", "text/javascript", b"Hinanj"),
         ("/demo-v2-scene.js", "text/javascript", b"HinanjoScene"),
+        ("/demo-v2-clock.js", "text/javascript", b"HinanjoReplayClock"),
+        ("/demo-v2-replay.js", "text/javascript", b"HinanjoReplayPlayer"),
+        ("/demo-v2-sprites.js", "text/javascript", b"HinanjoSprites"),
     ],
 )
 def test_backup_assets_are_independent_and_served_locally(tmp_path, route, content_type, marker):

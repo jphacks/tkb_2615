@@ -158,6 +158,28 @@ assert.equal(
 );
 assert.equal(scene.sample(a, b, 0), a);
 assert.equal(scene.sample(a, b, 1), b);
+const staffA = structuredClone(a),
+  staffB = structuredClone(b);
+staffA.staff = [
+  {
+    id: "s",
+    zone_id: "sleeping",
+    position: { point: { x: 0, y: 0 }, edge_id: "edge" },
+  },
+];
+staffB.staff = [
+  {
+    id: "s",
+    zone_id: "sleeping",
+    position: { point: { x: 10, y: 10 }, edge_id: "edge" },
+  },
+];
+const staffSource = JSON.stringify([staffA, staffB]),
+  staffMid = scene.sample(staffA, staffB, 0.5);
+assert.equal(staffMid.staff[0].position.x, 10);
+assert.equal(staffMid.staff[0].position.y, 0);
+assert(staffMid.staff[0]._walking);
+assert.equal(JSON.stringify([staffA, staffB]), staffSource);
 console.log(
   "PASS: 30/100 individuals, stable diagram slots, IDs/areas preserved, immutable input, physical/custom fallback, recorded corner interpolation, unknown path hold, branch isolation",
 );

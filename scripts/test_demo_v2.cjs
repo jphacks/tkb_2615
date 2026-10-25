@@ -100,7 +100,7 @@ async function main() {
     await page.locator("#example").click();
     await page.locator("#municipality").fill("墨田区");
     await page.locator("#disaster").selectOption("地震");
-    await page.locator("#evacuees").fill("100");
+    await page.locator("#evacuees").fill(process.env.UI_POPULATION || "100");
     await page.locator("#duration").fill("0.025");
     await page.locator("#preview").click();
     await idle();
@@ -138,10 +138,10 @@ async function main() {
     const parentBefore = (
       await request(`${root}/branches/main/timeline?minute=5`)
     ).state_hash;
-    await page.locator("#speed").selectOption("1");
+    await page.locator("#speed").selectOption("60");
     await page.locator("#play").click();
     await page.waitForFunction(
-      () => document.querySelector("#clock").textContent !== "1日目 00:05",
+      () => Number(document.querySelector("#seek").value) > 5,
     );
     await page.locator("#play").click();
     await page.locator("#seek").fill("5");
@@ -203,11 +203,10 @@ async function main() {
     assert.equal(compare.differences[0].metrics.toilet_working_units, 3);
     assert((await page.locator("#compare-time").innerText()).includes("00:36"));
     await shot("comparison");
-    await page.locator("#speed").selectOption("1");
+    await page.locator("#speed").selectOption("60");
     await page.locator("#play").click();
     await page.waitForFunction(
-      () =>
-        document.querySelector("#compare-time").textContent !== "1日目 00:36",
+      () => Number(document.querySelector("#compare-seek").value) > 5,
     );
     await page.locator("#play").click();
     await page.locator("#compare-refresh").click();
