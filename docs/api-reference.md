@@ -59,6 +59,7 @@ Project APIはasset、確認済みfacility geometry、draft、evaluation、datas
 - POST /api/v1/projects/{project}/scenario-approve はpreview ID、一致するhash、approved: true、新しいRun IDを要求します。不変のScenario版と初期Run状態を保存します。
 - Branchのintervention-previewは、指定時刻に自然言語または型付きprogramを受け取り、分離したstateで検証します。元Branchは変えません。intervention-applyはpreview ID、program hash、明示承認、child IDを要求し、元state hashを再検査して独立Branchを作ります。
 - timeline frameは指定tickの直前境界を表します。未計算・利用不可の履歴を推定値で返さず、要求を失敗させます。Branch比較は共通の計算済み時刻を使います。出力はsimulation上の記述で、外部データによる因果証拠ではありません。
+- `GET /api/v1/projects/{project}/runs/{run}/replay-frames?branch_ids=A,B&start=M&end=N` は、1〜2個の異なるBranchについて、両端を含む最大8個の計算済み境界を連続読取りします。各queryは1回だけ指定します。`samples` はBranchが1個なら既存timeline frame、2個なら既存compare responseと同じ契約です。未計算範囲・fork前・重複Branch・読み取り中のhead変更は拒否します。記録済み応答だけで復元し、保存Branchを進めず、live Providerも呼びません。
 - Branchへの質問は保存Run/Branchの証拠を読むだけで、simulation stateを変更しません。詳細はproject-persistence.md、adaptive-event-compiler.md、effect-program.mdを参照してください。
 
 ブラウザーrouteは /demo、/admin、および独立したバックアップUIの /demo-v2 です。/demo-v2 は同じProject APIと承認契約を利用します（[対応表](ui-backup.md)）。root routeは /demo へredirectします。serverは既定で127.0.0.1にbindし、認証機能を持ちません。信頼できないnetworkへ公開しないでください。
