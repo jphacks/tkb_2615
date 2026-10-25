@@ -19,8 +19,13 @@ from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.storage.projects import digest
 
 
-def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_until: int) -> dict[str, Any]:
-    """No state initialization, policy evaluation, RNG draws or provider capability."""
+def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_until: int,
+                state_hash: str | None = None) -> dict[str, Any]:
+    """No state initialization, policy evaluation, RNG draws or provider capability.
+
+    A caller that already holds the digest of ``world.to_dict()`` (a checkpoint's
+    ``state_hash``) may pass it to avoid serializing the whole history again.
+    """
     from sheltersim.domain.geometry_overlay import effective_geometry, effective_spatial_constraints
     geometry = effective_geometry(world)
     movement = world.model_state.get("movement_v1", {})
@@ -150,7 +155,7 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
     capacity = sum(zone.capacity or 0 for key, zone in world.zones.items() if key == "sleeping" or key.startswith("sleeping_"))
     kpis.update({"population": len(world.agents), "pending_arrivals": len(pending), "sleeping_capacity": capacity, "occupancy_ratio": len(world.agents) / capacity if capacity else None})
     events = [{"event_id": r.event.event_id, "minute": r.realized_minute, "event_type": r.event.event_type, "kind": r.event.kind.value, "status": r.status.value, "source_id": r.event.source_id, "causation_id": r.event.causation_id} for r in world.event_log.recent(100)]
-    frame = TimelineFrame(run_id=run_id, branch_id=branch_id, minute=world.minute_index, computed_until=computed_until, state_hash=digest(world.to_dict()), agents=tuple(agents), kpis=kpis, events=tuple(events)).model_dump(mode="json")
+    frame = TimelineFrame(run_id=run_id, branch_id=branch_id, minute=world.minute_index, computed_until=computed_until, state_hash=state_hash if state_hash is not None else digest(world.to_dict()), agents=tuple(agents), kpis=kpis, events=tuple(events)).model_dump(mode="json")
     zone_geometry = {z.zone_id: z.polygon for z in geometry.zones} if geometry else {}
     facilities = []
     independent_queues = world.model_state.get("facility_queues_v1", {})
