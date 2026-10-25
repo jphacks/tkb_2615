@@ -71,7 +71,9 @@ class Checkpoint:
                 f"checkpoint state must contain finite JSON values: {exc}"
             ) from exc
         checkpoint = cls(**body, checkpoint_hash=checkpoint_hash)
-        checkpoint._validate()
+        # Both hashes were just computed from these same, unshared objects;
+        # recomputing them here cannot fail. Structure and restore checks remain.
+        checkpoint._validate(hashes_verified=True)
         return checkpoint
 
     def restore_world(
@@ -220,7 +222,7 @@ class Checkpoint:
         """Load and validate a checkpoint from disk."""
         return cls.from_json(Path(path).read_text(encoding="utf-8"))
 
-    def _validate(self) -> tuple[WorldState, MetricsRecorder]:
+    def _validate(self, *, hashes_verified: bool = False) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version != self.CURRENT_SCHEMA_VERSION:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
         if self.world_state_schema_version not in (5, 6):
@@ -243,15 +245,14 @@ class Checkpoint:
             raise CheckpointError("checkpoint scenario ID does not match its WorldState")
         if self.world_state.get("minute_index") != self.simulation_minute:
             raise CheckpointError("checkpoint minute does not match its WorldState")
-        if _digest(self.world_state) != self.state_hash:
+        if not hashes_verified and _digest(self.world_state) != self.state_hash:
             raise CheckpointError("checkpoint WorldState integrity hash mismatch")
         try:
             world = WorldState.from_dict(self._world_document_for_restore())
             metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
-        body = self._body_dict()
-        if _digest(body) != self.checkpoint_hash:
+        if not hashes_verified and _digest(self._body_dict()) != self.checkpoint_hash:
             raise CheckpointError("checkpoint integrity hash mismatch")
         return world, metrics
 

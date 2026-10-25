@@ -161,9 +161,9 @@ def test_recorded_checkpoint_is_validated_only_by_capture(tmp_path, monkeypatch)
     calls = []
     original = Checkpoint._validate
 
-    def validate(self):
+    def validate(self, **kwargs):
         calls.append(self.checkpoint_hash)
-        return original(self)
+        return original(self, **kwargs)
 
     monkeypatch.setattr(Checkpoint, "_validate", validate)
     recorded = timeline.record(runtime)
