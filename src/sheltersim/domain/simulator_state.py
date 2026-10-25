@@ -44,6 +44,7 @@ from sheltersim.domain.facility_queues import (
 from sheltersim.domain.geometry_overlay import (
     GEOMETRY_OVERLAY_KEY,
     GEOMETRY_OVERLAY_POLICY,
+    INSTALLED_FACILITY_PLACEMENT_POLICY_VERSION,
     TEMPORARY_ROOM_BED_POLICY_VERSION,
     TEMPORARY_ROOM_INTAKE_POLICY_VERSION,
     create_geometry_overlay_state,
@@ -169,7 +170,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         if (not isinstance(overlay_config, dict)
                 or set(overlay_config) != {"schema_version"}
                 or type(overlay_config["schema_version"]) is not int
-                or overlay_config["schema_version"] not in {1, 2, 3}):
+                or overlay_config["schema_version"] not in {1, 2, 3, 4}):
             raise ValueError("unsupported geometry_overlay config")
         versions[GEOMETRY_OVERLAY_KEY] = GEOMETRY_OVERLAY_POLICY
     if body_policy_enabled:
@@ -212,13 +213,17 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
             f"pairs={proximity['max_pairs_per_sample']}"
         )
     overlay_config = configs.get("geometry_overlay", {})
-    if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {2, 3}:
+    if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {2, 3, 4}:
         signatures["operator:temporary_room_beds"] = (
             f"{TEMPORARY_ROOM_BED_POLICY_VERSION}@1:state1"
         )
-    if isinstance(overlay_config, dict) and overlay_config.get("schema_version") == 3:
+    if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {3, 4}:
         signatures["operator:temporary_room_intake"] = (
             f"{TEMPORARY_ROOM_INTAKE_POLICY_VERSION}@1:state1"
+        )
+    if isinstance(overlay_config, dict) and overlay_config.get("schema_version") == 4:
+        signatures["operator:installed_facility_placement"] = (
+            f"{INSTALLED_FACILITY_PLACEMENT_POLICY_VERSION}@1:state1"
         )
     signatures["operator:action_lifecycle"] = (
         f"{ACTION_LIFECYCLE_POLICY_VERSION}@1:state1"
@@ -410,21 +415,25 @@ def simulator_state_catalog() -> dict[str, Any]:
         GEOMETRY_OVERLAY_KEY: {
             "schema_version": 1, "implementation_id": GEOMETRY_OVERLAY_POLICY,
             "implementation_version": "1", "entity_kind": "system",
-            "enabled_by": "geometry_overlay.schema_version=1, 2 or 3",
+            "enabled_by": "geometry_overlay.schema_version=1, 2, 3 or 4",
             "source_id": "ASM-BOUNDED-RUNTIME-GEOMETRY-V1",
             "fields": {
-                "facility_points": {"unit": "metre_2d", "limit": 256},
+                "facility_points": {
+                    "unit": "metre_2d",
+                    "limit": 256,
+                    "installed_facility_placement": "geometry_overlay.schema_version=4",
+                },
                 "partitions": {"unit": "bounded_polygon_metre_2d", "limit": 256},
                 "route_modifiers": {"unit": "boolean_with_expiry", "limit": 256},
                 "bed_reservations": {
                     "unit": "person_to_sleep_bed_assignment",
                     "limit": 10000,
-                    "enabled_by": "geometry_overlay.schema_version=2",
+                    "enabled_by": "geometry_overlay.schema_version=2, 3 or 4",
                 },
                 "room_admissions": {
                     "unit": "resident_to_physical_room_capacity_assignment",
                     "limit": 10000,
-                    "enabled_by": "geometry_overlay.schema_version=3",
+                    "enabled_by": "geometry_overlay.schema_version=3 or 4",
                 },
             },
             "history": "GET branch/history?kind=events or kind=causal",

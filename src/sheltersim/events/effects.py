@@ -64,6 +64,9 @@ from sheltersim.domain.geometry_overlay import (
     MoveFacilityParameters,
     PartitionParameters,
     RouteAccessParameters,
+    installed_facility_placement_enabled,
+    installed_facility_point,
+    place_installed_facility,
     validate_geometry_change,
 )
 from sheltersim.domain.infrastructure import active_facility_outage
@@ -738,6 +741,43 @@ def available_primitives(
     ]
 
 
+def _toilet_placement_issues(
+    world: WorldState, additions: list[tuple[str, str, int]]
+) -> list[str]:
+    """Check that every added toilet gets a floor-plan point in the current state."""
+    if not installed_facility_placement_enabled(world):
+        return [
+            f"{label} cannot place added toilets on this floor plan; it needs "
+            "geometry_overlay schema_version=4 (create the Scenario again)"
+            for label, _, _ in additions
+        ]
+    from copy import deepcopy
+
+    from sheltersim.core.world import WorldState as MutableWorldState
+    from sheltersim.domain.models import FacilityState
+
+    candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+    for label, zone_id, count in additions:
+        if zone_id not in candidate.zones:
+            continue
+        for index in range(count):
+            facility_id = f"placement-check-{len(candidate.facilities)}-{index}"
+            candidate.facilities[facility_id] = FacilityState(
+                id=facility_id, kind="toilet", zone_id=zone_id, capacity=1, working_units=1,
+            )
+            point = installed_facility_point(candidate, facility_id)
+            if point is None:
+                return [
+                    f"{label} has no free floor-plan point for toilet {index + 1} "
+                    f"in zone {zone_id!r}"
+                ]
+            candidate.model_state[GEOMETRY_OVERLAY_KEY]["facility_points"][facility_id] = {
+                "point_m": point.model_dump(mode="json"),
+                "event_id": "placement-check", "source_ids": [], "minute": candidate.minute_index,
+            }
+    return []
+
+
 def validate_effect_program(
     world: WorldState,
     program: EffectProgram,
@@ -814,6 +854,7 @@ def validate_effect_program(
     added_staff = 0
     added_facilities = 0
     added_evacuees = 0
+    toilet_additions: list[tuple[str, str, int]] = []
     for effect in program.effects:
         label = f"effect {effect.effect_id!r}"
         primitive = registry.get(effect.op)
@@ -1056,9 +1097,9 @@ def validate_effect_program(
             overlay_config = world.model_configs.get("geometry_overlay", {})
             if parameters.admission_zone_ids and (
                 not isinstance(overlay_config, dict)
-                or overlay_config.get("schema_version") != 3
+                or overlay_config.get("schema_version") not in {3, 4}
             ):
-                issues.append(f"{label} alternate physical room admission requires geometry_overlay schema_version=3")
+                issues.append(f"{label} alternate physical room admission requires geometry_overlay schema_version=3 or 4")
             if parameters.approach_route_id is not None:
                 if parameters.admission_zone_ids:
                     issues.append(
@@ -1099,6 +1140,7 @@ def validate_effect_program(
             added_staff += parameters.count
         if effect.op == "add_toilet":
             added_facilities += parameters.count
+            toilet_additions.append((label, target_id, parameters.count))
         if effect.op == "add_evacuees":
             added_evacuees += parameters.count
 
@@ -1378,6 +1420,8 @@ def validate_effect_program(
         issues.append("temporary person capacity exceeds the 1000-person per-zone bound")
     if len(world.facilities) + pending_facility_additions + added_facilities > 200:
         issues.append("program exceeds the 200-facility runtime bound")
+    if toilet_additions and "facility_geometry" in world.model_configs:
+        issues.extend(_toilet_placement_issues(world, toilet_additions))
     population_state = world.model_state.get("population_dynamics_v1")
     if isinstance(population_state, dict):
         known_population = set(population_state.get("initial_agent_ids", ())) | set(
@@ -2482,6 +2526,8 @@ class EffectProgramStructureHandler:
         else:
             if len(candidate.facilities) + count > 200:
                 raise EventApplicationError("adding toilets would exceed the 200-facility bound")
+            from sheltersim.domain.agent_dynamics import announce_installed_facility
+
             for index in range(count):
                 facility_id = f"effect-toilet-{suffix}-{index + 1}"
                 if facility_id in candidate.facilities:
@@ -2493,6 +2539,15 @@ class EffectProgramStructureHandler:
                     capacity=1,
                     working_units=1,
                 )
+                if installed_facility_placement_enabled(candidate):
+                    try:
+                        place_installed_facility(
+                            candidate, facility_id, event_id=event.event_id,
+                            source_ids=(event.source_id,) if event.source_id else (),
+                        )
+                    except ValueError as exc:
+                        raise EventApplicationError(str(exc)) from exc
+                announce_installed_facility(candidate, facility_id)
         candidate.validate()
         world.__dict__.clear()
         world.__dict__.update(candidate.__dict__)

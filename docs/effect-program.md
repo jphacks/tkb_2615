@@ -15,7 +15,7 @@ EffectProgramの版付き契約とoffline interpreterはsheltersim.events.effect
 | set_ambient_noise | zone 1件、normalized_noise_0_1。levelは0–1 | 任意導入のzone_environment_v1 policyが必要です。既存心理Policyによる休息・睡眠中の疲労回復を変えます。stressやKPIへ直接書きません。 |
 | modify_demand_rate | zone 1件、relative_action_rate。確率とrest/sleep決定間隔の倍率は0.5–2 | 任意導入のzone_environment_v1 policyが必要です。Zone内の1 actionに対するsoftmax選択重みを変えます。rest/sleepの決定間隔は設定範囲に制限します。water/meal actionにはresource_service_v1も必要です。 |
 | add_staff | zone 1件、staff_member。countは1–100 | 決定的IDで通常支援staffを追加します。総staff数は100人以下です。一回限りの構造変更です。 |
-| add_toilet | zone 1件、toilet_stall。countは1–20 | 1ユニット設備を追加します。設備総数は200以下です。一回限りの構造変更です。 |
+| add_toilet | zone 1件、toilet_stall。countは1–20 | 1ユニット設備を追加します。設備総数は200以下です。一回限りの構造変更です。agent_dynamics v3のScenarioでは、追加したトイレを在所者全員へ知らせます（v2以前では既存の在所者は知りません）。図面のあるScenarioでは`geometry_overlay` schema_version 4が必要で、生成器と同じ格子規則で空き位置に置きます。置けない場合や版4未満の場合は適用不可です。 |
 
 zone_environment_v1は任意設定で、既存Zoneに限定されます。編集係数は仮定のsource IDを持ち、範囲を制限します。設定を省けばoperatorはcompiler previewから外れ、追加runtime stateも作りません。実測音、臨床的睡眠障害、群集移動、照明、温度、情報伝播、施設固有需要、任意のmodel config変更は表現しません。対応Policyが追加されるまでは未対応です。
 

@@ -11,6 +11,7 @@ from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import (
     AGENT_DYNAMICS_POLICY_VERSION,
     AGENT_DYNAMICS_STATE_KEY,
+    ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
     ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
     ORIENTATION_FACILITY_SOURCE_ID,
     canonical_agent_dynamics_config,
@@ -42,8 +43,9 @@ def _world(scenario: ScenarioSpec) -> WorldState:
 
 def test_generated_agents_know_shared_facilities_but_not_group_spaces() -> None:
     scenario = _generated()
+    # v3 keeps the v2 intake orientation checked here.
     assert scenario.model_configs["agent_dynamics"]["policy_version"] == (
-        ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION
+        ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
     )
     assert any(row["id"] == ORIENTATION_FACILITY_SOURCE_ID
                for row in scenario.provenance["assumptions"])

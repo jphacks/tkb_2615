@@ -118,12 +118,12 @@ class ProjectServices:
                     },
                     "temporary_room_beds": {
                         "policy_version": "exclusive-physical-sleep-beds-v1",
-                        "enabled_by": "geometry_overlay.schema_version=2 or 3",
+                        "enabled_by": "geometry_overlay.schema_version=2, 3 or 4",
                         "route_scope": "same_zone_in_room_route",
                     },
                     "temporary_room_intake": {
                         "policy_version": "physical-temporary-room-intake-v1",
-                        "enabled_by": "geometry_overlay.schema_version=3",
+                        "enabled_by": "geometry_overlay.schema_version=3 or 4",
                         "arrival_parameters": {
                             "admission_zone_ids": "explicit ordered fallback zones",
                             "approach_route_id": "optional FacilityGeometry.arrival_approach_routes ID ending at the preferred zone",

@@ -69,6 +69,14 @@ TEMPORARY_ROOM_BED_POLICY_VERSION = "exclusive-physical-sleep-beds-v1"
 TEMPORARY_ROOM_BED_SOURCE_ID = "ASM-TEMPORARY-ROOM-BEDS-V1"
 TEMPORARY_ROOM_INTAKE_POLICY_VERSION = "physical-temporary-room-intake-v1"
 TEMPORARY_ROOM_INTAKE_SOURCE_ID = "ASM-TEMPORARY-ROOM-INTAKE-V1"
+# geometry_overlay schema_version=4 places facilities installed during a Run on
+# the floor plan with the Scenario generator's own grid rule.
+INSTALLED_FACILITY_PLACEMENT_POLICY_VERSION = "generator-grid-installed-facility-v1"
+INSTALLED_FACILITY_PLACEMENT_SOURCE_ID = "ASM-INSTALLED-FACILITY-PLACEMENT-V1"
+# The narrowest physical queue spacing (independent walkers, movement.py); the
+# generator itself can place facilities this close in a narrow zone.
+INSTALLED_FACILITY_MIN_SEPARATION_M = 0.6
+MAX_INSTALLED_FACILITY_GRID_GROWTH = 16
 MAX_BED_ROUTE_CANDIDATES = 256
 MAX_ROOM_ADMISSION_POINTS = 256
 GEOMETRY_OPERATORS = frozenset(
@@ -194,6 +202,7 @@ class _GeometryHistory(ExtensionModel):
         "set_partition",
         "set_route_access",
         "temporary_room_geometry",
+        "install_facility",
     ]
     target_id: Identifier
     status: Literal["applied", "expired"]
@@ -250,7 +259,7 @@ def reserve_sleep_bed(world: Any, agent_id: str) -> dict[str, Any] | None:
         or agent is None
         or not isinstance(movement, dict)
         or not isinstance(overlay_config, dict)
-        or overlay_config.get("schema_version") not in {2, 3}
+        or overlay_config.get("schema_version") not in {2, 3, 4}
     ):
         return None
     reservations = state.setdefault("bed_reservations", {})
@@ -369,7 +378,7 @@ def available_temporary_room(world: Any, zone_id: str) -> str | None:
     state = world.model_state.get(GEOMETRY_OVERLAY_KEY)
     if (
         not isinstance(config, dict)
-        or config.get("schema_version") != 3
+        or config.get("schema_version") not in {3, 4}
         or not isinstance(state, dict)
     ):
         return None
@@ -527,6 +536,92 @@ def effective_geometry(world: Any) -> FacilityGeometry | None:
     return geometry.model_copy(update={
         "facility_points": points, "service_points": tuple(shifted_service_points),
     })
+
+
+def installed_facility_placement_enabled(world: Any) -> bool:
+    """Whether this Scenario places installed facilities on its floor plan."""
+    config = world.model_configs.get("geometry_overlay", {})
+    return (
+        isinstance(config, dict)
+        and config.get("schema_version") == 4
+        and isinstance(world.model_state.get(GEOMETRY_OVERLAY_KEY), dict)
+    )
+
+
+def installed_facility_point(world: Any, facility_id: str) -> Point2D | None:
+    """Choose a free generator-grid slot in the facility's zone, or None if none fits.
+
+    Existing facilities keep their points. The grid of the zone's facilities plus
+    this one is searched in slot order, then grown, for a walkable, reachable
+    point at least the narrowest queue spacing away from every other facility.
+    """
+    from sheltersim.domain.movement import _point_walkable, plan_in_room_route
+    from sheltersim.region.facility import facility_grid_point
+
+    facility = world.facilities.get(facility_id)
+    geometry = effective_geometry(world)
+    if facility is None or geometry is None:
+        return None
+    zone = next((row for row in geometry.zones if row.zone_id == facility.zone_id), None)
+    if zone is None:
+        return None
+    others = [
+        geometry.facility_points[key]
+        for key, item in sorted(world.facilities.items())
+        if key != facility_id and item.zone_id == facility.zone_id
+        and key in geometry.facility_points
+    ]
+    constraints = effective_spatial_constraints(world)
+    state = world.model_state.get(GEOMETRY_OVERLAY_KEY, {})
+    blocked = (
+        *(item.polygon for item in constraints.obstacles),
+        *(item.polygon for item in constraints.equipment_footprints),
+        *(
+            tuple(Point2D.model_validate(point) for point in room["polygon_m"])
+            for room in state.get("temporary_rooms", {}).values()
+            if room.get("active")
+        ),
+    )
+    for count in range(len(others) + 1, len(others) + 1 + MAX_INSTALLED_FACILITY_GRID_GROWTH):
+        for index in range(count):
+            point = facility_grid_point(zone.polygon, index, count)
+            if (
+                _point_walkable(point, zone.polygon, blocked)
+                and all(
+                    math.hypot(point.x - other.x, point.y - other.y)
+                    >= INSTALLED_FACILITY_MIN_SEPARATION_M
+                    for other in others
+                )
+                and plan_in_room_route(
+                    world, zone_id=facility.zone_id, start=None, destination=point
+                ) is not None
+            ):
+                return point
+    return None
+
+
+def place_installed_facility(
+    world: Any, facility_id: str, *, event_id: str, source_ids: tuple[str, ...]
+) -> Point2D:
+    """Record the floor-plan point of a facility installed during the Run."""
+    point = installed_facility_point(world, facility_id)
+    if point is None:
+        raise ValueError(f"no free floor-plan point for installed facility {facility_id!r}")
+    state = world.model_state[GEOMETRY_OVERLAY_KEY]
+    common = {
+        "event_id": event_id,
+        "source_ids": sorted({*source_ids, INSTALLED_FACILITY_PLACEMENT_SOURCE_ID}),
+        "minute": world.minute_index,
+    }
+    state["facility_points"][facility_id] = {"point_m": point.model_dump(mode="json"), **common}
+    import hashlib
+
+    digest = hashlib.sha256(f"{event_id}:{facility_id}".encode()).hexdigest()[:24]
+    transition_id = f"install-{digest}"
+    state["history"].append({"transition_id": transition_id, "op": "install_facility",
+        "target_id": facility_id, "status": "applied", "causation_id": event_id, **common})
+    del state["history"][:-20000]
+    return point
 
 
 def effective_spatial_constraints(world: Any) -> SpatialConstraints:
