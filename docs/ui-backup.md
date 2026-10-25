@@ -38,7 +38,7 @@ SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
 | 施設種別 | request.facility_conditions | 条件の記録に対応 / 実施設の図面・適合性や別形状を推測しない |
 | 人口構成・施設概要 | preview.scenario、facility_design | 実装済み / 記録年齢の構成図と生成Geometryを描画 |
 | 明示承認・Run作成 | POST P/scenario-approve | 実装済み / preview_id、approved_hash、approved:trueを送信 |
-| 計算・停止・進捗 | POST R/resume、R/cancel、GET R | 実装済み / 計算と再生を独立、保存済み時刻を進捗表示 |
+| 計算・停止・進捗 | POST R/resume、R/cancel、GET R | 実装済み / 計算と再生を独立、保存済み時刻を進捗表示。計算中はGET Rで状態だけを確認し、表示中のRun・Branch・時刻とhead checkpoint_hashが変わったときだけtimelineを再取得 |
 | マップ・人物・スタッフ・正式KPI | GET B/timeline?minute=M | 実装済み / 明示された模式図と実座標の切替、欠測位置の行動を補わない |
 | レイヤー・拡大縮小・人物選択 | timelineデータによるブラウザー描画 | 実装済み / 独立Canvas描画、ドラッグ・キー移動・集合内の人物選択。健康レイヤーは記録された疲労・空腹・水分ニーズで、医学診断ではない |
 | 再生・停止・速度・巻戻し | GET R/replay-frames | 実装済み / 1分刻みの記録を最大8境界ずつ取得。1/5/15/60/120/240×の実時間時計で連続描画し、通信待ちは時刻を保持 |

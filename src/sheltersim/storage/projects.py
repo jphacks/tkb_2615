@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -59,7 +60,13 @@ def safe_document(value: Any) -> Any:
         return [safe_document(item) for item in value]
     if isinstance(value, str):
         return _PHONE.sub("[redacted]", _SECRET.sub("[redacted]", value))
-    if value is None or type(value) in (bool, int, float):
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is float and math.isfinite(value):
+        # Finite built-in floats already satisfy the JSON scalar contract.
+        # Avoid constructing a JSON encoder for every coefficient/KPI/history value.
+        return value
+    if type(value) in (int, float):
         canonical(value)
         return value
     raise StorageError("saved data must be finite JSON")
@@ -290,10 +297,15 @@ class ProjectStore:
         with self.transaction():
             run = self.run(project_id, reference.run_id)
             scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
-            world = checkpoint.restore_world()
-            if world.scenario_id != scenario.id or world.seed != scenario.seed or world.model_configs != scenario.model_configs:
+            # to_dict validates both hashes, WorldState/model compatibility and
+            # metrics, and returns an owned snapshot. Reuse it throughout this
+            # locked save instead of restoring/copying the growing history again.
+            document = checkpoint.to_dict()
+            world = document["world_state"]
+            if (world["scenario_id"] != scenario.id or world["seed"] != scenario.seed
+                    or world["model_configs"] != scenario.model_configs):
                 raise StorageError("checkpoint does not match immutable run inputs")
-            if world.duration_minutes != scenario.duration_minutes:
+            if world["duration_minutes"] != scenario.duration_minutes:
                 raise StorageError("checkpoint duration does not match run inputs")
             if reference.fork_minute > reference.computed_until:
                 raise StorageError("fork minute cannot exceed computed history")
@@ -316,7 +328,7 @@ class ProjectStore:
                 parent, _ = self.load_branch(project_id, reference.run_id, reference.parent_branch_id)
                 if not parent.fork_minute <= reference.fork_minute <= parent.computed_until:
                     raise StorageError("fork point is outside parent history")
-            if safe_document(checkpoint.to_dict()) != checkpoint.to_dict():
+            if safe_document(document) != document:
                 raise StorageError("checkpoint contains sensitive data")
             checkpoint_path = self._path(project_id, "runs", reference.run_id, "checkpoints", f"{checkpoint.checkpoint_hash}.json")
             checkpoint_bytes_before = self.checkpoint_write_bytes(project_id, reference.run_id)
@@ -326,7 +338,9 @@ class ProjectStore:
                 "status": "checkpoint_archive_write_in_progress",
             })
             archive = CheckpointArchive(checkpoint_path.parent, max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536))
-            encoded_archive = archive.encode(checkpoint)
+            encoded_archive = archive._encode_validated_document(
+                document, checkpoint_hash=checkpoint.checkpoint_hash,
+            )
             new_manifest = not checkpoint_path.exists()
             self._write(checkpoint_path, encoded_archive, immutable=True)
             manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0

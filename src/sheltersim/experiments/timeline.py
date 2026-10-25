@@ -342,6 +342,7 @@ class TimelineStore:
         sink = _IndexedMetricSink(runtime.metrics, runtime.world)
         controller = OfflineSimulationController(runtime.world, sink, llm_router=router)
         engine = TickEngine(runtime.world, phase_handler=controller)
+        last_recorded_minute = head.simulation_minute
         while runtime.world.minute_index < target_minute:
             if cancelled is not None and cancelled():
                 break
@@ -349,9 +350,13 @@ class TimelineStore:
             if runtime.world.minute_index % checkpoint_interval == 0:
                 self.record(runtime, fork_minute=reference.fork_minute, router=router, observations=sink.observations)
                 sink.observations.clear()
+                last_recorded_minute = runtime.world.minute_index
         if runtime.world.minute_index == head.simulation_minute:
             return BranchRuntime.from_checkpoint(head, branch_id=branch_id, parent_branch_id=reference.parent_branch_id)
-        self.record(runtime, fork_minute=reference.fork_minute, router=router, observations=sink.observations)
+        # A boundary that ended on the interval is already durable; record only an
+        # unsaved remainder (odd target or cancellation between boundaries).
+        if runtime.world.minute_index != last_recorded_minute:
+            self.record(runtime, fork_minute=reference.fork_minute, router=router, observations=sink.observations)
         return runtime
 
     def fork(self, branch_id: str, minute: int, child_id: str, *, program: Any = None, approved_program_hash: str | None = None) -> BranchRuntime:
