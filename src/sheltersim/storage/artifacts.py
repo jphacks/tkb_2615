@@ -74,11 +74,12 @@ class ArtifactStore:
             except FileExistsError:
                 if path.read_bytes() != data:
                     raise StorageError("immutable_asset_conflict")
-            directory = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            if os.name != "nt":  # Windows cannot open a directory for fsync.
+                directory = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
         finally:
             os.unlink(temporary)
 
