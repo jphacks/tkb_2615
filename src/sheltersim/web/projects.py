@@ -75,6 +75,19 @@ class ProjectAPI:
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "telemetry" and not query:
             self.store.run(project_id, parts[2])
             return RunTelemetryStore(self.store, project_id, parts[2]).read()
+        if len(parts) == 4 and parts[1] == "runs" and parts[3] == "replay-frames":
+            from sheltersim.web.replay import replay_frames
+
+            if set(query) != {"branch_ids", "start", "end"} or any(
+                len(values) != 1 for values in query.values()
+            ):
+                raise StorageError("replay parameters must each occur once")
+            try:
+                start, end = int(query["start"][0]), int(query["end"][0])
+            except ValueError as exc:
+                raise StorageError("replay bounds must be integers") from exc
+            return replay_frames(self.store, self.workspace, project_id, parts[2],
+                                 query["branch_ids"][0].split(","), start, end)
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "compare" and set(query) == {"branch_ids", "minute"}:
             if any(len(values) != 1 for values in query.values()):
                 raise StorageError("comparison parameters must each occur once")

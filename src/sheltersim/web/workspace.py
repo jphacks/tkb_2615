@@ -307,8 +307,8 @@ class ProjectWorkspace:
             paired = all((r == first or key == first["branch_id"]) for key, r in zip(branch_ids, receipts, strict=True))
         else:
             paired = False
-        base = frames[0]["kpis"]
-        return {"schema_version": 1, "run_id": run_id, "minute": minute, "common_range": [lower, upper], "frames": frames, "origin_receipts": receipts, "shared_origin": paired, "differences": [{"branch_id": f["branch_id"], "metrics": {key: f["kpis"][key]-value for key, value in base.items() if type(value) in (int, float) and type(f["kpis"].get(key)) in (int, float)}} for f in frames[1:]], "interpretation": "Same Run/seed/time descriptive model comparison. Shared lineage does not establish real-world causation."}
+        from sheltersim.web.replay import comparison_projection
+        return comparison_projection(run_id, minute, [lower, upper], frames, receipts, paired)
 
     def intervention(self, project_id: str, run_id: str, branch_id: str, body: dict[str, Any]) -> dict[str, Any]:
         from sheltersim.web.projects import fields

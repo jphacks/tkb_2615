@@ -483,17 +483,20 @@ def _resolve_target(text: str, op: str, summary: ScenarioSummary) -> _TargetReso
         for zone in candidates
         if _contains_label(text, zone.id) or _contains_label(text, zone.name)
     ]
-    if named_zones:
+    explicit_zone_id = _explicit_zone_id(text)
+    if explicit_zone_id is not None:
+        matches = [zone for zone in candidates if zone.id == explicit_zone_id]
+        if not matches:
+            return _TargetResolution(
+                selector=None,
+                issue=ParseIssue(
+                    code="unknown_target",
+                    message=f"指定したZone ID {explicit_zone_id} はシナリオにありません。",
+                    choices=[zone.id for zone in candidates],
+                ),
+            )
+    elif named_zones:
         matches = named_zones
-    elif (explicit_zone_id := _explicit_zone_id(text)) is not None:
-        return _TargetResolution(
-            selector=None,
-            issue=ParseIssue(
-                code="unknown_target",
-                message=f"指定したZone ID {explicit_zone_id} はシナリオにありません。",
-                choices=[zone.id for zone in candidates],
-            ),
-        )
     elif summary.default_zone_id is not None:
         matches = [zone for zone in candidates if zone.id == summary.default_zone_id]
     else:

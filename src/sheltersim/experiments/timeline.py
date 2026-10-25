@@ -284,6 +284,11 @@ class TimelineStore:
         if not reference.fork_minute<=start<=end<=reference.computed_until:
             raise TimelineError("replay interval outside computed range")
         runtime=self.seek(branch_id,start)
+        # Observe the exact saved boundary before controller initialization can
+        # install any missing optional state. A one-frame read needs no controller.
+        yield runtime.world
+        if runtime.world.minute_index == end:
+            return
         router=None
         saved=runtime.runtime_state.get("llm")
         if saved is not None:
@@ -294,11 +299,9 @@ class TimelineStore:
             router=RecordedRouter(saved,complete,runtime.runtime_state.get("llm_settings",{}))
         controller=OfflineSimulationController(runtime.world,_MetricSink(runtime.metrics),llm_router=router)
         engine=TickEngine(runtime.world,phase_handler=controller)
-        while True:
-            yield runtime.world
-            if runtime.world.minute_index == end:
-                break
+        while runtime.world.minute_index < end:
             engine.step()
+            yield runtime.world
 
     def advance(self, branch_id: str, target_minute: int, *, router: LLMRouter | None = None, checkpoint_interval: int = 30, cancelled: Any = None) -> BranchRuntime:
         lease = self.store.claim_run(self.project_id, self.run_id)

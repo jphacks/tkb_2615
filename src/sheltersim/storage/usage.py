@@ -56,6 +56,11 @@ class UsageLedger:
 
     def summary(self) -> dict[str, Any]:
         document = self.store._read(self.path)
+        audit_events = (
+            self.store._read(self.audit_path).get("events", [])
+            if self.audit_path.exists()
+            else []
+        )
         receipts = document["receipts"].values()
         totals = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_nusd": 0}
         stages: dict[str, dict[str, int]] = {}
@@ -89,9 +94,12 @@ class UsageLedger:
             "estimated_cost_usd": totals["cost_nusd"] / 1_000_000_000,
             "uncertain_calls": uncertain, "coverage": document["coverage"],
             "frozen": document["frozen"],
-            "unfreeze_events": (
-                self.store._read(self.audit_path)["events"] if self.audit_path.exists() else []
-            ),
+            "unfreeze_events": [
+                event for event in audit_events if event.get("action") != "budget_increase"
+            ],
+            "budget_increase_events": [
+                event for event in audit_events if event.get("action") == "budget_increase"
+            ],
             "remaining_allowance": {
                 "calls":max(0,document["limits"]["max_calls"]-totals["calls"]),
                 "input_tokens":max(0,document["limits"]["max_input_tokens"]-totals["input_tokens"]),
@@ -217,6 +225,55 @@ class UsageLedger:
             self.store._write(self.path, document)
         return event
 
+    def increase_budget(
+        self, *, confirm_account_id: str, new_budget_usd: float, reason: str
+    ) -> dict[str, Any]:
+        """Explicitly raise an account's total budget and preserve a separate audit event."""
+        if confirm_account_id != self.account_id:
+            raise StorageError("usage_budget_confirmation_mismatch")
+        if (
+            isinstance(new_budget_usd, bool)
+            or not isinstance(new_budget_usd, (int, float))
+            or not math.isfinite(new_budget_usd)
+            or new_budget_usd <= 0
+        ):
+            raise StorageError("usage_budget_must_be_positive_and_finite")
+        reason = reason.strip()
+        if not reason or len(reason) > 200:
+            raise StorageError("usage_budget_increase_reason_required")
+        with self.store.transaction():
+            document = self.store._read(self.path)
+            previous_budget = document["limits"]["budget_usd"]
+            if new_budget_usd <= previous_budget:
+                raise StorageError("usage_budget_must_increase")
+            if any(row["status"] == "pending" for row in document["receipts"].values()):
+                raise StorageError("usage_budget_increase_pending_reservations")
+            updated_limits = UsageLimits.model_validate(
+                {**document["limits"], "budget_usd": float(new_budget_usd)}
+            )
+            event = {
+                "action": "budget_increase",
+                "increased_at": datetime.now(UTC).isoformat(),
+                "previous_budget_usd": previous_budget,
+                "new_budget_usd": updated_limits.budget_usd,
+                "reason": reason,
+                "receipt_count": len(document["receipts"]),
+            }
+            audit = (
+                self.store._read(self.audit_path)
+                if self.audit_path.exists()
+                else {"schema_version": 1, "account_id": self.account_id, "events": []}
+            )
+            if audit.get("account_id") != self.account_id or not isinstance(
+                audit.get("events"), list
+            ):
+                raise StorageError("usage_budget_audit_invalid")
+            audit["events"] = [*audit["events"], event]
+            document["limits"] = updated_limits.model_dump(mode="json")
+            self.store._write(self.audit_path, audit)
+            self.store._write(self.path, document)
+        return event
+
     def cancel_before_provider(self, receipt_id: str) -> None:
         """Release a reservation only when a later local preflight blocked the call."""
         with self.store.transaction():
@@ -313,8 +370,8 @@ def task_campaign_ledger(_store: ProjectStore | None = None) -> UsageLedger:
 
     Its platform user-data path is independent of Project roots, so a different project
     directory, CLI invocation, Web worker or process still sees the same allowance.
-    The cap is code-owned, not an environment setting, so Run/account changes cannot
-    increase the task-wide ceiling. `_store` remains accepted for caller compatibility.
+    The default cap is not an environment or Run setting. Any larger local cap must
+    have a matching confirmed, audit-logged increase history. `_store` remains accepted.
     """
     del _store
     store = task_campaign_store()
@@ -328,7 +385,16 @@ def task_campaign_ledger(_store: ProjectStore | None = None) -> UsageLedger:
         max_concurrency=16,
     ))
     summary = ledger.summary()
-    if summary["limits"]["budget_usd"] != TASK_CAMPAIGN_BUDGET_USD:
+    expected_budget = TASK_CAMPAIGN_BUDGET_USD
+    for event in summary["budget_increase_events"]:
+        if (
+            event.get("previous_budget_usd") != expected_budget
+            or not isinstance(event.get("new_budget_usd"), (int, float))
+            or event["new_budget_usd"] <= expected_budget
+        ):
+            raise StorageError("campaign_usage_cap_mismatch")
+        expected_budget = event["new_budget_usd"]
+    if summary["limits"]["budget_usd"] != expected_budget:
         raise StorageError("campaign_usage_cap_mismatch")
     return ledger
 
@@ -345,7 +411,7 @@ def task_campaign_summary() -> dict[str, Any]:
     summary = ledger.summary()
     totals = summary["totals"]
     receipts, anchor = ledger.receipt_records({})
-    return {"status": "active", "budget_usd": TASK_CAMPAIGN_BUDGET_USD,
+    return {"status": "active", "budget_usd": summary["limits"]["budget_usd"],
             "calls": totals["calls"],
             "reserved_or_spent_usd": summary["estimated_cost_usd"],
             "uncertain_calls": summary["uncertain_calls"],
