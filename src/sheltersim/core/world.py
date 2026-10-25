@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any
 
 from sheltersim.contracts.policies import selected_models
+from sheltersim.core.history import records_since_previous_tick
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_STATE_KEY,
     create_zone_environment_runtime_state,
@@ -268,7 +269,9 @@ class WorldState:
         if extension_keys.intersection(self.model_state) or simulator_signatures(self.model_configs):
             from sheltersim.domain.simulator_state import validate_simulator_extensions
             try:
-                validate_simulator_extensions(self)
+                validate_simulator_extensions(
+                    self, validate_event_history=validate_event_history
+                )
             except (ValueError, KeyError, TypeError) as exc:
                 raise StateInvariantError("invalid simulator extension state") from exc
         resource_service_enabled = "resource_service" in self.model_configs
@@ -334,7 +337,12 @@ class WorldState:
                 "travel_rejected",
                 "service_disabled",
             }
-            for record in service_state["request_history"]:
+            request_history = service_state["request_history"]
+            stall_history = service_state["queue_stall_history"]
+            if not validate_event_history:
+                request_history = records_since_previous_tick(request_history, self.minute_index)
+                stall_history = records_since_previous_tick(stall_history, self.minute_index)
+            for record in request_history:
                 if (
                     not isinstance(record, dict)
                     or set(record)
@@ -384,7 +392,7 @@ class WorldState:
                     raise StateInvariantError("resource service request outcome is inconsistent")
             known_reasons = {"capacity", "staff", "stock", "run_end", "water_outage"}
             previous_stall_minute = -1
-            for record in service_state["queue_stall_history"]:
+            for record in stall_history:
                 if (
                     not isinstance(record, dict)
                     or set(record) != {"minute", "facility_id", "agent_id", "reason"}

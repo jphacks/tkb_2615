@@ -288,8 +288,14 @@ def initialize_simulator_extensions(world: WorldState) -> None:
     validate_simulator_extensions(world)
 
 
-def validate_simulator_extensions(world: WorldState) -> None:
-    """Validate each extension independently for checkpoint and restore hooks."""
+def validate_simulator_extensions(
+    world: WorldState, *, validate_event_history: bool = True
+) -> None:
+    """Validate each extension independently for checkpoint and restore hooks.
+
+    Per-tick validation passes ``validate_event_history=False``: append-only histories
+    are then checked only for records from the tick that just ended.
+    """
     required = {key.removeprefix("simulator:") for key in simulator_signatures(world.model_configs) if key.startswith("simulator:")}
     if TEMPORARY_SPACES_STATE_KEY in world.model_state and TEMPORARY_SPACES_STATE_KEY not in required:
         raise ValueError("temporary_spaces_v1 requires an enabled, signed state contract")
@@ -301,7 +307,7 @@ def validate_simulator_extensions(world: WorldState) -> None:
     if missing:
         raise ValueError(f"required simulator state is missing: {sorted(missing)}")
     validate_agent_dynamics_state(world)
-    validate_body_state(world)
+    validate_body_state(world, validate_event_history=validate_event_history)
     validate_population_dynamics_state(world)
     validate_population_lifecycle_state(world)
     validate_social_network_state(world)
@@ -313,7 +319,7 @@ def validate_simulator_extensions(world: WorldState) -> None:
     validate_facility_queue_state(world)
     if SHARED_OPERATIONS_KEY in world.model_state and "shared_operations" not in world.model_configs:
         raise ValueError("shared_operations_v1 requires its signed Scenario contract")
-    validate_shared_operations_state(world)
+    validate_shared_operations_state(world, validate_event_history=validate_event_history)
 
 
 def restore_simulator_extensions(world: WorldState, model_state: dict[str, Any]) -> None:
