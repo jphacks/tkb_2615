@@ -212,9 +212,11 @@
     const box=$("effect-explanation"),result=detail?.result||{},program=result.program,operators=state.modelContracts?.executable_effect_primitives||[],supported=new Set(operators.map(item=>item.op)),registryKnown=Array.isArray(state.modelContracts?.executable_effect_primitives);box.replaceChildren();
     text(box,"h4",`型付き介入Preview · ${result.support_mode||result.status||"状態不明"} · can_apply ${result.can_apply===true?"true":"false / 未確認"}`);
     text(box,"p",`Run ${detail.run||"不明"} / Branch ${detail.branch||"不明"} · minute ${detail.minute??"不明"}。PreviewはまだWorldStateを変更していません。モデル内の差は実世界で実証された因果効果ではありません。`);
+    if(result.fallback_used===true)text(box,"p","AI（Opus）の解釈を使わず、規則ベースの処理で作成した結果です。理由は下の「制限・AIを使わなかった理由」を参照してください。","muted");
     if(program?.effects?.length){for(const effect of program.effects){const available=registryKnown?(supported.has(effect.op)?"実行可能primitive":"未登録/未実行可能") : "実行可否不明 · 共通Registry未取得";text(box,"p",`${available} · ${effect.effect_id||"effect"} / ${effect.op||"op不明"} · target ${effect.target_selector?.kind||"selector不明"} ${effect.target_selector?.id||""} · start ${effect.start_minute??"?"} · units ${effect.units||"不明"} · source ${effect.source_id||"未記録"} · assumptions ${(effect.assumption_ids||[]).join(", ")||"なし"}`);}}
     else text(box,"p",`検証済みEffectProgramはありません。${result.clarification_question||result.explanation||"未対応または曖昧な条件は実行可能な作用に変換されていません。"}`);
     if((program?.assumptions||[]).length){text(box,"h4","明示された仮定");for(const assumption of program.assumptions)text(box,"p",`${assumption.assumption_id||"仮定"} · ${assumption.statement||assumption.description||JSON.stringify(assumption)} · source ${assumption.source_id||"未記録"}`);}
+    if((result.limitations||[]).length){text(box,"h4",result.fallback_used===true?"制限・AIを使わなかった理由":"制限");for(const item of result.limitations)text(box,"p",item);}
     if((result.validation_issues||[]).length){text(box,"h4","サーバー検証エラー");for(const issue of result.validation_issues)text(box,"p",issue);}
     text(box,"p",`コンパイラー provenance: ${JSON.stringify(program?.compiler_provenance||result.compiler_provenance||"not returned")} · 型付きProgramがないときは適用ボタンを有効化しません。`);
   }

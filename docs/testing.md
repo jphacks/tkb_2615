@@ -40,6 +40,8 @@ tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、�
 
 testは決定的state遷移、Checkpoint serializationと復元、独立Branch、event順、施設・資源・職員操作、履歴・timeline検索、model provenance、LLM fallbackとresponse tape、Project永続化、Web route、Demo成果物を確認します。詳細は各packageに隣接するtest fileを参照してください。
 
+Project画面の作用説明（`project-round3.js`の`renderEffectExplanation`）は、`tests/test_effect_explanation_ui.py`がその関数だけをnodeで実行して確認します。fallback時の理由表示などが対象です。nodeがない環境ではskipします。
+
 ## 確認できていないこと
 
 - 今回、live有料Provider testは実行していません。
