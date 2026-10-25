@@ -195,6 +195,33 @@ def test_checkpoint_fails_closed_for_versions_corruption_and_model_mismatch() ->
         checkpoint.restore_world(expected_model_versions={"behavior": "unexpected"})
 
 
+def test_capture_hashes_once_and_later_reads_still_detect_mutation(monkeypatch) -> None:
+    import sheltersim.core.checkpoint as module
+
+    world_digests, body_digests = [], []
+    original = module._digest
+
+    def digest(value):
+        if isinstance(value, dict) and "event_log" in value:
+            world_digests.append(1)
+        if isinstance(value, dict) and "world_state" in value:
+            body_digests.append(1)
+        return original(value)
+
+    monkeypatch.setattr(module, "_digest", digest)
+    checkpoint = Checkpoint.capture(load_live_world())
+    assert (len(world_digests), len(body_digests)) == (1, 1)
+    monkeypatch.undo()
+
+    checkpoint.runtime_state["unexpected"] = 1
+    with pytest.raises(CheckpointError, match="^checkpoint integrity hash mismatch"):
+        checkpoint.to_dict()
+    del checkpoint.runtime_state["unexpected"]
+    checkpoint.world_state["resources"]["water"] = 500
+    with pytest.raises(CheckpointError, match="WorldState integrity hash mismatch"):
+        checkpoint.to_dict()
+
+
 def test_checkpoint_cadence_is_configurable_and_defaults_to_thirty_minutes() -> None:
     schedule = CheckpointSchedule()
 
