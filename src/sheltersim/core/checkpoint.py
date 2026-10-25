@@ -80,13 +80,10 @@ class Checkpoint:
         expected_model_versions: dict[str, str] | None = None,
     ) -> WorldState:
         """Recreate an independent world and optionally enforce runtime model versions."""
-        self._validate()
+        world, _ = self._validate()
         if expected_model_versions is not None and expected_model_versions != self.model_versions:
             raise CheckpointError("checkpoint model versions do not match the active runtime")
-        try:
-            return WorldState.from_dict(self._world_document_for_restore())
-        except StateInvariantError as exc:
-            raise CheckpointError(f"checkpoint WorldState cannot be restored: {exc}") from exc
+        return world
 
     def _legacy_queue_migration_required(self) -> bool:
         installed = model_signatures(self.world_state.get("model_configs", {}))
@@ -126,7 +123,9 @@ class Checkpoint:
                 independent_queues_required,
             )
             if not independent_queues_required(world_document.get("model_configs", {})):
-                raise CheckpointError("legacy queue migration was requested for an unrelated scenario")
+                raise CheckpointError(
+                    "legacy queue migration was requested for an unrelated scenario"
+                )
             world_document["model_state"][FACILITY_QUEUES_LEGACY_MODE_KEY] = dict(
                 FACILITY_QUEUES_LEGACY_MODE
             )
@@ -134,8 +133,12 @@ class Checkpoint:
 
     def restore_metrics(self) -> MetricsRecorder:
         """Restore KPI samples and accumulation history captured with this checkpoint."""
-        self._validate()
-        return MetricsRecorder.from_dict(deepcopy(self.metrics_state))
+        _, metrics = self._validate()
+        return metrics
+
+    def restore_state(self) -> tuple[WorldState, MetricsRecorder]:
+        """Validate once and return independent world/metric continuation objects."""
+        return self._validate()
 
     def to_dict(self) -> dict[str, Any]:
         """Return a detached checkpoint document."""
@@ -210,7 +213,7 @@ class Checkpoint:
         """Load and validate a checkpoint from disk."""
         return cls.from_json(Path(path).read_text(encoding="utf-8"))
 
-    def _validate(self) -> None:
+    def _validate(self) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version != self.CURRENT_SCHEMA_VERSION:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
         if self.world_state_schema_version not in (5, 6):
@@ -236,13 +239,14 @@ class Checkpoint:
         if _digest(self.world_state) != self.state_hash:
             raise CheckpointError("checkpoint WorldState integrity hash mismatch")
         try:
-            WorldState.from_dict(self._world_document_for_restore())
-            MetricsRecorder.from_dict(deepcopy(self.metrics_state))
+            world = WorldState.from_dict(self._world_document_for_restore())
+            metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         body = self._body_dict()
         if _digest(body) != self.checkpoint_hash:
             raise CheckpointError("checkpoint integrity hash mismatch")
+        return world, metrics
 
     def _body_dict(self) -> dict[str, Any]:
         return {

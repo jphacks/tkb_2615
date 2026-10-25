@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import gzip
-from bisect import bisect_right
 import hashlib
 import json
 import os
 import re
 import tempfile
+from bisect import bisect_right
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +70,19 @@ class CheckpointArchive:
         return {"kind": "value", "chunk": self._put(value)}
 
     def encode(self, checkpoint: Checkpoint) -> dict[str, Any]:
-        body = {"checkpoint_hash":checkpoint.checkpoint_hash,"document":self._pack(checkpoint.to_dict())}
+        return self._encode_validated_document(
+            checkpoint.to_dict(), checkpoint_hash=checkpoint.checkpoint_hash,
+        )
+
+    def _encode_validated_document(
+        self, document: dict[str, Any], *, checkpoint_hash: str,
+    ) -> dict[str, Any]:
+        """Pack an owned snapshot already checked by Checkpoint.to_dict().
+
+        ProjectStore reuses that same detached document for its input/privacy
+        checks and archive. Never pass an unvalidated external document here.
+        """
+        body = {"checkpoint_hash":checkpoint_hash,"document":self._pack(document)}
         return {"schema_version":1,"storage_type":"checkpoint_archive_v2",**body,
                 "manifest_hash":hashlib.sha256(_encoded(body)).hexdigest()}
 

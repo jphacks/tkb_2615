@@ -27,6 +27,30 @@ from sheltersim.experiments.scenario import ScenarioSpec
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "failure_day3.json"
 
 
+def test_paired_restore_constructs_one_validated_detached_world(monkeypatch) -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    metrics = MetricsRecorder()
+    metrics.capture(world, minute=0)
+    checkpoint = Checkpoint.capture(world, metrics=metrics)
+    original = WorldState.from_dict.__func__
+    calls = []
+
+    def restore(cls, document):
+        calls.append(document["minute_index"])
+        return original(cls, document)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(restore))
+    restored_world, restored_metrics = checkpoint.restore_state()
+    assert calls == [0]
+    assert restored_world.canonical_json() == world.canonical_json()
+    assert restored_metrics.to_dict() == metrics.to_dict()
+    restored_world.metric_state["test_only"] = 1.0
+    restored_metrics.snapshots.clear()
+    again_world, again_metrics = checkpoint.restore_state()
+    assert "test_only" not in again_world.metric_state
+    assert again_metrics.to_dict() == metrics.to_dict()
+
+
 def load_live_world() -> WorldState:
     world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
     toilet = ToiletServiceManager(world)

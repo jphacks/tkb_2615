@@ -770,6 +770,7 @@
   async function refreshRun() {
     const scope = state.scope,
       atHead = state.minute === upper(),
+      previousHead = reference()?.checkpoint_hash,
       data = await api(runBase());
     if (scope !== state.scope) return;
     if (state.loadedRun !== state.run) {
@@ -833,7 +834,15 @@
       atHead && data.status === "running"
         ? upper()
         : Math.max(lower(), Math.min(upper(), state.minute));
-    await seek(state.minute);
+    // A saved boundary is immutable. Poll status cheaply while its checkpoint
+    // and displayed target stay unchanged; full reconstruction can be expensive.
+    if (
+      !state.frame ||
+      state.frame.run_id !== state.run ||
+      state.frame.branch_id !== state.branch ||
+      state.frame.minute !== state.minute ||
+      previousHead !== reference()?.checkpoint_hash
+    ) await seek(state.minute);
     remember();
     controls();
     if (data.status === "running") {

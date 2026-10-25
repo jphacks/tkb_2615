@@ -276,11 +276,12 @@ class BranchRuntime:
             stored_parent = metadata.get("parent_branch_id") if isinstance(metadata, dict) else None
             parent_branch_id = stored_parent if stored_branch_id == branch_id else stored_branch_id
         try:
+            world, metrics = checkpoint.restore_state()
             return cls(
                 branch_id=branch_id,
                 parent_branch_id=parent_branch_id,
-                world=checkpoint.restore_world(),
-                metrics=checkpoint.restore_metrics(),
+                world=world,
+                metrics=metrics,
                 runtime_state=deepcopy(checkpoint.runtime_state),
                 command_log=deepcopy(metadata.get("command_log", []))
                 if isinstance(metadata, dict)
