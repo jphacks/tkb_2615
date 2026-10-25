@@ -58,6 +58,7 @@ from sheltersim.domain.resources import (
     RESOURCE_LEDGER_KEY,
     create_resource_ledger,
     validate_resource_ledger,
+    validate_resource_ledger_state,
 )
 from sheltersim.events.models import (
     EventKind,
@@ -1267,12 +1268,18 @@ class WorldState:
                         item["agent_id"] for item in population_state["arrivals"]
                         if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
                     }
-                validate_resource_ledger(
+                ledger_arguments = (
                     self.model_state[RESOURCE_LEDGER_KEY],
                     self.resources,
                     set(self.agents) | archived_agent_ids,
                     set(self.zones),
                 )
+                if validate_event_history:
+                    validate_resource_ledger(*ledger_arguments)
+                else:
+                    validate_resource_ledger_state(
+                        *ledger_arguments, minute_index=self.minute_index
+                    )
             except ValueError as exc:
                 raise StateInvariantError(f"invalid resource ledger: {exc}") from exc
         if any(value < 0 for value in self.id_counters.values()):
