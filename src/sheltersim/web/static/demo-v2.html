@@ -41,7 +41,7 @@
           <option value="120">120×</option>
           <option value="240">240×</option>
         </select></label
-      ><button id="play" class="primary" disabled>▶ 再生</button>
+      ><button id="play" class="primary" disabled>▶ シミュレーションを再生</button>
     </header>
     <aside class="sidebar">
       <nav aria-label="メインナビゲーション">
@@ -418,12 +418,18 @@
           <aside class="simulation-side">
             <article class="panel">
               <h2>! 発生中の事象・支援上の課題</h2>
+              <p class="fine">
+                いつ何が起きたかは、下の「イベントタイムライン」を参照してください。
+              </p>
               <div id="issues"></div>
             </article>
             <article class="panel">
-              <h2>⑂ ここから別の「もしも」を試す</h2>
+              <h2><span data-icon="comparison" class="inline-icon"></span>ここから別の「もしも」を試す</h2>
               <p class="fine">
                 計算済みの任意時刻へ戻り、作用を確認してから分岐します。
+              </p>
+              <p class="fine">
+                <strong>計算が終了してから（または「計算を停止」してから）介入してください。</strong>
               </p>
               <label for="intervention-text">介入の指示</label
               ><textarea
@@ -448,6 +454,13 @@
             </article>
             <article class="panel">
               <h2>♟ 避難者・スタッフの状態</h2>
+              <dialog id="person-dialog" class="person-dialog" aria-labelledby="person-dialog-title">
+                <div class="pd-head">
+                  <h2 id="person-dialog-title">人物の状態</h2>
+                  <button id="person-dialog-close" aria-label="閉じる">×</button>
+                </div>
+                <div id="person-dialog-body"></div>
+              </dialog>
               <div id="person-detail">
                 <p class="muted">
                   マップの人物をクリックすると、記録された状態を表示します。
@@ -457,26 +470,8 @@
             </article>
           </aside>
         </div>
-        <article class="panel timeline-panel">
-          <div class="panel-title">
-            <h2>
-              イベントタイムライン <small>直近の記録を同種・同時刻で集約</small>
-            </h2>
-            <span id="computed-label" class="badge">未計算</span>
-          </div>
-          <div class="playback">
-            <button id="timeline-play" disabled>▶ 再生</button
-            ><input
-              id="seek"
-              type="range"
-              min="0"
-              max="0"
-              value="0"
-              aria-label="計算済み時刻に移動"
-              disabled
-            /><output id="seek-label">開始前</output>
-          </div>
-          <div id="events" class="events"></div>
+        <article id="compute-panel" class="panel compute-panel">
+          <h2>シミュレーションを計算する <small>マップやタイムラインに出るのは、ここで計算した時刻までです</small></h2>
           <div class="compute-controls">
             <label
               >計算を進める時刻（経過分）<input
@@ -496,9 +491,38 @@
               aria-label="計算進捗"
             ></progress
             ><span id="compute-status" class="fine"
-              >計算と再生は別の操作です。</span
+              >「計算」で結果を作り、「シミュレーションを再生」で計算済みの結果を見ます。</span
             >
           </div>
+        </article>
+        <article class="panel timeline-panel">
+          <div class="panel-title">
+            <h2>
+              イベントタイムライン <small>直近の記録を同種・同時刻で集約</small>
+            </h2>
+            <span id="computed-label" class="badge">未計算</span>
+          </div>
+          <div class="playback">
+            <button id="timeline-play" disabled>▶ シミュレーションを再生</button
+            ><input
+              id="seek"
+              type="range"
+              min="0"
+              max="0"
+              value="0"
+              aria-label="計算済み時刻に移動"
+              disabled
+            /><output id="seek-label">開始前</output>
+          </div>
+          <h3 class="events-heading">
+            発生したスタッフ対応・避難者支援など
+            <small
+              ><span class="tone tone-resolved">青：完了・解決</span
+              ><span class="tone tone-unresolved">赤：未解決・問題</span
+              ><span class="tone tone-record">灰：経過の記録</span></small
+            >
+          </h3>
+          <div id="events" class="events"></div>
         </article>
       </section>
       <section
@@ -517,7 +541,7 @@
         </div>
         <article class="panel comparison-intro">
           <div>
-            <span class="branch-letter">⑂</span><strong>介入の記録</strong>
+            <span class="branch-letter" data-icon="comparison"></span><strong>介入の記録</strong>
             <p id="comparison-instruction">
               シミュレーション画面で介入をプレビュー・承認してください。
             </p>
@@ -541,6 +565,15 @@
               <option value="health">健康・ニーズ</option>
               <option value="operations">運営</option>
             </select></label
+          ><label class="compare-target-label"
+            >計算目標（経過分）<input
+              id="compare-target"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="終了までの範囲" /></label
+          ><button id="compute-pair" class="primary" disabled>
+            目標まで両分岐を計算</button
           ><button data-zoom="in">＋ 両マップ拡大</button
           ><button data-zoom="out">− 両マップ縮小</button
           ><button data-zoom="reset">⌖ リセット</button
@@ -551,15 +584,7 @@
               min="0"
               max="0"
               disabled /></label
-          ><output id="compare-time">—</output
-          ><label
-            >計算目標（経過分）<input
-              id="compare-target"
-              type="number"
-              min="1"
-              step="1"
-              placeholder="終了までの範囲" /></label
-          ><button id="compute-pair" disabled>目標まで両分岐を計算</button>
+          ><output id="compare-time">—</output>
         </div>
         <div class="comparison-grid">
           <article class="panel">
@@ -619,6 +644,12 @@
             ><button id="report-refresh" disabled>↻ 結果を更新</button
             ><button id="save-report" disabled>↓ レポート保存</button>
           </div>
+        </div>
+        <div id="report-draft-note" class="draft-note" hidden>
+          <strong>簡易版レポート</strong>
+          <span
+            >シミュレーションが最後の時刻まで計算されていないため、AIによるレポート本文はまだ作られていません。ここに出ているのは、計算済みの範囲の数値の要約です。「終了まで計算」すると正式なレポートに切り替わります。</span
+          >
         </div>
         <div id="report-kpis" class="kpi-grid"></div>
         <div class="report-grid">

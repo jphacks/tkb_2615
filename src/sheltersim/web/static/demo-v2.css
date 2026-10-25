@@ -996,6 +996,42 @@ main {
   display: block;
   color: #20417d;
 }
+.event-item.event-resolved {
+  border-left-color: #2f7bf6;
+}
+.event-item.event-unresolved {
+  border-left-color: #ff5b78;
+  background: #fff3f5;
+}
+.event-item.event-unresolved b {
+  color: #c4213f;
+}
+.event-item.event-record {
+  border-left-color: #b8c2d3;
+}
+.events-heading {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: #20417d;
+}
+.events-heading small {
+  margin-left: 8px;
+  font-weight: normal;
+}
+.events-heading .tone {
+  margin-right: 10px;
+  padding-left: 6px;
+  border-left: 3px solid;
+}
+.tone-resolved {
+  border-color: #2f7bf6;
+}
+.tone-unresolved {
+  border-color: #ff5b78;
+}
+.tone-record {
+  border-color: #b8c2d3;
+}
 .compute-controls {
   display: flex;
   gap: 8px;
@@ -1714,7 +1750,7 @@ body.is-busy #compute-pair {
   .timeline-panel .event-item {
     font-size: 9px;
   }
-  .timeline-panel .compute-controls {
+  .compute-panel .compute-controls {
     padding-top: 7px;
   }
   .comparison-map {
@@ -3079,3 +3115,270 @@ h2 {
 }
 #replay-status {display:block;font-size:8px;line-height:1.3;max-width:185px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .clock {font-variant-numeric:tabular-nums;}
+
+/* 計算パネル：マップの下・タイムラインの上に独立させ、操作を大きく見せる */
+#compute-panel {
+  margin-top: 14px;
+  border: 2px solid var(--blue);
+}
+#compute-panel h2 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+#compute-panel h2 small {
+  font-size: 11px;
+  font-weight: normal;
+  margin-left: 8px;
+}
+#compute-panel .compute-controls {
+  gap: 12px;
+  border-top: 0;
+  padding-top: 0;
+}
+#compute-panel .compute-controls label {
+  font-size: 13px;
+}
+#compute-panel .compute-controls input {
+  width: 110px;
+  padding: 9px;
+  font-size: 15px;
+}
+#compute-panel .compute-controls button {
+  font-size: 15px;
+  padding: 11px 18px;
+}
+#compute-panel .compute-controls #compute {
+  font-size: 16px;
+  padding: 12px 24px;
+}
+#compute-panel .compute-controls progress {
+  width: 160px;
+  height: 12px;
+}
+#compute-panel .compute-controls .fine {
+  font-size: 12px;
+}
+
+/* 分岐比較：計算目標をレイヤーの横に置き、文字を大きく */
+.compare-controls .compare-target-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.compare-controls .compare-target-label input[type="number"] {
+  width: 130px;
+  padding: 8px;
+  font-size: 15px;
+}
+.compare-controls #compute-pair {
+  font-size: 13px;
+  padding: 9px 14px;
+}
+
+/* 介入・分岐のアイコンを、ナビの「分岐比較」と同じ図形に揃える */
+.inline-icon {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+.inline-icon svg,
+.branch-letter svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.branch-letter svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* レポート：計算途中の簡易版であることを色付きで明示 */
+.draft-note {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  border: 2px solid #f0a020;
+  border-left-width: 6px;
+  border-radius: 8px;
+  background: #fff6e2;
+  color: #6b4500;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.draft-note[hidden] {
+  display: none;
+}
+.draft-note strong {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #f0a020;
+  color: #fff;
+  font-size: 12px;
+}
+#report-status.draft-badge {
+  background: #fff1cc;
+  color: #8a5a00;
+  border: 1px solid #f0a020;
+}
+
+/* 避難者・スタッフの状態パネルを広げ、文字を大きく */
+.simulation-side {
+  grid-template-rows: 140px minmax(170px, 1fr) minmax(240px, 1.2fr);
+}
+.simulation-side #person-detail {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.simulation-side #person-detail .muted {
+  font-size: 12px;
+}
+.simulation-side .people-list {
+  max-height: 150px;
+  gap: 6px;
+}
+.simulation-side .person-chip {
+  font-size: 12px;
+  padding: 5px 9px;
+}
+.simulation-side .person-preview {
+  padding: 9px 10px;
+  font-size: 13px;
+}
+.simulation-side .person-preview .avatar {
+  width: 36px;
+  height: 36px;
+}
+.simulation-side .person-preview .avatar svg {
+  width: 26px;
+  height: 26px;
+}
+.simulation-side .person-preview strong {
+  font-size: 14px;
+}
+.simulation-side .person-preview small {
+  font-size: 12px;
+}
+.simulation-side .person-state {
+  padding: 10px;
+  font-size: 13px;
+}
+
+/* 避難者・スタッフの状態ポップアップ */
+.person-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(16, 42, 84, 0.28);
+  color: #1d2b44;
+}
+.person-dialog::backdrop {
+  background: rgba(16, 32, 64, 0.35);
+}
+.person-dialog .pd-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: linear-gradient(90deg, #dcedff, #bfdfff);
+}
+.person-dialog .pd-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.person-dialog .pd-head button {
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 10px;
+}
+#person-dialog-body {
+  padding: 12px 18px 18px;
+  font-size: 14px;
+}
+.pd-facts {
+  display: grid;
+  grid-template-columns: 9em 1fr;
+  gap: 6px 12px;
+  margin: 8px 0 4px;
+}
+.pd-facts dt {
+  color: #5c7393;
+}
+.pd-facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+.pd-section {
+  margin-top: 14px;
+}
+.pd-section h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+  padding-left: 8px;
+  border-left: 4px solid #0878ff;
+}
+.pd-meter {
+  display: grid;
+  grid-template-columns: 9em 1fr 3em;
+  gap: 10px;
+  align-items: center;
+  margin: 5px 0;
+}
+.pd-meter em {
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pd-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: #e8eef7;
+  overflow: hidden;
+}
+.pd-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.pd-good {
+  background: #2f9e6a;
+}
+.pd-mid {
+  background: #f0a020;
+}
+.pd-bad {
+  background: #e5484d;
+}
+#person-dialog-body details {
+  margin-top: 14px;
+  font-size: 12px;
+}
+#person-dialog-body pre {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 11px;
+}
+
+/* 発生したスタッフ対応・避難者支援：横スクロールせず、縦横に並べる */
+.timeline-panel #events {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  overflow-x: visible;
+}
+.timeline-panel #events .event-item {
+  min-width: 0;
+  max-width: none;
+  font-size: 11px;
+  padding: 7px 10px;
+}
