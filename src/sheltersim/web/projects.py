@@ -109,7 +109,9 @@ class ProjectAPI:
                     raise StorageError("minute must be an integer") from exc
                 return TimelineStore(self.store, project_id, run_id).frame(branch_id, minute)
             if action == "report" and not query:
-                self.store.load_branch(project_id, run_id, branch_id)
+                # The report is its own artifact; the branch pointer proves the
+                # branch exists without decoding its checkpoint history.
+                self.store.branch_reference(project_id, run_id, branch_id)
                 path = self.store._path(project_id, "runs", run_id, "branches", branch_id, "report.json")
                 return self.store._read(path) if path.exists() else {"status": "not_generated"}
             if action == "llm-status" and not query:
@@ -130,7 +132,7 @@ class ProjectAPI:
                                     "branch includes the parent's records before its fork",
                 }
             if action == "conversations" and not query:
-                self.store.load_branch(project_id, run_id, branch_id)
+                self.store.branch_reference(project_id, run_id, branch_id)
                 from sheltersim.storage.history_index import HistoryIndex
                 return {"turns": HistoryIndex(self.store,project_id,run_id).conversation_tail(branch_id,None,100),
                         "coverage":"latest_100_turns", "history_route":"history?kind=conversations"}

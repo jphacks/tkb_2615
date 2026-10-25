@@ -469,8 +469,12 @@ class ResultsChatService:
     def _project_evidence(self, project_id: str, run_id: str, branch_id: str | None, minute: int | None, agent_id: str | None, comparisons: Any, history_query: Any = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         from sheltersim.experiments.timeline import TimelineStore
         branch_id = branch_id or "main"
-        reference, checkpoint = self.projects.store.load_branch(project_id, run_id, branch_id)
-        if checkpoint.simulation_minute != checkpoint.world_state["duration_minutes"]:
+        store = self.projects.store
+        # Completion needs only the pointer and the immutable Scenario duration.
+        reference = store.branch_reference(project_id, run_id, branch_id)
+        run = store.run(project_id, run_id)
+        scenario = store.scenario(project_id, run["scenario_id"], run["scenario_version"])
+        if reference.computed_until != scenario.duration_minutes:
             raise WebQueryError("result Q&A requires a completed project branch")
         minute = reference.computed_until if minute is None else minute
         frame = TimelineStore(self.projects.store, project_id, run_id).frame(branch_id, minute)
