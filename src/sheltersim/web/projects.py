@@ -258,8 +258,13 @@ class ProjectAPI:
         with self._lock:
             if self._closed or self._active is not None:
                 raise StorageError("background worker is busy; wait or pause the active run")
-            _, checkpoint = self.store.load_branch(project_id, run_id, branch_id)
-            if type(target_minute) is not int or not checkpoint.simulation_minute < target_minute <= checkpoint.world_state["duration_minutes"]:
+            # The pointer and the immutable Scenario bound the range without decoding
+            # the history; the worker loads and validates the checkpoint once.
+            reference = self.store.branch_reference(project_id, run_id, branch_id)
+            run = self.store.run(project_id, run_id)
+            scenario = self.store.scenario(project_id, run["scenario_id"], run["scenario_version"])
+            if (type(target_minute) is not int
+                    or not reference.computed_until < target_minute <= scenario.duration_minutes):
                 raise StorageError("target minute must be in the uncomputed remaining range")
             lease = self.store.claim_run(project_id, run_id)
             try:
@@ -305,15 +310,20 @@ class ProjectAPI:
         from_minute = 0
         computed_until = 0
         try:
-            _, checkpoint = self.store.load_branch(project_id, run_id, branch_id)
-            from_minute = checkpoint.simulation_minute
-            saved_llm = checkpoint.runtime_state.get("llm")
+            # Router setup needs only the head pointer and runtime_state; the full
+            # checkpoint is loaded and validated once by _advance_locked.
+            reference = self.store.branch_reference(project_id, run_id, branch_id)
+            runtime_state = self.store.checkpoint_fields(
+                project_id, run_id, reference.checkpoint_hash, ("runtime_state",)
+            )["runtime_state"]
+            from_minute = reference.computed_until
+            saved_llm = runtime_state.get("llm")
             router = None
             if saved_llm is not None:
                 settings = LLMSettings.from_env()
                 if saved_llm["mode"]=="offline":
                     from sheltersim.experiments.timeline import settings_from_record
-                    settings=settings_from_record(checkpoint.runtime_state.get("llm_settings",{}),mode=LLMMode.OFFLINE,api_key=None)
+                    settings=settings_from_record(runtime_state.get("llm_settings",{}),mode=LLMMode.OFFLINE,api_key=None)
                 elif settings.effective_mode.value != saved_llm["mode"]:
                     raise StorageError("saved LLM mode unavailable; restore original configuration")
                 router = accounted_router(self.store, project_id, run_id=run_id,

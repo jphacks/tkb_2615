@@ -350,7 +350,8 @@ class ProjectStore:
             elif expected_checkpoint_hash is not None:
                 raise StorageError("branch does not exist")
             elif reference.parent_branch_id is not None:
-                parent, _ = self.load_branch(project_id, reference.run_id, reference.parent_branch_id)
+                # Only the parent's lineage pointer is needed, not its history.
+                parent = self.branch_reference(project_id, reference.run_id, reference.parent_branch_id)
                 if not parent.fork_minute <= reference.fork_minute <= parent.computed_until:
                     raise StorageError("fork point is outside parent history")
             checkpoint_path = self._path(project_id, "runs", reference.run_id, "checkpoints", f"{checkpoint.checkpoint_hash}.json")
@@ -439,7 +440,8 @@ class ProjectStore:
         checkpoint = self.load_checkpoint(project_id, run_id, reference.checkpoint_hash)
         if checkpoint.checkpoint_hash != reference.checkpoint_hash or checkpoint.simulation_minute != reference.computed_until:
             raise StorageError("branch checkpoint pointer is corrupt")
-        checkpoint.restore_world()
+        # load_checkpoint already validated hashes, model compatibility and the
+        # WorldState/metrics restore; callers restore again only if they need objects.
         return reference, checkpoint
 
     def load_checkpoint(self, project_id: str, run_id: str, checkpoint_hash: str) -> Checkpoint:
