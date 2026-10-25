@@ -17,7 +17,7 @@ def _key(store: ProjectStore) -> bytes:
     path=store._path("query-signing-key")
     with store.transaction():
         if not path.exists():
-            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_BINARY",0),0o600)
             with os.fdopen(fd,"wb") as stream:
                 stream.write(secrets.token_bytes(32));stream.flush();os.fsync(stream.fileno())
         if path.is_symlink():raise StorageError("unsafe_query_signing_key")

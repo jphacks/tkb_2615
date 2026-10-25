@@ -238,9 +238,20 @@ class ProjectStore:
         with self.transaction():
             self.run(project_id, run_id)
             path = self._path(project_id, "runs", run_id, "worker-lock")
-            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            # O_NOFOLLOW/O_BINARY exist only on some platforms; Windows has no symlink flag here.
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            descriptor = os.open(path, flags, 0o600)
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:  # Windows: lock the first byte without waiting; the lock ends when the FD closes.
+                    if os.fstat(descriptor).st_size == 0:
+                        os.write(descriptor, b"\0")
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    try:
+                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    except OSError as exc:
+                        raise BlockingIOError(str(exc)) from exc
             except BlockingIOError as exc:
                 os.close(descriptor)
                 raise StorageError("run_worker_busy: another process owns this Run") from exc
