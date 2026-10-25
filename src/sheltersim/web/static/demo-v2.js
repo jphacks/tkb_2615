@@ -116,31 +116,77 @@
     corridor: "通路",
   };
   const eventNames = {
-    resource_reserve: "物資の利用予約",
-    resource_consume: "物資の消費",
-    resource_service_complete: "物資の受取完了",
-    staff_operation_transition: "スタッフ対応の進行",
-    staff_operation_arrive: "スタッフの到着",
-    toilet_service_complete: "トイレ利用完了",
-    support_request_timeout: "支援要請の待機期限",
-    social_interaction: "支援・交流の記録",
-    care_support_transition: "支援対応の進行",
-    facility_outage: "設備の稼働停止",
-    facility_recovery: "設備の稼働復旧",
-    agent_action_lifecycle: "行動の状態変化",
-    agent_travel_complete: "移動完了",
-    agent_travel_start: "移動開始",
-    staff_task_complete: "スタッフの対応完了",
-    staff_task_start: "スタッフの対応開始",
-    facility_failure: "設備故障",
-    facility_repair: "設備復旧",
-    arrival: "避難者到着",
-    agent_arrival: "避難者到着",
-    resource_delivery: "物資到着",
-    information: "情報提供",
-    support_request: "支援要請",
-    intervention: "介入",
+    resource_reserve: "物資の受け取りを予約",
+    resource_consume: "物資を使用（在庫が減少）",
+    resource_service_complete: "食事・水の受け取りが完了",
+    resource_service_cancel: "食事・水の受け取りを中止",
+    resource_delivery: "物資が届いた",
+    delivery_delayed: "物資の到着が遅れている",
+    staff_operation_transition: "スタッフ業務の段階が変わった",
+    staff_operation_arrive: "スタッフが現場に到着",
+    staff_operation_complete: "スタッフ業務が完了",
+    staff_operation_relief: "スタッフが交代",
+    staff_operation_preempted: "スタッフ業務を中断（別の対応を優先）",
+    staff_support_complete: "スタッフによる避難者支援が完了",
+    staff_task_complete: "スタッフの作業が完了",
+    staff_task_start: "スタッフの作業を開始",
+    staff_unavailable: "スタッフが対応できなくなった",
+    staff_restored: "スタッフが対応に復帰",
+    toilet_service_complete: "トイレの利用が完了",
+    facility_queue_transition: "待ち列の状況が変わった",
+    facility_queue_abandon: "待ち列をあきらめて離れた",
+    support_request: "避難者が支援を求めた（対応待ち）",
+    support_request_timeout: "支援要請が対応されないまま時間切れ",
+    social_interaction: "避難者どうしの会話・助け合い",
+    care_support_transition: "介助・見守り支援の段階が変わった",
+    facility_outage: "設備が使えなくなった",
+    facility_recovery: "設備が使えるようになった",
+    facility_failure: "設備が故障",
+    facility_repair: "設備の修理が完了",
+    water_outage: "断水が発生",
+    water_restored: "断水が復旧",
+    agent_action_lifecycle: "避難者の行動の開始・終了",
+    agent_travel_complete: "避難者の移動が完了",
+    agent_travel_start: "避難者が移動を開始",
+    zone_edge_capacity_wait: "通路が混んで移動待ち",
+    arrival: "避難者が到着",
+    agent_arrival: "避難者が到着",
+    population_approach_complete: "避難者が避難所に到着",
+    population_return_admission: "一時外出した避難者が戻った",
+    information: "情報を伝えた",
+    information_contact_update: "情報が避難者に伝わった",
+    proximity_contact_update: "避難者どうしが近くで接触",
+    intervention: "介入（もしもの条件）を適用",
+    effect_program_apply: "介入の効果が始まった",
+    effect_program_expire: "介入の効果が終わった",
   };
+  // 色分け：resolved=青（完了・解決）、unresolved=赤（未解決・問題）、それ以外=灰（経過の記録）
+  const eventTones = {
+    resource_service_complete: "resolved",
+    resource_delivery: "resolved",
+    staff_operation_complete: "resolved",
+    staff_support_complete: "resolved",
+    staff_task_complete: "resolved",
+    staff_restored: "resolved",
+    toilet_service_complete: "resolved",
+    facility_recovery: "resolved",
+    facility_repair: "resolved",
+    water_restored: "resolved",
+    resource_service_cancel: "unresolved",
+    delivery_delayed: "unresolved",
+    staff_operation_preempted: "unresolved",
+    staff_unavailable: "unresolved",
+    facility_queue_abandon: "unresolved",
+    support_request: "unresolved",
+    support_request_timeout: "unresolved",
+    facility_outage: "unresolved",
+    facility_failure: "unresolved",
+    water_outage: "unresolved",
+  };
+  const eventTone = (e) =>
+    ["rejected", "failed"].includes(e.status)
+      ? "unresolved"
+      : eventTones[e.event_type] || "record";
   const activityNames = {
     moving: "移動中",
     queued: "待機中",
@@ -296,8 +342,8 @@
       state.motion = null;
       state.visualMs = 0;
     }
-    $("play").textContent = "▶ 再生";
-    $("timeline-play").textContent = "▶ 再生";
+    $("play").textContent = "▶ シミュレーションを再生";
+    $("timeline-play").textContent = "▶ シミュレーションを再生";
     $("replay-status").textContent = preserve
       ? "一時停止 · 位置と姿勢を保持"
       : "計算済みの記録を再生";
@@ -924,7 +970,7 @@
     if (frame.kpis.unresolved_support_request_count > 0)
       issues.push([
         "未解決の支援要請",
-        `${frame.kpis.unresolved_support_request_count}件。資格・移動・スタッフ稼働などの制約は記録から確認してください。`,
+        `${frame.kpis.unresolved_support_request_count}件がスタッフの対応待ちです。対応が完了すると下の「イベントタイムライン」に青で、対応されないまま時間切れになると赤で表示されます。`,
       ]);
     for (const f of frame.facilities.filter(
       (f) =>
@@ -973,7 +1019,11 @@
       else grouped.set(key, { ...event, count: 1 });
     }
     for (const e of [...grouped.values()].slice(-12)) {
-      const node = el(clickable ? "button" : "div", undefined, "event-item");
+      const node = el(
+        clickable ? "button" : "div",
+        undefined,
+        `event-item event-${eventTone(e)}`,
+      );
       node.append(
         el(
           "b",
@@ -1064,6 +1114,113 @@
     state.selectedGroup = group;
     renderPeople();
     drawAll();
+    openPersonDialog(id);
+  }
+  const mobilityNames = {
+    independent: "自力で移動できる",
+    assisted: "介助があれば移動できる",
+    wheelchair: "車いすで移動",
+    bedridden: "寝たきり",
+  };
+  // 0〜1 の値を、ラベル付きの横棒で表示する（high=true は値が大きいほど悪い指標）
+  function meter(label, value, high = true) {
+    const row = el("div", undefined, "pd-meter");
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      row.append(el("span", label), el("em", "未記録"));
+      return row;
+    }
+    const pct = Math.max(0, Math.min(100, value * 100));
+    const bad = high ? pct : 100 - pct;
+    const bar = el("span", undefined, "pd-bar");
+    const fill = el(
+      "i",
+      undefined,
+      bad >= 66 ? "pd-bad" : bad >= 33 ? "pd-mid" : "pd-good",
+    );
+    fill.style.width = `${pct}%`;
+    bar.append(fill);
+    row.append(el("span", label), bar, el("em", `${num(pct)}`));
+    return row;
+  }
+  function pdSection(title, ...children) {
+    const s = el("section", undefined, "pd-section");
+    s.append(el("h3", title), ...children);
+    return s;
+  }
+  function pdFacts(pairs) {
+    const dl = el("dl", undefined, "pd-facts");
+    for (const [k, v] of pairs) dl.append(el("dt", k), el("dd", v ?? "未記録"));
+    return dl;
+  }
+  function openPersonDialog(id) {
+    const f = state.frame,
+      dialog = $("person-dialog");
+    if (!f || !dialog) return;
+    const p = f.people.find((x) => x.id === id),
+      staff = f.staff.find((x) => x.id === id),
+      body = $("person-dialog-body");
+    body.replaceChildren();
+    if (p) {
+      $("person-dialog-title").textContent = `避難者 ${p.id}`;
+      body.append(
+        el("p", `${time(state.minute)} 時点の記録`, "fine"),
+        pdFacts([
+          ["年齢", typeof p.traits?.age_years === "number" ? `${p.traits.age_years}歳` : null],
+          ["いる場所", zoneNames[p.zone_id] || p.zone_id],
+          ["いまの行動", activityNames[p.activity] || p.activity],
+          ["移動", mobilityNames[p.mobility] || p.mobility],
+          ["世帯", `${p.household_id || "—"}${p.traits?.household_role === "alone" ? "（単身）" : ""}`],
+          ["言語", (p.traits?.languages || []).join("、") || null],
+          ["配慮が必要なこと", (p.traits?.accessibility_needs || []).join("、") || "なし"],
+          ["家族と離れている", p.family_separated ? "はい" : "いいえ"],
+        ]),
+        pdSection(
+          "こころの状態",
+          meter("ストレス", p.stress),
+          meter("安心感", p.body?.reassurance, false),
+          meter("不安", p.body?.uncertainty),
+          meter("不満", p.body?.discontent),
+          meter("前向きな気持ち", p.body?.positive_affect, false),
+          meter("落ち込み", p.body?.negative_affect),
+        ),
+        pdSection(
+          "からだの状態・ニーズ",
+          meter("支援の必要度", p.support_need),
+          meter("空腹", p.needs?.hunger),
+          meter("のどの渇き", p.needs?.hydration_need),
+          meter("トイレに行きたい", p.needs?.toilet_urgency),
+          meter("疲れ", p.needs?.fatigue),
+          meter("衛生面の不快", p.body?.hygiene_need),
+          pdFacts([
+            [
+              "睡眠不足",
+              typeof p.body?.sleep_debt_minutes === "number"
+                ? `${num(p.body.sleep_debt_minutes / 60)}時間分`
+                : null,
+            ],
+          ]),
+        ),
+      );
+    } else if (staff) {
+      $("person-dialog-title").textContent = `スタッフ ${staff.id}`;
+      body.append(
+        el("p", `${time(state.minute)} 時点の記録`, "fine"),
+        pdFacts([
+          ["いる場所", zoneNames[staff.zone_id] || staff.zone_id],
+          ["担当中の対応", staff.active_task_id || "なし"],
+          ["連続勤務", `${staff.dynamics?.consecutive_work_minutes ?? "—"}分`],
+          ["できること", (staff.skills || []).join("、") || null],
+        ]),
+        pdSection("負担", meter("疲れ", staff.dynamics?.fatigue)),
+      );
+    } else {
+      $("person-dialog-title").textContent = id;
+      body.append(el("p", "この人物はこの時点の記録に含まれません。", "fine"));
+    }
+    const raw = el("details");
+    raw.append(el("summary", "記録データ（開発者向け）"), el("pre", json(p || staff || {})));
+    body.append(raw);
+    if (!dialog.open) dialog.showModal();
   }
   function replayTime(minute) {
     const seconds = Math.floor(minute * 60 + 0.00001),
@@ -1155,8 +1312,8 @@
                 playing: false,
               };
             $("replay-status").textContent = "一時停止 · 位置と姿勢を保持";
-            $("play").textContent = "▶ 再生";
-            $("timeline-play").textContent = "▶ 再生";
+            $("play").textContent = "▶ シミュレーションを再生";
+            $("timeline-play").textContent = "▶ シミュレーションを再生";
           }
           if (status === "end")
             $("replay-status").textContent = "計算済み範囲の終点";
@@ -1169,8 +1326,8 @@
     }
     state.playing = true;
     state.replay.setRate(Number($("speed").value));
-    $("play").textContent = "Ⅱ 一時停止";
-    $("timeline-play").textContent = "Ⅱ 一時停止";
+    $("play").textContent = "Ⅱ 再生を一時停止";
+    $("timeline-play").textContent = "Ⅱ 再生を一時停止";
     state.replay.play();
   }
   async function compute(
@@ -1569,9 +1726,12 @@
     state.mode = llm.mode;
     $("mode-badge").textContent =
       `${llmModeLabel(llm.mode)} / fallback ${llm.outcomes?.fallback_count ?? "集計を参照"}`;
+    const draft = report.status === "not_generated";
+    $("report-draft-note").hidden = !draft;
+    $("report-status").classList.toggle("draft-badge", draft);
     $("report-status").textContent =
-      report.status === "not_generated"
-        ? "計算途中 · レポート未生成"
+      draft
+        ? "簡易版 · 計算途中のためAIレポート未生成"
         : report.status === "rule_fallback"
           ? "規則による代替レポート"
           : report.status === "unavailable"
@@ -2157,6 +2317,13 @@
   on("intervention-preview", previewIntervention);
   $("intervention-check").addEventListener("change", controls);
   on("intervention-apply", applyIntervention);
+  $("person-dialog-close").addEventListener("click", () =>
+    $("person-dialog").close(),
+  );
+  // 枠の外（背景）をクリックしても閉じる
+  $("person-dialog").addEventListener("click", (e) => {
+    if (e.target === $("person-dialog")) $("person-dialog").close();
+  });
   on("compare-refresh", () => loadComparison());
   on("compute-pair", computePair);
   $("compare-branch").addEventListener("change", () => {
