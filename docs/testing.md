@@ -42,6 +42,8 @@ testは決定的state遷移、Checkpoint serializationと復元、独立Branch�
 
 Project画面の作用説明（`project-round3.js`の`renderEffectExplanation`）は、`tests/test_effect_explanation_ui.py`がその関数だけをnodeで実行して確認します。fallback時の理由表示などが対象です。nodeがない環境ではskipします。
 
+demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確認します。timeline routeが返すframe（保存済み境界のframe cacheと、境界以外の再構成）をnodeで`demo-v2-scene.js`・`demo-v2-sprites.js`・`demo-v2-map.js`に渡し、描画命令を受け流すcanvasの代わりを使って、`HinanjoMap.draw`が返す施設アイコンの記録（hit）を検査します。介入で追加したトイレが実座標の地図と模式図の両方で別々の位置に描かれること、座標のない施設は実座標の地図に描かれないことが対象です。模式図は施設を実座標と無関係に並べるため、模式図に描かれても図面上の位置があるとは限りません。画素の見た目（色・重なり・文字）は確認しません。nodeがない環境では描画のtestだけをskipします。
+
 ## 確認できていないこと
 
 - 今回、live有料Provider testは実行していません。
