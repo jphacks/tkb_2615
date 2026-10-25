@@ -37,6 +37,7 @@ from sheltersim.experiments.scenario_editor import (
     scenario_hash,
 )
 from sheltersim.llm.natural_language import (
+    InterventionCompilerUnavailable,
     _sanitize_narrative,
     compile_natural_language,
     scenario_summary_from_world,
@@ -528,7 +529,10 @@ class DemoService:
             ),
         )
         request = request.model_copy(update={"scenario_summary": summary})
-        result = compile_natural_language(request, self.llm_router(request.branch_id))
+        try:
+            result = compile_natural_language(request, self.llm_router(request.branch_id))
+        except InterventionCompilerUnavailable as exc:
+            raise DemoConflictError(str(exc)) from exc
         plan = result.draft_plan
         validation_issues = (
             list(validate_effect_program(validation_snapshot, plan))

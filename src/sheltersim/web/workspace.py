@@ -14,7 +14,11 @@ from sheltersim.events.effects import EffectProgram, validate_effect_program
 from sheltersim.experiments.initial_scenario import InitialScenarioBuilder, InitialScenarioRequest
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.accounting import StoredResponseTape, accounted_router
-from sheltersim.llm.natural_language import compile_natural_language, scenario_summary_from_world
+from sheltersim.llm.natural_language import (
+    InterventionCompilerUnavailable,
+    compile_natural_language,
+    scenario_summary_from_world,
+)
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.region_prepare import parse_scenario_text
 from sheltersim.llm.report import (
@@ -336,7 +340,10 @@ class ProjectWorkspace:
             compiler_tape = StoredResponseTape(
                 self.store, self.store._path(project_id, "runs", run_id, "compiler-tape.json")
             )
-            compiled = compile_natural_language({"text": body["text"], "branch_id": branch_id, "selected_minute": body["minute"], "scenario_summary": scenario_summary_from_world(runtime.world).model_dump(mode="json")}, router=accounted_router(self.store, project_id, run_id=run_id, operation="compiler", branch_id=branch_id, tape=compiler_tape))
+            try:
+                compiled = compile_natural_language({"text": body["text"], "branch_id": branch_id, "selected_minute": body["minute"], "scenario_summary": scenario_summary_from_world(runtime.world).model_dump(mode="json")}, router=accounted_router(self.store, project_id, run_id=run_id, operation="compiler", branch_id=branch_id, tape=compiler_tape))
+            except InterventionCompilerUnavailable as exc:
+                raise StorageError(str(exc), code="intervention_compiler_unavailable") from exc
             result = compiled.model_dump(mode="json")
             program = None
             if compiled.draft_plan is not None and compiled.status == "compiled":

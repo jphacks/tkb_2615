@@ -243,3 +243,29 @@ def test_unsupported_offline_input_is_explained_and_cannot_be_approved(tmp_path:
     assert status == 400
     assert "compiled" in result["error"]
     assert set(demo.branches) == {"baseline"}
+
+
+def test_interpret_under_stop_policy_returns_the_reason_instead_of_a_rule_plan(
+    tmp_path: Path,
+) -> None:
+    from sheltersim.llm.config import LLMErrorPolicy
+
+    demo = _demo()
+    source_hash = _world_hash(demo)
+    # A stop policy without a key cannot record; replay has no tape, so nothing is called.
+    demo._compiler_routers["baseline"] = LLMRouter(
+        LLMSettings(mode=LLMMode.REPLAY, error_policy=LLMErrorPolicy.STOP)
+    )
+
+    status, response = _post(
+        demo,
+        tmp_path,
+        "/api/v1/nl/interpret",
+        {"text": "toilet_1 outage", "branch_id": "baseline", "selected_minute": 5},
+    )
+
+    assert status == 409
+    assert "記録済みの応答がない" in response["error"]
+    assert "replay_miss" in response["error"]
+    assert demo.natural_language_previews == {}
+    assert _world_hash(demo) == source_hash
