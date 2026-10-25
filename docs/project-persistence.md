@@ -13,7 +13,7 @@ sheltersim project --root runs/.projects frame --project-id study --run-id trial
 sheltersim project --root runs/.projects fork --project-id study --run-id trial --minute 73 --child-id alternative
 ~~~
 
-approved hashは確認した正準ScenarioSpecそのものに結び付きます。CLIとWebの継続実行は設定されたLLM modeを使い、モデル設定と費用記録を保持できます。過去frameの読み出しではnetwork adapterを作りません。offline履歴が暗黙にlive履歴へ変わることはありません。記録が欠落または非互換なら、過去の再構築を拒否します。
+approved hashは確認した正準ScenarioSpecそのものに結び付きます。Webの計算開始（POST R/resume）は、BranchのポインタとScenarioの期間だけで目標時刻を検査して受け付けます。head Checkpointの展開と検証はworkerが1回だけ行い、破損や非互換を検出した場合はRunを `failed` にして、Branchのポインタは変えません。CLIとWebの継続実行は設定されたLLM modeを使い、モデル設定と費用記録を保持できます。過去frameの読み出しではnetwork adapterを作りません。offline履歴が暗黙にlive履歴へ変わることはありません。記録が欠落または非互換なら、過去の再構築を拒否します。
 
 時刻Mはtick Mの直前境界です。timelineのWorldState KPIはその境界で取得します。保存metrics.csvはtick終了時刻の意味を保ちます。frameにはexact、state_hash、computed_untilを含み、未計算時刻は拒否します。親と兄弟のstateは独立しています。geometry点を物理メートルとして扱うのは検証済みmovement位置がある場合だけです。旧来の表示用位置はdisplay_onlyと表示します。
 
