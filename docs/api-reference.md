@@ -57,7 +57,7 @@ Project APIはasset、確認済みfacility geometry、draft、evaluation、datas
 - POST /api/v1/projects/{project}/scenario-preview はdraftを検証し、期限付きpreview IDと正準approval hashを返します。previewだけではRunを作らず、simulationも開始しません。
 - POST /api/v1/projects/{project}/scenario-household-corrections は、previewで保護者を確認できない未成年者へ同一世帯内の親・介護者を明示し、新しいpreviewを作ります。解消されるのは保護者のapproval blockerだけで、アクセシブル経路・容量などの他のblockerはpreviewに保存された記録から引き継ぎます。blocker記録のない古いdraftは修正せず、previewの再生成を求めます。
 - POST /api/v1/projects/{project}/scenario-approve はpreview ID、一致するhash、approved: true、新しいRun IDを要求します。不変のScenario版と初期Run状態を保存します。
-- Branchのintervention-previewは、指定時刻に自然言語または型付きprogramを受け取り、分離したstateで検証します。元Branchは変えません。intervention-applyはpreview ID、program hash、明示承認、child IDを要求し、元state hashを再検査して独立Branchを作ります。
+- Branchのintervention-previewは、指定時刻に自然言語または型付きprogramを受け取り、分離したstateで検証します。元Branchは変えません。自然言語の変換がruleの結果になった場合（`fallback_used: true`）、Opusを使わなかった理由を`limitations`に含めます（llm-integration.md参照）。intervention-applyはpreview ID、program hash、明示承認、child IDを要求し、元state hashを再検査して独立Branchを作ります。
 - timeline frameは指定tickの直前境界を表します。未計算・利用不可の履歴を推定値で返さず、要求を失敗させます。Branch比較は共通の計算済み時刻を使います。出力はsimulation上の記述で、外部データによる因果証拠ではありません。
 - `GET /api/v1/projects/{project}/runs/{run}/replay-frames?branch_ids=A,B&start=M&end=N` は、1〜2個の異なるBranchについて、両端を含む最大8個の計算済み境界を連続読取りします。各queryは1回だけ指定します。`samples` はBranchが1個なら既存timeline frame、2個なら既存compare responseと同じ契約です。未計算範囲・fork前・重複Branch・読み取り中のhead変更は拒否します。記録済み応答だけで復元し、保存Branchを進めず、live Providerも呼びません。
 - Branchへの質問は保存Run/Branchの証拠を読むだけで、simulation stateを変更しません。詳細はproject-persistence.md、adaptive-event-compiler.md、effect-program.mdを参照してください。

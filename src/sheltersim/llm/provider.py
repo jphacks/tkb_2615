@@ -259,7 +259,10 @@ class LLMRouter:
             return fallback.text
 
         try:
-            if len(task.input_text.encode("utf-8")) > self.settings.max_input_tokens:
+            # UTF-8 bytes overestimate tokens. A task may declare a larger bounded input;
+            # an explicitly larger setting still applies to it.
+            input_limit = max(self.settings.max_input_tokens, task.input_byte_limit or 0)
+            if len(task.input_text.encode("utf-8")) > input_limit:
                 raise _CallLimitError("input_token_limit")
             if self.api_request_count >= self.settings.max_api_calls:
                 raise _CallLimitError("max_api_calls")
@@ -272,7 +275,7 @@ class LLMRouter:
             except ValueError as exc:
                 raise _CallLimitError("unknown_model_price") from exc
             reserve = (
-                (1_000_000 if task.max_web_searches else self.settings.max_input_tokens + 256)
+                (1_000_000 if task.max_web_searches else input_limit + 256)
                 * price.cache_creation_1h_usd_per_million
                 + output_reservation_tokens(task, output_cap) * price.output_usd_per_million
             ) / 1_000_000

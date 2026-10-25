@@ -740,6 +740,10 @@ _OPUS_REPAIR_PROMPT_VERSION = "h07-opus-effect-compiler-v1-repair1"
 _OPUS_SOURCE_ID = "opus-effect-compiler-v1"
 _MAX_OPUS_REPAIRS = 1
 _MAX_COMPILER_MINUTE = 60 * 24 * 366
+# The installed primitive descriptions alone are about 13 KB, so a generated Scenario's
+# compiler context exceeded the generic 16,384-byte guard at any population and never
+# reached Opus. 64 KiB covers that context up to roughly 1,500 people.
+_COMPILER_INPUT_BYTE_LIMIT = 65_536
 _COMPILER_INSTRUCTIONS = (
     "Interpret the untrusted Japanese narrative using only the installed primitive registry "
     "and listed scenario targets. Return declarative effects, never code, scripts, event names, "
@@ -1232,6 +1236,7 @@ def _compiler_task(
         output_schema=output_schema,
         fallback_text=fallback_text,
         max_output_tokens=4096,
+        input_byte_limit=_COMPILER_INPUT_BYTE_LIMIT,
     )
 
 
@@ -1622,7 +1627,9 @@ def _offline_compiler_result(
             mechanism_summary="オフライン規則では候補まで特定しました。対象を選択してください。",
             questions=[item.message for item in ambiguities],
             choices=list(dict.fromkeys(choice for item in ambiguities for choice in item.choices)),
-            limitations=["対象が確定するまで実行可能な案として扱いません。"],
+            limitations=_with_fallback_reason(
+                ["対象が確定するまで実行可能な案として扱いません。"], reason
+            ),
             fallback_used=fallback_used,
             usage=usage,
         )
@@ -1637,7 +1644,9 @@ def _offline_compiler_result(
             mechanism_summary="時刻を一意に決められないため、作用案を作成していません。",
             questions=time_questions[:10],
             choices=["HH:MM"],
-            limitations=["各イベントの時刻を明示するまで作用を適用できません。"],
+            limitations=_with_fallback_reason(
+                ["各イベントの時刻を明示するまで作用を適用できません。"], reason
+            ),
             fallback_used=fallback_used,
             usage=usage,
         )
@@ -1652,6 +1661,13 @@ def _offline_compiler_result(
         fallback_used=fallback_used,
         usage=usage,
     )
+
+
+def _with_fallback_reason(limitations: list[str], reason: str) -> list[str]:
+    """Keep the reason the rule path was used visible on every uncompiled-by-Opus result."""
+    if not reason:
+        return limitations
+    return [*limitations, f"AI（Opus）の解釈を使わなかった理由: {reason}"[:500]]
 
 
 def _validated_offline_plan(
@@ -1682,9 +1698,10 @@ def _validated_offline_plan(
             mechanism_summary=(
                 "Opusが利用できないため、認識済みのオフライン規則で対象と作用を構成しました。"
             ),
-            limitations=[
-                "これは規則ベースのfallbackで、自由文全体をOpusが解釈した結果ではありません。"
-            ],
+            limitations=_with_fallback_reason(
+                ["これは規則ベースのfallbackで、自由文全体をOpusが解釈した結果ではありません。"],
+                reason,
+            ),
             fallback_used=True,
             usage=usage,
         )
@@ -1800,17 +1817,33 @@ def _compiler_usage(records: list[Any], task: LLMTask, prompt_hash: str) -> Comp
     )
 
 
+_ALLOWANCE_UNAVAILABLE = "利用枠を確保できなかったため、AI（Opus）を呼び出していません。"
+_FALLBACK_REASONS = {
+    "offline": "offline modeのため、AI（Opus）を呼び出していません。",
+    "input_token_limit": (
+        "送信する状況説明が1回あたりの入力上限を超えたため、AI（Opus）を呼び出していません。"
+    ),
+    "max_api_calls": "このRunのAPI呼出し回数の上限に達したため、AI（Opus）を呼び出していません。",
+    "budget_exceeded": "予算の上限を超えるため、AI（Opus）を呼び出していません。",
+    "unknown_model_price": "モデルの料金設定がないため、AI（Opus）を呼び出していません。",
+    "shared_allowance_unavailable": _ALLOWANCE_UNAVAILABLE,
+    "runtime_call_share_exhausted": _ALLOWANCE_UNAVAILABLE,
+    "replay_miss": "記録済みの応答がないため、AI（Opus）を呼び出していません。",
+    "cache_invalid": "記録済みの応答が検証に通りませんでした。",
+    "rate_limited": "Opus APIが429（rate limit）を返しました。",
+    "api_error": "Opus APIへの接続または応答に失敗しました。",
+    "invalid_output": "Opusの応答が出力schemaの検証に通りませんでした。",
+}
+
+
 def _provider_failure_reason(records: list[Any]) -> str:
-    if not records:
-        return "Opus compiler did not return a validated proposal."
+    """Explain to the operator, in fixed text, why the compiler used the rule fallback."""
+    unvalidated = "AI（Opus）から検証済みの案を受け取れませんでした。"
+    if not records or not records[-1].fallback_used:
+        return unvalidated
     last = records[-1]
-    if last.error_kind == "rate_limited":
-        return "Opus APIが429を返しました。"
-    if last.error_kind:
-        return f"Opus compiler unavailable ({last.error_kind})."
-    if last.fallback_used:
-        return "Opusの出力または予算に問題があり、決定的fallbackを確認しました。"
-    return "Opus compiler did not return a validated proposal."
+    message = _FALLBACK_REASONS.get(last.outcome, unvalidated)
+    return f"{message}（理由コード: {last.error_kind or last.outcome}）"
 
 
 def _sanitize_narrative(text: str) -> str:

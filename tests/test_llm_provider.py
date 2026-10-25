@@ -565,3 +565,44 @@ def test_adapter_keeps_search_results_when_the_json_answer_has_no_citations() ->
         "https://www.city.example.lg.jp/bousai"
     ]
     assert response.citations[0].cited_text == ""
+
+
+def test_task_input_byte_limit_lets_a_bounded_large_context_reach_the_provider() -> None:
+    oversized = "x" * 1_000
+    provider = FakeProvider(['{"priority":1,"rationale":"urgent need"}'] * 2)
+    router = LLMRouter(settings(budget_usd=1.0), provider=provider, tape=ResponseTape())
+
+    # The generic guard (256 bytes here) still stops a task that declares no limit.
+    router.complete(task(text=oversized))
+    assert provider.calls == []
+    assert router.records[-1].outcome == "input_token_limit"
+
+    declared = LLMTask(
+        **{**task(text=oversized).__dict__, "input_byte_limit": 2_000}
+    )
+    router.complete(declared)
+    assert len(provider.calls) == 1
+    assert router.records[-1].outcome == "recorded"
+    # The limit changes no response, so recorded tapes keep their keys.
+    assert declared.cache_key("m") == task(text=oversized).cache_key("m")
+
+    beyond = LLMTask(**{**task(text="y" * 3_000).__dict__, "input_byte_limit": 2_000})
+    router.complete(beyond)
+    assert len(provider.calls) == 1
+    assert router.records[-1].outcome == "input_token_limit"
+
+
+def test_task_input_byte_limit_never_lowers_a_larger_setting() -> None:
+    provider = FakeProvider()
+    router = LLMRouter(settings(max_input_tokens=4_096, budget_usd=1.0), provider=provider,
+                       tape=ResponseTape())
+
+    router.complete(LLMTask(**{**task(text="z" * 3_000).__dict__, "input_byte_limit": 1_000}))
+
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_task_input_byte_limit_must_be_a_positive_integer(value) -> None:
+    with pytest.raises(ValueError, match="input_byte_limit"):
+        LLMTask(**{**task().__dict__, "input_byte_limit": value})

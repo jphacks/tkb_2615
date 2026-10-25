@@ -60,9 +60,18 @@ class LLMTask:
     max_output_tokens: int | None = None
     web_search_allowed_domains: tuple[str, ...] = ()
     max_web_searches: int = 0
+    # A task whose bounded context outgrows the generic per-call guard declares its own
+    # UTF-8 byte limit. It changes no response, so it is not part of the cache key.
+    input_byte_limit: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "stage", LLMStage(self.stage))
+        if self.input_byte_limit is not None and (
+            not isinstance(self.input_byte_limit, int)
+            or isinstance(self.input_byte_limit, bool)
+            or self.input_byte_limit <= 0
+        ):
+            raise ValueError("input_byte_limit must be positive")
         if not self.prompt_version:
             raise ValueError("prompt_version cannot be empty")
         if (
