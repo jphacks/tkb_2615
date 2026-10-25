@@ -303,8 +303,12 @@ class ProjectWorkspace:
         frames = [timeline.frame(key, minute) for key in branch_ids]
         receipts = []
         for key in branch_ids:
-            _, checkpoint = self.store.load_branch(project_id, run_id, key)
-            receipts.append(checkpoint.runtime_state.get("fork_origin"))
+            # Only the fork receipt is needed; read the head's verified runtime_state
+            # instead of decoding and validating each branch's whole history.
+            runtime_state = self.store.checkpoint_fields(
+                project_id, run_id, refs[key]["checkpoint_hash"], ("runtime_state",)
+            )["runtime_state"]
+            receipts.append(runtime_state.get("fork_origin"))
         origins = [r for r in receipts if r is not None]
         if origins:
             first = origins[0]
