@@ -175,6 +175,8 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
                 if op == "add_staff"
                 else "トイレ"
                 if op == "add_toilet"
+                else "停止するユニット"
+                if op == "facility_outage"
                 else "避難者"
             )
             issues.append(
@@ -372,7 +374,8 @@ def _extract_count(text: str, op: str) -> int | None:
     else:
         tokens = r"水|water"
         units = r""
-    number = r"(?P<value>[+\-]?\d{1,6}|[零〇一二三四五六七八九十]+)"
+    # A sign glued to a word is part of an ID such as "toilet-1", not a negative count.
+    number = r"(?P<value>(?<![A-Za-z0-9_])[+\-]\d{1,6}|\d{1,6}|[零〇一二三四五六七八九十]+)"
     patterns = (
         rf"(?:{tokens})(?:を|が|は)?\s*{number}\s*(?:{units})?",
         rf"{number}\s*(?:{units})?(?:の|を)?\s*(?:{tokens})",

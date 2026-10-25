@@ -299,3 +299,23 @@ def test_shared_contract_rejects_unknown_fields_and_invalid_time_windows() -> No
     document["effects"][0]["end_minute"] = document["effects"][0]["start_minute"]
     with pytest.raises(ValidationError, match="later than"):
         DraftPlan.model_validate(document)
+
+
+def test_hyphenated_facility_id_is_a_target_not_a_negative_count() -> None:
+    result = parse("Day4 toilet-2を故障させる", context=summary(toilets=2))
+
+    assert result.status == "parsed", result.issues
+    assert result.draft_plan is not None
+    effect = result.draft_plan.effects[0]
+    assert effect.op == "facility_outage"
+    assert effect.target_selector.target_id == "toilet-2"
+    assert effect.parameters == {"units": 1}
+
+
+def test_out_of_range_outage_count_names_units_not_evacuees() -> None:
+    result = parse("Day4 トイレが2000基故障")
+
+    assert result.status == "rejected"
+    message = next(item.message for item in result.issues if item.code == "invalid_count")
+    assert "停止するユニット" in message
+    assert "避難者" not in message
