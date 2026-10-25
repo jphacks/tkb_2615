@@ -133,7 +133,7 @@ def capacity_metrics(world: WorldState, zone_id: str, *, occupancy: int | None =
     ] if isinstance(physical_rooms, dict) else []
     room_capacity = (
         sum(row["people_capacity"] for row in room_rows if row.get("active"))
-        if isinstance(overlay_config, dict) and overlay_config.get("schema_version") == 3
+        if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {3, 4}
         else 0
     )
     active_room_ids = {row["room_id"] for row in room_rows if row.get("active")}

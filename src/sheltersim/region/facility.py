@@ -923,22 +923,27 @@ def _place_facilities(
     positions: dict[str, Point2D] = {}
     for zone_id, items in groups.items():
         zone = zone_by_id[zone_id]
-        min_x = min(point.x for point in zone.polygon)
-        max_x = max(point.x for point in zone.polygon)
-        min_y = min(point.y for point in zone.polygon)
-        max_y = max(point.y for point in zone.polygon)
-        columns = math.ceil(math.sqrt(len(items)))
-        rows = math.ceil(len(items) / columns)
         for index, facility in enumerate(sorted(items, key=lambda item: item.id)):
-            column = index % columns
-            row = index // columns
-            x_fraction = 0.35 if len(items) == 1 else (column + 1) / (columns + 1)
-            y_fraction = 0.68 + 0.28 * (row + 1) / (rows + 1)
-            positions[facility.id] = Point2D(
-                x=min_x + (max_x - min_x) * x_fraction,
-                y=min_y + (max_y - min_y) * y_fraction,
-            )
+            positions[facility.id] = facility_grid_point(zone.polygon, index, len(items))
     return positions
+
+
+def facility_grid_point(polygon: tuple[Point2D, ...], index: int, count: int) -> Point2D:
+    """Slot ``index`` of ``count`` facilities in a grid near the far wall of a zone."""
+    min_x = min(point.x for point in polygon)
+    max_x = max(point.x for point in polygon)
+    min_y = min(point.y for point in polygon)
+    max_y = max(point.y for point in polygon)
+    columns = math.ceil(math.sqrt(count))
+    rows = math.ceil(count / columns)
+    column = index % columns
+    row = index // columns
+    x_fraction = 0.35 if count == 1 else (column + 1) / (columns + 1)
+    y_fraction = 0.68 + 0.28 * (row + 1) / (rows + 1)
+    return Point2D(
+        x=min_x + (max_x - min_x) * x_fraction,
+        y=min_y + (max_y - min_y) * y_fraction,
+    )
 
 
 def _standard_editable_geometry(

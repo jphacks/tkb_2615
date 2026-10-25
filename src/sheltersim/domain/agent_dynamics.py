@@ -11,7 +11,14 @@ from sheltersim.policies.behavior import ActionProposal
 AGENT_DYNAMICS_STATE_KEY = "agent_dynamics_v1"
 AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v1"
 ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v2"
+# v3 keeps the v2 intake orientation and also announces shared facilities that
+# are installed during a Run to the Agents already present.
+ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v3"
 ORIENTATION_FACILITY_SOURCE_ID = "ASM-INTAKE-FACILITY-ORIENTATION-V1"
+INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID = "ASM-INSTALLED-FACILITY-ANNOUNCEMENT-V1"
+_ORIENTED_POLICY_VERSIONS = frozenset({
+    ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION, ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
+})
 # Shared services every evacuee is assumed to be shown at intake. Group-specific
 # spaces (pet, family, privacy) are still learned only on arrival.
 ORIENTATION_FACILITY_KINDS = frozenset({
@@ -27,7 +34,7 @@ def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
         raise ValueError("agent_dynamics config has unsupported fields")
     policy_version = raw.get("policy_version", AGENT_DYNAMICS_POLICY_VERSION)
     if raw.get("schema_version", 1) != 1 or policy_version not in {
-        AGENT_DYNAMICS_POLICY_VERSION, ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
+        AGENT_DYNAMICS_POLICY_VERSION, *_ORIENTED_POLICY_VERSIONS,
     }:
         raise ValueError("agent_dynamics config has an unsupported version")
     if policy_version == AGENT_DYNAMICS_POLICY_VERSION:
@@ -35,7 +42,7 @@ def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
             raise ValueError("agent_dynamics v1 has no orientation source")
         return {"schema_version": 1, "policy_version": policy_version}
     if raw.get("source_id", ORIENTATION_FACILITY_SOURCE_ID) != ORIENTATION_FACILITY_SOURCE_ID:
-        raise ValueError("agent_dynamics v2 must cite the intake orientation assumption")
+        raise ValueError("agent_dynamics v2/v3 must cite the intake orientation assumption")
     return {
         "schema_version": 1,
         "policy_version": policy_version,
@@ -47,7 +54,7 @@ def _initial_known_facility_ids(world: WorldState, zone_id: str) -> list[str]:
     policy_version = canonical_agent_dynamics_config(
         world.model_configs.get("agent_dynamics")
     )["policy_version"]
-    oriented = policy_version == ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION
+    oriented = policy_version in _ORIENTED_POLICY_VERSIONS
     return sorted(
         facility.id for facility in world.facilities.values()
         if facility.zone_id == zone_id or (oriented and facility.kind in ORIENTATION_FACILITY_KINDS)
@@ -163,6 +170,27 @@ def learn_facility(world: WorldState, agent_id: str, facility_id: str) -> None:
     record["known_facility_ids"] = sorted(
         set(record["known_facility_ids"]) | discovered_ids
     )
+
+
+def announce_installed_facility(world: WorldState, facility_id: str) -> None:
+    """Tell present Agents about a shared facility installed during the Run (v3 only).
+
+    Agents admitted later already learn it through intake orientation.
+    """
+    state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
+    facility = world.facilities.get(facility_id)
+    if (
+        not isinstance(state, dict)
+        or facility is None
+        or facility.kind not in ORIENTATION_FACILITY_KINDS
+        or canonical_agent_dynamics_config(world.model_configs.get("agent_dynamics"))[
+            "policy_version"
+        ] != ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
+    ):
+        return
+    for record in state["agents"].values():
+        if facility_id not in record["known_facility_ids"]:
+            record["known_facility_ids"] = sorted((*record["known_facility_ids"], facility_id))
 
 
 def add_agent(world: WorldState, agent_id: str) -> None:

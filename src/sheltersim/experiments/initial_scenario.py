@@ -958,32 +958,38 @@ class InitialScenarioBuilder:
         }
         model_configs["movement_model"] = canonical_movement_config(None)
         from sheltersim.domain.geometry_overlay import (
+            INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
             TEMPORARY_ROOM_BED_SOURCE_ID,
             TEMPORARY_ROOM_INTAKE_SOURCE_ID,
         )
 
-        model_configs["geometry_overlay"] = {"schema_version": 3}
+        # v4 also places facilities installed during a Run on the floor plan.
+        model_configs["geometry_overlay"] = {"schema_version": 4}
         for source_id, title in ((BODY_SOURCE_ID, "Experimental life-state feedback"),
                                  (STAFF_OPERATIONS_SOURCE_ID, "Experimental staff operations"),
                                  (MOVEMENT_SOURCE_ID, "Experimental spatial movement"),
                                  (TEMPORARY_ROOM_BED_SOURCE_ID, "Exclusive temporary sleeping places"),
-                                 (TEMPORARY_ROOM_INTAKE_SOURCE_ID, "Physical temporary room intake")):
+                                 (TEMPORARY_ROOM_INTAKE_SOURCE_ID, "Physical temporary room intake"),
+                                 (INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
+                                  "Floor-plan placement of installed facilities")):
             if not any(source["id"] == source_id for source in provenance["sources"]):
                 provenance["sources"].append({"id": source_id, "title": title,
                     "source_kind": "assumption", "description": "Installed synthetic coefficients; not empirically calibrated."})
             provenance["assumptions"].append({"id": source_id, "subject": title,
                 "source_id": source_id, "reason": "New generated Scenario explicitly enables the installed experimental model."})
         from sheltersim.domain.agent_dynamics import (
-            ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
+            ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
+            INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
             ORIENTATION_FACILITY_KINDS,
             ORIENTATION_FACILITY_SOURCE_ID,
             canonical_agent_dynamics_config,
         )
 
         # Without this, Agents start knowing only facilities in the sleeping zone
-        # and never learn the separate toilet, water or meal zones.
+        # and never learn the separate toilet, water or meal zones. v3 also tells
+        # present Agents about shared facilities an intervention installs later.
         model_configs["agent_dynamics"] = canonical_agent_dynamics_config(
-            {"policy_version": ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION}
+            {"policy_version": ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION}
         )
         provenance["sources"].append({
             "id": ORIENTATION_FACILITY_SOURCE_ID,
@@ -997,6 +1003,26 @@ class InitialScenarioBuilder:
             "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
             "source_id": ORIENTATION_FACILITY_SOURCE_ID,
             "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
+        })
+        provenance["sources"].append({
+            "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+            "title": "Announcement of shared facilities installed during a Run",
+            "source_kind": "assumption",
+            "description": (
+                "Every present Agent is assumed to be told at once about a shared service "
+                "facility installed during the Run; not observed at a real shelter."
+            ),
+        })
+        provenance["assumptions"].append({
+            "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+            "subject": "installed_facility_knowledge",
+            "value": {"announced_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS),
+                      "delay_minutes": 0, "reach": "all_present_agents"},
+            "source_id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+            "reason": (
+                "There is no information-spread path for facility knowledge, so an installed "
+                "shared facility would otherwise stay unknown to everyone already admitted."
+            ),
         })
         provenance["sources"].append({
             "id": IntegratedDistressLifeStatePolicy.source_id,

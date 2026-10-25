@@ -1224,7 +1224,7 @@
       "id": "ASM-INTAKE-FACILITY-ORIENTATION-V1",
       "source_type": "assumption",
       "target": "agent_dynamics_v1 initial known_facility_ids for generated Scenarios",
-      "model_version": "need-led-autonomy-memory-v2",
+      "model_version": "need-led-autonomy-memory-v2 and need-led-autonomy-memory-v3",
       "values": {
         "known_facility_kinds_at_start": [
           "intake",
@@ -1239,6 +1239,46 @@
       "context_sources": [],
       "calibration_status": "uncalibrated structural assumption",
       "notes": "Agents only choose facilities they know. Under v1 they knew only facilities in their start zone, so generated Scenarios, whose sleeping zone holds no facilities, never served a toilet. v2 assumes every Agent is shown the shared services at intake. Whether and when evacuees learn facility locations at real shelters is not measured. Scenarios without an agent_dynamics config keep v1 so saved histories replay exactly."
+    },
+    {
+      "id": "ASM-INSTALLED-FACILITY-ANNOUNCEMENT-V1",
+      "source_type": "assumption",
+      "target": "agent_dynamics_v1 known_facility_ids when a facility is installed during a Run",
+      "model_version": "need-led-autonomy-memory-v3",
+      "values": {
+        "announced_facility_kinds": [
+          "intake",
+          "meal_distribution",
+          "medical_support",
+          "quiet_space",
+          "toilet",
+          "water_station"
+        ],
+        "delay_minutes": 0,
+        "reach": "every Agent present when the facility is installed",
+        "later_admissions": "learn it through ASM-INTAKE-FACILITY-ORIENTATION-V1"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated structural assumption",
+      "notes": "Facility knowledge has no information-spread path. Under v2 a toilet added by an intervention was known only by Agents admitted afterwards, so it was never used by the people already in the shelter. v3 assumes the installation is announced to everyone present at once. How quickly and how widely such announcements reach evacuees at real shelters is not measured. Scenarios saved with v1 or v2 keep their behaviour so saved histories replay exactly."
+    },
+    {
+      "id": "ASM-INSTALLED-FACILITY-PLACEMENT-V1",
+      "source_type": "assumption",
+      "target": "geometry_overlay_v1 facility_points for facilities installed during a Run",
+      "model_version": "generator-grid-installed-facility-v1 (geometry_overlay schema_version=4)",
+      "values": {
+        "placement_rule": "StandardShelterGenerator facility grid of the zone's facilities plus the new one, slots in order, grid grown by one up to 16 times",
+        "existing_facilities": "keep their points",
+        "min_separation_m": 0.6,
+        "min_separation_basis": "narrowest physical queue spacing (independent walkers) in movement.py; the generator itself places facilities 0.6 m apart in a 1.8 m wide zone",
+        "requirements": "inside the zone polygon, outside obstacles, partitions, equipment footprints and active temporary rooms, and reachable by an in-room route from the zone centre",
+        "on_failure": "intervention preview is not applicable; at runtime the structural event fails and the world is unchanged",
+        "footprint": "none; no equipment footprint is created"
+      },
+      "context_sources": [],
+      "calibration_status": "uncalibrated synthetic layout assumption",
+      "notes": "A toilet added by an intervention had no floor-plan point, so Agents could reach its zone but never queue at it. Generated floor plans are synthetic, so the generator's own grid rule is reused instead of inferring a real building layout. On an imported plan the same rule only proposes a point; a point that fails the checks makes the intervention not applicable. Scenarios saved with geometry_overlay schema_version 3 or lower cannot place added toilets and report the intervention as not applicable."
     },
     {
       "id": "ASM-STANDARD-SHELTER-GEOMETRY-V1",

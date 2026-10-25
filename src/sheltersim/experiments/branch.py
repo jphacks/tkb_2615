@@ -434,6 +434,23 @@ def _apply_to_world(world: WorldState, command: BranchCommand) -> None:
                 command.capacity if command.working_units is None else command.working_units
             ),
         )
+        if "facility_geometry" in world.model_configs:
+            from sheltersim.domain.geometry_overlay import (
+                installed_facility_placement_enabled,
+                place_installed_facility,
+            )
+            if not installed_facility_placement_enabled(world):
+                raise BranchError("this floor plan cannot place added toilets")
+            event_id = "branch-add-toilet-" + hashlib.sha256(
+                command.facility_id.encode("utf-8")
+            ).hexdigest()[:16]
+            try:
+                place_installed_facility(world, command.facility_id, event_id=event_id,
+                                         source_ids=())
+            except ValueError as exc:
+                raise BranchError(str(exc)) from exc
+        from sheltersim.domain.agent_dynamics import announce_installed_facility
+        announce_installed_facility(world, command.facility_id)
     elif isinstance(command, SetZoneEdgeCommand):
         edge = world.zone_edges.get(command.edge_id)
         if edge is None:

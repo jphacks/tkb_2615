@@ -309,10 +309,10 @@ def queue_arrivals(
     overlay_config = world.model_configs.get("geometry_overlay", {})
     if admission_zone_ids and (
         not isinstance(overlay_config, dict)
-        or overlay_config.get("schema_version") != 3
+        or overlay_config.get("schema_version") not in {3, 4}
     ):
         raise EventApplicationError(
-            "alternate room admission requires geometry_overlay schema_version=3"
+            "alternate room admission requires geometry_overlay schema_version=3 or 4"
         )
     if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_ARRIVALS_PER_EVENT:
         raise EventApplicationError("population arrival count is outside its supported range")
