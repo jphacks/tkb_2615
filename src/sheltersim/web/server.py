@@ -242,6 +242,19 @@ def _handler_for(
                     document = json.loads(self.rfile.read(length).decode("utf-8"))
                     if not isinstance(document, dict):
                         raise StorageError("project request must be an object")
+                    if len(parts) == 7 and parts[4] == "runs" and parts[6] == "pdf-report":
+                        payload = projects.pdf_reports.export(parts[3], parts[5], document)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/pdf")
+                        self.send_header(
+                            "Content-Disposition", 'attachment; filename="hinanjo-if-report.pdf"'
+                        )
+                        self.send_header("Content-Length", str(len(payload)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.end_headers()
+                        self.wfile.write(payload)
+                        return
                     payload = projects.post(parts[3:], document)
                     self._json_response(200, payload)
                 except StorageError as exc:

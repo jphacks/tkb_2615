@@ -48,6 +48,8 @@ class ProjectAPI:
         self.workspace = ProjectWorkspace(self)
         from sheltersim.web.project_services import ProjectServices
         self.services = ProjectServices(self)
+        from sheltersim.web.pdf_report import PDFReportService
+        self.pdf_reports = PDFReportService(self)
 
     def close(self) -> None:
         with self._lock:

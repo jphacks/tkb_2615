@@ -482,6 +482,7 @@
       working;
     for (const id of ["report-refresh", "save-report", "ask"])
       $(id).disabled = !has || state.busy;
+    $("save-report").disabled = !has || working;
     const branches = state.data?.branches || [],
       pair = branches.length > 1;
     for (const id of ["compare-refresh", "compare-branch", "compute-pair"])
@@ -1968,27 +1969,34 @@
     $("chat").scrollTop = $("chat").scrollHeight;
     $("question").value = "";
   }
-  function saveReport() {
-    const blob = new Blob(
-        [
-          json({
-            project_id: state.project,
-            run_id: state.run,
-            branch_id: state.branch,
-            minute: state.minute,
-            kpis: state.frame.kpis,
-            history: state.history,
-            report: state.report,
-            evidence: state.evidence,
-            comparison: state.comparison,
-          }),
-        ],
-        { type: "application/json" },
-      ),
-      url = URL.createObjectURL(blob),
+  async function saveReport() {
+    const branchIds = state.comparison ? pairIds() : [state.branch],
+      minute = state.comparison ? state.comparison.minute : state.minute,
+      button = $("save-report");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    note("Opusによる分析とPDFの生成中です。保存済みのレポートがあれば再利用します…", "loading");
+    let blob;
+    try {
+      const response = await fetch(`${runBase()}/pdf-report`, {
+        method: "POST",
+        headers: { Accept: "application/pdf", "Content-Type": "application/json" },
+        body: JSON.stringify({ branch_ids: branchIds, minute }),
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || `PDF生成に失敗しました (HTTP ${response.status})`);
+      }
+      if (!response.headers.get("Content-Type")?.startsWith("application/pdf"))
+        throw new Error("PDFを取得できませんでした。再試行してください。");
+      blob = await response.blob();
+    } finally {
+      button.removeAttribute("aria-busy");
+    }
+    const url = URL.createObjectURL(blob),
       a = el("a");
     a.href = url;
-    a.download = `hinanjo-if-${state.branch}-${state.minute}.json`;
+    a.download = `hinanjo-if-${branchIds.join("-vs-")}-${minute}.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
