@@ -156,6 +156,13 @@ class Checkpoint:
             "checkpoint_hash": self.checkpoint_hash,
         }
 
+    def _document_view(self) -> dict[str, Any]:
+        """Unvalidated, shared view for a caller that owns a just-captured checkpoint.
+
+        Callers must only read it. Everything else uses to_dict().
+        """
+        return {**self._body_dict(), "checkpoint_hash": self.checkpoint_hash}
+
     def to_json(self) -> str:
         """Serialize canonically for storage or deterministic comparison."""
         return json.dumps(

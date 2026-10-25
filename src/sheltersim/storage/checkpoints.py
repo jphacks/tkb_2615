@@ -10,7 +10,7 @@ import re
 import tempfile
 from bisect import bisect_right
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 
@@ -24,12 +24,18 @@ def _encoded(value: Any) -> bytes:
 class CheckpointArchive:
     """Storage representation only; restores the unchanged Checkpoint v1 hash."""
 
-    def __init__(self, directory: Path, *, chunk_records: int = 128, max_new_bytes: int | None = None) -> None:
+    def __init__(self, directory: Path, *, chunk_records: int = 128, max_new_bytes: int | None = None,
+                 content_check: Callable[[Any], None] | None = None) -> None:
         self.directory = directory
         self.chunk_records = chunk_records
         self.max_new_bytes = max_new_bytes
+        # Called on every chunk value (and large-object field names) that is not
+        # already stored. Stored chunks passed the same check when first written.
+        self.content_check = content_check
         self.new_bytes = 0
         self.chunk_directory = directory / "chunks"
+        self._staged: dict[str, bytes] | None = None
+        self._staged_bytes = 0
 
     def _put(self, value: Any) -> str:
         if self.chunk_directory.is_symlink() or not self.chunk_directory.resolve().is_relative_to(self.directory.resolve()):
@@ -39,25 +45,37 @@ class CheckpointArchive:
             raise CheckpointError("checkpoint chunk exceeds the supported size")
         key = hashlib.sha256(raw).hexdigest()
         path = self.chunk_directory / f"{key}.json.gz"
-        if not path.exists():
-            compressed = gzip.compress(raw, compresslevel=3, mtime=0)
-            if self.max_new_bytes is not None and self.new_bytes + len(compressed) > self.max_new_bytes:
-                raise CheckpointError("checkpoint storage capacity exceeded")
-            self.chunk_directory.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(prefix=".chunk-", dir=self.chunk_directory)
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(compressed)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                try:
-                    os.link(name, path)
-                    self.new_bytes += len(compressed)
-                except FileExistsError:
-                    pass
-            finally:
-                Path(name).unlink(missing_ok=True)
+        if path.exists() or (self._staged is not None and key in self._staged):
+            return key
+        if self.content_check is not None:
+            self.content_check(value)
+        compressed = gzip.compress(raw, compresslevel=3, mtime=0)
+        if (self.max_new_bytes is not None
+                and self.new_bytes + self._staged_bytes + len(compressed) > self.max_new_bytes):
+            raise CheckpointError("checkpoint storage capacity exceeded")
+        if self._staged is not None:
+            self._staged[key] = compressed
+            self._staged_bytes += len(compressed)
+        else:
+            self._write_chunk(key, compressed)
         return key
+
+    def _write_chunk(self, key: str, compressed: bytes) -> None:
+        path = self.chunk_directory / f"{key}.json.gz"
+        self.chunk_directory.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".chunk-", dir=self.chunk_directory)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(compressed)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(name, path)
+                self.new_bytes += len(compressed)
+            except FileExistsError:
+                pass
+        finally:
+            Path(name).unlink(missing_ok=True)
 
     def _pack(self, value: Any) -> dict[str, Any]:
         if isinstance(value, list) and len(value) > self.chunk_records:
@@ -66,6 +84,9 @@ class CheckpointArchive:
             keys = sorted(value)
             return {"kind": "map", "chunks": [self._put({key: value[key] for key in keys[i:i+self.chunk_records]}) for i in range(0, len(keys), self.chunk_records)]}
         if isinstance(value, dict) and len(_encoded(value)) > 65_536:
+            if self.content_check is not None:
+                # Field names of a split object live in the manifest, not a chunk.
+                self.content_check(dict.fromkeys(value))
             return {"kind": "object", "fields": {key: self._pack(item) for key, item in sorted(value.items())}}
         return {"kind": "value", "chunk": self._put(value)}
 
@@ -77,14 +98,31 @@ class CheckpointArchive:
     def _encode_validated_document(
         self, document: dict[str, Any], *, checkpoint_hash: str,
     ) -> dict[str, Any]:
-        """Pack an owned snapshot already checked by Checkpoint.to_dict().
+        """Pack an owned snapshot already checked by Checkpoint validation.
 
-        ProjectStore reuses that same detached document for its input/privacy
-        checks and archive. Never pass an unvalidated external document here.
+        Never pass an unvalidated external document here.
         """
-        body = {"checkpoint_hash":checkpoint_hash,"document":self._pack(document)}
+        manifest = self._prepare_validated_document(document, checkpoint_hash=checkpoint_hash)
+        self._write_prepared()
+        return manifest
+
+    def _prepare_validated_document(
+        self, document: dict[str, Any], *, checkpoint_hash: str,
+    ) -> dict[str, Any]:
+        """Pack and run content checks without writing; _write_prepared publishes chunks."""
+        self._staged, self._staged_bytes = {}, 0
+        try:
+            body = {"checkpoint_hash":checkpoint_hash,"document":self._pack(document)}
+        except BaseException:
+            self._staged, self._staged_bytes = None, 0
+            raise
         return {"schema_version":1,"storage_type":"checkpoint_archive_v2",**body,
                 "manifest_hash":hashlib.sha256(_encoded(body)).hexdigest()}
+
+    def _write_prepared(self) -> None:
+        staged, self._staged, self._staged_bytes = self._staged or {}, None, 0
+        for key, compressed in staged.items():
+            self._write_chunk(key, compressed)
 
     def _get(self, key: str) -> Any:
         if not isinstance(key, str) or not _HASH.fullmatch(key):

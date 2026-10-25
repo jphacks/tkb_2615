@@ -72,6 +72,11 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+def _reject_sensitive_checkpoint_content(value: Any) -> None:
+    if safe_document(value) != value:
+        raise StorageError("checkpoint contains sensitive data")
+
+
 class ProjectStore:
     """Local cloud-disk store; callers provide opaque IDs, never filesystem paths."""
 
@@ -294,13 +299,33 @@ class ProjectStore:
 
     def save_branch(self, project_id: str, reference: BranchReference, checkpoint: Checkpoint, *, expected_checkpoint_hash: str | None = None) -> None:
         """Write content first, then atomically move a compare-and-swap branch pointer."""
+        # to_dict validates both hashes, WorldState/model compatibility and
+        # metrics, and returns an owned snapshot. Reuse it throughout this
+        # locked save instead of restoring/copying the growing history again.
+        self._save_branch(project_id, reference, checkpoint, checkpoint.to_dict,
+                          expected_checkpoint_hash=expected_checkpoint_hash)
+
+    def save_captured_branch(
+        self, project_id: str, reference: BranchReference, checkpoint: Checkpoint, *,
+        expected_checkpoint_hash: str | None = None,
+    ) -> None:
+        """Save a checkpoint the caller just created with Checkpoint.capture.
+
+        capture() already validated the hashes, WorldState/model compatibility
+        and metrics. Only pass an object that has not been shared or mutated
+        since; anything else must use save_branch, which validates again.
+        """
+        self._save_branch(project_id, reference, checkpoint, checkpoint._document_view,
+                          expected_checkpoint_hash=expected_checkpoint_hash)
+
+    def _save_branch(
+        self, project_id: str, reference: BranchReference, checkpoint: Checkpoint,
+        document_source: Any, *, expected_checkpoint_hash: str | None,
+    ) -> None:
         with self.transaction():
             run = self.run(project_id, reference.run_id)
             scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
-            # to_dict validates both hashes, WorldState/model compatibility and
-            # metrics, and returns an owned snapshot. Reuse it throughout this
-            # locked save instead of restoring/copying the growing history again.
-            document = checkpoint.to_dict()
+            document = document_source()
             world = document["world_state"]
             if (world["scenario_id"] != scenario.id or world["seed"] != scenario.seed
                     or world["model_configs"] != scenario.model_configs):
@@ -328,19 +353,22 @@ class ProjectStore:
                 parent, _ = self.load_branch(project_id, reference.run_id, reference.parent_branch_id)
                 if not parent.fork_minute <= reference.fork_minute <= parent.computed_until:
                     raise StorageError("fork point is outside parent history")
-            if safe_document(document) != document:
-                raise StorageError("checkpoint contains sensitive data")
             checkpoint_path = self._path(project_id, "runs", reference.run_id, "checkpoints", f"{checkpoint.checkpoint_hash}.json")
             checkpoint_bytes_before = self.checkpoint_write_bytes(project_id, reference.run_id)
+            # The archive applies the privacy check to every chunk that is not
+            # already stored (stored chunks passed it when first written) and
+            # stages new chunks, so a rejected checkpoint writes nothing.
+            archive = CheckpointArchive(checkpoint_path.parent, max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
+                                        content_check=_reject_sensitive_checkpoint_content)
+            encoded_archive = archive._prepare_validated_document(
+                document, checkpoint_hash=checkpoint.checkpoint_hash,
+            )
             pending_ledger_path = self._path(project_id, "runs", reference.run_id, "checkpoint-write-pending.json")
             self._write(pending_ledger_path, {
                 "schema_version": 1, "run_id": reference.run_id,
                 "status": "checkpoint_archive_write_in_progress",
             })
-            archive = CheckpointArchive(checkpoint_path.parent, max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536))
-            encoded_archive = archive._encode_validated_document(
-                document, checkpoint_hash=checkpoint.checkpoint_hash,
-            )
+            archive._write_prepared()
             new_manifest = not checkpoint_path.exists()
             self._write(checkpoint_path, encoded_archive, immutable=True)
             manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0

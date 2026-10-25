@@ -113,16 +113,15 @@ def test_failed_pointer_publish_keeps_previous_durable_head(tmp_path, monkeypatc
 def test_interrupted_archive_recovers_orphan_chunk_accounting(tmp_path, monkeypatch):
     store, timeline = saved_timeline(tmp_path)
     prior = store.load_branch("p", "r", "main")[1].to_json()
-    put = CheckpointArchive._put
+    write_chunk = CheckpointArchive._write_chunk
 
-    def interrupted_put(archive, value):
-        key = put(archive, value)
+    def interrupted_write(archive, key, compressed):
+        write_chunk(archive, key, compressed)
         if archive.new_bytes:
             raise OSError("injected interruption after a durable chunk")
-        return key
 
     with monkeypatch.context() as patch:
-        patch.setattr(CheckpointArchive, "_put", interrupted_put)
+        patch.setattr(CheckpointArchive, "_write_chunk", interrupted_write)
         with pytest.raises(OSError, match="injected interruption"):
             timeline.advance("main", 5)
     restarted = ProjectStore(store.root)
@@ -149,6 +148,83 @@ def test_save_still_rejects_mutation_and_sensitive_runtime_data(tmp_path):
     new = BranchReference(run_id="r", branch_id="sensitive", fork_minute=0, computed_until=0)
     with pytest.raises(StorageError, match="sensitive"):
         store.save_branch("p", new, sensitive)
+
+
+def files(store):
+    return sorted((str(p), p.read_bytes()) for p in store.root.rglob("*") if p.is_file())
+
+
+def test_recorded_checkpoint_is_validated_only_by_capture(tmp_path, monkeypatch):
+    store, timeline = saved_timeline(tmp_path)
+    _, head = store.load_branch("p", "r", "main")
+    runtime = BranchRuntime.from_checkpoint(head, branch_id="main")
+    calls = []
+    original = Checkpoint._validate
+
+    def validate(self):
+        calls.append(self.checkpoint_hash)
+        return original(self)
+
+    monkeypatch.setattr(Checkpoint, "_validate", validate)
+    recorded = timeline.record(runtime)
+    assert calls == [recorded.checkpoint_hash]
+
+
+@pytest.mark.parametrize("method", ["save_branch", "save_captured_branch"])
+def test_sensitive_checkpoint_is_rejected_before_anything_is_written(tmp_path, method):
+    store, _ = saved_timeline(tmp_path)
+    _, valid = store.load_branch("p", "r", "main")
+    sensitive = Checkpoint.capture(
+        valid.restore_world(), runtime_state={"note": "sk-ant-abcdefghijklmnop"}
+    )
+    new = BranchReference(run_id="r", branch_id="sensitive", fork_minute=0, computed_until=0)
+    before = files(store)
+    with pytest.raises(StorageError, match="sensitive"):
+        getattr(store, method)("p", new, sensitive)
+    assert files(store) == before
+
+
+def test_split_object_field_names_are_privacy_checked(tmp_path):
+    from sheltersim.storage.projects import _reject_sensitive_checkpoint_content
+
+    archive = CheckpointArchive(tmp_path, content_check=_reject_sensitive_checkpoint_content)
+    with pytest.raises(StorageError, match="sensitive"):
+        archive._prepare_validated_document(
+            {"model_state": {"phone_number": "x" * 70_000}}, checkpoint_hash="0" * 64
+        )
+    assert not any(tmp_path.rglob("*.gz"))
+
+
+def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch):
+    import sheltersim.storage.projects as projects
+
+    store, timeline = saved_timeline(tmp_path)
+    checked = []
+    original = projects._reject_sensitive_checkpoint_content
+
+    def check(value):
+        if not (isinstance(value, dict) and all(item is None for item in value.values())):
+            checked.append(value)
+        original(value)
+
+    monkeypatch.setattr(projects, "_reject_sensitive_checkpoint_content", check)
+    reference, head = store.load_branch("p", "r", "main")
+    store.save_captured_branch("p", reference, head, expected_checkpoint_hash=head.checkpoint_hash)
+    assert checked == []
+    timeline.advance("main", 1)
+    assert checked
+
+
+def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path):
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 31)
+    _, head = store.load_branch("p", "r", "main")
+    directory = store._path("p", "runs", "r", "checkpoints")
+    manifest = json.loads((directory / f"{head.checkpoint_hash}.json").read_text())
+    other = tmp_path / "public"
+    assert CheckpointArchive(other).encode(head) == manifest
+    for chunk in (other / "chunks").iterdir():
+        assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()
 
 
 @pytest.mark.parametrize("value", [None, True, False, 0, -1, 0.0, -0.0, 0.12345678901234567])

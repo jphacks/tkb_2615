@@ -232,7 +232,9 @@ class TimelineStore:
                 raise
             prior = None
         reference = BranchReference(run_id=self.run_id, branch_id=runtime.branch_id, parent_branch_id=runtime.parent_branch_id, fork_minute=prior.fork_minute if prior else fork_minute, computed_until=checkpoint.simulation_minute)
-        self.store.save_branch(self.project_id, reference, checkpoint, expected_checkpoint_hash=prior.checkpoint_hash if prior else None)
+        # runtime.checkpoint() captured and validated this object just now and it
+        # has not left this method, so the store need not validate it again.
+        self.store.save_captured_branch(self.project_id, reference, checkpoint, expected_checkpoint_hash=prior.checkpoint_hash if prior else None)
         from sheltersim.storage.history_index import HistoryIndex
         HistoryIndex(self.store, self.project_id, self.run_id).ingest(runtime.branch_id, checkpoint, observations=observations)
         self._cache_frame(runtime, checkpoint)
