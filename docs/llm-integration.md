@@ -44,7 +44,7 @@ runtimeの呼出しは、Run（CLIでは1回のrun）の利用枠の上限から
 
 runtime以外のstage（準備、介入、review）が使うOpusは、thinkingを無効にできません。thinkingのtokenはAPIの`max_tokens`に含まれます。そのためrouterは、各taskの回答の大きさ（`max_output_tokens`、設定の`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`で上限）に、thinking用の余裕として4,096 tokenを加えて要求し、その分の費用も予約します。準備stageでは`effort: low`を指定し、thinkingを短くします。runtimeのHaikuは従来どおりthinkingを無効にします。
 
-Opus呼出し1回の予約額は、既定設定でtaskの回答上限に応じておよそ$0.2〜0.4になりました（review約$0.26、シナリオ下書き最大約$0.38）。runの予算（`SHELTERSIM_LLM_BUDGET_USD`）がこれより小さいと、Opusの呼出しは`budget_exceeded`としてfallbackします。100人規模のシナリオ下書きは、回答が既定の出力上限（8,192）を超える見込みです。その場合は`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`を上げてください。
+Opus呼出し1回の予約額は、既定設定でtaskの回答上限に応じておよそ$0.2〜0.4になりました（review約$0.26、シナリオ下書き最大約$0.38）。介入compilerは入力上限を64 KiBで予約するため、約$0.69です（以前は約$0.30）。実際の費用は送信量に応じて精算され、予約額よりずっと小さくなります。runの予算（`SHELTERSIM_LLM_BUDGET_USD`）がこれより小さいと、Opusの呼出しは`budget_exceeded`としてfallbackします。100人規模のシナリオ下書きは、回答が既定の出力上限（8,192）を超える見込みです。その場合は`SHELTERSIM_LLM_MAX_OUTPUT_TOKENS`を上げてください。
 
 web searchのようなserver toolを使う呼出しでは、APIが検索の前後でモデルを複数回実行し、`usage.output_tokens`はその合計になります。予約は「検索回数＋1」回分の`max_tokens`で計算します。実際の使用量が予約を超えると、利用記録は安全のため凍結（frozen）され、以後その記録を共有するすべての有料呼出しが拒否されます。
 
@@ -58,6 +58,20 @@ sheltersim usage --unfreeze task-global-v1 --confirm task-global-v1 --reason "�
 - 解除した日時・理由・その時点のreceipt数は、利用記録とは別の監査ファイル（usage-audit/）に残ります。usage summaryの`unfreeze_events`に表示されます。
 - 利用記録の形式はv1のままです。PC全体で共有する記録なので、古い版のShelterSimからも引き続き読めます。
 - Project Runの利用枠は、このコマンドの対象外です。
+
+### 入力の大きさの上限
+
+routerは送信文のUTF-8バイト数を`max_input_tokens`（`SHELTERSIM_LLM_MAX_INPUT_TOKENS`、既定16,384）と比べ、超える依頼はAPIを呼ばずに`input_token_limit`としてfallbackします。バイト数はtoken数より多めの見積もりです。
+
+文脈が大きくなるtaskは、task側で入力上限（`input_byte_limit`）を宣言できます。routerは設定値とtaskの宣言値の大きい方を使い、呼出し前の予算確認もその上限で予約します。宣言値は応答を変えないので、cache keyとresponse tapeには影響しません。
+
+- 介入の自然言語指示（compiler）は64 KiBを宣言します。生成Scenarioでは導入済みprimitiveの説明だけで約13 KBあり、以前はScenarioの人数によらず16,384バイトを超えていました。その結果、Opusを一度も呼ばずにruleの結果になっていました。64 KiBは約1,500人までの文脈に相当します。
+- それ以上の人数でも上限を超えると、これまでどおりAPIを呼ばずにfallbackし、その理由を結果に示します。
+- usage ledgerの予約は、従来どおり実際の送信バイト数（入力とschema）から計算します。
+
+### 介入compilerのfallback理由
+
+介入の変換がruleの結果になったときは、Opusを使わなかった理由を日本語の固定文で`limitations`に入れます。対象はofflineで変換できた案、聞き返し、変換できなかった結果のすべてです。末尾の理由コードは`usage.error_kind`、またはrouterのoutcomeと同じです（例：`offline`、`input_token_limit`、`max_api_calls`、`budget_exceeded`、`rate_limited`、`invalid_output`）。model出力本文やprovider errorの本文は含めません。
 
 ### fallbackの可視化
 
