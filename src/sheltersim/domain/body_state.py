@@ -7,6 +7,7 @@ import math
 import re
 from typing import Any
 
+from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import WorldState
 from sheltersim.policies.affect import create_affect_policy
 
@@ -186,7 +187,7 @@ def create_body_state(world: WorldState) -> dict[str, Any]:
     }
 
 
-def validate_body_state(world: WorldState) -> None:
+def validate_body_state(world: WorldState, *, validate_event_history: bool = True) -> None:
     """Reject partial state, unknown people, out-of-range values and malformed evidence."""
     state = world.model_state.get(BODY_STATE_KEY)
     if state is None:
@@ -311,7 +312,10 @@ def validate_body_state(world: WorldState) -> None:
             for item in population.get("departures", ())
             if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
         )
-    for item in state["history"]:
+    history = state["history"]
+    if not validate_event_history:
+        history = records_since_previous_tick(history, world.minute_index)
+    for item in history:
         expected = {"event_id", "minute", "kind", "actor_ids", "topic_id", "causation_id", "deltas"}
         if (
             not isinstance(item, dict)
