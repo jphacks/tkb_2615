@@ -21,6 +21,7 @@ from sheltersim.contracts.operations import (
     StaffOperationReceipt,
     StaffSupportContinuityReceipt,
 )
+from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventStatus
 
@@ -42,15 +43,24 @@ def create_shared_operations_state() -> dict[str, Any]:
     }
 
 
-def validate_shared_operations_state(world: WorldState) -> None:
+def validate_shared_operations_state(
+    world: WorldState, *, validate_event_history: bool = True
+) -> None:
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
     if state is None:
         return
+    # Per-tick validation parses only the records from the tick that just ended (each
+    # was checked against its event when appended); the run-boundary validation
+    # replays the whole history and the care lifecycle.
+    checked = state
+    history = state.get("history") if isinstance(state, dict) else None
+    if not validate_event_history and isinstance(history, list):
+        checked = {**state, "history": records_since_previous_tick(history, world.minute_index)}
     try:
-        parsed = SharedOperationsState.model_validate(state)
+        parsed = SharedOperationsState.model_validate(checked)
     except (TypeError, ValueError) as exc:
         raise ValueError("shared_operations_v1 has an invalid exact schema") from exc
-    if (len(parsed.history) > MAX_SHARED_OPERATION_HISTORY
+    if (len(state["history"]) > MAX_SHARED_OPERATION_HISTORY
             or any(a.minute > b.minute for a, b in zip(parsed.history, parsed.history[1:]))):
         raise ValueError("shared_operations_v1 history is over limit or out of time order")
     seen_events: set[str] = set()
@@ -67,6 +77,8 @@ def validate_shared_operations_state(world: WorldState) -> None:
             raise ValueError("shared_operations_v1 record must link to a realized applied event")
         if isinstance(item, StaffOperationReceipt):
             _validate_staff_operation_receipt(world, item, history_truncated=parsed.history_truncated)
+        if not validate_event_history:
+            continue
         if isinstance(item, CareTransitionReceipt):
             prior = care.get(item.request_id)
             if prior is None:
@@ -140,7 +152,7 @@ def validate_shared_operations_state(world: WorldState) -> None:
         expected_status = "pending" if head.status == "requested" else "assigned"
         if request.status.value != expected_status:
             raise ValueError("shared_operations_v1 care status disagrees with the persisted support request")
-        if request_id in active_care:
+        if request_id in active_care or not validate_event_history:
             if head.status in {"assigned", "started"}:
                 evidence = world.event_log.find(head.latest_event_id)
                 staff_id = evidence.event.payload.get("staff_id") if evidence is not None else None

@@ -42,6 +42,8 @@ Python標準ライブラリのHTTPサーバーがローカルブラウザーア�
 - WorldStateが変更可能なsimulation stateの正本です。Policyとadapterは型付き提案を作り、controllerが検証して適用します。
 - 乱数はScenario seedと安定したdomain IDから決定します。simulation結果の判断にwall-clockやmodule-global乱数を使いません。
 - EventQueueは今後処理する予定を、EventLogは結果を記録します。sourceやcausationを含む、相互に区別された記録です。
+- TickEngineは毎分の終わりに、現在の状態と、その分に追記された履歴記録（直前の1件を含む）を検証します。追記専用の履歴（共有運用、生活状態の社会履歴、給水・配食の依頼と停止の履歴、資源台帳の監査記録）とEventLogの全体の再生、共有運用の支援ライフサイクルの再構成は、Runの開始・終了とCheckpointの作成・復元で行う完全検証で確認します。毎分の検証が履歴全体を再走査しないため、1分あたりの検証時間は履歴の長さに比例して増えません。
+- 資源台帳への操作（納入、損失、予約、解放、消費）と毎分の指標集計は、現在の残高・予約と、直前の監査記録・各資源の最新の監査記録を確認します。操作は変更する口座だけを複製した候補に適用し、確認を通ってから差し替えます。監査記録の全件の再生は完全検証で行います。
 - Checkpointは対応する復元に必要なstateとruntime情報を含みます。BranchRuntimeは分離したstateを復元し、兄弟Branchで可変queue、RNG状態、actor objectを共有しません。
 - inspection、描画、metrics、trace levelはWorldStateを変えず、simulation乱数も消費しません。
 
