@@ -61,7 +61,7 @@
       unit: "/100",
       factor: 100,
       icon: "♟",
-      note: "状態境界の平均",
+      note: "避難者全員のストレスの平均（0〜100、高いほどつらい）",
     },
     {
       key: "toilet_wait_max_minutes",
@@ -69,7 +69,7 @@
       unit: "分",
       factor: 1,
       icon: "◷",
-      note: "記録上の累積最大",
+      note: "ここまでで一番長く待った人の待ち時間",
     },
     {
       key: "staff_load_ratio",
@@ -77,7 +77,7 @@
       unit: "%",
       factor: 100,
       icon: "♟",
-      note: "稼働スタッフ比率",
+      note: "スタッフのうち、いま対応中の人の割合",
     },
     {
       key: "unresolved_support_request_count",
@@ -85,7 +85,7 @@
       unit: "件",
       factor: 1,
       icon: "!",
-      note: "記録された未解決件数",
+      note: "助けを求めて、まだ対応されていない件数",
     },
     {
       key: "population",
@@ -93,7 +93,7 @@
       unit: "人",
       factor: 1,
       icon: "♟",
-      note: "現在のWorldState",
+      note: "この時刻に避難所にいる人数",
     },
     {
       key: "toilet_queue_length",
@@ -101,7 +101,7 @@
       unit: "人",
       factor: 1,
       icon: "◷",
-      note: "現在の待機列",
+      note: "いまトイレの列に並んでいる人数",
     },
   ];
   const zoneNames = {
@@ -1044,7 +1044,9 @@
     $("people-list").replaceChildren();
     const group = state.selectedGroup?.length
       ? f.people.filter((p) => state.selectedGroup.includes(p.id))
-      : f.people.slice(0, 8);
+      : $("people-panel").classList.contains("expanded")
+        ? f.people
+        : f.people.slice(0, 8);
     if (state.selectedGroup?.length > 1)
       $("people-list").append(
         el("span", `同じ記録位置の${group.length}人`, "group-caption"),
@@ -1053,7 +1055,7 @@
       const button = el("button", p.id, "person-chip");
       button.classList.toggle("selected", p.id === state.selected);
       button.addEventListener("click", () =>
-        selectPerson(p.id, state.selectedGroup),
+        selectPerson(p.id, state.selectedGroup, anchorOf(button)),
       );
       $("people-list").append(button);
     }
@@ -1095,18 +1097,25 @@
         const body = el("span");
         body.append(el("strong", p.id), el("small", personSummary(p)));
         card.append(avatar, body);
-        card.addEventListener("click", () => selectPerson(p.id));
+        card.addEventListener("click", () =>
+          selectPerson(p.id, [], anchorOf(card)),
+        );
         $("person-detail").append(card);
       }
     }
   }
-  function selectPerson(id, group = []) {
+  function selectPerson(id, group = [], anchor = null) {
     state.selected = id;
     state.selectedGroup = group;
     renderPeople();
     drawAll();
-    openPersonDialog(id);
+    openPersonDialog(id, anchor);
   }
+  // クリックした要素の位置を、吹き出しの基準点にする
+  const anchorOf = (node) => {
+    const r = node.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.bottom };
+  };
   const mobilityNames = {
     independent: "自力で移動できる",
     assisted: "介助があれば移動できる",
@@ -1143,7 +1152,7 @@
     for (const [k, v] of pairs) dl.append(el("dt", k), el("dd", v ?? "未記録"));
     return dl;
   }
-  function openPersonDialog(id) {
+  function openPersonDialog(id, anchor = null) {
     const f = state.frame,
       dialog = $("person-dialog");
     if (!f || !dialog) return;
@@ -1211,7 +1220,34 @@
     const raw = el("details");
     raw.append(el("summary", "記録データ（開発者向け）"), el("pre", json(p || staff || {})));
     body.append(raw);
-    if (!dialog.open) dialog.showModal();
+    // パネルの overflow に切られないよう、body 直下に置く
+    if (dialog.parentElement !== document.body) document.body.append(dialog);
+    if (!dialog.open) dialog.show();
+    placeBubble(dialog, anchor);
+  }
+  // 吹き出しをクリック位置の近くに置き、画面からはみ出さないように調整する
+  function placeBubble(dialog, anchor) {
+    const w = dialog.offsetWidth,
+      h = dialog.offsetHeight,
+      pad = 12,
+      at = anchor || { x: innerWidth / 2, y: innerHeight / 3 };
+    let left = at.x - w / 2,
+      top = at.y + 14,
+      below = true;
+    if (top + h > innerHeight - pad) {
+      top = at.y - h - 14;
+      below = false;
+    }
+    left = Math.max(pad, Math.min(innerWidth - w - pad, left));
+    top = Math.max(pad, Math.min(innerHeight - h - pad, top));
+    dialog.style.left = `${left}px`;
+    dialog.style.top = `${top}px`;
+    dialog.style.setProperty(
+      "--tail-x",
+      `${Math.max(16, Math.min(w - 16, at.x - left))}px`,
+    );
+    dialog.classList.toggle("tail-top", below);
+    dialog.classList.toggle("tail-bottom", !below);
   }
   function replayTime(minute) {
     const seconds = Math.floor(minute * 60 + 0.00001),
@@ -2311,9 +2347,24 @@
   $("person-dialog-close").addEventListener("click", () =>
     $("person-dialog").close(),
   );
-  // 枠の外（背景）をクリックしても閉じる
-  $("person-dialog").addEventListener("click", (e) => {
-    if (e.target === $("person-dialog")) $("person-dialog").close();
+  // 吹き出しの外をクリックすると閉じる（マップ上の人物クリックは開き直す）
+  document.addEventListener("pointerdown", (e) => {
+    const d = $("person-dialog");
+    if (d.open && !d.contains(e.target) && e.target.tagName !== "CANVAS")
+      d.close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      $("person-dialog").close();
+      $("people-panel").classList.remove("expanded");
+    }
+  });
+  // 「避難者・スタッフの状態」をページ内で大きく表示する
+  $("people-expand").addEventListener("click", () => {
+    const panel = $("people-panel"),
+      open = panel.classList.toggle("expanded");
+    $("people-expand").textContent = open ? "× 閉じる" : "⤢ 大きく表示";
+    if (state.frame) renderPeople();
   });
   on("compare-refresh", () => loadComparison());
   on("compute-pair", computePair);
@@ -2437,7 +2488,7 @@
         const hit = hitAt(e);
         if (hit?.type === "person") {
           if (id === "simulation-map" || id === "report-map")
-            selectPerson(hit.id, hit.ids);
+            selectPerson(hit.id, hit.ids, { x: e.clientX, y: e.clientY });
           else {
             state.selected = hit.id;
             drawAll();

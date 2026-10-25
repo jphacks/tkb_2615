@@ -35,7 +35,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "sheltersim.contracts" = ["*.json"]
 "sheltersim.web" = [
-    "static/*.html", "static/*.js", "static/*.css", "examples/*.json",
+    "static/*.html", "static/*.js", "static/*.css", "static/*.jpg", "examples/*.json",
     "static/vendor/pdfjs/*.mjs", "static/vendor/pdfjs/LICENSE", "static/vendor/pdfjs/NOTICE.txt",
     "static/vendor/pdfjs/cmaps/*", "static/vendor/pdfjs/standard_fonts/*",
 ]

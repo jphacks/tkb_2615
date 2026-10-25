@@ -400,6 +400,7 @@ def _handler_for(
             names = {
                 "/demo-v2": "demo-v2.html",
                 "/demo-v2.css": "demo-v2.css",
+                "/demo-v2-logo.jpg": "demo-v2-logo.jpg",
                 "/demo-v2.js": "demo-v2.js",
                 "/demo-v2-map.js": "demo-v2-map.js",
                 "/demo-v2-scene.js": "demo-v2-scene.js",

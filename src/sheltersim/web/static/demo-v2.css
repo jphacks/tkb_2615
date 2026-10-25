@@ -3382,3 +3382,158 @@ h2 {
   font-size: 11px;
   padding: 7px 10px;
 }
+
+/* ブランドロゴ（家の中に3人）：配布ロゴに合わせた図形 */
+.brand-logo {
+  width: 48px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+/* 人物ポップアップ：クリック位置の近くに出る吹き出しサイズ（中は縦スクロール） */
+.person-dialog {
+  position: fixed;
+  margin: 0;
+  z-index: 50;
+  width: 300px;
+  max-height: 340px;
+  overflow: visible;
+  border: 1px solid #cfe0f5;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(16, 42, 84, 0.25);
+}
+.person-dialog .pd-head {
+  padding: 8px 12px;
+  border-radius: 12px 12px 0 0;
+}
+.person-dialog .pd-head h2 {
+  font-size: 14px;
+}
+.person-dialog .pd-head button {
+  font-size: 16px;
+  padding: 2px 8px;
+}
+.person-dialog #person-dialog-body {
+  max-height: 290px;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+  font-size: 12px;
+}
+.person-dialog .pd-facts {
+  grid-template-columns: 7.5em 1fr;
+  gap: 3px 8px;
+}
+.person-dialog .pd-meter {
+  grid-template-columns: 7.5em 1fr 2.4em;
+  gap: 6px;
+  margin: 3px 0;
+}
+.person-dialog .pd-section {
+  margin-top: 10px;
+}
+.person-dialog .pd-section h3 {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+/* 吹き出しのしっぽ */
+.person-dialog::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--tail-x, 50%) - 8px);
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 1px solid #cfe0f5;
+  transform: rotate(45deg);
+}
+.person-dialog.tail-top::after {
+  top: -9px;
+  background: #d6eaff;
+  border-right: 0;
+  border-bottom: 0;
+}
+.person-dialog.tail-bottom::after {
+  bottom: -9px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* 「避難者・スタッフの状態」をページ内で大きく表示 */
+.people-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.people-panel-head h2 {
+  margin-bottom: 0;
+}
+.people-panel-head button {
+  font-size: 11px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.simulation-side > .people-panel.expanded {
+  position: fixed;
+  z-index: 40;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 32px));
+  height: auto;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 18px 22px;
+  box-shadow:
+    0 18px 48px rgba(16, 42, 84, 0.28),
+    0 0 0 100vmax rgba(16, 32, 64, 0.35);
+}
+.people-panel.expanded h2 {
+  font-size: 18px;
+}
+.people-panel.expanded #person-detail {
+  font-size: 15px;
+}
+.people-panel.expanded .people-list {
+  max-height: none;
+}
+.people-panel.expanded .person-chip {
+  font-size: 14px;
+  padding: 7px 12px;
+}
+
+/* ロゴ横の分岐（ひとつの避難所から複数の「もしも」へ） */
+.brand-branch {
+  width: 40px;
+  height: 36px;
+  margin-left: 2px;
+  fill: none;
+  stroke: #4ea3ff;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.brand-branch circle {
+  fill: #4ea3ff;
+  stroke: none;
+}
+
+/* 配布ロゴ画像（そのまま表示） */
+.logo-banner {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 0 14px;
+  border-radius: 12px;
+}
+
+/* 左上のロゴ枠：配布ロゴ画像の中央（家＋「避難所IF！」だけ）をそのまま切り出して表示 */
+.brand-image {
+  display: block;
+  width: 218px;
+  height: 52px;
+  flex-shrink: 0;
+  background: url("/demo-v2-logo.jpg") no-repeat;
+  background-size: 443px auto;
+  background-position: -109.5px -31px;
+}

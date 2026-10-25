@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath fill=%22%230878ff%22 d=%22M16 1L1 12v19h30V12z%22/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 48 44%22%3E%3Cpath fill=%22%230a63e8%22 d=%22M24 0 48 18V44H0V18Z%22/%3E%3Cpath fill=%22%23fff%22 d=%22M24 8.5 40.5 21V44H7.5V21Z%22/%3E%3Ccircle fill=%22%237fb6ff%22 cx=%2214.5%22 cy=%2228%22 r=%223.4%22/%3E%3Cpath fill=%22%237fb6ff%22 d=%22M9.3 44v-5.4a5.2 5.2 0 0 1 10.4 0V44Z%22/%3E%3Ccircle fill=%22%237fb6ff%22 cx=%2233.5%22 cy=%2228%22 r=%223.4%22/%3E%3Cpath fill=%22%237fb6ff%22 d=%22M28.3 44v-5.4a5.2 5.2 0 0 1 10.4 0V44Z%22/%3E%3Ccircle fill=%22%230a63e8%22 cx=%2224%22 cy=%2224.5%22 r=%224.4%22/%3E%3Cpath fill=%22%230a63e8%22 d=%22M17 44v-7.6a7 7 0 0 1 14 0V44Z%22/%3E%3C/svg%3E"
     />
     <title>避難所IF！ | 避難所の「もしも」を、考えよう。</title>
     <link rel="stylesheet" href="/demo-v2.css" />
@@ -19,9 +19,12 @@
   <body data-view="scenario">
     <header class="app-header">
       <a class="brand" href="/demo-v2"
-        ><span class="brand-mark" data-icon="home" aria-hidden="true"></span
-        ><strong>避難所<span>IF！</span></strong></a
-      ><span class="tagline">避難所の「もしも」を、考えよう。</span>
+        ><span
+          class="brand-image"
+          role="img"
+          aria-label="避難所IF！"
+        ></span
+      ></a>
       <div class="header-scenario">
         <small>シナリオ</small
         ><select id="saved-runs" aria-label="保存したシナリオ">
@@ -452,8 +455,11 @@
                 承認して新しい分岐を作成
               </button>
             </article>
-            <article class="panel">
-              <h2>♟ 避難者・スタッフの状態</h2>
+            <article id="people-panel" class="panel people-panel">
+              <div class="people-panel-head">
+                <h2>♟ 避難者・スタッフの状態</h2>
+                <button id="people-expand" type="button" class="compact">⤢ 大きく表示</button>
+              </div>
               <dialog id="person-dialog" class="person-dialog" aria-labelledby="person-dialog-title">
                 <div class="pd-head">
                   <h2 id="person-dialog-title">人物の状態</h2>
