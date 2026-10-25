@@ -26,6 +26,93 @@ pytestmark = [
     ),
 ]
 
+
+def test_live_pdf_reports_use_opus_and_reuse_saved_pdf(tmp_path, monkeypatch) -> None:
+    """Explicitly gated feature-schema test; both calls share durable paid accounting."""
+    import json
+    from io import BytesIO
+    from pathlib import Path
+
+    from pypdf import PdfReader
+
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import AddToiletCommand, BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+    from sheltersim.web.projects import ProjectAPI
+
+    settings = LLMSettings.from_env()
+    assert settings.live_tests_allowed and settings.api_key
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "record")
+    # Retain finite, durable guards even when the human authorizes uncapped QA.
+    monkeypatch.setenv("SHELTERSIM_LLM_MAX_API_CALLS", "4")
+    monkeypatch.setenv("SHELTERSIM_LLM_BUDGET_USD", "5")
+    monkeypatch.setenv("SHELTERSIM_LLM_TIMEOUT_SECONDS", "180")
+    store = ProjectStore(tmp_path / "pdf-projects")
+    store.create_project("pdf-live")
+    raw = json.loads(ScenarioSpec.load("fixtures/scenario_100_agents.json").canonical_json())
+    raw["duration_minutes"] = 180
+    raw["scheduled_events"] = []
+    raw["model_configs"]["toilet_service"] = {}
+    scenario = ScenarioSpec.model_validate(raw)
+    store.save_scenario(
+        "pdf-live", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+    )
+    store.create_run("pdf-live", "report-qa", scenario.id, 1)
+    timeline = TimelineStore(store, "pdf-live", "report-qa")
+    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    timeline.advance("main", 180, checkpoint_interval=30)
+    origin = timeline.seek("main", 60)
+    child = origin.fork("toilet-capacity")
+    child.runtime_state["fork_origin"] = {
+        "branch_id": "main",
+        "minute": 60,
+        "state_hash": digest(origin.world.to_dict()),
+        "checkpoint_hash": origin.checkpoint().checkpoint_hash,
+    }
+    child.apply(AddToiletCommand("extra-toilet", "toilet", capacity=4))
+    timeline.record(child, fork_minute=60)
+    timeline.advance("toilet-capacity", 180, checkpoint_interval=30)
+    output = Path(os.environ.get("SHELTERSIM_PDF_LIVE_OUTPUT_DIR", str(tmp_path / "pdf-output")))
+    output.mkdir(parents=True, exist_ok=True)
+    api = ProjectAPI(store)
+    try:
+        for name, ids in (("single", ["main"]), ("comparison", ["main", "toilet-capacity"])):
+            body = {"branch_ids": ids, "minute": 180}
+            pdf = api.pdf_reports.export("pdf-live", "report-qa", body)
+            assert pdf.startswith(b"%PDF-")
+            path = output / f"hinanjo-if-opus-{name}.pdf"
+            path.write_bytes(pdf)
+            reader = PdfReader(BytesIO(pdf))
+            assert 5 <= len(reader.pages) <= 8
+            text = "\n".join(page.extract_text() for page in reader.pages)
+            assert "表示対象外" not in text and "\ufffd" not in text
+            assert "AI分析" in text and "優先案" in text and "代替案" in text
+            binding = store._read(store._path("pdf-live", "runs", "report-qa", "usage.json"))
+            ledger = UsageLedger(store, "pdf-live", binding["account_id"])
+            before = ledger.summary()
+            assert api.pdf_reports.export("pdf-live", "report-qa", body) == pdf
+            assert ledger.summary() == before
+            print(
+                "LIVE_PDF_QA="
+                + json.dumps(
+                    {
+                        "case": name,
+                        "path": str(path),
+                        "pages": len(reader.pages),
+                        "calls": before["totals"]["calls"],
+                        "estimated_cost_usd": before["estimated_cost_usd"],
+                        "models": list(before["by_model"]),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        assert ledger.summary()["totals"]["calls"] == 2
+    finally:
+        api.close()
+
+
 _ACK_SCHEMA = {
     "type": "object",
     "properties": {"ok": {"type": "boolean"}},

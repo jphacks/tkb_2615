@@ -14,6 +14,7 @@ from sheltersim.events.effects import EffectProgram, validate_effect_program
 from sheltersim.experiments.initial_scenario import InitialScenarioBuilder, InitialScenarioRequest
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.accounting import StoredResponseTape, accounted_router
+from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.natural_language import (
     InterventionCompilerUnavailable,
     compile_natural_language,
@@ -68,12 +69,14 @@ class ProjectWorkspace:
         return content
 
     def analysis_router(self, project_id: str, run_id: str, *, operation: str = "questions",
-                        branch_id: str | None = None) -> LLMRouter:
+                        branch_id: str | None = None,
+                        settings: LLMSettings | None = None) -> LLMRouter:
         tape = StoredResponseTape(
             self.store, self.store._path(project_id, "runs", run_id, "analysis-tape.json")
         )
         return accounted_router(self.store, project_id, run_id=run_id,
-                                operation=operation, branch_id=branch_id, tape=tape)
+                                operation=operation, branch_id=branch_id, tape=tape,
+                                settings=settings)
 
     def _preparation_account(self, project_id: str, requested: str | None = None) -> str:
         if requested is not None:

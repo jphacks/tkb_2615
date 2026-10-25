@@ -20,9 +20,10 @@ async function main() {
       viewport: { width: 1440, height: 900 },
     });
     const errors = [];
+    let expectingPdfError = false;
     page.on("pageerror", (e) => errors.push(e.message));
     page.on("console", (m) => {
-      if (m.type() === "error") errors.push(m.text());
+      if (m.type() === "error" && !expectingPdfError) errors.push(m.text());
     });
     const project = `e2e-backup-${Date.now()}`;
     async function idle() {
@@ -237,10 +238,20 @@ async function main() {
       (await page.locator("#chat").innerText()).includes("回答できません"),
     );
     await shot("report");
-    const download = page.waitForEvent("download");
+    // A fresh offline run must show a retryable error, rather than exporting JSON
+    // or presenting deterministic text as an Opus-authored PDF.
+    const pdfResponse = page.waitForResponse((r) => r.url().endsWith("/pdf-report"));
+    let downloads = 0;
+    page.on("download", () => downloads++);
+    expectingPdfError = true;
     await page.locator("#save-report").click();
-    const file = await download;
-    assert(file.suggestedFilename().endsWith(".json"));
+    assert.equal((await pdfResponse).status(), 409);
+    await page.waitForFunction(() => !document.body.classList.contains("is-busy"));
+    expectingPdfError = false;
+    assert((await page.locator("#notice").innerText()).includes("pdf_analysis_offline"));
+    assert.equal(await page.locator("#save-report").isEnabled(), true);
+    assert.equal((await page.locator("#save-report").innerText()).trim(), "↓ レポート保存");
+    assert.equal(downloads, 0);
     await page.reload();
     await page.waitForLoadState("networkidle");
     await idle();
@@ -265,7 +276,7 @@ async function main() {
         screenshots: out,
         report_status: report.status,
         checks:
-          "scenario approval, invalidation, computation, playback, seek, layers, selection, intervention clarification and approval, parent isolation, synchronized compare, report, history, offline Q&A, download, restore, responsive widths",
+          "scenario approval, invalidation, computation, playback, seek, layers, selection, intervention clarification and approval, parent isolation, synchronized compare, report, history, offline Q&A, retryable offline PDF error without JSON download, restore, responsive widths",
       }),
     );
   } finally {
