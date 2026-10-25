@@ -235,12 +235,29 @@ class TimelineStore:
         self.store.save_branch(self.project_id, reference, checkpoint, expected_checkpoint_hash=prior.checkpoint_hash if prior else None)
         from sheltersim.storage.history_index import HistoryIndex
         HistoryIndex(self.store, self.project_id, self.run_id).ingest(runtime.branch_id, checkpoint, observations=observations)
+        self._cache_frame(runtime, checkpoint)
         return checkpoint
 
-    def seek(self, branch_id: str, minute: int) -> BranchRuntime:
-        reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
-        if type(minute) is not int or not reference.fork_minute <= minute <= reference.computed_until:
-            raise TimelineError("minute is outside this branch's computed range")
+    def _cache_frame(self, runtime: BranchRuntime, checkpoint: Checkpoint) -> None:
+        """Render the saved boundary from the writer's in-memory world for later reads.
+
+        The checkpoint is already durable; a cache failure only means readers
+        reconstruct the frame as before.
+        """
+        from sheltersim.inspection.frames import world_frame
+        from sheltersim.storage.frames import FrameCache
+        try:
+            frame = world_frame(runtime.world, run_id=self.run_id, branch_id=runtime.branch_id,
+                                computed_until=checkpoint.simulation_minute,
+                                state_hash=checkpoint.state_hash)
+            cache = FrameCache(self.store, self.project_id, self.run_id)
+            cache.put(checkpoint.checkpoint_hash, frame)
+        except (OSError, StorageError):
+            pass
+
+    def _nearest_checkpoint(
+        self, branch_id: str, minute: int, reference: BranchReference,
+    ) -> tuple[int, str]:
         from sheltersim.storage.history_index import HistoryIndex
         index = HistoryIndex(self.store, self.project_id, self.run_id)
         try:
@@ -255,7 +272,13 @@ class TimelineStore:
             nearest = max(((int(key), value) for key,value in entries.items() if int(key)<=minute), default=None)
         if nearest is None:
             raise TimelineError("no checkpoint exists before requested minute")
-        _, checkpoint_hash = nearest
+        return nearest
+
+    def seek(self, branch_id: str, minute: int) -> BranchRuntime:
+        reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
+        if type(minute) is not int or not reference.fork_minute <= minute <= reference.computed_until:
+            raise TimelineError("minute is outside this branch's computed range")
+        _, checkpoint_hash = self._nearest_checkpoint(branch_id, minute, reference)
         checkpoint = self.store.load_checkpoint(self.project_id, self.run_id, checkpoint_hash)
         if checkpoint.checkpoint_hash != checkpoint_hash:
             raise TimelineError("timeline checkpoint hash mismatch")
@@ -378,6 +401,19 @@ class TimelineStore:
         return child
 
     def frame(self, branch_id: str, minute: int) -> dict[str, Any]:
+        reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
+        if type(minute) is int and reference.fork_minute <= minute <= reference.computed_until:
+            # A saved boundary renders the same frame the writer cached when it was
+            # recorded; only computed_until moves as the branch grows.
+            from sheltersim.storage.frames import FrameCache
+            saved_minute, checkpoint_hash = self._nearest_checkpoint(branch_id, minute, reference)
+            cache = FrameCache(self.store, self.project_id, self.run_id)
+            cached = cache.get(checkpoint_hash) if saved_minute == minute else None
+            identity = (self.run_id, branch_id, minute)
+            if cached is not None and (
+                cached.get("run_id"), cached.get("branch_id"), cached.get("minute")
+            ) == identity:
+                return {**cached, "computed_until": reference.computed_until}
         runtime = self.seek(branch_id, minute)
         from sheltersim.inspection.frames import world_frame
         reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
