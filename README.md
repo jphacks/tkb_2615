@@ -67,7 +67,7 @@ https://github.com/user-attachments/assets/86487258-815c-468b-b038-51e71b65fcfb
 シミュレーション中は、避難者やスタッフの移動、施設の混雑、各種指標の変化を2Dマップ上で可視化します。
 
 
-![避難所IF！シミュレーションデモ](https://github.com/user-attachments/assets/291dad28-6b5f-4ac8-a3bb-91ed39e4a765)
+<img width="426" height="240" alt="Image" src="https://github.com/user-attachments/assets/291dad28-6b5f-4ac8-a3bb-91ed39e4a765" />
 
 
 
