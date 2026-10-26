@@ -15,7 +15,7 @@ ruff format --check .
 
 ### 並列実行
 
-開発依存にはpytest-xdistが含まれます。複数CPUで並列に実行するには`-n auto`を付けます。
+開発依存にはpytest-xdistが含まれます。複数CPUで並列に実行するには`-n auto`を付けます。`pyproject.toml`で`--dist worksteal`を指定しているので、手の空いたworkerが残りのテストを引き取り、長いテストが最後にまとまっても全体が延びにくくなっています（`-n`なしでは効果はありません）。
 
 ~~~shell
 SHELTERSIM_LLM_MODE=offline python -m pytest -n auto
@@ -102,6 +102,10 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 
 比べるのは変化の向きだけで、大きさは確かめません。係数の多くは実測で校正されていないためです。期待どおりに効かない介入や、生成Scenarioに適用できない介入が見つかったら、テストで隠さずに不具合のIssueにします（例：#65）。
 
+- 不具合で今は確かめられない振る舞いは、期待する形でテストを書き、`pytest.mark.xfail(strict=True, raises=…)`にIssue番号を付けて置きます（例：#72、#74、#76）。`raises`で失敗の種類を限るので、不具合を直したのに期待と違う結果になった場合も気づけます。直したら印を外します。
+- 職員が待機中のときにしか出せない指示は、本線を先に進め、`TimelineStore.iter_worlds`で条件を満たす最初の時刻を探してから分岐させます（読み取りだけで、状態も乱数も変えません）。
+- 作業の引き継ぎのように、別の介入で作った状態が前提になるものは、介入したBranchからさらに分岐させます。
+
 ## 出典台帳と根拠IDの整合
 
 AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記録するよう求めています。`tests/unit/repo/test_source_manifest.py`は、`src/`に固定の文字列で書かれた仮定ID（`ASM-…`）と出典ID（`SRC-…`）を集め、台帳にも既知の不足の一覧にもないIDがあると失敗します。
@@ -118,7 +122,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -177,7 +181,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_staff_support_travel.py` | domain | 8 |  |  | 2 | 契約 | fixture＋図面 |  |
 | `test_staff_task_order_effect.py` | domain | 5 |  |  | 5 | 契約 | fixture |  |
 | `test_structured_social_history.py` | domain | 2 |  |  | 2 | 契約 | fixture |  |
-| `integration/test_intervention_outcomes.py` | events |  | 4 |  |  | 結果 | 生成 |  |
+| `integration/test_intervention_outcomes.py` | events |  | 12 |  |  | 結果 | 生成 |  |
 | `test_effect_program.py` | events | 19 | 1 |  | 12 | 契約 | fixture＋図面 |  |
 | `test_events.py` | events | 13 |  |  | 10 |  | fixture |  |
 | `test_agents.py` | policies | 14 | 1 |  |  | 契約 | fixture |  |
@@ -265,7 +269,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 |---|---|---|---|---|---|---|
 | core | 4 | 32 | 13 | 0 | 3 | 1 |
 | domain | 25 | 181 | 17 | 1 | 12 | 8 |
-| events | 3 | 32 | 5 | 0 | 1 | 1 |
+| events | 3 | 32 | 13 | 0 | 1 | 1 |
 | policies | 10 | 107 | 14 | 1 | 6 | 2 |
 | experiments | 18 | 90 | 20 | 1 | 10 | 1 |
 | region | 4 | 22 | 3 | 0 | 2 | 2 |
@@ -275,9 +279,9 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
-| 計 | 108 | 688 | 204 | 20 | 58 | 18 |
+| 計 | 108 | 688 | 212 | 20 | 58 | 18 |
 
-912件のうち単体が688件（75%）、統合が204件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが44本、統合だけまたはe2eだけが5本で、残りの58本は範囲が混ざっています。
+920件のうち単体が688件（75%）、統合が212件（23%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが44本、統合だけまたはe2eだけが5本で、残りの58本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -297,7 +301,7 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 1. **粒度がファイルごとにばらばら。** 104本中57本が、単体・統合・e2eのうち2つ以上を含みます。たとえば`test_pdf_report.py`は統合32件・単体1件・e2e 1件、`test_checkpoint_save_regressions.py`は単体17件・統合10件です。ファイル名からも置き場所からも範囲が分からず、新しいテストをどの粒度で書くかの手本がありません。→ #59
 2. **時刻を手で動かす単体テストが多い。** 22本のファイルにある126件が、`TickEngine`を使わずにテスト自身で時刻を動かし、イベントを直接処理させています（`test_operational_events.py`、`test_effect_program.py`、`test_adaptive_event_eval.py`で各12件など）。中には、比較のKPIをイベント記録を手で書き込んで確かめるテスト（`test_route_bottleneck.py`）もあります。部品の検査としては有効ですが、同じ振る舞いをtickの順序どおりに通す統合テストが対になっていないものがあります。→ #59、#60
 3. **e2eが少なく、利用者の主な流れを通していない。** e2eは20件で、使うScenarioはすべてfixtureです。Project画面の主な流れ（生成Scenarioのpreview → 承認 → 実行 → 介入 → 結果を見る）をHTTPから通すテストはありません。ProjectのHTTP routeを通るのは、PDFのダウンロード（`test_pdf_http_attachment_and_existing_origin_guard`）だけです。→ #58、#60
-4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60で、スタッフ追加・設備の故障・断水・物資搬入を`tests/integration/test_intervention_outcomes.py`に追加。残りの介入は#66〜#69で扱います。
+4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60で、スタッフ追加・設備の故障・断水・物資搬入を`tests/integration/test_intervention_outcomes.py`に追加。#66で施設・職員・物資の残り（稼働の上限、修理、職員の不在・作業指示・引き継ぎ・担当変更、物資の遅延）を追加。残りの介入は#67〜#69で扱います。
 5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない**（#58で足した共通fixtureの検査`test_generated_scenario_fixture.py`と、#60で足した介入の結果テストを除く）。 Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
 6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58
 7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58で対応済み（`generated_small`を追加）

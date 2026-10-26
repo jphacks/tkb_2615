@@ -47,7 +47,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # importlib lets tests/unit, tests/integration and tests/e2e hold files of the same name.
-addopts = "-ra --import-mode=importlib"
+# With -n, worksteal lets idle workers take queued tests, so a few long ones do not
+# stretch the run; without -n it has no effect.
+addopts = "-ra --import-mode=importlib --dist worksteal"
 markers = [
     "live_api: paid live API tests in tests/live requiring an explicit dev-environment gate",
     "long_simulation: full-duration seven-day simulation regressions run in the long CI lane",
