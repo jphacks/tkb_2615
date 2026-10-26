@@ -94,8 +94,13 @@ def test_environment_key_is_suppressed_outside_explicit_live_integration_case(
     monkeypatch.delenv("SHELTERSIM_ALLOW_LIVE_API_TESTS", raising=False)
     assert LLMSettings.from_env().api_key is None
     monkeypatch.setenv("SHELTERSIM_ALLOW_LIVE_API_TESTS", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/integration/test_live_api.py::test_live_models (call)")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/live/test_live_api.py::test_live_models (call)")
     assert LLMSettings.from_env().api_key == "sk-ant-test-key-not-used"
+    # tests/integration holds ordinary offline integration tests, not paid ones.
+    monkeypatch.setenv(
+        "PYTEST_CURRENT_TEST", "tests/integration/test_live_api.py::test_live_models (call)"
+    )
+    assert LLMSettings.from_env().api_key is None
 
 
 def test_record_requires_key_unless_a_test_provider_is_injected() -> None:

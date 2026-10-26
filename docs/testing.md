@@ -40,11 +40,44 @@ tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、�
 
 ## 主なテスト範囲
 
-testは決定的state遷移、Checkpoint serializationと復元、独立Branch、event順、施設・資源・職員操作、履歴・timeline検索、model provenance、LLM fallbackとresponse tape、Project永続化、Web route、Demo成果物を確認します。テストはpackageの隣ではなく`tests/`直下にあり、ライブAPIテストだけが`tests/integration/`にあります。どのファイルが何を確かめるかは、下の[テストの地図](#テストの地図)を参照してください。
+testは決定的state遷移、Checkpoint serializationと復元、独立Branch、event順、施設・資源・職員操作、履歴・timeline検索、model provenance、LLM fallbackとresponse tape、Project永続化、Web route、Demo成果物を確認します。テストは`tests/`の下に範囲ごとに置きます（[テストの置き場所と名前](#テストの置き場所と名前)）。決まりを作る前のファイルは、まだ`tests/`直下にあります。どのファイルが何を確かめるかは、下の[テストの地図](#テストの地図)を参照してください。
 
 Project画面の作用説明（`project-round3.js`の`renderEffectExplanation`）は、`tests/test_effect_explanation_ui.py`がその関数だけをnodeで実行して確認します。fallback時の理由表示などが対象です。nodeがない環境ではskipします。
 
 demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確認します。timeline routeが返すframe（保存済み境界のframe cacheと、境界以外の再構成）をnodeで`demo-v2-scene.js`・`demo-v2-sprites.js`・`demo-v2-map.js`に渡し、描画命令を受け流すcanvasの代わりを使って、`HinanjoMap.draw`が返す施設アイコンの記録（hit）を検査します。介入で追加したトイレが実座標の地図と模式図の両方で別々の位置に描かれること、座標のない施設は実座標の地図に描かれないことが対象です。模式図は施設を実座標と無関係に並べるため、模式図に描かれても図面上の位置があるとは限りません。画素の見た目（色・重なり・文字）は確認しません。nodeがない環境では描画のtestだけをskipします。
+
+## テストの置き場所と名前
+
+テストは範囲（単体・統合・e2e）ごとにディレクトリを分けます。範囲の定義は[テストの地図](#テストの地図)と同じで、1つのテストが通る一番広い範囲で決めます。
+
+| 置き場所 | 範囲 | 名前 |
+|---|---|---|
+| `tests/unit/<担当>/` | 単体：`TickEngine`で時間を進めず、HTTP・CLIも通さない | `test_<srcのモジュール名>.py`。例：`src/sheltersim/domain/facility_queues.py`なら`tests/unit/domain/test_facility_queues.py` |
+| `tests/integration/` | 統合：`TickEngine`で時間を進めるか、HTTP・CLIを通す（どちらか一方） | `test_<機能>.py`。例：`test_toilet_service.py`、`test_branch_interventions.py` |
+| `tests/e2e/` | e2e：HTTPかCLIから入り、時間も進める | `test_<利用者の流れ>.py`。例：`test_project_scenario_to_results.py` |
+| `tests/live/` | 有料APIを呼ぶテスト（`live_api`の印） | `test_live_api.py`だけ。APIキーを使えるようにするゲート（`sheltersim.llm.config`）が、このパスのテストにだけ開くため |
+
+- `<担当>`は、AGENTS.mdのモジュール（`core`、`domain`、`events`、`policies`、`experiments`、`region`、`llm`、`storage`、`web`）と`cli`、それにリポジトリ自体（テストの配置、文書、fixture、出典台帳）を確かめる`repo`です。
+- 名前に、不具合名（例：`resource_loss_without_operational_state`）、開発の回の名前（例：`round2_common_services`）、`regressions`を使いません。不具合の再発防止テストはその機能のファイルに足し、守るべき振る舞いを関数名に書き、Issue番号をdocstringかコメントに書きます。
+- 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/conftest.py`のfixtureにします。
+- 何を確かめるか（結果・契約・画面）は、ディレクトリにも印にもしません。実行の選び分けに使わない印は、付け忘れても気づけず、すぐ実態とずれるためです。確かめる振る舞いを関数名に書き、全体は地図の「目的」欄で把握します。
+
+### 時刻を手で動かすテスト
+
+単体テストでは、handlerの反応を確かめるために、テスト自身で時刻を動かして`EventDispatcher.dispatch_due`を直接呼んでかまいません。ただし次を守ります。
+
+- tickの順序やモジュールの組み合わせで決まる振る舞い（「シミュレーション中にこうなる」）は、`TickEngine`で時間を進める統合テストでも確かめます。時刻を手で動かす単体テストを足すときは、対になる統合テストを足すか、既存の統合テストの名前をコメントに書きます。
+- KPI、比較、レポートを確かめるために、イベント記録や履歴を手で書き込んで実行結果の代わりにしません。共通fixture（`generated_scenario`）を実行して作ります。
+
+### 既存のテスト
+
+`tests/`直下の既存ファイルは、一括では移しません。変更するときに、そのファイルを新しい置き場所へ移します。
+
+1. 先に`git mv`だけのcommitを作り、内容の変更は次のcommitにします。履歴をたどれるようにするためです。
+2. 範囲が混ざるファイルは、移すときに範囲ごとに分けます。
+3. `tests/unit/repo/test_test_layout.py`の`UNSORTED`から、そのファイル名を消します。
+
+`tests/unit/repo/test_test_layout.py`は、`tests/`直下への新しいファイルの追加、決まった場所以外のテストファイル、`tests/live/`以外での`live_api`の印を見つけると失敗します。
 
 ## 利用者の経路を通る共通fixture
 
@@ -59,7 +92,7 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -68,7 +101,7 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
   - 統合：`TickEngine`で時間を進める（runner、Branch、timelineを通す場合を含む）か、HTTP・CLIを通すか、どちらか一方。
   - e2e：HTTPかCLIから入り、`TickEngine`で時間も進める。
 - **手で時刻**：単体のうち、`TickEngine`を使わずにテスト自身が時刻を動かし、`EventDispatcher.dispatch_due`を直接呼ぶテストの件数。tickの順序（AGENTS.mdの不変条件）を通らないので、部品ごとには正しくても組み合わせると壊れる不具合（#51）を見逃します。
-- **担当**：主に確かめているモジュール。AGENTS.mdの区分に加え、`cli`（`sheltersim.cli`と`__main__`）と、複数モジュールにまたがって主担当を決められない`横断`を使います。
+- **担当**：主に確かめているモジュール。AGENTS.mdの区分に加え、`cli`（`sheltersim.cli`と`__main__`）、リポジトリ自体を確かめる`repo`、複数モジュールにまたがって主担当を決められない`横断`を使います。
 - **目的**：範囲とは別に、何を確かめるファイルかを表す印です。1つのファイルに複数付くことがあります。
   - 結果：KPI、比較レポート、画面データ（frame・timeline）、PDF、説明文など、利用者が目にする出力の値や内容。
   - 契約：同じseedで同じ結果になること、Checkpointからの復元、スキーマ版と互換、HTTP API・CLIの入出力、出典台帳とprovenance、秘匿情報の扱い。
@@ -152,7 +185,7 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 | `test_region_providers.py` | region | 7 |  |  |  | 契約 | なし |  |
 | `test_region_water_outage_conditions.py` | region | 1 | 1 |  |  |  | 生成 |  |
 | `test_standard_provisioning.py` | region | 13 | 2 |  |  | 結果 | 生成 |  |
-| `integration/test_live_api.py` | llm | — | — | — | — | 結果・契約 | fixture | live_api |
+| `live/test_live_api.py` | llm | — | — | — | — | 結果・契約 | fixture | live_api |
 | `test_adaptive_event_eval.py` | llm | 22 |  |  | 12 | 契約 | fixture |  |
 | `test_complex_interactions.py` | llm | 9 |  |  | 4 | 契約 | fixture |  |
 | `test_llm_outcomes.py` | llm | 6 | 7 | 2 |  | 結果・契約 | fixture・生成（実行なし） |  |
@@ -194,6 +227,7 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 | `test_inspect_cli.py` | cli |  | 12 | 1 | 6 | 契約 | fixture |  |
 | `test_smoke.py` | cli | 1 | 3 |  |  | 契約 | なし |  |
 | `test_round2_common_services.py` | 横断 | 22 | 2 |  |  | 契約 | 生成・fixture |  |
+| `unit/repo/test_test_layout.py` | repo | 4 |  |  |  | 契約 | なし |  |
 
 ### 集計
 
@@ -212,9 +246,10 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 | web | 20 | 29 | 86 | 13 | 15 | 1 |
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
-| 計 | 105 | 679 | 200 | 20 | 58 | 17 |
+| repo | 1 | 4 | 0 | 0 | 0 | 0 |
+| 計 | 106 | 683 | 200 | 20 | 58 | 17 |
 
-899件のうち単体が679件（76%）、統合が200件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが42本、統合だけまたはe2eだけが4本で、残りの58本は範囲が混ざっています。
+903件のうち単体が683件（76%）、統合が200件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが43本、統合だけまたはe2eだけが4本で、残りの58本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -239,7 +274,7 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58
 7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58で対応済み（`generated_small`を追加）
 8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58で小規模な生成Scenarioの共通fixtureを用意済み。既存の遅いテストはそのままです。
-9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59
+9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59で置き場所と名前の決まりを作り、ライブテストを`tests/live/`へ移しました。既存ファイルの改名は、移すときに行います。
 
 ## 確認できていないこと
 
