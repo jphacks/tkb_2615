@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -61,21 +63,12 @@ def _isolated_local_state(
     _isolate(monkeypatch, tmp_path_factory.mktemp("local-state"))
 
 
-@pytest.fixture(scope="session")
-def generated_scenario_preview(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    """The Scenario preview the Project screen gets for GENERATED_SCENARIO_REQUEST.
-
-    It goes through the same ProjectAPI preview as the UI, so the Scenario has a
-    floor plan (facility_geometry) and facility awareness (agent_dynamics) like
-    every Scenario an operator creates. Only the regional research is replaced by
-    an empty result, because the real one calls public web services.
-    Built once per worker; use generated_scenario for a Scenario to change.
-    """
+def _ui_preview(root: Path, request: dict[str, Any]) -> dict[str, Any]:
+    """Run the Project screen's Scenario preview for one structured form."""
     from sheltersim.region.models import RegionResearchResult
     from sheltersim.storage.projects import ProjectStore
     from sheltersim.web.projects import ProjectAPI
 
-    root = tmp_path_factory.mktemp("generated-scenario")
     with pytest.MonkeyPatch.context() as monkeypatch:
         _isolate(monkeypatch, root)
         monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
@@ -87,12 +80,47 @@ def generated_scenario_preview(tmp_path_factory: pytest.TempPathFactory) -> dict
             request=query, researched_at=datetime(2026, 1, 1, tzinfo=UTC)
         )
         try:
-            preview = api.workspace.preview(
-                "project", {"text": "", "request": copy.deepcopy(GENERATED_SCENARIO_REQUEST)}
-            )
+            return api.workspace.preview("project", {"text": "", "request": request})
         finally:
             api.close()
+
+
+@pytest.fixture(scope="session")
+def generated_previews(tmp_path_factory: pytest.TempPathFactory) -> Callable[..., dict[str, Any]]:
+    """Previews of GENERATED_SCENARIO_REQUEST with some form fields changed.
+
+    Each changed field is marked as user input, as the demo-v2 form does. Every
+    distinct set of fields is built once per worker and shared, so do not change
+    the returned preview.
+    """
+    cache: dict[str, dict[str, Any]] = {}
+
+    def preview(**fields: Any) -> dict[str, Any]:
+        key = json.dumps(fields, sort_keys=True, ensure_ascii=False)
+        if key not in cache:
+            request = copy.deepcopy(GENERATED_SCENARIO_REQUEST)
+            request.update(copy.deepcopy(fields))
+            request["field_origins"] = {
+                **request["field_origins"],
+                **{name: "user" for name in fields},
+            }
+            cache[key] = _ui_preview(tmp_path_factory.mktemp("generated-scenario"), request)
+        return cache[key]
+
     return preview
+
+
+@pytest.fixture(scope="session")
+def generated_scenario_preview(generated_previews: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    """The Scenario preview the Project screen gets for GENERATED_SCENARIO_REQUEST.
+
+    It goes through the same ProjectAPI preview as the UI, so the Scenario has a
+    floor plan (facility_geometry) and facility awareness (agent_dynamics) like
+    every Scenario an operator creates. Only the regional research is replaced by
+    an empty result, because the real one calls public web services.
+    Built once per worker; use generated_scenario for a Scenario to change.
+    """
+    return generated_previews()
 
 
 @pytest.fixture
@@ -101,3 +129,18 @@ def generated_scenario(generated_scenario_preview: dict[str, Any]):
     from sheltersim.experiments.scenario import ScenarioSpec
 
     return ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
+
+
+@pytest.fixture
+def generated_scenario_with(generated_previews: Callable[..., dict[str, Any]]):
+    """Build a fresh ScenarioSpec from the shared form with some fields changed.
+
+    For example generated_scenario_with(duration_days=4) is what an operator gets
+    after typing 4 into the duration field.
+    """
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    def build(**fields: Any):
+        return ScenarioSpec.model_validate(copy.deepcopy(generated_previews(**fields)["scenario"]))
+
+    return build
