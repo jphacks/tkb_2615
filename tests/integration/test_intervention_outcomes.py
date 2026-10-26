@@ -19,7 +19,7 @@ from sheltersim.core.world import WorldState
 from sheltersim.domain.staff_dynamics import staff_dynamics_on_shift
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
 from sheltersim.events.models import EventLogRecord, EventStatus
-from sheltersim.experiments.branch import BranchRuntime
+from sheltersim.experiments.branch import BranchError, BranchRuntime
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.operational_kpis import operational_kpi_values
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -591,3 +591,125 @@ def test_delaying_a_water_delivery_keeps_people_thirsty_longer(
         OUTAGE_END_MINUTE
     ]
     assert _kpis(child)["hydration_need_mean"] > _kpis(main)["hydration_need_mean"]
+
+
+def test_arriving_evacuees_raise_toilet_and_water_demand(main_line) -> None:
+    program = _program(
+        _action(
+            "add_evacuees",
+            TargetSelector(kind="zone", target_id="sleeping"),
+            {"count": 10},
+            units="evacuee",
+            policy_dependencies=["population_dynamics_v1"],
+        )
+    )
+
+    main, child = _fork_main(main_line, "arrivals", program)
+
+    assert _applied(child, "effect_program_population")
+    assert len(child.agents) == len(main.agents) + 10
+    assert len(_applied(child, "toilet_service_complete")) > len(
+        _applied(main, "toilet_service_complete")
+    )
+    assert _kpis(child)["toilet_wait_total_minutes"] > _kpis(main)["toilet_wait_total_minutes"]
+    assert _kpis(child)["water_ml_remaining"] < _kpis(main)["water_ml_remaining"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#78: a departure deferred for a busy person fails, so nobody leaves",
+)
+def test_departing_evacuees_lower_toilet_demand(main_line) -> None:
+    program = _program(
+        _action(
+            "depart_evacuees",
+            TargetSelector(kind="zone", target_id="sleeping"),
+            {"count": 5, "include_initial": True},
+            units="evacuee",
+            policy_dependencies=["population_dynamics_v1"],
+        )
+    )
+
+    main, child = _fork_main(main_line, "departures", program)
+
+    assert len(child.agents) == len(main.agents) - 5
+    assert len(_applied(child, "toilet_service_complete")) < len(
+        _applied(main, "toilet_service_complete")
+    )
+
+
+def _service_users(world: WorldState) -> set[str]:
+    return {row["agent_id"] for row in world.model_state["resource_service_v1"]["request_history"]}
+
+
+def _temporary_exit(agent_id: str) -> EffectProgram:
+    return _program(
+        _action(
+            "population_presence",
+            TargetSelector(kind="person", target_id=agent_id),
+            {"action": "temporary_exit", "expected_return_minute": OUTAGE_END_MINUTE},
+            units="population_transition",
+            policy_dependencies=["population_lifecycle_v1"],
+        )
+    )
+
+
+def test_a_temporary_exit_takes_the_person_out_of_the_shelter(main_line) -> None:
+    # Someone who has not used water or meal service yet; the others fail (#79).
+    at_fork = main_line.seek("main", FORK_MINUTE).world
+    agent_id = min(set(at_fork.agents) - _service_users(at_fork))
+
+    main, child = _fork_main(main_line, "temporary-exit", _temporary_exit(agent_id))
+
+    assert _applied(child, "effect_program_population")
+    assert agent_id in main.agents
+    assert agent_id not in child.agents
+    assert not [
+        record
+        for record in child.event_log.records
+        if record.realized_minute > FORK_MINUTE and record.event.payload.get("agent_id") == agent_id
+    ], "the person still acted in the shelter while away"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#79: the request history still names the person, so the exit fails validation",
+)
+def test_a_temporary_exit_works_for_someone_who_has_used_water_or_meals(main_line) -> None:
+    agent_id = min(_service_users(main_line.seek("main", FORK_MINUTE).world))
+
+    main, child = _fork_main(main_line, "temporary-exit-user", _temporary_exit(agent_id))
+
+    assert _applied(child, "effect_program_population")
+    assert agent_id not in child.agents
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=BranchError,
+    reason="#80: generated Scenarios do not enable the temporary space state",
+)
+def test_a_temporary_space_is_opened_for_its_window(main_line) -> None:
+    # What the extra capacity should change for operators is to be decided once
+    # it applies; until then this checks only that it opens and closes.
+    program = _program(
+        _action(
+            "add_temporary_space",
+            TargetSelector(kind="zone", target_id="sleeping"),
+            {"people_capacity": 10, "sleeping_capacity": 10},
+            units="person_capacity",
+            policy_dependencies=["temporary_spaces_v1"],
+            end_minute=OUTAGE_END_MINUTE,
+        )
+    )
+
+    main, child = _fork_main(main_line, "temporary-space", program)
+
+    applied_ops = [
+        record.event.payload.get("op")
+        for record in child.event_log.records
+        if record.status is EventStatus.APPLIED
+    ]
+    assert applied_ops.count("add_temporary_space") >= 2
