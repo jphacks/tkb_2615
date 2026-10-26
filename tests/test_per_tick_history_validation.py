@@ -8,11 +8,8 @@ import pytest
 
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import StateInvariantError, WorldState
-from sheltersim.experiments.initial_scenario import (
-    InitialScenarioBuilder,
-    InitialScenarioRequest,
-)
 from sheltersim.experiments.runner import run_scenario
+from sheltersim.experiments.scenario import ScenarioSpec
 
 
 def _rows(*minutes: object) -> list[object]:
@@ -39,20 +36,8 @@ def test_malformed_records_do_not_end_the_scan() -> None:
 
 
 @pytest.fixture(scope="module")
-def finished_world(tmp_path_factory) -> dict:
-    scenario = (
-        InitialScenarioBuilder()
-        .build(
-            InitialScenarioRequest(
-                municipality="Synthetic municipality",
-                disaster="earthquake",
-                evacuees=12,
-                duration_days=0.25,
-                seed=9,
-            )
-        )
-        .scenario
-    )
+def finished_world(tmp_path_factory, generated_scenario_preview) -> dict:
+    scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
     world = run_scenario(scenario, tmp_path_factory.mktemp("run"))
     for namespace, key in (
         ("body_state_v1", "history"),

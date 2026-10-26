@@ -43,6 +43,18 @@
     },
     "world_state_schema_version": 5
   },
+  "generated_small": {
+    "duration_minutes": 360,
+    "expected_final_state_sha256": "d97ea45d07c4d0a35f8bf63d976d2f565b227865ae2f30c563ad81e718705925",
+    "profile_count": 20,
+    "realized_event_count": 2083,
+    "realized_event_ids_sha256": "6e5bedc35b572e48f3054508da2dd11df0855d3ac9f706fd9eb6eaba0b662a3c",
+    "scenario_id": "region-3ed2de3ec6535af4",
+    "scenario_schema_version": 3,
+    "scenario_sha256": "6c7788570ee8996829a051995594b520d6f395334b4974073af347281537816f",
+    "seed": 2026,
+    "world_state_schema_version": 6
+  },
   "schema_version": 1,
   "small_replay": {
     "checkpoint_schema_version": 1,

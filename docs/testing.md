@@ -46,9 +46,20 @@ Project画面の作用説明（`project-round3.js`の`renderEffectExplanation`�
 
 demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確認します。timeline routeが返すframe（保存済み境界のframe cacheと、境界以外の再構成）をnodeで`demo-v2-scene.js`・`demo-v2-sprites.js`・`demo-v2-map.js`に渡し、描画命令を受け流すcanvasの代わりを使って、`HinanjoMap.draw`が返す施設アイコンの記録（hit）を検査します。介入で追加したトイレが実座標の地図と模式図の両方で別々の位置に描かれること、座標のない施設は実座標の地図に描かれないことが対象です。模式図は施設を実座標と無関係に並べるため、模式図に描かれても図面上の位置があるとは限りません。画素の見た目（色・重なり・文字）は確認しません。nodeがない環境では描画のtestだけをskipします。
 
+## 利用者の経路を通る共通fixture
+
+UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent_dynamics`）を持ちます。一方、`fixtures/`のScenarioはどちらも持ちません。#51の不具合は図面と認知がある場合にだけ起き、fixtureを使う多くのテストをすり抜けました。新しいテストは、特に理由がなければ`tests/conftest.py`の共通fixtureを使ってください。
+
+- `generated_scenario`：`ScenarioSpec`をテストごとに新しく作って返します。テスト内で変更しても、ほかのテストには影響しません。
+- `generated_scenario_preview`：元になったpreviewの結果（`scenario`、`approved_hash`、`can_start`、`request`など）です。session単位で1回だけ作るので、変更してはいけません。module単位のfixtureから使うときは、`copy.deepcopy(generated_scenario_preview["scenario"])`から`ScenarioSpec`を作ります。
+
+共通fixtureは、demo-v2のScenario画面が送る入力（`GENERATED_SCENARIO_REQUEST`：合成市・地震・20人・0.25日。各項目は利用者の入力として扱います）を、UIと同じ`ProjectAPI`のpreviewに渡して作ります。違いは地域調査だけで、本物は公開Webサービスに接続するため、空の調査結果に差し替えています。20人・6時間の全体を実行しても、約6秒で終わります。
+
+この共通fixtureの実行結果は、`fixtures/regression-contract.json`の`generated_small`が固定していて、`tests/test_generated_scenario_fixture.py`が確かめます。生成手順やモデルを意図して変えたためにhashが変わった場合は、変えた理由をPull Requestに書いたうえで値を更新します。理由が説明できない変化は不具合として調べます。
+
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -123,6 +134,7 @@ demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確�
 | `test_comparison.py` | experiments | 5 | 2 | 1 |  | 結果・契約 | fixture |  |
 | `test_e2e.py` | experiments |  | 4 |  |  | 契約 | fixture | long_simulation |
 | `test_exact_timeline.py` | experiments |  | 1 |  |  | 契約 | fixture |  |
+| `test_generated_scenario_fixture.py` | experiments | 2 | 1 |  |  | 契約 | 生成 |  |
 | `test_household_correction.py` | experiments | 5 |  |  |  | 契約 | 生成（実行なし） |  |
 | `test_metrics.py` | experiments | 3 | 1 |  | 1 | 結果・契約 | fixture |  |
 | `test_model_evaluation.py` | experiments | 12 |  |  |  | 契約 | fixture・生成（実行なし） |  |
@@ -193,16 +205,16 @@ demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確�
 | domain | 25 | 181 | 17 | 1 | 12 | 8 |
 | events | 2 | 32 | 1 | 0 | 1 | 0 |
 | policies | 10 | 107 | 14 | 1 | 6 | 2 |
-| experiments | 17 | 88 | 19 | 1 | 9 | 0 |
+| experiments | 18 | 90 | 20 | 1 | 10 | 1 |
 | region | 4 | 22 | 3 | 0 | 2 | 2 |
 | llm | 13 | 134 | 15 | 3 | 4 | 1 |
 | storage | 6 | 29 | 14 | 0 | 2 | 0 |
 | web | 20 | 29 | 86 | 13 | 15 | 1 |
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
-| 計 | 104 | 677 | 199 | 20 | 57 | 16 |
+| 計 | 105 | 679 | 200 | 20 | 58 | 17 |
 
-896件のうち単体が677件（76%）、統合が199件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが42本、統合だけまたはe2eだけが4本で、残りの57本は範囲が混ざっています。
+899件のうち単体が679件（76%）、統合が200件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが42本、統合だけまたはe2eだけが4本で、残りの58本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -223,10 +235,10 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 2. **時刻を手で動かす単体テストが多い。** 22本のファイルにある126件が、`TickEngine`を使わずにテスト自身で時刻を動かし、イベントを直接処理させています（`test_operational_events.py`、`test_effect_program.py`、`test_adaptive_event_eval.py`で各12件など）。中には、比較のKPIをイベント記録を手で書き込んで確かめるテスト（`test_route_bottleneck.py`）もあります。部品の検査としては有効ですが、同じ振る舞いをtickの順序どおりに通す統合テストが対になっていないものがあります。→ #59、#60
 3. **e2eが少なく、利用者の主な流れを通していない。** e2eは20件で、使うScenarioはすべてfixtureです。Project画面の主な流れ（生成Scenarioのpreview → 承認 → 実行 → 介入 → 結果を見る）をHTTPから通すテストはありません。ProjectのHTTP routeを通るのは、PDFのダウンロード（`test_pdf_http_attachment_and_existing_origin_guard`）だけです。→ #58、#60
 4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60
-5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない。** Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
+5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない**（#58で足した共通fixtureの検査`test_generated_scenario_fixture.py`を除く）。 Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
 6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58
-7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58
-8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58
+7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58で対応済み（`generated_small`を追加）
+8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58で小規模な生成Scenarioの共通fixtureを用意済み。既存の遅いテストはそのままです。
 9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59
 
 ## 確認できていないこと
