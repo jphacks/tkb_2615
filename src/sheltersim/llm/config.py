@@ -125,7 +125,7 @@ class LLMSettings:
         under_pytest = bool(pytest_case)
         opted_in_live_test = (
             os.getenv("SHELTERSIM_ALLOW_LIVE_API_TESTS") == "1"
-            and "tests/integration/test_live_api.py::test_live_" in pytest_case.replace("\\", "/")
+            and "tests/live/test_live_api.py::test_live_" in pytest_case.replace("\\", "/")
         )
         api_key = os.getenv("ANTHROPIC_API_KEY", "").strip() or None
         if under_pytest and not opted_in_live_test:
