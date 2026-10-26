@@ -46,9 +46,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# importlib lets tests/unit, tests/integration and tests/e2e hold files of the same name.
+addopts = "-ra --import-mode=importlib"
 markers = [
-    "live_api: paid integration tests requiring an explicit dev-environment gate",
+    "live_api: paid live API tests in tests/live requiring an explicit dev-environment gate",
     "long_simulation: full-duration seven-day simulation regressions run in the long CI lane",
 ]
 

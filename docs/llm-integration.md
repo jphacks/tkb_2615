@@ -112,7 +112,7 @@ CLI usage commandと/api/v1/usage/runtimeは上限付きusage receiptを表示�
 
 CLIはprepareとrunのたびに新しい利用枠（cli-prepare-…、cli-run-…）を作り、その時点の設定を上限として固定します。reviewは対象Runの利用枠を引き継ぎます。以前は全CLI実行が固定の cli-default を共有していました。一度使い切ると、それ以降はAPIを呼ばずに全taskがfallbackしていました。既存の cli-default は使われなくなるだけで、記録は残ります。Run間の合計は、既定50ドルまたは端末台帳の監査済み増額により制限されます。
 
-live連携testは標準testとは別です。ANTHROPIC_API_KEYとSHELTERSIM_ALLOW_LIVE_API_TESTS=1の両方が必要です。設定の既定値は2 call、test budget 0.01ドルですが、OpusとSonnetの呼出しはthinking用の余裕を予約するため、この既定値ではOpusを1回も呼べません。そのため各testは、上限を自分で設定します。
+live連携testは標準testとは別で、`tests/live/test_live_api.py`にあります。ANTHROPIC_API_KEYとSHELTERSIM_ALLOW_LIVE_API_TESTS=1の両方が必要で、pytest実行中にAPIキーを使えるのはこのファイルのテストだけです。設定の既定値は2 call、test budget 0.01ドルですが、OpusとSonnetの呼出しはthinking用の余裕を予約するため、この既定値ではOpusを1回も呼べません。そのため各testは、上限を自分で設定します。
 
 - モデル別確認：3 call、0.15ドル
 - 公式ドメイン検索：2 call分の枠
