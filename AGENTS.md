@@ -49,6 +49,6 @@
 
 ## チーム開発とコーディングエージェント
 
-- featureブランチで開発し、`main`へはPull Requestを通して統合します。`main`へ直接実装commitをpushしません。
+- `main`は審査中のため凍結しています。`develop`からfeatureブランチを作り、`develop`へPull Requestを通して統合します。`main`へのcommit・merge・Pull Requestは行いません。
 - エージェントは関連コードとテストを先に確認し、この文書に従い、実行した確認を明記します。利用者が所有する未commit変更を上書きしてはいけません。
 - 通常の実装でリポジトリ設定、branch protection、CIトリガー、外部サービスを変更しません。依頼で明示された場合に限ります。
