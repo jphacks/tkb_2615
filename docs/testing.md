@@ -48,17 +48,20 @@ demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。
 
 ### 分類の軸
 
+- **範囲**：テストがどこからどこまでを動かすか。テスト1件ごとに決め、ファイルごとに件数を数えます。
+  - 単体：シミュレーションの時間を`TickEngine`で進めず、HTTP・CLIも通さない。
+  - 統合：`TickEngine`で時間を進める（runner、Branch、timelineを通す場合を含む）か、HTTP・CLIを通すか、どちらか一方。
+  - e2e：HTTPかCLIから入り、`TickEngine`で時間も進める。
+- **手で時刻**：単体のうち、`TickEngine`を使わずにテスト自身が時刻を動かし、`EventDispatcher.dispatch_due`を直接呼ぶテストの件数。tickの順序（AGENTS.mdの不変条件）を通らないので、部品ごとには正しくても組み合わせると壊れる不具合（#51）を見逃します。
 - **担当**：主に確かめているモジュール。AGENTS.mdの区分に加え、`cli`（`sheltersim.cli`と`__main__`）と、複数モジュールにまたがって主担当を決められない`横断`を使います。
-- **層**：主な層を1つと、ほかに含む層を挙げます。
-  - 単体：1つのモジュールの関数・クラスを直接呼ぶ。runnerで時間を進めないか、進めても数tickに限る。
-  - 組合せ：runner・engine・Branchで時間を進め、複数モジュールにまたがる状態やイベントの変化を確かめる。
-  - 結果：KPI、比較レポート、画面データ（frame・timeline）、PDF、説明文など、利用者が目にする出力の値や内容を確かめる。
-  - 契約：同じseedで同じ結果になること、Checkpointからの復元、スキーマ版と互換、HTTP API・CLIの入出力、出典台帳とprovenance、秘匿情報の扱いを確かめる。
-  - UI：nodeでブラウザー用のJavaScriptを動かす、または画面用の静的ファイルやHTMLの配信を確かめる。
+- **目的**：範囲とは別に、何を確かめるファイルかを表す印です。1つのファイルに複数付くことがあります。
+  - 結果：KPI、比較レポート、画面データ（frame・timeline）、PDF、説明文など、利用者が目にする出力の値や内容。
+  - 契約：同じseedで同じ結果になること、Checkpointからの復元、スキーマ版と互換、HTTP API・CLIの入出力、出典台帳とprovenance、秘匿情報の扱い。
+  - 画面：nodeでブラウザー用のJavaScriptを動かす、または画面用の静的ファイルやHTMLの配信。
 - **Scenario**：テストが使うScenarioの出どころ。
   - fixture：`fixtures/`のScenario（`src/sheltersim/web/examples/failure_day3.json`の同梱版を含む）。読んだ後に一部を書き換えるものも含みます。どれも`model_configs`に`facility_geometry`も`agent_dynamics`も持ちません。
   - 生成：`InitialScenarioBuilder`で作ったScenarioを実行する。UIで作るScenarioと同じく、図面（`facility_geometry`）と認知（`agent_dynamics`）を持ちます。`test_facility_orientation.py`だけは、比べるために認知を外した生成Scenarioも実行します。
@@ -69,137 +72,137 @@ demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確�
   - なし：Scenarioを使わない。
 - **印**：pytestの印（`live_api`、`long_simulation`）。
 
-Scenario欄は、全件のoffline実行中に`ScenarioSpec.load`、`InitialScenarioBuilder.build`、`WorldState.from_scenario`の呼び出しをテストファイルごとに記録して決めました。実行されない`live_api`と、別プロセスで動くCLIの中身はコードを読んで決めました。層と担当は、テスト名と本体を読んで決めた判断で、境界の例ではほかの層と迷うものがあります。
+範囲、手で時刻、Scenarioの欄は、全件のoffline実行中にテスト1件ごとの呼び出しを記録して決めました。記録したのは`TickEngine.step`、HTTPの入口（`_dispatch_api`とrequest handlerの`do_GET`・`do_POST`）、CLIの入口（`sheltersim.cli.main`と、`sheltersim`を起動する子プロセス）、`EventDispatcher.dispatch_due`、`ScenarioSpec.load`、`InitialScenarioBuilder.build`、`WorldState.from_scenario`です。fixtureの準備中に起きた呼び出しは、そのfixtureを使う各テストに数えています。`live_api`の4件は実行されないので範囲を数えていません（表では「—」）。担当と目的は、テスト名と本体を読んで決めた判断です。
 
 ### 一覧
 
-| ファイル | 担当 | 主な層 | ほかの層 | Scenario | 印 |
-|---|---|---|---|---|---|
-| `test_checkpoint.py` | core | 契約 |  | fixture |  |
-| `test_engine.py` | core | 単体 | 契約 | fixture | long_simulation |
-| `test_per_tick_history_validation.py` | core | 単体 |  | 生成 |  |
-| `test_state.py` | core | 単体 | 契約 | fixture |  |
-| `test_action_lifecycle.py` | domain | 単体 |  | fixture |  |
-| `test_ambient_demand_effects.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_care_lifecycle.py` | domain | 組合せ | 契約 | 生成・fixture |  |
-| `test_cascading_infrastructure.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_distress_monitor.py` | domain | 単体 |  | なし |  |
-| `test_facilities.py` | domain | 単体 |  | fixture |  |
-| `test_facility_awareness.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_facility_orientation.py` | domain | 組合せ | 契約 | 生成 |  |
-| `test_facility_queues.py` | domain | 組合せ | 契約 | fixture＋図面 |  |
-| `test_geometry_config_cache.py` | domain | 単体 | 契約 | 生成 |  |
-| `test_installed_facility_announcement.py` | domain | 組合せ | 結果 | 生成 |  |
-| `test_operational_events.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_physical_queue_overflow.py` | domain | 組合せ | 結果 | 生成 |  |
-| `test_population_demand_integration.py` | domain | 組合せ | 契約 | fixture＋図面 |  |
-| `test_queue_service_while_repositioning.py` | domain | 組合せ | 結果 | 生成 |  |
-| `test_resource_ledger_state_check.py` | domain | 単体 | 契約 | fixture |  |
-| `test_resource_loss_without_operational_state.py` | domain | 組合せ | 契約 | 生成 |  |
-| `test_resource_queue_regressions.py` | domain | 組合せ |  | 生成 |  |
-| `test_resource_service.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_resources.py` | domain | 組合せ | 契約・結果 | fixture |  |
-| `test_staff.py` | domain | 組合せ | 結果 | fixture |  |
-| `test_staff_operation_relief.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_staff_support_travel.py` | domain | 組合せ | 契約 | fixture＋図面 |  |
-| `test_staff_task_order_effect.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_structured_social_history.py` | domain | 組合せ | 契約 | fixture |  |
-| `test_effect_program.py` | events | 組合せ | 契約 | fixture＋図面 |  |
-| `test_events.py` | events | 単体 |  | fixture |  |
-| `test_agents.py` | policies | 単体 | 契約 | fixture |  |
-| `test_causal_stress.py` | policies | 組合せ | 契約 | コード内で組立 |  |
-| `test_information_spread.py` | policies | 組合せ | 契約 | fixture |  |
-| `test_policy_parameter_overrides.py` | policies | 契約 | 組合せ | 生成 |  |
-| `test_policy_registry_full.py` | policies | 契約 | 単体 | fixture |  |
-| `test_research_models.py` | policies | 単体 | 組合せ | fixture |  |
-| `test_research_psychology_default.py` | policies | 契約 | 組合せ | 生成・fixture |  |
-| `test_route_bottleneck.py` | policies | 組合せ | 結果 | fixture |  |
-| `test_social.py` | policies | 組合せ | 契約 | fixture |  |
-| `test_space.py` | policies | 単体 |  | fixture |  |
-| `test_branch.py` | experiments | 契約 | 組合せ | fixture |  |
-| `test_comparison.py` | experiments | 結果 | 契約 | fixture |  |
-| `test_e2e.py` | experiments | 組合せ | 契約 | fixture | long_simulation |
-| `test_exact_timeline.py` | experiments | 契約 |  | fixture |  |
-| `test_household_correction.py` | experiments | 契約 |  | 生成（実行なし） |  |
-| `test_metrics.py` | experiments | 結果 | 契約 | fixture |  |
-| `test_model_evaluation.py` | experiments | 単体 | 契約 | fixture・生成（実行なし） |  |
-| `test_operational_scenarios.py` | experiments | 組合せ | 結果 | fixture | long_simulation |
-| `test_performance_smoke.py` | experiments | 契約 |  | fixture |  |
-| `test_profiles.py` | experiments | 単体 | 契約 | fixture |  |
-| `test_provenance.py` | experiments | 契約 |  | fixture |  |
-| `test_sanitation_diagnostics.py` | experiments | 単体 |  | fixture |  |
-| `test_scenario_editor.py` | experiments | 契約 | UI | fixture |  |
-| `test_sensitivity.py` | experiments | 結果 | 契約 | fixture |  |
-| `test_service_capacity.py` | experiments | 単体 | 契約 | fixture・生成（実行なし） |  |
-| `test_startable_generated_scenarios.py` | experiments | 単体 |  | 生成（実行なし） |  |
-| `test_timed_branch_plan.py` | experiments | 契約 |  | fixture | long_simulation |
-| `test_imported_plan_route_revision.py` | region | 組合せ | 契約 | なし |  |
-| `test_region_providers.py` | region | 単体 | 契約 | なし |  |
-| `test_region_water_outage_conditions.py` | region | 組合せ |  | 生成 |  |
-| `test_standard_provisioning.py` | region | 単体 | 組合せ・結果 | 生成 |  |
-| `integration/test_live_api.py` | llm | 組合せ | 結果・契約 | fixture | live_api |
-| `test_adaptive_event_eval.py` | llm | 契約 |  | fixture |  |
-| `test_complex_interactions.py` | llm | 組合せ | 契約 | fixture |  |
-| `test_llm_outcomes.py` | llm | 契約 | 結果 | fixture・生成（実行なし） |  |
-| `test_llm_prepare.py` | llm | 契約 |  | fixture |  |
-| `test_llm_provider.py` | llm | 単体 | 契約 | fixture |  |
-| `test_llm_review.py` | llm | 契約 | 結果 | fixture |  |
-| `test_llm_run_integration.py` | llm | 組合せ | 契約 | fixture |  |
-| `test_llm_runtime.py` | llm | 組合せ | 契約 | fixture |  |
-| `test_nl_opus.py` | llm | 契約 | 組合せ | 生成・fixture |  |
-| `test_nl_parser.py` | llm | 単体 | 契約 | fixture |  |
-| `test_story_report.py` | llm | 結果 | 契約 | なし |  |
-| `test_support_priority_runtime.py` | llm | 組合せ | 契約 | fixture |  |
-| `test_checkpoint_save_regressions.py` | storage | 契約 |  | fixture |  |
-| `test_project_store.py` | storage | 契約 |  | fixture |  |
-| `test_round3_common_services.py` | storage | 契約 |  | fixture |  |
-| `test_scaling_storage.py` | storage | 契約 |  | fixture |  |
-| `test_timeline_frame_cache.py` | storage | 契約 |  | fixture |  |
-| `test_windows_storage_compat.py` | storage | 契約 |  | fixture |  |
-| `test_admin_audit.py` | web | 契約 | UI | fixture |  |
-| `test_demo_jobs.py` | web | 契約 | 組合せ | fixture |  |
-| `test_demo_performance.py` | web | 契約 |  | fixture |  |
-| `test_demo_timeline.py` | web | 結果 |  | 手書きRun成果物 |  |
-| `test_demo_v2.py` | web | UI | 単体 | なし |  |
-| `test_demo_v2_polling.py` | web | UI |  | なし |  |
-| `test_effect_explanation_ui.py` | web | UI |  | なし |  |
-| `test_installed_facility_rendering.py` | web | UI | 結果 | 生成 |  |
-| `test_judge_demo_e2e.py` | web | 結果 | 契約・UI | fixture |  |
-| `test_map_layout.py` | web | 結果 |  | 手書きRun成果物 |  |
-| `test_multi_plan.py` | web | 契約 | 組合せ | fixture |  |
-| `test_nl_demo_ui.py` | web | 契約 |  | fixture |  |
-| `test_pdf_report.py` | web | 結果 | 契約 | fixture |  |
-| `test_pointer_only_reads.py` | web | 契約 |  | fixture |  |
-| `test_replay_frames.py` | web | 契約 |  | fixture |  |
-| `test_results_chat.py` | web | 契約 |  | fixture |  |
-| `test_resume_checkpoint_loads.py` | web | 契約 |  | fixture |  |
-| `test_web_demo.py` | web | 契約 | 組合せ | fixture |  |
-| `test_web_inspector.py` | web | 結果 | 契約 | fixture |  |
-| `test_web_routes.py` | web | UI | 契約 | なし |  |
-| `test_inspect_cli.py` | cli | 契約 |  | fixture |  |
-| `test_smoke.py` | cli | 契約 |  | なし |  |
-| `test_round2_common_services.py` | 横断 | 契約 |  | 生成・fixture |  |
+| ファイル | 担当 | 単体 | 統合 | e2e | 手で時刻 | 目的 | Scenario | 印 |
+|---|---|---|---|---|---|---|---|---|
+| `test_checkpoint.py` | core | 5 | 1 |  | 3 | 契約 | fixture |  |
+| `test_engine.py` | core | 4 | 6 |  |  | 契約 | fixture | long_simulation |
+| `test_per_tick_history_validation.py` | core | 3 | 6 |  |  |  | 生成 |  |
+| `test_state.py` | core | 20 |  |  |  | 契約 | fixture |  |
+| `test_action_lifecycle.py` | domain | 3 |  |  |  |  | fixture |  |
+| `test_ambient_demand_effects.py` | domain | 10 |  |  | 4 | 契約 | fixture |  |
+| `test_care_lifecycle.py` | domain | 16 | 1 |  | 11 | 契約 | 生成・fixture |  |
+| `test_cascading_infrastructure.py` | domain | 10 |  |  | 9 | 契約 | fixture |  |
+| `test_distress_monitor.py` | domain | 2 |  |  |  |  | なし |  |
+| `test_facilities.py` | domain | 7 |  |  | 5 |  | fixture |  |
+| `test_facility_awareness.py` | domain | 4 | 1 |  |  | 契約 | fixture |  |
+| `test_facility_orientation.py` | domain | 7 | 1 |  |  | 契約 | 生成 |  |
+| `test_facility_queues.py` | domain | 1 | 2 |  |  | 契約 | fixture＋図面 |  |
+| `test_geometry_config_cache.py` | domain | 3 | 1 |  |  | 契約 | 生成 |  |
+| `test_installed_facility_announcement.py` | domain | 5 | 3 |  |  | 結果 | 生成 |  |
+| `test_operational_events.py` | domain | 15 |  |  | 12 | 契約 | fixture |  |
+| `test_physical_queue_overflow.py` | domain | 2 | 1 |  |  | 結果 | 生成 |  |
+| `test_population_demand_integration.py` | domain | 9 |  |  | 9 | 契約 | fixture＋図面 |  |
+| `test_queue_service_while_repositioning.py` | domain | 3 | 1 |  |  | 結果 | 生成 |  |
+| `test_resource_ledger_state_check.py` | domain | 6 |  |  |  | 契約 | fixture |  |
+| `test_resource_loss_without_operational_state.py` | domain | 2 | 1 |  |  | 契約 | 生成 |  |
+| `test_resource_queue_regressions.py` | domain | 8 | 1 |  |  |  | 生成 |  |
+| `test_resource_service.py` | domain | 23 | 4 |  | 5 | 契約 | fixture |  |
+| `test_resources.py` | domain | 8 |  | 1 | 3 | 結果・契約 | fixture |  |
+| `test_staff.py` | domain | 9 |  |  | 2 | 結果 | fixture |  |
+| `test_staff_operation_relief.py` | domain | 13 |  |  | 6 | 契約 | fixture |  |
+| `test_staff_support_travel.py` | domain | 8 |  |  | 2 | 契約 | fixture＋図面 |  |
+| `test_staff_task_order_effect.py` | domain | 5 |  |  | 5 | 契約 | fixture |  |
+| `test_structured_social_history.py` | domain | 2 |  |  | 2 | 契約 | fixture |  |
+| `test_effect_program.py` | events | 19 | 1 |  | 12 | 契約 | fixture＋図面 |  |
+| `test_events.py` | events | 13 |  |  | 10 |  | fixture |  |
+| `test_agents.py` | policies | 14 | 1 |  |  | 契約 | fixture |  |
+| `test_causal_stress.py` | policies | 3 | 1 |  | 1 | 契約 | コード内で組立 |  |
+| `test_information_spread.py` | policies | 4 | 8 |  |  | 契約 | fixture |  |
+| `test_policy_parameter_overrides.py` | policies | 23 |  |  |  | 契約 | 生成 |  |
+| `test_policy_registry_full.py` | policies | 9 |  |  |  | 契約 | fixture |  |
+| `test_research_models.py` | policies | 18 | 2 |  |  |  | fixture |  |
+| `test_research_psychology_default.py` | policies | 10 | 1 | 1 |  | 契約 | 生成・fixture |  |
+| `test_route_bottleneck.py` | policies | 13 |  |  |  | 結果 | fixture |  |
+| `test_social.py` | policies | 6 | 1 |  |  | 契約 | fixture |  |
+| `test_space.py` | policies | 7 |  |  |  |  | fixture |  |
+| `test_branch.py` | experiments | 3 | 1 |  |  | 契約 | fixture |  |
+| `test_comparison.py` | experiments | 5 | 2 | 1 |  | 結果・契約 | fixture |  |
+| `test_e2e.py` | experiments |  | 4 |  |  | 契約 | fixture | long_simulation |
+| `test_exact_timeline.py` | experiments |  | 1 |  |  | 契約 | fixture |  |
+| `test_household_correction.py` | experiments | 5 |  |  |  | 契約 | 生成（実行なし） |  |
+| `test_metrics.py` | experiments | 3 | 1 |  | 1 | 結果・契約 | fixture |  |
+| `test_model_evaluation.py` | experiments | 12 |  |  |  | 契約 | fixture・生成（実行なし） |  |
+| `test_operational_scenarios.py` | experiments | 1 | 3 |  |  | 結果 | fixture | long_simulation |
+| `test_performance_smoke.py` | experiments | 1 | 1 |  |  | 契約 | fixture |  |
+| `test_profiles.py` | experiments | 8 |  |  |  | 契約 | fixture |  |
+| `test_provenance.py` | experiments | 8 |  |  |  | 契約 | fixture |  |
+| `test_sanitation_diagnostics.py` | experiments | 1 |  |  |  |  | fixture |  |
+| `test_scenario_editor.py` | experiments | 7 | 2 |  |  | 契約・画面 | fixture |  |
+| `test_sensitivity.py` | experiments | 3 | 1 |  |  | 結果・契約 | fixture |  |
+| `test_service_capacity.py` | experiments | 14 | 1 |  |  | 契約 | fixture・生成（実行なし） |  |
+| `test_startable_generated_scenarios.py` | experiments | 16 |  |  |  |  | 生成（実行なし） |  |
+| `test_timed_branch_plan.py` | experiments | 1 | 2 |  |  | 契約 | fixture | long_simulation |
+| `test_imported_plan_route_revision.py` | region | 1 |  |  |  | 契約 | なし |  |
+| `test_region_providers.py` | region | 7 |  |  |  | 契約 | なし |  |
+| `test_region_water_outage_conditions.py` | region | 1 | 1 |  |  |  | 生成 |  |
+| `test_standard_provisioning.py` | region | 13 | 2 |  |  | 結果 | 生成 |  |
+| `integration/test_live_api.py` | llm | — | — | — | — | 結果・契約 | fixture | live_api |
+| `test_adaptive_event_eval.py` | llm | 22 |  |  | 12 | 契約 | fixture |  |
+| `test_complex_interactions.py` | llm | 9 |  |  | 4 | 契約 | fixture |  |
+| `test_llm_outcomes.py` | llm | 6 | 7 | 2 |  | 結果・契約 | fixture・生成（実行なし） |  |
+| `test_llm_prepare.py` | llm | 4 |  |  |  | 契約 | fixture |  |
+| `test_llm_provider.py` | llm | 30 |  |  |  | 契約 | fixture |  |
+| `test_llm_review.py` | llm | 4 |  |  |  | 結果・契約 | fixture |  |
+| `test_llm_run_integration.py` | llm | 1 | 1 |  |  | 契約 | fixture |  |
+| `test_llm_runtime.py` | llm | 7 |  |  | 2 | 契約 | fixture |  |
+| `test_nl_opus.py` | llm | 13 | 2 |  |  | 契約 | 生成・fixture |  |
+| `test_nl_parser.py` | llm | 34 |  |  |  | 契約 | fixture |  |
+| `test_story_report.py` | llm | 4 |  |  |  | 結果・契約 | なし |  |
+| `test_support_priority_runtime.py` | llm |  | 5 | 1 |  | 契約 | fixture |  |
+| `test_checkpoint_save_regressions.py` | storage | 17 | 10 |  |  | 契約 | fixture |  |
+| `test_project_store.py` | storage | 3 |  |  |  | 契約 | fixture |  |
+| `test_round3_common_services.py` | storage | 5 |  |  |  | 契約 | fixture |  |
+| `test_scaling_storage.py` | storage | 1 |  |  |  | 契約 | fixture |  |
+| `test_timeline_frame_cache.py` | storage | 1 | 4 |  |  | 契約 | fixture |  |
+| `test_windows_storage_compat.py` | storage | 2 |  |  |  | 契約 | fixture |  |
+| `test_admin_audit.py` | web | 1 | 3 | 2 |  | 契約・画面 | fixture |  |
+| `test_demo_jobs.py` | web |  | 6 | 1 |  | 契約 | fixture |  |
+| `test_demo_performance.py` | web | 2 | 1 |  |  | 契約 | fixture |  |
+| `test_demo_timeline.py` | web | 1 | 1 |  |  | 結果 | 手書きRun成果物 |  |
+| `test_demo_v2.py` | web | 4 | 8 |  |  | 画面 | なし |  |
+| `test_demo_v2_polling.py` | web | 1 |  |  |  | 画面 | なし |  |
+| `test_effect_explanation_ui.py` | web | 2 |  |  |  | 画面 | なし |  |
+| `test_installed_facility_rendering.py` | web |  | 5 |  |  | 結果・画面 | 生成 |  |
+| `test_judge_demo_e2e.py` | web | 1 | 2 |  |  | 結果・契約・画面 | fixture |  |
+| `test_map_layout.py` | web | 2 |  |  |  | 結果 | 手書きRun成果物 |  |
+| `test_multi_plan.py` | web | 4 | 1 | 2 |  | 契約 | fixture |  |
+| `test_nl_demo_ui.py` | web |  | 4 | 3 |  | 契約 | fixture |  |
+| `test_pdf_report.py` | web | 1 | 32 | 1 |  | 結果・契約 | fixture |  |
+| `test_pointer_only_reads.py` | web | 1 | 2 |  |  | 契約 | fixture |  |
+| `test_replay_frames.py` | web |  | 13 |  |  | 契約 | fixture |  |
+| `test_results_chat.py` | web | 3 | 1 |  |  | 契約 | fixture |  |
+| `test_resume_checkpoint_loads.py` | web | 2 | 1 |  |  | 契約 | fixture |  |
+| `test_web_demo.py` | web | 2 | 2 | 1 |  | 契約 | fixture |  |
+| `test_web_inspector.py` | web |  | 2 | 3 |  | 結果・契約 | fixture |  |
+| `test_web_routes.py` | web | 2 | 2 |  |  | 契約・画面 | なし |  |
+| `test_inspect_cli.py` | cli |  | 12 | 1 | 6 | 契約 | fixture |  |
+| `test_smoke.py` | cli | 1 | 3 |  |  | 契約 | なし |  |
+| `test_round2_common_services.py` | 横断 | 22 | 2 |  |  | 契約 | 生成・fixture |  |
 
 ### 集計
 
-担当ごとの集計です。「結果の層を含む」は、主な層かほかの層に「結果」があるファイルの数です。
+担当ごとの件数です。「範囲が混ざるファイル」は、単体・統合・e2eのうち2つ以上を含むファイルの数です。
 
-| 担当 | ファイル | 生成Scenarioを実行 | 生成（実行なし） | fixtureのみ | 結果の層を含む |
-|---|---|---|---|---|---|
-| core | 4 | 1 | 0 | 3 | 0 |
-| domain | 25 | 8 | 0 | 13 | 5 |
-| events | 2 | 0 | 0 | 1 | 0 |
-| policies | 10 | 2 | 0 | 7 | 1 |
-| experiments | 17 | 0 | 4 | 13 | 4 |
-| region | 4 | 2 | 0 | 0 | 1 |
-| llm | 13 | 1 | 1 | 10 | 4 |
-| storage | 6 | 0 | 0 | 6 | 0 |
-| web | 20 | 1 | 0 | 13 | 6 |
-| cli | 2 | 0 | 0 | 1 | 0 |
-| 横断 | 1 | 1 | 0 | 0 | 0 |
-| 計 | 104 | 16 | 5 | 67 | 21 |
+| 担当 | ファイル | 単体 | 統合 | e2e | 範囲が混ざるファイル | 生成Scenarioを実行するファイル |
+|---|---|---|---|---|---|---|
+| core | 4 | 32 | 13 | 0 | 3 | 1 |
+| domain | 25 | 181 | 17 | 1 | 12 | 8 |
+| events | 2 | 32 | 1 | 0 | 1 | 0 |
+| policies | 10 | 107 | 14 | 1 | 6 | 2 |
+| experiments | 17 | 88 | 19 | 1 | 9 | 0 |
+| region | 4 | 22 | 3 | 0 | 2 | 2 |
+| llm | 13 | 134 | 15 | 3 | 4 | 1 |
+| storage | 6 | 29 | 14 | 0 | 2 | 0 |
+| web | 20 | 29 | 86 | 13 | 15 | 1 |
+| cli | 2 | 1 | 15 | 1 | 2 | 0 |
+| 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
+| 計 | 104 | 677 | 199 | 20 | 57 | 16 |
 
-主な層ごとに見ると、生成Scenarioを実行するのは単体21本中3本、組合せ34本中8本、結果9本中0本、契約35本中4本、UI 5本中1本です。
+896件のうち単体が677件（76%）、統合が199件（22%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが42本、統合だけまたはe2eだけが4本で、残りの57本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -216,13 +219,15 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 
 ### 見えた穴
 
-1. **利用者が見る結果を、利用者の経路で確かめるテストがない。** 主な層が「結果」の9本は、すべてfixtureか手書きRun成果物を使います。生成Scenarioで結果を確かめるのは、ほかの層として結果を含む5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）だけです。そのうち介入して本線と比べるのはトイレ追加だけです。→ #60
-2. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない。** Branch、比較、時系列、Project保存、EffectProgramは、図面と認知を持つ状態で確かめられていません（`横断`の`test_round2_common_services.py`は生成Scenarioの保存を一部含みます）。webも、生成Scenarioを実行するのは描画の1本だけで、デモ、HTTP、PDF、再生frameはfixtureだけで確かめています。→ #58、#60
-3. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58
-4. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58
-5. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5本のうち3本が生成Scenarioのテストで（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）、`long_simulation`の印がありません。生成Scenarioを新しいテストで気軽に使うには、小規模な生成Scenarioが要ります。→ #58
-6. **層が混ざったファイルと、名前から中身が分からないファイルがある。** 主な層が契約のファイルが35本と最も多く、その多くは組合せの検査も含みます。`test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱い、名前から担当が分かりません。→ #59
-7. **生成したdraftを検査するだけのファイルがある。** 5本（`test_household_correction.py`、`test_llm_outcomes.py`、`test_model_evaluation.py`、`test_service_capacity.py`、`test_startable_generated_scenarios.py`）は生成Scenarioを作りますが実行しません。生成の検査としては十分ですが、実行時の振る舞いは別のテストに頼っています。
+1. **粒度がファイルごとにばらばら。** 104本中57本が、単体・統合・e2eのうち2つ以上を含みます。たとえば`test_pdf_report.py`は統合32件・単体1件・e2e 1件、`test_checkpoint_save_regressions.py`は単体17件・統合10件です。ファイル名からも置き場所からも範囲が分からず、新しいテストをどの粒度で書くかの手本がありません。→ #59
+2. **時刻を手で動かす単体テストが多い。** 22本のファイルにある126件が、`TickEngine`を使わずにテスト自身で時刻を動かし、イベントを直接処理させています（`test_operational_events.py`、`test_effect_program.py`、`test_adaptive_event_eval.py`で各12件など）。中には、比較のKPIをイベント記録を手で書き込んで確かめるテスト（`test_route_bottleneck.py`）もあります。部品の検査としては有効ですが、同じ振る舞いをtickの順序どおりに通す統合テストが対になっていないものがあります。→ #59、#60
+3. **e2eが少なく、利用者の主な流れを通していない。** e2eは20件で、使うScenarioはすべてfixtureです。Project画面の主な流れ（生成Scenarioのpreview → 承認 → 実行 → 介入 → 結果を見る）をHTTPから通すテストはありません。ProjectのHTTP routeを通るのは、PDFのダウンロード（`test_pdf_http_attachment_and_existing_origin_guard`）だけです。→ #58、#60
+4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60
+5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない。** Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
+6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58
+7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58
+8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58
+9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59
 
 ## 確認できていないこと
 
