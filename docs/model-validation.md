@@ -16,7 +16,7 @@
 
 ## 実装値の分類
 
-主要な仮定は `fixtures/source-manifest.json` の `assumptions` にモデル版・対象・値または実装参照・校正状況と一緒に記録します。CI の `tests/test_provenance.py` は心理係数を `PsychologyParameters` と、行動・トイレ値を実装および ScenarioSpec と照合します。
+主要な仮定は `fixtures/source-manifest.json` の `assumptions` にモデル版・対象・値または実装参照・校正状況と一緒に記録します。CI の `tests/test_provenance.py` は心理係数を `PsychologyParameters` と、行動・トイレ値を実装および ScenarioSpec と照合します。コードが参照する仮定ID・出典IDが台帳にあるかは `tests/unit/repo/test_source_manifest.py` が確かめ、まだ台帳にないIDの一覧も持っています（[テストと検証](testing.md#出典台帳と根拠idの整合)）。
 
 | 対象 | 現在の扱い |
 |---|---|
