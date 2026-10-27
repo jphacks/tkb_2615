@@ -3,7 +3,8 @@ from __future__ import annotations
 import copy
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -63,26 +64,44 @@ def _isolated_local_state(
     _isolate(monkeypatch, tmp_path_factory.mktemp("local-state"))
 
 
-def _ui_preview(root: Path, request: dict[str, Any]) -> dict[str, Any]:
-    """Run the Project screen's Scenario preview for one structured form."""
+def _generated_request(**fields: Any) -> dict[str, Any]:
+    """GENERATED_SCENARIO_REQUEST with some fields changed and marked as user input."""
+    request = copy.deepcopy(GENERATED_SCENARIO_REQUEST)
+    request.update(copy.deepcopy(fields))
+    request["field_origins"] = {**request["field_origins"], **{name: "user" for name in fields}}
+    return request
+
+
+@contextmanager
+def _ui_project_api(monkeypatch: pytest.MonkeyPatch, root: Path) -> Iterator[Any]:
+    """The Project screen's API over a fresh store, with an empty regional research.
+
+    The real research calls public web services, so it is replaced by an empty
+    result; everything else goes through the same code as the UI.
+    """
     from sheltersim.region.models import RegionResearchResult
     from sheltersim.storage.projects import ProjectStore
     from sheltersim.web.projects import ProjectAPI
 
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        _isolate(monkeypatch, root)
-        monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        store = ProjectStore(root / "store")
-        store.create_project("project")
-        api = ProjectAPI(store)
-        api.workspace.research.research = lambda query, **_kwargs: RegionResearchResult(
-            request=query, researched_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
-        try:
-            return api.workspace.preview("project", {"text": "", "request": request})
-        finally:
-            api.close()
+    _isolate(monkeypatch, root)
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    store = ProjectStore(root / "store")
+    store.create_project("project")
+    api = ProjectAPI(store)
+    api.workspace.research.research = lambda query, **_kwargs: RegionResearchResult(
+        request=query, researched_at=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    try:
+        yield api
+    finally:
+        api.close()
+
+
+def _ui_preview(root: Path, request: dict[str, Any]) -> dict[str, Any]:
+    """Run the Project screen's Scenario preview for one structured form."""
+    with pytest.MonkeyPatch.context() as monkeypatch, _ui_project_api(monkeypatch, root) as api:
+        return api.workspace.preview("project", {"text": "", "request": request})
 
 
 @pytest.fixture(scope="session")
@@ -98,13 +117,9 @@ def generated_previews(tmp_path_factory: pytest.TempPathFactory) -> Callable[...
     def preview(**fields: Any) -> dict[str, Any]:
         key = json.dumps(fields, sort_keys=True, ensure_ascii=False)
         if key not in cache:
-            request = copy.deepcopy(GENERATED_SCENARIO_REQUEST)
-            request.update(copy.deepcopy(fields))
-            request["field_origins"] = {
-                **request["field_origins"],
-                **{name: "user" for name in fields},
-            }
-            cache[key] = _ui_preview(tmp_path_factory.mktemp("generated-scenario"), request)
+            cache[key] = _ui_preview(
+                tmp_path_factory.mktemp("generated-scenario"), _generated_request(**fields)
+            )
         return cache[key]
 
     return preview
@@ -165,3 +180,20 @@ def count_validations(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], list[i
         return calls
 
     return count
+
+
+@pytest.fixture
+def ui_project_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """The Project screen's API with an empty project named "project", open for one test.
+
+    Use it when a test must call further routes on the preview it creates, which
+    the cached generated_previews cannot do. Build the form with generated_request.
+    """
+    with _ui_project_api(monkeypatch, tmp_path) as api:
+        yield api
+
+
+@pytest.fixture
+def generated_request() -> Callable[..., dict[str, Any]]:
+    """The structured form of GENERATED_SCENARIO_REQUEST with some fields changed."""
+    return _generated_request

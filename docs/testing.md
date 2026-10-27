@@ -91,6 +91,8 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 - `generated_scenario_preview`：元になったpreviewの結果（`scenario`、`approved_hash`、`can_start`、`request`など）です。session単位で1回だけ作るので、変更してはいけません。module単位のfixtureから使うときは、`copy.deepcopy(generated_scenario_preview["scenario"])`から`ScenarioSpec`を作ります。
 - `generated_scenario_with(**fields)`：画面の入力欄の一部を変えたときのScenarioを、テストごとに新しく作って返します。たとえば`generated_scenario_with(duration_days=4)`は、期間の欄に4と入力した場合です。変えた欄は利用者の入力として扱います。
 - `generated_previews(**fields)`：上のpreviewの結果を返します。session単位のfixtureで、同じ入力のpreviewは1回だけ作って共有するので、変更してはいけません。
+- `ui_project_api`と`generated_request(**fields)`：作ったpreviewにさらに画面の操作（世帯の修正、承認など）を続けるテスト用です。`ui_project_api`は、空の地域調査に差し替えた`ProjectAPI`（project名`project`）をテストの間だけ開いておきます。`generated_request`は、上と同じ入力欄の値を返すので、`ui_project_api.workspace.post(["project", "scenario-preview"], {"text": "", "request": generated_request(...)})`でpreviewを作ります。
+- `generated_scenario_with`などには、画面にない`InitialScenarioRequest`の項目（`seed`、`operational_conditions.scheduled`、`population_conditions`など）も渡せます。previewが受け取る項目なら、そのまま通ります。
 
 共通fixtureは、demo-v2のScenario画面が送る入力（`GENERATED_SCENARIO_REQUEST`：合成市・地震・20人・0.25日。各項目は利用者の入力として扱います）を、UIと同じ`ProjectAPI`のpreviewに渡して作ります。違いは地域調査だけで、本物は公開Webサービスに接続するため、空の調査結果に差し替えています。20人・6時間の全体を実行しても、約6秒で終わります。
 
@@ -128,7 +130,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -217,7 +219,6 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_e2e.py` | experiments |  | 4 |  |  | 契約 | fixture | long_simulation |
 | `test_exact_timeline.py` | experiments |  | 1 |  |  | 契約 | fixture |  |
 | `test_generated_scenario_fixture.py` | experiments | 2 | 1 |  |  | 契約 | 生成 |  |
-| `test_household_correction.py` | experiments | 5 |  |  |  | 契約 | 生成（実行なし） |  |
 | `test_metrics.py` | experiments | 3 | 1 |  | 1 | 結果・契約 | fixture |  |
 | `unit/experiments/test_validation.py` | experiments | 12 |  |  |  | 契約 | fixture・生成（実行なし） |  |
 | `test_operational_scenarios.py` | experiments | 1 | 3 |  |  | 結果 | fixture | long_simulation |
@@ -274,6 +275,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_web_demo.py` | web | 2 | 2 | 1 |  | 契約 | fixture |  |
 | `test_web_inspector.py` | web |  | 2 | 3 |  | 結果・契約 | fixture |  |
 | `test_web_routes.py` | web | 2 | 2 |  |  | 契約・画面 | なし |  |
+| `unit/web/test_workspace.py` | web | 5 |  |  |  | 契約 | 生成（実行なし） |  |
 | `test_inspect_cli.py` | cli |  | 12 | 1 | 6 | 契約 | fixture |  |
 | `test_smoke.py` | cli | 1 | 3 |  |  | 契約 | なし |  |
 | `test_round2_common_services.py` | 横断 | 22 | 2 |  |  | 契約 | 生成・fixture |  |
@@ -290,11 +292,11 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | domain | 31 | 184 | 17 | 1 | 6 | 8 |
 | events | 5 | 36 | 32 | 0 | 1 | 1 |
 | policies | 12 | 106 | 14 | 1 | 5 | 2 |
-| experiments | 19 | 91 | 20 | 1 | 10 | 1 |
+| experiments | 18 | 86 | 20 | 1 | 10 | 1 |
 | region | 4 | 22 | 3 | 0 | 2 | 2 |
 | llm | 14 | 134 | 15 | 3 | 3 | 1 |
 | storage | 6 | 29 | 14 | 0 | 2 | 0 |
-| web | 20 | 29 | 86 | 13 | 15 | 1 |
+| web | 21 | 34 | 86 | 13 | 15 | 1 |
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
