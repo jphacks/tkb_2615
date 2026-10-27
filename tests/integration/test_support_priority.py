@@ -11,6 +11,7 @@ from pathlib import Path
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
+from sheltersim.domain.movement import MOVEMENT_STATE_KEY
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
@@ -151,25 +152,42 @@ def test_histories_recorded_under_v1_keep_the_v1_policy(small_benchmark_scenario
     assert SUPPORT_PRIORITY_STATE_KEY not in world.model_state
 
 
+def _stressed_world(scenario) -> WorldState:
+    """The Scenario's world with everyone at 0.95 stress.
+
+    On the shared generated Scenario stress stays below the 0.65 threshold for asking
+    (about 0.43 at most in six hours), so no support priority would be asked for.
+    """
+    world = WorldState.from_scenario(scenario)
+    for agent in world.agents.values():
+        agent.stress = 0.95
+    return world
+
+
 def test_v2_project_history_replays_exactly_without_a_provider(
-    tmp_path: Path, small_benchmark_scenario
+    tmp_path: Path, generated_scenario
 ) -> None:
-    scenario = small_benchmark_scenario(200)
+    # On a Project Run of the generated Scenario, so the replayed world walks people
+    # and staff on the floor plan; until #137 this ran on a benchmark fixture.
+    scenario = generated_scenario
     store = ProjectStore(tmp_path)
     store.create_project("project")
     saved = store.save_scenario(
         "project", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
     )
     store.create_run("project", "run", scenario.id, saved["scenario_version"])
-    runtime = BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    router = _router(RecordingProvider())
+    runtime = BranchRuntime.from_world(_stressed_world(scenario))
+    provider = RecordingProvider()
+    router = _router(provider)
     timeline = TimelineStore(store, "project", "run")
     timeline.record(runtime, router=router)
     live = timeline.advance("main", 200, router=router)
     assert live.world.model_state[SUPPORT_PRIORITY_STATE_KEY]["attempts_by_day"]["0"] > 0
+    assert _priority_tasks(provider)
+    assert live.world.model_state[MOVEMENT_STATE_KEY]["positions"]
 
     # Seeking between checkpoints reconstructs v2 decisions from the recorded tape only.
     replayed = timeline.seek("main", 195)
-    reference = WorldState.from_scenario(scenario)
+    reference = _stressed_world(scenario)
     _run_controller(reference, _router(RecordingProvider()), steps=195)
     assert replayed.world.canonical_json() == reference.canonical_json()
