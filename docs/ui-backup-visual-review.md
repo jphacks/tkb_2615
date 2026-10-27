@@ -62,7 +62,7 @@ APIモックや画像用の固定KPIは使っていない。
 
 ```sh
 PYTHONPATH=src SHELTERSIM_LLM_MODE=offline python -m pytest -q \
-  -p no:cacheprovider tests/test_demo_v2.py tests/test_web_routes.py
+  -p no:cacheprovider tests/integration/test_demo_v2_routes.py tests/test_web_routes.py
 
 # 別途起動したoffline専用テストサーバーに対する実HTTP E2E
 UI_BASE_URL=http://127.0.0.1:8877 \
@@ -105,7 +105,7 @@ offlineのBranch reportは `rule_fallback` であり、ライブAI生成の成�
 - `src/sheltersim/web/static/demo-v2.js`：表示整形、選択・パン・履歴描画・対話・画面復元。
 - `src/sheltersim/web/static/demo-v2-map.js`：記録に基づく独立マップレンダラー。
 - `src/sheltersim/web/server.py`：新しいJavaScriptの静的配信ルート1件のみ。
-- `tests/test_demo_v2.py`：静的ルート検証。
+- `tests/integration/test_demo_v2_routes.py`：静的ルート検証。
 - `scripts/test_demo_v2.cjs`、`scripts/review_demo_v2.py`：実ブラウザー検証。
 
 `/demo`、`/admin`、シミュレーションエンジン、承認hash、Checkpointの保存契約は維持する。

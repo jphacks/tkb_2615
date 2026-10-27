@@ -82,7 +82,7 @@ SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
 
 ```sh
 SHELTERSIM_LLM_MODE=offline PYTHONPATH=src python -m pytest \
-  tests/test_web_routes.py tests/test_demo_v2.py tests/test_web_demo.py \
+  tests/test_web_routes.py tests/integration/test_demo_v2_routes.py tests/test_web_demo.py \
   tests/unit/storage/test_projects.py tests/test_results_chat.py
 ```
 
