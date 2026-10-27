@@ -500,19 +500,21 @@ class _AckProvider:
         )
 
 
-def test_the_live_model_check_fits_its_call_and_budget_caps(live_model_check, tmp_path: Path):
+def test_each_live_model_check_run_fits_its_call_and_budget_caps(live_model_check, tmp_path: Path):
     # tests/live/test_live_api.py runs this case against the real API only when asked, so
-    # a ledger rule that denies one of its calls went unnoticed for days (#148).
-    settings, router, tasks, _ = live_model_check(
-        LLMSettings(api_key="mock-key"), tmp_path / "tape.json", provider=_AckProvider()
-    )
+    # a ledger rule that denies one of its calls went unnoticed for days (#148). A second
+    # run in the same usage store must get its own allowance.
+    for run in ("first", "second"):
+        settings, router, tasks, _ = live_model_check(
+            LLMSettings(api_key="mock-key"), tmp_path / f"{run}.json", provider=_AckProvider()
+        )
 
-    outputs = [router.complete(task) for task in tasks]
+        outputs = [router.complete(task) for task in tasks]
 
-    assert outputs == ['{"ok":true}'] * 3
-    assert [(record.stage, record.model_id, record.outcome) for record in router.records] == [
-        ("runtime", settings.haiku_model, "recorded"),
-        ("prepare", settings.opus_model, "recorded"),
-        ("intervention", settings.sonnet_model, "recorded"),
-    ]
-    assert router.spent_usd <= settings.budget_usd
+        assert outputs == ['{"ok":true}'] * 3
+        assert [(record.stage, record.model_id, record.outcome) for record in router.records] == [
+            ("runtime", settings.haiku_model, "recorded"),
+            ("prepare", settings.opus_model, "recorded"),
+            ("intervention", settings.sonnet_model, "recorded"),
+        ]
+        assert router.spent_usd <= settings.budget_usd

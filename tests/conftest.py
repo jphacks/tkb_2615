@@ -243,6 +243,7 @@ _LIVE_ACK_SCHEMA = {
 
 
 def _live_model_check(settings: Any, cache_path: Path, provider: Any = None) -> tuple:
+    import uuid
     from dataclasses import replace
 
     from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, usage_limits
@@ -263,7 +264,10 @@ def _live_model_check(settings: Any, cache_path: Path, provider: Any = None) -> 
     )
     store = runtime_usage_store()
     store.create_project("runtime-accounts", _internal=True)
-    ledger = UsageLedger(store, "runtime-accounts", "live-task-qa")
+    # Each run gets its own 3-call account. One fixed account kept every earlier run's
+    # receipts, so the caps covered the machine's lifetime and a second run could not pass
+    # (#148). The machine-wide task campaign ledger still bounds all runs together.
+    ledger = UsageLedger(store, "runtime-accounts", f"live-task-qa-{uuid.uuid4().hex}")
     ledger.create(usage_limits(settings))
     router = LLMRouter(settings)
     router.provider = AccountedProvider(
