@@ -91,9 +91,7 @@ class MetricSnapshot:
         support_wait_details = {
             request.agent_id: {
                 "request_id": request.id,
-                "waited_minutes": support_waited_minutes(
-                    world, request.id, minute=sample_minute
-                ),
+                "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
                 "reason_codes": list(
                     support_wait_reason_codes(world, request.id, minute=sample_minute)
                 ),
@@ -112,8 +110,7 @@ class MetricSnapshot:
         wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
         wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
         source_events = sorted(
-            record.event.event_id
-            for record in world.event_log.at_minute(sample_minute)
+            record.event.event_id for record in world.event_log.at_minute(sample_minute)
         )
         source_ids = {
             "toilet_queue_agents": queued_ids,

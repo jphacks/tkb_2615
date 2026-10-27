@@ -113,5 +113,3 @@ def test_run_sets_pair_by_seed_and_report_paired_distribution(tmp_path: Path, ca
     assert json.loads(output.read_text(encoding="utf-8"))["seed_count"] == 3
     assert output.with_suffix(".md").is_file()
     capsys.readouterr()
-
-

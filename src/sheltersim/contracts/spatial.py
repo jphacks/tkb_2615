@@ -74,20 +74,28 @@ def service_points_for_scenario(scenario: Any) -> tuple[FacilityServicePoint, ..
     return legacy_service_points(geometry, scenario.facilities)
 
 
-def legacy_service_points(geometry: FacilityGeometry, facilities: Any) -> tuple[FacilityServicePoint, ...]:
+def legacy_service_points(
+    geometry: FacilityGeometry, facilities: Any
+) -> tuple[FacilityServicePoint, ...]:
     """Build point records that preserve existing facility-target/FIFO semantics."""
     points = []
     for facility in sorted(facilities, key=lambda row: row.id):
         point = geometry.facility_points.get(facility.id)
         if point is None:
             continue
-        capacity = facility.working_units if facility.working_units is not None else facility.capacity
-        points.append(FacilityServicePoint(
-            id=f"legacy-service:{hashlib.sha256(facility.id.encode()).hexdigest()[:24]}",
-            facility_id=facility.id, point_m=point,
-            access=ServiceAccessConditions(accessibility="unknown"),
-            service_capacity=capacity, queue_id=facility.id,
-        ))
+        capacity = (
+            facility.working_units if facility.working_units is not None else facility.capacity
+        )
+        points.append(
+            FacilityServicePoint(
+                id=f"legacy-service:{hashlib.sha256(facility.id.encode()).hexdigest()[:24]}",
+                facility_id=facility.id,
+                point_m=point,
+                access=ServiceAccessConditions(accessibility="unknown"),
+                service_capacity=capacity,
+                queue_id=facility.id,
+            )
+        )
     return tuple(points)
 
 
@@ -112,8 +120,16 @@ class PopulationTransition(ExtensionModel):
     agent_id: Identifier
     household_id: Identifier | None = None
     minute: int = Field(ge=0)
-    action: Literal["arrived", "waiting", "admitted", "departed", "temporary_exit",
-                    "returned", "transferred", "reunited"]
+    action: Literal[
+        "arrived",
+        "waiting",
+        "admitted",
+        "departed",
+        "temporary_exit",
+        "returned",
+        "transferred",
+        "reunited",
+    ]
     zone_id: Identifier | None = None
     source_ids: tuple[Identifier, ...] = ()
 
@@ -123,6 +139,7 @@ def validate_spatial_constraints(scenario: Any) -> None:
     if raw is None:
         return
     from sheltersim.contracts.extensions import FacilityGeometry
+
     spec = SpatialConstraints.model_validate(raw)
     geometry = FacilityGeometry.model_validate(scenario.model_configs["facility_geometry"])
     walls = {wall.id: wall for wall in spec.walls}
@@ -130,16 +147,23 @@ def validate_spatial_constraints(scenario: Any) -> None:
         raise ValueError("wall/opening IDs must be unique")
     if len({item.id for item in spec.obstacles}) != len(spec.obstacles):
         raise ValueError("obstacle IDs must be unique")
-    if len({item.facility_id for item in spec.equipment_footprints}) != len(spec.equipment_footprints):
+    if len({item.facility_id for item in spec.equipment_footprints}) != len(
+        spec.equipment_footprints
+    ):
         raise ValueError("equipment footprint facility IDs must be unique")
     from sheltersim.contracts.extensions import polygon_area
+
     for item in (*spec.obstacles, *spec.equipment_footprints):
         if polygon_area(item.polygon) <= 0:
             raise ValueError("obstacle/equipment polygon must have positive area")
-        if any(not 0 <= point.x <= geometry.width_m or not 0 <= point.y <= geometry.height_m
-               for point in item.polygon):
+        if any(
+            not 0 <= point.x <= geometry.width_m or not 0 <= point.y <= geometry.height_m
+            for point in item.polygon
+        ):
             raise ValueError("obstacle/equipment polygon lies outside facility bounds")
-    if not {item.facility_id for item in spec.equipment_footprints} <= {f.id for f in scenario.facilities}:
+    if not {item.facility_id for item in spec.equipment_footprints} <= {
+        f.id for f in scenario.facilities
+    }:
         raise ValueError("equipment footprint references an unknown facility")
     for wall in spec.walls:
         if wall.start == wall.end:
@@ -148,16 +172,20 @@ def validate_spatial_constraints(scenario: Any) -> None:
             if not 0 <= point.x <= geometry.width_m or not 0 <= point.y <= geometry.height_m:
                 raise ValueError("wall lies outside facility bounds")
     for opening in spec.openings:
-        if opening.wall_id not in walls or not set(opening.edge_ids) <= {r.edge_id for r in geometry.routes}:
+        if opening.wall_id not in walls or not set(opening.edge_ids) <= {
+            r.edge_id for r in geometry.routes
+        }:
             raise ValueError("opening references missing wall or route")
         wall = walls[opening.wall_id]
-        dx, dy = wall.end.x-wall.start.x, wall.end.y-wall.start.y
-        length = (dx*dx+dy*dy)**0.5
-        px, py = opening.center.x-wall.start.x, opening.center.y-wall.start.y
-        distance = (px*dx+py*dy)/length
-        if (abs(px*dy-py*dx) > 1e-7
-                or distance - opening.width_m / 2 < -1e-9
-                or distance + opening.width_m / 2 > length + 1e-9):
+        dx, dy = wall.end.x - wall.start.x, wall.end.y - wall.start.y
+        length = (dx * dx + dy * dy) ** 0.5
+        px, py = opening.center.x - wall.start.x, opening.center.y - wall.start.y
+        distance = (px * dx + py * dy) / length
+        if (
+            abs(px * dy - py * dx) > 1e-7
+            or distance - opening.width_m / 2 < -1e-9
+            or distance + opening.width_m / 2 > length + 1e-9
+        ):
             raise ValueError("opening must lie on and fit inside its wall")
     if not set(spec.planning_capacity_by_zone) <= {z.id for z in scenario.zones}:
         raise ValueError("planning capacity references unknown zone")
@@ -170,7 +198,9 @@ def validate_spatial_constraints(scenario: Any) -> None:
 def occupancy_snapshot(world: Any) -> dict[str, Any]:
     from sheltersim.domain.temporary_spaces import capacity_metrics
 
-    planning = world.model_configs.get("spatial_constraints", {}).get("planning_capacity_by_zone", {})
+    planning = world.model_configs.get("spatial_constraints", {}).get(
+        "planning_capacity_by_zone", {}
+    )
     counts = {key: 0 for key in world.zones}
     for person in world.agents.values():
         counts[person.zone_id] += 1
@@ -179,35 +209,39 @@ def occupancy_snapshot(world: Any) -> dict[str, Any]:
     for zone_id, zone in sorted(world.zones.items()):
         capacity = capacity_metrics(world, zone_id, occupancy=counts[zone_id])
         planning_capacity = planning.get(zone_id, zone.capacity)
-        zones.append({
-            "zone_id": zone_id,
-            "occupants": counts[zone_id],
-            "hard_capacity": zone.capacity,
-            "nominal_capacity": capacity["nominal_capacity"],
-            "effective_capacity": capacity["effective_capacity"],
-            "temporary_people_capacity": capacity["temporary_people_capacity"],
-            "retained_expired_capacity": capacity["retained_expired_capacity"],
-            "temporary_sleeping_capacity": capacity["temporary_sleeping_capacity"],
-            "physical_room_capacity": capacity["physical_room_capacity"],
-            "active_room_admissions": capacity["active_room_admissions"],
-            "retained_expired_room_admissions": capacity["retained_expired_room_admissions"],
-            "effective_total_capacity": capacity["effective_total_capacity"],
-            "occupied_above_nominal": (
-                max(0, counts[zone_id] - zone.capacity) if zone.capacity is not None else 0
-            ),
-            "planning_capacity": planning_capacity,
-            "planning_excess": (
-                max(0, counts[zone_id] - planning_capacity)
-                if planning_capacity is not None else None
-            ),
-            "geometry_status": (
-                "physical_room_and_zone_capacity"
-                if capacity["physical_room_capacity"]
-                else "zone_only_capacity"
-                if capacity["temporary_people_capacity"] or capacity["retained_expired_capacity"]
-                else "no_temporary_space"
-            ),
-        })
+        zones.append(
+            {
+                "zone_id": zone_id,
+                "occupants": counts[zone_id],
+                "hard_capacity": zone.capacity,
+                "nominal_capacity": capacity["nominal_capacity"],
+                "effective_capacity": capacity["effective_capacity"],
+                "temporary_people_capacity": capacity["temporary_people_capacity"],
+                "retained_expired_capacity": capacity["retained_expired_capacity"],
+                "temporary_sleeping_capacity": capacity["temporary_sleeping_capacity"],
+                "physical_room_capacity": capacity["physical_room_capacity"],
+                "active_room_admissions": capacity["active_room_admissions"],
+                "retained_expired_room_admissions": capacity["retained_expired_room_admissions"],
+                "effective_total_capacity": capacity["effective_total_capacity"],
+                "occupied_above_nominal": (
+                    max(0, counts[zone_id] - zone.capacity) if zone.capacity is not None else 0
+                ),
+                "planning_capacity": planning_capacity,
+                "planning_excess": (
+                    max(0, counts[zone_id] - planning_capacity)
+                    if planning_capacity is not None
+                    else None
+                ),
+                "geometry_status": (
+                    "physical_room_and_zone_capacity"
+                    if capacity["physical_room_capacity"]
+                    else "zone_only_capacity"
+                    if capacity["temporary_people_capacity"]
+                    or capacity["retained_expired_capacity"]
+                    else "no_temporary_space"
+                ),
+            }
+        )
     return {
         "schema_version": 2,
         "minute": world.minute_index,

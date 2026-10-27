@@ -198,7 +198,11 @@ def test_agent_social_operator_catalog_covers_configured_body_and_environment_va
 
     environment = ScenarioZoneEnvironmentConfig().model_dump(mode="json")
     assert set(environment) - {
-        "schema_version", "policy_version", "source_type", "source_id", "baseline_by_zone"
+        "schema_version",
+        "policy_version",
+        "source_type",
+        "source_id",
+        "baseline_by_zone",
     } <= set(environment_parameters)
     assert "baseline_by_zone.*" in environment_parameters
 
@@ -252,4 +256,3 @@ def test_core_suite_is_checkpoint_signed_and_restorable():
     assert model_signatures(scenario.model_configs)["model_suite"] == f"{CORE_MODEL_SUITE_V2}@1"
     assert checkpoint.model_versions["model_suite"] == f"{CORE_MODEL_SUITE_V2}@1"
     assert checkpoint.restore_world().model_configs == scenario.model_configs
-

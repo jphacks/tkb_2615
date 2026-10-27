@@ -145,9 +145,7 @@ def test_run_checkpoint_callback_captures_exact_midpoint_without_changing_run(
         checkpoint_at_minute=20,
         checkpoint_callback=save_checkpoint,
     )
-    uninterrupted = run_scenario(
-        scenario, tmp_path / "uninterrupted", trace_level=TraceLevel.OFF
-    )
+    uninterrupted = run_scenario(scenario, tmp_path / "uninterrupted", trace_level=TraceLevel.OFF)
 
     assert callback_minutes == [20]
     checkpoint = Checkpoint.load(checkpoint_path)

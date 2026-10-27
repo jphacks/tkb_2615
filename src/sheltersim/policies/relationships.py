@@ -31,9 +31,15 @@ class DistanceDurationRepeatTrustPolicy:
     model_id = "distance-duration-repeat-trust-v1"
     source_id = "ASM-DISTANCE-DURATION-REPEAT-TRUST-V1"
     implementation_version = "1"
-    formula = "baseline = trust*(1-decay*elapsed/day)+0.5*decay*elapsed/day; gain = contact_gain*min(1,duration/scale)*(1+repeat_bonus*min(prior_contacts,10))/(1+observed_distance/distance_scale); missing observed distance uses factor 1"
+    formula = (
+        "baseline = trust*(1-decay*elapsed/day)+0.5*decay*elapsed/day; gain = "
+        "contact_gain*min(1,duration/scale)*(1+repeat_bonus*min(prior_contacts,10))/"
+        "(1+observed_distance/distance_scale); missing observed distance uses factor 1"
+    )
 
-    def __init__(self, *, distance_scale_m: float = 2.0, repeat_contact_bonus: float = 0.05) -> None:
+    def __init__(
+        self, *, distance_scale_m: float = 2.0, repeat_contact_bonus: float = 0.05
+    ) -> None:
         self.distance_scale_m = distance_scale_m
         self.repeat_contact_bonus = repeat_contact_bonus
 
@@ -68,7 +74,10 @@ class DurationOnlyTrustPolicy:
     model_id = "duration-contact-trust-v1"
     source_id = "ASM-DURATION-CONTACT-TRUST-V1"
     implementation_version = "1"
-    formula = "baseline = trust*(1-decay*elapsed/day)+0.5*decay*elapsed/day; gain = contact_gain*min(1,duration/scale)"
+    formula = (
+        "baseline = trust*(1-decay*elapsed/day)+0.5*decay*elapsed/day; gain = "
+        "contact_gain*min(1,duration/scale)"
+    )
 
     def update_trust(
         self,
@@ -89,7 +98,9 @@ class DurationOnlyTrustPolicy:
         return min(1.0, max(0.0, baseline + trust_gain * duration_factor))
 
 
-def create_relationship_policy(configs: dict[str, dict[str, object]]) -> RelationshipFormationPolicy:
+def create_relationship_policy(
+    configs: dict[str, dict[str, object]],
+) -> RelationshipFormationPolicy:
     """Resolve an explicit Registry replacement or the current proximity model."""
     selection = configs.get("policy_registry", {}).get("relationship")
     if selection is not None:

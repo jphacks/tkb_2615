@@ -104,7 +104,12 @@ def canonical_staff_operations_config(raw: Any) -> dict[str, Any]:
         "patrol_reassurance",
     ):
         value = config[name]
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+        ):
             raise ValueError(f"staff_operations {name} must be finite and within 0..1")
     thresholds_by_zone = config["thresholds_by_zone"]
     if not isinstance(thresholds_by_zone, dict):
@@ -130,9 +135,7 @@ def canonical_staff_operations_config(raw: Any) -> dict[str, Any]:
                 or not math.isfinite(value)
                 or not 0.0 <= value <= 1.0
             ):
-                raise ValueError(
-                    f"staff_operations per-zone {name} must be finite and within 0..1"
-                )
+                raise ValueError(f"staff_operations per-zone {name} must be finite and within 0..1")
     effects_by_zone = config["effects_by_zone"]
     allowed_effects = {
         "sanitation_use_per_person_minute": (0.0, 0.01),
@@ -160,7 +163,8 @@ def canonical_staff_operations_config(raw: Any) -> dict[str, Any]:
                 or not lower <= value <= upper
             ):
                 raise ValueError(
-                    f"staff_operations per-zone {name} must be finite and within {lower:g}..{upper:g}"
+                    f"staff_operations per-zone {name} must be finite and within "
+                    f"{lower:g}..{upper:g}"
                 )
     return config
 
@@ -173,7 +177,10 @@ def create_staff_operations_state(world: WorldState) -> dict[str, Any]:
         "policy_version": STAFF_OPERATIONS_POLICY_VERSION,
         "source_id": STAFF_OPERATIONS_SOURCE_ID,
         "config": config,
-        "zones": {zone_id: {"sanitation": 1.0, "updated_minute": world.minute_index} for zone_id in sorted(world.zones)},
+        "zones": {
+            zone_id: {"sanitation": 1.0, "updated_minute": world.minute_index}
+            for zone_id in sorted(world.zones)
+        },
         "staff": {staff_id: _idle_record() for staff_id in sorted(world.staff)},
         "history": [],
     }
@@ -222,13 +229,28 @@ def validate_staff_operations_state(world: WorldState) -> None:
         ):
             raise ValueError(f"staff_operations_v1 zone state for {zone_id!r} is invalid")
     fields = {
-        "phase", "task_id", "task_kind", "target_id", "target_zone_id", "reason",
-        "started_minute", "travel_due_minute", "arrival_minute", "due_minute",
-        "route_zone_ids", "route_edge_ids", "travel_minutes", "causation_event_ids",
+        "phase",
+        "task_id",
+        "task_kind",
+        "target_id",
+        "target_zone_id",
+        "reason",
+        "started_minute",
+        "travel_due_minute",
+        "arrival_minute",
+        "due_minute",
+        "route_zone_ids",
+        "route_edge_ids",
+        "travel_minutes",
+        "causation_event_ids",
     }
     pending_events = world.event_queue.pending()
     for staff_id, record in state["staff"].items():
-        if not isinstance(record, dict) or set(record) != fields or record["phase"] not in {"idle", "travel", "working"}:
+        if (
+            not isinstance(record, dict)
+            or set(record) != fields
+            or record["phase"] not in {"idle", "travel", "working"}
+        ):
             raise ValueError(f"staff_operations_v1 record for {staff_id!r} is invalid")
         if record["phase"] == "idle":
             if record != _idle_record():
@@ -276,7 +298,8 @@ def validate_staff_operations_state(world: WorldState) -> None:
             if (
                 not route_is_valid
                 or type(record["travel_due_minute"]) is not int
-                or record["travel_due_minute"] != record["started_minute"] + record["travel_minutes"]
+                or record["travel_due_minute"]
+                != record["started_minute"] + record["travel_minutes"]
                 or record["arrival_minute"] is not None
             ):
                 raise ValueError(f"staff_operations_v1 travel record for {staff_id!r} is invalid")
@@ -297,14 +320,16 @@ def validate_staff_operations_state(world: WorldState) -> None:
         if record["due_minute"] != expected_due:
             raise ValueError(f"staff_operations_v1 due minute for {staff_id!r} is invalid")
         completions = [
-            event for event in pending_events
+            event
+            for event in pending_events
             if event.event_type == "staff_operation_complete"
             and event.payload.get("task_id") == record["task_id"]
             and event.payload.get("staff_id") == staff_id
             and event.due_minute == record["due_minute"]
         ]
         arrivals = [
-            event for event in pending_events
+            event
+            for event in pending_events
             if event.event_type == "staff_operation_arrive"
             and event.payload.get("task_id") == record["task_id"]
             and event.payload.get("staff_id") == staff_id
@@ -317,11 +342,27 @@ def validate_staff_operations_state(world: WorldState) -> None:
             or (arrivals and arrivals[0].due_minute != record["travel_due_minute"])
             or (arrivals and arrivals[0].payload.get("target_zone_id") != record["target_zone_id"])
         ):
-            raise ValueError(f"staff_operations_v1 event references for {staff_id!r} are inconsistent")
+            raise ValueError(
+                f"staff_operations_v1 event references for {staff_id!r} are inconsistent"
+            )
     for item in state["history"]:
         if (
             not isinstance(item, dict)
-            or set(item) != {"task_id", "staff_id", "task_kind", "target_id", "target_zone_id", "reason", "status", "start_minute", "arrival_minute", "complete_minute", "travel_minutes", "causation_event_ids"}
+            or set(item)
+            != {
+                "task_id",
+                "staff_id",
+                "task_kind",
+                "target_id",
+                "target_zone_id",
+                "reason",
+                "status",
+                "start_minute",
+                "arrival_minute",
+                "complete_minute",
+                "travel_minutes",
+                "causation_event_ids",
+            }
             or item["staff_id"] not in world.staff
             or item["task_kind"] not in _DURATION_DEFAULTS
             or item["status"] not in {"completed", "blocked", "interrupted"}
@@ -329,7 +370,10 @@ def validate_staff_operations_state(world: WorldState) -> None:
             or (item["target_id"] is not None and item["target_id"] not in world.facilities)
             or not isinstance(item["task_id"], str)
             or not isinstance(item["reason"], str)
-            or any(type(item[name]) is not int or item[name] < 0 for name in ("start_minute", "complete_minute", "travel_minutes"))
+            or any(
+                type(item[name]) is not int or item[name] < 0
+                for name in ("start_minute", "complete_minute", "travel_minutes")
+            )
             or item["complete_minute"] < item["start_minute"]
             or (
                 item["arrival_minute"] is None
@@ -343,7 +387,10 @@ def validate_staff_operations_state(world: WorldState) -> None:
                 )
             )
             or not isinstance(item["causation_event_ids"], list)
-            or any(not isinstance(event_id, str) or not event_id for event_id in item["causation_event_ids"])
+            or any(
+                not isinstance(event_id, str) or not event_id
+                for event_id in item["causation_event_ids"]
+            )
         ):
             raise ValueError("staff_operations_v1 history item is invalid")
 
@@ -363,9 +410,13 @@ def update_staff_operations(world: WorldState, minute: int) -> None:
         load = sum(agent.zone_id == zone_id for agent in world.agents.values())
         zone = state["zones"][zone_id]
         elapsed = max(0, minute - zone["updated_minute"])
-        rate = state["config"]["effects_by_zone"].get(zone_id, {}).get(
-            "sanitation_use_per_person_minute",
-            state["config"]["sanitation_use_per_person_minute"],
+        rate = (
+            state["config"]["effects_by_zone"]
+            .get(zone_id, {})
+            .get(
+                "sanitation_use_per_person_minute",
+                state["config"]["sanitation_use_per_person_minute"],
+            )
         )
         zone["sanitation"] = max(0.0, zone["sanitation"] - load * rate * elapsed)
         zone["updated_minute"] = minute
@@ -391,8 +442,7 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
     workload: dict[str, tuple[int, int]] = {
         staff_id: (
             sum(
-                item["staff_id"] == staff_id
-                and item["complete_minute"] >= recent_cutoff
+                item["staff_id"] == staff_id and item["complete_minute"] >= recent_cutoff
                 for item in state["history"]
             ),
             sum(item["staff_id"] == staff_id for item in state["history"]),
@@ -408,11 +458,12 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
         if record["phase"] != "idle"
     }
     for staff_id, staff in sorted(
-        world.staff.items(), key=lambda item: (
+        world.staff.items(),
+        key=lambda item: (
             *workload[item[0]],
             round(1000 * staff_dynamics.get(item[0], {}).get("fatigue", 0.0)),
             item[0],
-        )
+        ),
     ):
         if (
             staff.active_task_id is not None
@@ -433,10 +484,15 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
                     record["sanitation"] < cleaning_threshold
                     and ("cleaning", zone_id, None) not in reserved_operations
                 ):
-                    candidates.append((
-                        1.0 - record["sanitation"], "cleaning", zone_id, None,
-                        f"sanitation_index_below_{cleaning_threshold:g}",
-                    ))
+                    candidates.append(
+                        (
+                            1.0 - record["sanitation"],
+                            "cleaning",
+                            zone_id,
+                            None,
+                            f"sanitation_index_below_{cleaning_threshold:g}",
+                        )
+                    )
         if skills & {"maintenance", "repair"}:
             for facility in sorted(world.facilities.values(), key=lambda item: item.id):
                 deficit = facility.capacity - facility.working_units
@@ -445,7 +501,15 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
                     and not _maintenance_blocked(world, facility.id)
                     and ("maintenance", facility.zone_id, facility.id) not in reserved_operations
                 ):
-                    candidates.append((float(deficit), "maintenance", facility.zone_id, facility.id, "facility_working_units_below_capacity"))
+                    candidates.append(
+                        (
+                            float(deficit),
+                            "maintenance",
+                            facility.zone_id,
+                            facility.id,
+                            "facility_working_units_below_capacity",
+                        )
+                    )
         if skills & {"support", "information"} and body:
             by_zone: dict[str, list[float]] = {}
             for agent_id, agent in world.agents.items():
@@ -461,10 +525,15 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
                     mean >= outreach_threshold
                     and ("information_outreach", zone_id, None) not in reserved_operations
                 ):
-                    candidates.append((
-                        mean, "information_outreach", zone_id, None,
-                        f"mean_information_uncertainty_at_least_{outreach_threshold:g}",
-                    ))
+                    candidates.append(
+                        (
+                            mean,
+                            "information_outreach",
+                            zone_id,
+                            None,
+                            f"mean_information_uncertainty_at_least_{outreach_threshold:g}",
+                        )
+                    )
         if skills & {"support", "patrol"}:
             for zone_id in sorted(world.zones):
                 occupants = [agent for agent in world.agents.values() if agent.zone_id == zone_id]
@@ -477,10 +546,15 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
                         mean_stress >= patrol_threshold
                         and ("patrol", zone_id, None) not in reserved_operations
                     ):
-                        candidates.append((
-                            mean_stress * 0.5, "patrol", zone_id, None,
-                            f"mean_zone_stress_at_least_{patrol_threshold:g}",
-                        ))
+                        candidates.append(
+                            (
+                                mean_stress * 0.5,
+                                "patrol",
+                                zone_id,
+                                None,
+                                f"mean_zone_stress_at_least_{patrol_threshold:g}",
+                            )
+                        )
         ranked: list[
             tuple[
                 tuple[float, float, str, str, str],
@@ -492,9 +566,7 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
             if route is not None:
                 ranked.append(
                     (
-                        formula.rank_key(
-                            urgency, route.travel_minutes, kind, zone_id, target_id
-                        ),
+                        formula.rank_key(urgency, route.travel_minutes, kind, zone_id, target_id),
                         (urgency, kind, zone_id, target_id, reason, route),
                     )
                 )
@@ -543,29 +615,52 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
         staff.work_queue[:] = [task_id]
         staff.busy_until = due
         if travel_minutes:
-            world.schedule_event(ScheduledEvent(
-                event_id=f"staff-operation-arrive-{sequence}",
-                kind=EventKind.COMPLETION,
-                due_minute=arrival_minute,
-                priority=5,
-                sequence=sequence,
-                event_type="staff_operation_arrive",
-                payload={"staff_id": staff_id, "task_id": task_id, "target_zone_id": target_zone},
-                source_id=event_source_id,
-                provenance={"source_type": "assumption", "source_id": formula_source_id, "policy_version": formula_policy_id},
-            ))
+            world.schedule_event(
+                ScheduledEvent(
+                    event_id=f"staff-operation-arrive-{sequence}",
+                    kind=EventKind.COMPLETION,
+                    due_minute=arrival_minute,
+                    priority=5,
+                    sequence=sequence,
+                    event_type="staff_operation_arrive",
+                    payload={
+                        "staff_id": staff_id,
+                        "task_id": task_id,
+                        "target_zone_id": target_zone,
+                    },
+                    source_id=event_source_id,
+                    provenance={
+                        "source_type": "assumption",
+                        "source_id": formula_source_id,
+                        "policy_version": formula_policy_id,
+                    },
+                )
+            )
         completion_sequence = world.allocate_event_sequence()
-        world.schedule_event(ScheduledEvent(
-            event_id=f"staff-operation-complete-{completion_sequence}",
-            kind=EventKind.COMPLETION,
-            due_minute=due,
-            priority=5,
-            sequence=completion_sequence,
-            event_type="staff_operation_complete",
-            payload={"staff_id": staff_id, "task_id": task_id, "task_kind": task_kind, "target_id": target_id, "target_zone_id": target_zone},
-            source_id=event_source_id,
-            provenance={"source_type": "assumption", "source_id": formula_source_id, "policy_version": formula_policy_id, "reason": reason},
-        ))
+        world.schedule_event(
+            ScheduledEvent(
+                event_id=f"staff-operation-complete-{completion_sequence}",
+                kind=EventKind.COMPLETION,
+                due_minute=due,
+                priority=5,
+                sequence=completion_sequence,
+                event_type="staff_operation_complete",
+                payload={
+                    "staff_id": staff_id,
+                    "task_id": task_id,
+                    "task_kind": task_kind,
+                    "target_id": target_id,
+                    "target_zone_id": target_zone,
+                },
+                source_id=event_source_id,
+                provenance={
+                    "source_type": "assumption",
+                    "source_id": formula_source_id,
+                    "policy_version": formula_policy_id,
+                    "reason": reason,
+                },
+            )
+        )
         reserved_operations.add((task_kind, target_zone, target_id))
         assigned.append(task_id)
     if assigned and "movement_v1" in world.model_state:
@@ -607,9 +702,7 @@ def _missing_task_skill_message(world: WorldState, staff_id: str, task_kind: str
             "設備の修理は修理の手配（facility_repair）で指示するか、"
             "担当変更（set_staff_role）で職員に技能を与えてから指示してください。"
         )
-    return (
-        f"no_qualified_staff: {name}の技能（{skill_list}）を持つ職員がいません。{advice}"
-    )
+    return f"no_qualified_staff: {name}の技能（{skill_list}）を持つ職員がいません。{advice}"
 
 
 def validate_staff_operation_order(
@@ -650,9 +743,13 @@ def validate_staff_operation_order(
     if task_kind == "maintenance":
         facility = world.facilities.get(target_id or "")
         if facility is None or facility.zone_id != target_zone_id:
-            raise EventApplicationError("maintenance order must target a facility in its selected zone")
+            raise EventApplicationError(
+                "maintenance order must target a facility in its selected zone"
+            )
         if facility.working_units >= facility.capacity or _maintenance_blocked(world, facility.id):
-            raise EventApplicationError("maintenance order has no currently repairable facility unit")
+            raise EventApplicationError(
+                "maintenance order has no currently repairable facility unit"
+            )
     elif target_id is not None:
         raise EventApplicationError("only maintenance orders accept a target facility")
     if task_kind in {"information_outreach", "patrol"}:
@@ -671,7 +768,8 @@ def validate_staff_operation_order(
         graph = ZoneGraph(
             zones=graph.zones,
             edges=tuple(
-                edge for edge in graph.edges
+                edge
+                for edge in graph.edges
                 if route_is_physically_clear(world, edge.id, mobility="independent")
             ),
         )
@@ -762,41 +860,45 @@ def order_staff_operation(
         "reason": reason,
     }
     if route.travel_minutes:
-        world.schedule_event(ScheduledEvent(
-            event_id=f"staff-operation-arrive-{sequence}",
+        world.schedule_event(
+            ScheduledEvent(
+                event_id=f"staff-operation-arrive-{sequence}",
+                kind=EventKind.COMPLETION,
+                due_minute=arrival_minute,
+                priority=5,
+                sequence=sequence,
+                event_type="staff_operation_arrive",
+                payload={
+                    "staff_id": staff_id,
+                    "task_id": task_id,
+                    "target_zone_id": target_zone_id,
+                },
+                source_id=operation_source_id,
+                causation_id=causation_event_id,
+                provenance=provenance,
+            )
+        )
+    completion_sequence = world.allocate_event_sequence()
+    world.schedule_event(
+        ScheduledEvent(
+            event_id=f"staff-operation-complete-{completion_sequence}",
             kind=EventKind.COMPLETION,
-            due_minute=arrival_minute,
+            due_minute=due_minute,
             priority=5,
-            sequence=sequence,
-            event_type="staff_operation_arrive",
+            sequence=completion_sequence,
+            event_type="staff_operation_complete",
             payload={
                 "staff_id": staff_id,
                 "task_id": task_id,
+                "task_kind": task_kind,
+                "target_id": target_id,
                 "target_zone_id": target_zone_id,
             },
             source_id=operation_source_id,
             causation_id=causation_event_id,
             provenance=provenance,
-        ))
-    completion_sequence = world.allocate_event_sequence()
-    world.schedule_event(ScheduledEvent(
-        event_id=f"staff-operation-complete-{completion_sequence}",
-        kind=EventKind.COMPLETION,
-        due_minute=due_minute,
-        priority=5,
-        sequence=completion_sequence,
-        event_type="staff_operation_complete",
-        payload={
-            "staff_id": staff_id,
-            "task_id": task_id,
-            "task_kind": task_kind,
-            "target_id": target_id,
-            "target_zone_id": target_zone_id,
-        },
-        source_id=operation_source_id,
-        causation_id=causation_event_id,
-        provenance=provenance,
-    ))
+        )
+    )
     if "movement_v1" in world.model_state:
         from sheltersim.domain.movement import staff_position_snapshots
 
@@ -830,11 +932,18 @@ def schedule_staff_operation_relief(world: WorldState, minute: int) -> tuple[str
     recent_cutoff = max(0, minute - 240)
     workload = {
         staff_id: (
-            sum(row["staff_id"] == staff_id and row["complete_minute"] >= recent_cutoff
-                for row in state["history"]),
+            sum(
+                row["staff_id"] == staff_id and row["complete_minute"] >= recent_cutoff
+                for row in state["history"]
+            ),
             sum(row["staff_id"] == staff_id for row in state["history"]),
-            round(1000 * world.model_state.get("staff_dynamics_v1", {})
-                  .get("staff", {}).get(staff_id, {}).get("fatigue", 0.0)),
+            round(
+                1000
+                * world.model_state.get("staff_dynamics_v1", {})
+                .get("staff", {})
+                .get(staff_id, {})
+                .get("fatigue", 0.0)
+            ),
             staff_id,
         )
         for staff_id in world.staff
@@ -843,9 +952,8 @@ def schedule_staff_operation_relief(world: WorldState, minute: int) -> tuple[str
         if operation["phase"] == "idle" or operation["task_id"] in pending_handoffs:
             continue
         handoff_minute = minute + 1
-        unavailable = (
-            not staff_is_available(world, staff_id)
-            or not staff_dynamics_on_shift(world, staff_id, handoff_minute)
+        unavailable = not staff_is_available(world, staff_id) or not staff_dynamics_on_shift(
+            world, staff_id, handoff_minute
         )
         if not unavailable:
             continue
@@ -913,9 +1021,8 @@ def handoff_staff_operation(world: WorldState, event: ScheduledEvent) -> EventLo
         or event.provenance.get("source_type") != "assumption"
         or event.provenance.get("source_id") != STAFF_RELIEF_SOURCE_ID
         or event.provenance.get("policy_version") != STAFF_RELIEF_POLICY_VERSION
-        or set(event.payload) != {
-            "task_id", "previous_staff_id", "replacement_staff_id", "reason_code"
-        }
+        or set(event.payload)
+        != {"task_id", "previous_staff_id", "replacement_staff_id", "reason_code"}
     ):
         raise EventApplicationError("staff operation relief provenance or payload is invalid")
     task_id = event.payload["task_id"]
@@ -965,7 +1072,8 @@ def handoff_staff_operation(world: WorldState, event: ScheduledEvent) -> EventLo
     event_source_id = formula_source_id if formula_selected else STAFF_OPERATIONS_POLICY_VERSION
 
     pending = [
-        candidate for candidate in world.event_queue.pending()
+        candidate
+        for candidate in world.event_queue.pending()
         if candidate.event_type in {"staff_operation_arrive", "staff_operation_complete"}
         and candidate.payload.get("task_id") == task_id
     ]
@@ -975,19 +1083,21 @@ def handoff_staff_operation(world: WorldState, event: ScheduledEvent) -> EventLo
     if "movement_v1" in world.model_state:
         from sheltersim.domain.movement import staff_position_snapshots
 
-        previous_position = staff_position_snapshots(
-            world, boundary_minute=world.minute_index
-        ).get(previous_id)
+        previous_position = staff_position_snapshots(world, boundary_minute=world.minute_index).get(
+            previous_id
+        )
         if previous_position is not None:
             previous.zone_id = previous_position["zone_id"]
     for candidate in pending:
         world.event_queue.remove(candidate.event_id)
-        world.event_log.append(EventLogRecord(
-            event=candidate,
-            realized_minute=world.minute_index,
-            status=EventStatus.SUPPRESSED,
-            detail="staff operation was replaced by a qualified co-located worker",
-        ))
+        world.event_log.append(
+            EventLogRecord(
+                event=candidate,
+                realized_minute=world.minute_index,
+                status=EventStatus.SUPPRESSED,
+                detail="staff operation was replaced by a qualified co-located worker",
+            )
+        )
 
     previous.active_task_id = None
     previous.work_queue.clear()
@@ -1014,29 +1124,31 @@ def handoff_staff_operation(world: WorldState, event: ScheduledEvent) -> EventLo
     state["staff"][replacement_id] = updated
 
     sequence = world.allocate_event_sequence()
-    world.schedule_event(ScheduledEvent(
-        event_id=f"staff-operation-complete-{sequence}",
-        kind=EventKind.COMPLETION,
-        due_minute=updated["due_minute"],
-        priority=5,
-        sequence=sequence,
-        event_type="staff_operation_complete",
-        payload={
-            "staff_id": replacement_id,
-            "task_id": task_id,
-            "task_kind": updated["task_kind"],
-            "target_id": updated["target_id"],
-            "target_zone_id": updated["target_zone_id"],
-        },
-        source_id=event_source_id,
-        causation_id=event.event_id,
-        provenance={
-            "source_type": "assumption",
-            "source_id": formula_source_id,
-            "policy_version": formula_policy_id,
-            "reason": updated["reason"],
-        },
-    ))
+    world.schedule_event(
+        ScheduledEvent(
+            event_id=f"staff-operation-complete-{sequence}",
+            kind=EventKind.COMPLETION,
+            due_minute=updated["due_minute"],
+            priority=5,
+            sequence=sequence,
+            event_type="staff_operation_complete",
+            payload={
+                "staff_id": replacement_id,
+                "task_id": task_id,
+                "task_kind": updated["task_kind"],
+                "target_id": updated["target_id"],
+                "target_zone_id": updated["target_zone_id"],
+            },
+            source_id=event_source_id,
+            causation_id=event.event_id,
+            provenance={
+                "source_type": "assumption",
+                "source_id": formula_source_id,
+                "policy_version": formula_policy_id,
+                "reason": updated["reason"],
+            },
+        )
+    )
     if "movement_v1" in world.model_state:
         from sheltersim.domain.movement import staff_position_snapshots
 
@@ -1058,16 +1170,25 @@ def handoff_staff_operation(world: WorldState, event: ScheduledEvent) -> EventLo
 def arrive_staff_operation(world: WorldState, event: ScheduledEvent) -> None:
     state = world.model_state.get(STAFF_OPERATIONS_STATE_KEY)
     staff_id, task_id = event.payload.get("staff_id"), event.payload.get("task_id")
-    record = state["staff"].get(staff_id) if isinstance(state, dict) and isinstance(staff_id, str) else None
+    record = (
+        state["staff"].get(staff_id)
+        if isinstance(state, dict) and isinstance(staff_id, str)
+        else None
+    )
     staff = world.staff.get(staff_id) if isinstance(staff_id, str) else None
     task = world.active_tasks.get(task_id) if isinstance(task_id, str) else None
     if (
-        record is None or record["phase"] != "travel" or record["task_id"] != task_id
-        or staff is None or task is None or staff.active_task_id != task_id
+        record is None
+        or record["phase"] != "travel"
+        or record["task_id"] != task_id
+        or staff is None
+        or task is None
+        or staff.active_task_id != task_id
         or event.due_minute != record["travel_due_minute"]
         or event.payload.get("target_zone_id") != record["target_zone_id"]
     ):
         from sheltersim.events.models import EventApplicationError
+
         raise EventApplicationError("staff travel arrival does not match an active operation")
     if not staff_is_available(world, staff_id):
         interrupt_staff_operation(world, staff_id, event, current_event_id=event.event_id)
@@ -1088,13 +1209,22 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
     state = world.model_state.get(STAFF_OPERATIONS_STATE_KEY)
     payload = event.payload
     staff_id, task_id = payload.get("staff_id"), payload.get("task_id")
-    record = state["staff"].get(staff_id) if isinstance(state, dict) and isinstance(staff_id, str) else None
+    record = (
+        state["staff"].get(staff_id)
+        if isinstance(state, dict) and isinstance(staff_id, str)
+        else None
+    )
     staff = world.staff.get(staff_id) if isinstance(staff_id, str) else None
     task = world.active_tasks.get(task_id) if isinstance(task_id, str) else None
     if (
-        record is None or record["phase"] != "working" or record["task_id"] != task_id
-        or staff is None or task is None or staff.active_task_id != task_id
-        or event.due_minute != record["due_minute"] or payload.get("task_kind") != record["task_kind"]
+        record is None
+        or record["phase"] != "working"
+        or record["task_id"] != task_id
+        or staff is None
+        or task is None
+        or staff.active_task_id != task_id
+        or event.due_minute != record["due_minute"]
+        or payload.get("task_kind") != record["task_kind"]
         or payload.get("target_zone_id") != record["target_zone_id"]
     ):
         raise EventApplicationError("staff operation completion does not match active work")
@@ -1104,19 +1234,20 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
     kind, zone_id, target_id = record["task_kind"], record["target_zone_id"], record["target_id"]
     outcome = "completed"
     if kind == "cleaning":
-        recovery = state["config"]["effects_by_zone"].get(zone_id, {}).get(
-            "cleaning_sanitation_recovery",
-            state["config"]["cleaning_sanitation_recovery"],
+        recovery = (
+            state["config"]["effects_by_zone"]
+            .get(zone_id, {})
+            .get(
+                "cleaning_sanitation_recovery",
+                state["config"]["cleaning_sanitation_recovery"],
+            )
         )
         state["zones"][zone_id]["sanitation"] = min(
             1.0, state["zones"][zone_id]["sanitation"] + recovery
         )
     elif kind == "maintenance" and target_id in world.facilities:
         facility = world.facilities[target_id]
-        if (
-            facility.working_units >= facility.capacity
-            or _maintenance_blocked(world, target_id)
-        ):
+        if facility.working_units >= facility.capacity or _maintenance_blocked(world, target_id):
             outcome = "blocked"
         else:
             facility.working_units += 1
@@ -1130,8 +1261,10 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
             if kind == "information_outreach"
             else "patrol_reassurance"
         )
-        relief = state["config"]["effects_by_zone"].get(zone_id, {}).get(
-            effect_name, state["config"][effect_name]
+        relief = (
+            state["config"]["effects_by_zone"]
+            .get(zone_id, {})
+            .get(effect_name, state["config"][effect_name])
         )
         for agent in sorted(world.agents.values(), key=lambda item: item.id):
             if agent.zone_id != zone_id:
@@ -1140,7 +1273,9 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
             if record_body is not None:
                 record_body["uncertainty"] = max(0.0, record_body["uncertainty"] - relief)
                 record_body["reassurance"] = min(1.0, record_body["reassurance"] + relief * 0.5)
-                record_body["positive_affect"] = min(1.0, record_body["positive_affect"] + relief * 0.25)
+                record_body["positive_affect"] = min(
+                    1.0, record_body["positive_affect"] + relief * 0.25
+                )
             agent.trust = min(1.0, agent.trust + relief * 0.1)
             record["causation_event_ids"].append(event.event_id)
     elif kind == "intake":
@@ -1154,7 +1289,9 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
         "reason": record["reason"],
         "status": outcome,
         "start_minute": record["started_minute"],
-        "arrival_minute": record["arrival_minute"] if record["arrival_minute"] is not None else record["started_minute"],
+        "arrival_minute": record["arrival_minute"]
+        if record["arrival_minute"] is not None
+        else record["started_minute"],
         "complete_minute": event.due_minute,
         "travel_minutes": record["travel_minutes"],
         "causation_event_ids": sorted(set(record["causation_event_ids"] + [event.event_id])),
@@ -1170,7 +1307,9 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
     return deepcopy(completed_operation)
 
 
-def interrupt_staff_trips_on_closed_routes(world: WorldState, event: ScheduledEvent) -> tuple[str, ...]:
+def interrupt_staff_trips_on_closed_routes(
+    world: WorldState, event: ScheduledEvent
+) -> tuple[str, ...]:
     """Stop travel tasks invalidated by a newly applied closure for same-tick reassignment.
 
     The caller invokes this only after the typed geometry event was applied. Existing
@@ -1249,31 +1388,39 @@ def interrupt_staff_operation(
             continue
         world.event_queue.remove(pending.event_id)
         causation_ids.add(pending.event_id)
-        world.event_log.append(EventLogRecord(
-            event=pending,
-            realized_minute=event.due_minute,
-            status=EventStatus.SUPPRESSED,
-            detail="Staff operation was interrupted by staff unavailability",
-        ))
+        world.event_log.append(
+            EventLogRecord(
+                event=pending,
+                realized_minute=event.due_minute,
+                status=EventStatus.SUPPRESSED,
+                detail="Staff operation was interrupted by staff unavailability",
+            )
+        )
 
     elapsed = max(0, min(record["travel_minutes"], event.due_minute - record["started_minute"]))
     arrival_minute = record["arrival_minute"]
-    if arrival_minute is None and record["travel_minutes"] > 0 and elapsed >= record["travel_minutes"]:
+    if (
+        arrival_minute is None
+        and record["travel_minutes"] > 0
+        and elapsed >= record["travel_minutes"]
+    ):
         arrival_minute = record["started_minute"] + record["travel_minutes"]
-    state["history"].append({
-        "task_id": task_id,
-        "staff_id": staff_id,
-        "task_kind": record["task_kind"],
-        "target_id": record["target_id"],
-        "target_zone_id": record["target_zone_id"],
-        "reason": record["reason"],
-        "status": "interrupted",
-        "start_minute": record["started_minute"],
-        "arrival_minute": arrival_minute,
-        "complete_minute": event.due_minute,
-        "travel_minutes": record["travel_minutes"],
-        "causation_event_ids": sorted(causation_ids),
-    })
+    state["history"].append(
+        {
+            "task_id": task_id,
+            "staff_id": staff_id,
+            "task_kind": record["task_kind"],
+            "target_id": record["target_id"],
+            "target_zone_id": record["target_zone_id"],
+            "reason": record["reason"],
+            "status": "interrupted",
+            "start_minute": record["started_minute"],
+            "arrival_minute": arrival_minute,
+            "complete_minute": event.due_minute,
+            "travel_minutes": record["travel_minutes"],
+            "causation_event_ids": sorted(causation_ids),
+        }
+    )
     if len(state["history"]) > MAX_STAFF_HISTORY:
         del state["history"][: len(state["history"]) - MAX_STAFF_HISTORY]
     world.active_tasks.pop(task_id, None)
@@ -1299,9 +1446,18 @@ def _maintenance_blocked(world: WorldState, facility_id: str) -> bool:
 
 def _idle_record() -> dict[str, Any]:
     return {
-        "phase": "idle", "task_id": None, "task_kind": None, "target_id": None,
-        "target_zone_id": None, "reason": None, "started_minute": None,
-        "travel_due_minute": None, "arrival_minute": None, "due_minute": None,
-        "route_zone_ids": [], "route_edge_ids": [], "travel_minutes": 0,
+        "phase": "idle",
+        "task_id": None,
+        "task_kind": None,
+        "target_id": None,
+        "target_zone_id": None,
+        "reason": None,
+        "started_minute": None,
+        "travel_due_minute": None,
+        "arrival_minute": None,
+        "due_minute": None,
+        "route_zone_ids": [],
+        "route_edge_ids": [],
+        "travel_minutes": 0,
         "causation_event_ids": [],
     }

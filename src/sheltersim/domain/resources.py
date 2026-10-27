@@ -472,7 +472,10 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
         raise ResourceLedgerError("resource ledger is not enabled for this scenario")
     current = world.model_state[RESOURCE_LEDGER_KEY]
     validate_resource_ledger_state(
-        current, world.resources, set(world.agents), set(world.zones),
+        current,
+        world.resources,
+        set(world.agents),
+        set(world.zones),
         minute_index=world.minute_index,
     )
     # Only the accounts change in place; the ID and audit lists are only appended to,
@@ -592,7 +595,10 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
         }
     )
     validate_resource_ledger_state(
-        ledger, resources, set(world.agents), set(world.zones),
+        ledger,
+        resources,
+        set(world.agents),
+        set(world.zones),
         minute_index=world.minute_index,
     )
     world.model_state[RESOURCE_LEDGER_KEY] = ledger
@@ -605,7 +611,10 @@ def resource_metric_values(world: Any) -> dict[str, int] | None:
     if ledger is None:
         return None
     validate_resource_ledger_state(
-        ledger, world.resources, set(world.agents), set(world.zones),
+        ledger,
+        world.resources,
+        set(world.agents),
+        set(world.zones),
         minute_index=world.minute_index,
     )
     result: dict[str, int] = {}

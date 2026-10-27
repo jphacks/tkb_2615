@@ -33,14 +33,24 @@ class RegionResearchRequest(RegionModel):
     weather_area_code: str | None = Field(
         default=None,
         pattern=r"^\d{6}$",
-        description="Selected six-digit JMA forecast-file code; nested area applicability remains unknown without a separate mapping.",
+        description=(
+            "Selected six-digit JMA forecast-file code; nested area applicability remains "
+            "unknown without a separate mapping."
+        ),
     )
 
     @model_validator(mode="after")
     def selected_statistics_are_consistent(self) -> RegionResearchRequest:
-        if (self.estat_period_code or self.estat_category_codes or self.estat_area_code) and not self.estat_stats_data_id:
-            raise ValueError("e-Stat area, period, and category selections require a selected table")
-        if any(not key or len(key) > 32 or not value or len(value) > 64 for key, value in self.estat_category_codes.items()):
+        if (
+            self.estat_period_code or self.estat_category_codes or self.estat_area_code
+        ) and not self.estat_stats_data_id:
+            raise ValueError(
+                "e-Stat area, period, and category selections require a selected table"
+            )
+        if any(
+            not key or len(key) > 32 or not value or len(value) > 64
+            for key, value in self.estat_category_codes.items()
+        ):
             raise ValueError("e-Stat category selections require bounded dimension and class codes")
         return self
 
@@ -148,7 +158,10 @@ class MunicipalPlanObservation(RegionModel):
     content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_id: str
     status: Literal[
-        "observed", "historical", "unknown", "conflicting",
+        "observed",
+        "historical",
+        "unknown",
+        "conflicting",
         "operator_mapped_pending_source_review",
     ] = "operator_mapped_pending_source_review"
     valid_from: date | None = None
@@ -215,8 +228,13 @@ class WeatherObservation(RegionModel):
 class RegionalProviderStatus(RegionModel):
     data_kind: Literal["municipal_plan", "hazard", "weather"]
     status: Literal[
-        "available", "partial", "not_configured", "unavailable", "stale",
-        "out_of_scope", "conflicting",
+        "available",
+        "partial",
+        "not_configured",
+        "unavailable",
+        "stale",
+        "out_of_scope",
+        "conflicting",
     ]
     source_id: str | None = None
     record_count: int = Field(default=0, ge=0)
@@ -315,8 +333,12 @@ class LLMSearchSourceCandidate(RegionModel):
 
         parsed = urlparse(self.url)
         host = (parsed.hostname or "").casefold()
-        if (parsed.scheme != "https" or not host.endswith((".go.jp", ".lg.jp"))
-                or parsed.username or parsed.password):
+        if (
+            parsed.scheme != "https"
+            or not host.endswith((".go.jp", ".lg.jp"))
+            or parsed.username
+            or parsed.password
+        ):
             raise ValueError("LLM search candidate must use a Japanese government HTTPS host")
         if self.accessed_at.tzinfo is None:
             raise ValueError("LLM search candidate time must include a timezone")
@@ -365,14 +387,10 @@ class RegionResearchResult(RegionModel):
         if self.shelter_register is not None and self.shelter_register.source_id:
             references.append(self.shelter_register.source_id)
         references.extend(
-            item.source_id
-            for item in self.provider_statuses
-            if item.source_id is not None
+            item.source_id for item in self.provider_statuses if item.source_id is not None
         )
         references.extend(
-            item.metadata_source_id
-            for item in self.shelters
-            if item.metadata_source_id is not None
+            item.metadata_source_id for item in self.shelters if item.metadata_source_id is not None
         )
         missing = sorted(set(references) - source_ids)
         if missing:
@@ -380,4 +398,3 @@ class RegionResearchResult(RegionModel):
         if self.researched_at.tzinfo is None:
             raise ValueError("researched_at must include a timezone")
         return self
-

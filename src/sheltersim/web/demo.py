@@ -36,13 +36,13 @@ from sheltersim.experiments.scenario_editor import (
     scenario_family_hash,
     scenario_hash,
 )
+from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.natural_language import (
     InterventionCompilerUnavailable,
     _sanitize_narrative,
     compile_natural_language,
     scenario_summary_from_world,
 )
-from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.report import (
     build_narrative_card,
@@ -266,17 +266,34 @@ class DemoService:
 
     def frame_view(self, branch_id: str, *, at_minute: int | None = None) -> dict[str, Any]:
         from sheltersim.inspection.frames import world_frame
+
         with self._lock:
             branch = self._require_branch(branch_id)
             minute = branch.runtime.world.minute_index if at_minute is None else at_minute
             if minute == branch.runtime.world.minute_index:
                 world = WorldState.from_dict(branch.runtime.world.to_dict())
             else:
-                checkpoint = next((cp for cp in branch.checkpoints.values() if cp.simulation_minute == minute), None)
+                checkpoint = next(
+                    (cp for cp in branch.checkpoints.values() if cp.simulation_minute == minute),
+                    None,
+                )
                 if checkpoint is None:
-                    return {"exact": False, "branch_id": branch_id, "minute": minute, "limitation": "Legacy demo has no exact checkpoint here; use Project timeline for any-minute replay."}
+                    return {
+                        "exact": False,
+                        "branch_id": branch_id,
+                        "minute": minute,
+                        "limitation": (
+                            "Legacy demo has no exact checkpoint here; use Project timeline for "
+                            "any-minute replay."
+                        ),
+                    }
                 world = checkpoint.restore_world()
-            frame = world_frame(world, run_id="legacy-demo", branch_id=branch_id, computed_until=branch.runtime.world.minute_index)
+            frame = world_frame(
+                world,
+                run_id="legacy-demo",
+                branch_id=branch_id,
+                computed_until=branch.runtime.world.minute_index,
+            )
             frame.update({"namespace": "legacy_demo", "status": branch.status})
             return frame
 
@@ -284,7 +301,15 @@ class DemoService:
         if not 2 <= len(branch_ids) <= 8 or len(set(branch_ids)) != len(branch_ids):
             raise DemoError("legacy comparison needs 2–8 distinct branches")
         frames = [self.frame_view(key, at_minute=at_minute) for key in branch_ids]
-        return {"namespace": "legacy_demo", "minute": at_minute, "frames": frames, "exact": all(frame["exact"] for frame in frames), "interpretation": "Legacy demo checkpoints only; Project and Demo identities cannot be mixed."}
+        return {
+            "namespace": "legacy_demo",
+            "minute": at_minute,
+            "frames": frames,
+            "exact": all(frame["exact"] for frame in frames),
+            "interpretation": (
+                "Legacy demo checkpoints only; Project and Demo identities cannot be mixed."
+            ),
+        }
 
     def scenario_presets(self) -> dict[str, Any]:
         """Return fixed, packaged scenario choices with bounded comparison metadata."""

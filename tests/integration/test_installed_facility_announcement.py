@@ -48,8 +48,13 @@ def _forked_child(
     tmp_path, scenario: ScenarioSpec, until: int, program: EffectProgram
 ) -> BranchRuntime:
     timeline = _timeline(tmp_path, scenario)
-    timeline.fork("main", _FORK_MINUTE, "child", program=program,
-                  approved_program_hash=digest(program.model_dump(mode="json")))
+    timeline.fork(
+        "main",
+        _FORK_MINUTE,
+        "child",
+        program=program,
+        approved_program_hash=digest(program.model_dump(mode="json")),
+    )
     return timeline.advance("child", until)
 
 
@@ -105,7 +110,8 @@ def test_installed_toilets_are_placed_announced_and_used(
     # Existing facilities keep the points the generator gave them.
     assert all(geometry.facility_points[key] == point for key, point in before.items())
     served = {
-        record.event.payload["facility_id"] for record in world.event_log.records
+        record.event.payload["facility_id"]
+        for record in world.event_log.records
         if record.event.event_type == "toilet_service_complete"
         and record.status is EventStatus.APPLIED
     }
@@ -131,15 +137,22 @@ def test_runtime_placement_failure_fails_the_event_without_changes(
 ) -> None:
     timeline = _timeline(tmp_path, generated_scenario)
     program = add_toilets_program(start_minute=_FORK_MINUTE)
-    timeline.fork("main", _FORK_MINUTE, "child", program=program,
-                  approved_program_hash=digest(program.model_dump(mode="json")))
+    timeline.fork(
+        "main",
+        _FORK_MINUTE,
+        "child",
+        program=program,
+        approved_program_hash=digest(program.model_dump(mode="json")),
+    )
     # Something placed later (a partition, a room) can take the free point.
     import sheltersim.domain.geometry_overlay as overlay
+
     monkeypatch.setattr(overlay, "installed_facility_point", lambda world, facility_id: None)
     world = timeline.advance("child", _FORK_MINUTE + 1).world
     assert not _added_toilets(world)
-    failed = [record for record in world.event_log.records
-              if record.event.event_type == "effect_program_structure"]
+    failed = [
+        record
+        for record in world.event_log.records
+        if record.event.event_type == "effect_program_structure"
+    ]
     assert [record.status for record in failed] == [EventStatus.FAILED]
-
-

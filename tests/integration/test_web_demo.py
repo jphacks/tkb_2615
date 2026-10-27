@@ -131,5 +131,3 @@ def test_demo_http_mutations_are_separate_from_read_only_saved_run_api(tmp_path:
     handler.path = "/api/v1/runs/run-1"
     handler.do_POST()
     assert response == [(405, {"error": "inspector API is read-only"})]
-
-

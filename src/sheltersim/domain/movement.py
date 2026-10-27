@@ -23,10 +23,14 @@ from sheltersim.policies.space import ZoneRoute
 MOVEMENT_STATE_KEY = "movement_v1"
 MOVEMENT_POLICY_VERSION = "spatial-route-and-room-waypoint-v2"
 MOVEMENT_SOURCE_ID = "ASM-SPATIAL-MOVEMENT-V2"
-_QUEUE_TRIP_PURPOSES = frozenset({
-    "toilet_queue_position", "resource_queue_position",
-    "toilet_queue_service", "resource_queue_service",
-})
+_QUEUE_TRIP_PURPOSES = frozenset(
+    {
+        "toilet_queue_position",
+        "resource_queue_position",
+        "toilet_queue_service",
+        "resource_queue_service",
+    }
+)
 _MOVEMENT_DEFAULTS = {
     "schema_version": 1,
     "policy_version": MOVEMENT_POLICY_VERSION,
@@ -51,9 +55,7 @@ def canonical_movement_config(raw: Any) -> dict[str, Any]:
     if isinstance(config["speed_m_per_minute_by_mobility"], dict):
         # The speed table is nested mutable data; isolate each Scenario so a
         # coefficient override cannot mutate the module defaults or its siblings.
-        config["speed_m_per_minute_by_mobility"] = dict(
-            config["speed_m_per_minute_by_mobility"]
-        )
+        config["speed_m_per_minute_by_mobility"] = dict(config["speed_m_per_minute_by_mobility"])
     if (
         config["schema_version"] != 1
         or config["policy_version"] != MOVEMENT_POLICY_VERSION
@@ -64,11 +66,21 @@ def canonical_movement_config(raw: Any) -> dict[str, Any]:
     if not isinstance(speeds, dict) or set(speeds) != {"independent", "assisted", "wheelchair"}:
         raise ValueError("movement_model speed table must define every mobility class")
     for value in speeds.values():
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
             raise ValueError("movement_model speeds must be finite positive metres per minute")
     for name in ("density_slowdown_per_person_m2", "maximum_density_slowdown"):
         value = config[name]
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value < 0
+        ):
             raise ValueError(f"movement_model {name} must be finite and non-negative")
     if config["maximum_density_slowdown"] < 1.0:
         raise ValueError("movement_model maximum_density_slowdown must be at least one")
@@ -77,7 +89,10 @@ def canonical_movement_config(raw: Any) -> dict[str, Any]:
 
 def route_with_movement_time(world: WorldState, agent_id: str, route: ZoneRoute) -> ZoneRoute:
     """Apply accessibility speed and measured occupancy density to declared edge time."""
-    if "facility_geometry" not in world.model_configs and "movement_model" not in world.model_configs:
+    if (
+        "facility_geometry" not in world.model_configs
+        and "movement_model" not in world.model_configs
+    ):
         return route
     config = canonical_movement_config(world.model_configs.get("movement_model"))
     geometry = _geometry(world)
@@ -198,20 +213,32 @@ def validate_movement_runtime_state(world: WorldState) -> None:
             raise ValueError(f"movement_v1 edge for {agent_id!r} is unknown")
     for agent_id, journey in state["journeys"].items():
         expected_journey_fields = {
-            "event_id", "task_id", "purpose", "facility_id", "destination_zone_id",
-            "route_zone_ids", "route_edge_ids", "route_points", "started_minute", "due_minute",
+            "event_id",
+            "task_id",
+            "purpose",
+            "facility_id",
+            "destination_zone_id",
+            "route_zone_ids",
+            "route_edge_ids",
+            "route_points",
+            "started_minute",
+            "due_minute",
         }
         staff_support_fields = {"support_request_id", "support_staff_id"}
         if (
             agent_id not in world.agents
             or not isinstance(journey, dict)
-            or set(journey) not in (
+            or set(journey)
+            not in (
                 expected_journey_fields,
                 expected_journey_fields | {"queue_id"},
                 expected_journey_fields | staff_support_fields,
                 expected_journey_fields | staff_support_fields | {"queue_id"},
             )
-            or (staff_support_fields <= set(journey) and journey["purpose"] != "staff_support_travel")
+            or (
+                staff_support_fields <= set(journey)
+                and journey["purpose"] != "staff_support_travel"
+            )
             or (
                 journey["purpose"] == "staff_support_travel"
                 and (
@@ -222,14 +249,20 @@ def validate_movement_runtime_state(world: WorldState) -> None:
                     )
                 )
             )
-            or ("queue_id" in journey and (not isinstance(journey["queue_id"], str) or not journey["queue_id"]))
+            or (
+                "queue_id" in journey
+                and (not isinstance(journey["queue_id"], str) or not journey["queue_id"])
+            )
             or ("queue_id" in journey and journey["purpose"] not in _QUEUE_TRIP_PURPOSES)
             or (
                 "queue_id" in journey
                 and (
                     FACILITY_QUEUES_STATE_KEY not in world.model_state
-                    or journey["queue_id"] not in world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"]
-                    or world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][journey["queue_id"]]["facility_id"]
+                    or journey["queue_id"]
+                    not in world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"]
+                    or world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][journey["queue_id"]][
+                        "facility_id"
+                    ]
                     != journey["facility_id"]
                 )
             )
@@ -247,7 +280,8 @@ def validate_movement_runtime_state(world: WorldState) -> None:
         if journey["route_points"] and (
             len(journey["route_points"]) < 2
             or journey["route_edge_ids"]
-            or journey["route_zone_ids"] != [world.agents[agent_id].zone_id, journey["destination_zone_id"]]
+            or journey["route_zone_ids"]
+            != [world.agents[agent_id].zone_id, journey["destination_zone_id"]]
             or any(
                 not isinstance(point, dict)
                 or set(point) != {"x", "y"}
@@ -263,10 +297,18 @@ def validate_movement_runtime_state(world: WorldState) -> None:
             raise ValueError(f"movement_v2 in-room route for {agent_id!r} is invalid")
         if journey["route_points"]:
             geometry = _geometry(world)
-            zone = next(
-                (item for item in geometry.zones if item.zone_id == world.agents[agent_id].zone_id),
-                None,
-            ) if geometry is not None else None
+            zone = (
+                next(
+                    (
+                        item
+                        for item in geometry.zones
+                        if item.zone_id == world.agents[agent_id].zone_id
+                    ),
+                    None,
+                )
+                if geometry is not None
+                else None
+            )
             points = tuple(Point2D.model_validate(point) for point in journey["route_points"])
             if zone is None or any(not point_in_polygon(point, zone.polygon) for point in points):
                 raise ValueError(f"movement_v2 in-room route for {agent_id!r} leaves its room")
@@ -323,7 +365,9 @@ def start_movement(
         if route_points and elapsed
         else route_points[0]
         if route_points
-        else _route_point(geometry, route.edge_ids[0], initial_progress, route.origin_zone_id, world)
+        else _route_point(
+            geometry, route.edge_ids[0], initial_progress, route.origin_zone_id, world
+        )
         if route.edge_ids and elapsed
         else _route_point(geometry, route.edge_ids[0], 0.0, route.origin_zone_id, world)
         if route.edge_ids
@@ -389,7 +433,9 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
             continue
         room_points = tuple(Point2D.model_validate(point) for point in journey["route_points"])
         if room_points:
-            if not _room_path_is_clear(world, agent_id, journey["destination_zone_id"], room_points, journey):
+            if not _room_path_is_clear(
+                world, agent_id, journey["destination_zone_id"], room_points, journey
+            ):
                 if journey["purpose"] in _QUEUE_TRIP_PURPOSES:
                     _replan_physical_queue_trip(world, agent_id, journey, minute)
                 else:
@@ -431,18 +477,14 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
         edge_id = journey["route_edge_ids"][edge_index] if durations else None
         if edge_id is not None and (
             world.zone_edges[edge_id].closed
-            or not route_is_physically_clear(
-                world, edge_id, mobility=agent.profile.mobility.value
-            )
+            or not route_is_physically_clear(world, edge_id, mobility=agent.profile.mobility.value)
         ):
             # A closure invalidates this completion event. The controller records a
             # suppression receipt and computes a new route before any further movement.
             replan.append(agent_id)
             continue
         current_zone = (
-            journey["route_zone_ids"][edge_index]
-            if durations
-            else journey["destination_zone_id"]
+            journey["route_zone_ids"][edge_index] if durations else journey["destination_zone_id"]
         )
         point = (
             _route_point(geometry, edge_id, progress, current_zone, world)
@@ -457,9 +499,7 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
             progress=progress,
         )
         if edge_id is not None:
-            state["edge_usage_minutes"][edge_id] = (
-                state["edge_usage_minutes"].get(edge_id, 0) + 1
-            )
+            state["edge_usage_minutes"][edge_id] = state["edge_usage_minutes"].get(edge_id, 0) + 1
         if (
             agent.activity is Activity.QUEUED
             and journey["purpose"] in _QUEUE_TRIP_PURPOSES
@@ -497,30 +537,44 @@ def shared_passage_edge_loads(world: WorldState, minute: int | None = None) -> d
             loads[edge_id] = loads.get(edge_id, 0) + 1
             represented_agent_ids.add(agent_id)
     for event in world.event_queue.pending():
-        if event.event_type != "agent_travel_complete" or event.payload.get("agent_id") in represented_agent_ids:
+        if (
+            event.event_type != "agent_travel_complete"
+            or event.payload.get("agent_id") in represented_agent_ids
+        ):
             continue
         if not event.payload.get("origin_zone_id") or not event.payload.get("route_edge_ids"):
             continue
         task = world.active_tasks.get(event.payload.get("task_id"))
         if task is None or not task.start_minute <= at_minute < task.due_minute:
             continue
-        edge_id = _current_journey_edge(world, {
-            "started_minute": task.start_minute,
-            "due_minute": task.due_minute,
-            "route_edge_ids": event.payload["route_edge_ids"],
-        }, at_minute)
+        edge_id = _current_journey_edge(
+            world,
+            {
+                "started_minute": task.start_minute,
+                "due_minute": task.due_minute,
+                "route_edge_ids": event.payload["route_edge_ids"],
+            },
+            at_minute,
+        )
         if edge_id is not None:
             loads[edge_id] = loads.get(edge_id, 0) + 1
     operations = world.model_state.get("staff_operations_v1", {})
     staff_records = operations.get("staff", {}) if isinstance(operations, dict) else {}
     for record in staff_records.values():
-        if record.get("phase") != "travel" or not record["started_minute"] <= at_minute < record["travel_due_minute"]:
+        if (
+            record.get("phase") != "travel"
+            or not record["started_minute"] <= at_minute < record["travel_due_minute"]
+        ):
             continue
-        edge_id = _current_journey_edge(world, {
-            "started_minute": record["started_minute"],
-            "due_minute": record["travel_due_minute"],
-            "route_edge_ids": record["route_edge_ids"],
-        }, at_minute)
+        edge_id = _current_journey_edge(
+            world,
+            {
+                "started_minute": record["started_minute"],
+                "due_minute": record["travel_due_minute"],
+                "route_edge_ids": record["route_edge_ids"],
+            },
+            at_minute,
+        )
         if edge_id is not None:
             loads[edge_id] = loads.get(edge_id, 0) + 1
     return dict(sorted(loads.items()))
@@ -554,13 +608,12 @@ def finish_movement(world: WorldState, agent_id: str) -> None:
         return
     state = world.model_state[MOVEMENT_STATE_KEY]
     journey = state["journeys"].pop(agent_id, None)
-    if (
-        journey is not None
-        and journey["purpose"] in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
-        }
-    ):
+    if journey is not None and journey["purpose"] in {
+        "toilet_queue_position",
+        "resource_queue_position",
+        "toilet_queue_service",
+        "resource_queue_service",
+    }:
         # The person is still reserved in the FIFO queue until the service manager
         # atomically promotes them. Preserve their surveyed service-point arrival.
         position = state["positions"].get(agent_id)
@@ -602,9 +655,13 @@ def staff_position_snapshots(
     boundary = world.minute_index if boundary_minute is None else boundary_minute
     operations = world.model_state.get("staff_operations_v1", {})
     for staff_id, staff in sorted(world.staff.items()):
-        operation = operations.get("staff", {}).get(staff_id) if isinstance(operations, dict) else None
+        operation = (
+            operations.get("staff", {}).get(staff_id) if isinstance(operations, dict) else None
+        )
         if isinstance(operation, dict) and operation.get("phase") == "travel":
-            elapsed = max(0, min(operation["travel_minutes"], boundary - operation["started_minute"]))
+            elapsed = max(
+                0, min(operation["travel_minutes"], boundary - operation["started_minute"])
+            )
             cumulative = 0
             edge_id = None
             progress = 0.0
@@ -640,10 +697,7 @@ def staff_position_snapshots(
             point,
             "physical" if point is not None else "unavailable",
         )
-    return {
-        staff_id: dict(record)
-        for staff_id, record in sorted(state["staff_positions"].items())
-    }
+    return {staff_id: dict(record) for staff_id, record in sorted(state["staff_positions"].items())}
 
 
 def _reserved_bed_point(world: WorldState, agent_id: str) -> Point2D | None:
@@ -706,13 +760,18 @@ def _state(world: WorldState) -> dict[str, Any]:
 
 def _geometry(world: WorldState) -> FacilityGeometry | None:
     from sheltersim.domain.geometry_overlay import effective_geometry
+
     return effective_geometry(world)
 
 
 def _spatial_constraints(world: WorldState) -> dict[str, Any] | None:
-    if "spatial_constraints" not in world.model_configs and "geometry_overlay_v1" not in world.model_state:
+    if (
+        "spatial_constraints" not in world.model_configs
+        and "geometry_overlay_v1" not in world.model_state
+    ):
         return None
     from sheltersim.domain.geometry_overlay import effective_spatial_constraints
+
     return effective_spatial_constraints(world).model_dump(mode="json")
 
 
@@ -724,8 +783,7 @@ def _zone_center(geometry: FacilityGeometry | None, zone_id: str) -> Point2D | N
         return None
     points = [(point.x, point.y) for point in zone.polygon]
     twice_area = sum(
-        x1 * y2 - x2 * y1
-        for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
+        x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
     )
     if abs(twice_area) < 1e-12:
         candidate = Point2D(
@@ -770,7 +828,10 @@ def _zone_center(geometry: FacilityGeometry | None, zone_id: str) -> Point2D | N
 
 
 def _queue_slot_position(
-    world: WorldState, geometry: FacilityGeometry, agent_id: str, facility_id: str,
+    world: WorldState,
+    geometry: FacilityGeometry,
+    agent_id: str,
+    facility_id: str,
     queue_id: str | None = None,
 ) -> Point2D | None:
     """Return a distinct, accessible queue point only when a real room route exists."""
@@ -782,16 +843,25 @@ def _queue_slot_position(
         point_for_queue,
         queue_agent_ids,
     )
+
     independent = FACILITY_QUEUES_STATE_KEY in world.model_state and queue_id is not None
     service_point = point_for_queue(world, queue_id) if independent else None
-    facility_point = service_point.point_m if service_point is not None else geometry.facility_points.get(facility_id)
+    facility_point = (
+        service_point.point_m
+        if service_point is not None
+        else geometry.facility_points.get(facility_id)
+    )
     zone = next((item for item in geometry.zones if item.zone_id == facility.zone_id), None)
     if facility_point is None or zone is None:
         return None
-    queue = queue_agent_ids(world, queue_id) if independent else (
-        facility.resource_queue_agent_ids
-        if agent_id in facility.resource_queue_agent_ids
-        else facility.queue_agent_ids
+    queue = (
+        queue_agent_ids(world, queue_id)
+        if independent
+        else (
+            facility.resource_queue_agent_ids
+            if agent_id in facility.resource_queue_agent_ids
+            else facility.queue_agent_ids
+        )
     )
     if agent_id not in queue:
         return facility_point
@@ -836,13 +906,15 @@ def _queue_slot_position(
                 x=facility_point.x + ux * along - uy * across,
                 y=facility_point.y + uy * along + ux * across,
             )
-            if (
-                _point_walkable(candidate, zone.polygon, blocked_polygons)
-                and all(_distance(candidate, other) >= spacing for other in occupied)
+            if _point_walkable(candidate, zone.polygon, blocked_polygons) and all(
+                _distance(candidate, other) >= spacing for other in occupied
             ):
                 path = plan_in_room_route(
-                    world, zone_id=facility.zone_id, start=start,
-                    destination=candidate, mobility=mobility,
+                    world,
+                    zone_id=facility.zone_id,
+                    start=start,
+                    destination=candidate,
+                    mobility=mobility,
                 )
                 if path is not None:
                     return candidate
@@ -870,23 +942,35 @@ def facility_queue_slot_route(
     raw_start = record.get("point") if isinstance(record, dict) else None
     start = Point2D.model_validate(raw_start) if isinstance(raw_start, dict) else None
     path = plan_in_room_route(
-        world, zone_id=facility.zone_id, start=start, destination=destination,
+        world,
+        zone_id=facility.zone_id,
+        start=start,
+        destination=destination,
         mobility=world.agents[agent_id].profile.mobility.value,
     )
     if path is None:
         return None
     duration = in_room_travel_minutes(world, agent_id, path)
-    if len(path) < 2 or all(_distance(first, second) <= 1e-8 for first, second in zip(path, path[1:])):
+    if len(path) < 2 or all(
+        _distance(first, second) <= 1e-8 for first, second in zip(path, path[1:])
+    ):
         duration = 0
     route = ZoneRoute(
-        origin_zone_id=facility.zone_id, destination_zone_id=facility.zone_id,
-        zone_ids=(facility.zone_id, facility.zone_id), edge_ids=(), travel_minutes=duration,
+        origin_zone_id=facility.zone_id,
+        destination_zone_id=facility.zone_id,
+        zone_ids=(facility.zone_id, facility.zone_id),
+        edge_ids=(),
+        travel_minutes=duration,
     )
     return route, path
 
 
 def progress_physical_queue_positions(
-    world: WorldState, facility_id: str, *, resource: bool, minute: int,
+    world: WorldState,
+    facility_id: str,
+    *,
+    resource: bool,
+    minute: int,
     queue_id: str | None = None,
 ) -> bool:
     """Move one FIFO member to its reserved in-room slot; return whether work remains.
@@ -895,17 +979,23 @@ def progress_physical_queue_positions(
     person per facility travels at a time, so a following person cannot reserve an
     occupied slot while the previous person is still in transit.
     """
-    if MOVEMENT_STATE_KEY not in world.model_state or "facility_geometry" not in world.model_configs:
+    if (
+        MOVEMENT_STATE_KEY not in world.model_state
+        or "facility_geometry" not in world.model_configs
+    ):
         return False
     facility = world.facilities.get(facility_id)
     geometry = _geometry(world)
     if facility is None or geometry is None:
         return True
     from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY, queue_agent_ids
+
     queue = (
         queue_agent_ids(world, queue_id)
         if FACILITY_QUEUES_STATE_KEY in world.model_state and queue_id is not None
-        else facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
+        else facility.resource_queue_agent_ids
+        if resource
+        else facility.queue_agent_ids
     )
     movement = world.model_state[MOVEMENT_STATE_KEY]
     trips = _queue_trips(movement, facility_id, queue_id)
@@ -919,7 +1009,9 @@ def progress_physical_queue_positions(
         if index == 0 and agent_id in trips:
             continue
         if index == 0 and agent_is_at_facility_service_point(
-            world, agent_id, facility_id,
+            world,
+            agent_id,
+            facility_id,
             service_point_id=(
                 world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][queue_id]["service_point_id"]
                 if queue_id is not None and FACILITY_QUEUES_STATE_KEY in world.model_state
@@ -961,20 +1053,30 @@ def progress_physical_queue_positions(
 
 
 def progress_physical_queue_head_to_service(
-    world: WorldState, facility_id: str, *, resource: bool, minute: int,
+    world: WorldState,
+    facility_id: str,
+    *,
+    resource: bool,
+    minute: int,
     queue_id: str | None = None,
 ) -> bool:
     """Walk the positioned FIFO head to the facility point before service starts."""
-    if MOVEMENT_STATE_KEY not in world.model_state or "facility_geometry" not in world.model_configs:
+    if (
+        MOVEMENT_STATE_KEY not in world.model_state
+        or "facility_geometry" not in world.model_configs
+    ):
         return False
     facility = world.facilities.get(facility_id)
     if facility is None:
         return True
     from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY, queue_agent_ids
+
     queue = (
         queue_agent_ids(world, queue_id)
         if FACILITY_QUEUES_STATE_KEY in world.model_state and queue_id is not None
-        else facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
+        else facility.resource_queue_agent_ids
+        if resource
+        else facility.queue_agent_ids
     )
     if not queue:
         return False
@@ -1056,7 +1158,9 @@ def agent_is_at_queue_slot(
 
 
 def agent_is_at_facility_service_point(
-    world: WorldState, agent_id: str, facility_id: str,
+    world: WorldState,
+    agent_id: str,
+    facility_id: str,
     service_point_id: str | None = None,
 ) -> bool:
     """The installed access planner defines the service point, including footprint clearance."""
@@ -1067,16 +1171,20 @@ def agent_is_at_facility_service_point(
 def physical_service_capacity(
     world: WorldState, facility_id: str, configured: int, queue_id: str | None = None
 ) -> int:
-    """A single surveyed point reserves one physical service place until per-unit geometry exists."""
+    """A single surveyed point reserves one physical service place until per-unit
+    geometry exists.
+    """
     if queue_id is not None:
         from sheltersim.domain.facility_queues import point_for_queue
+
         point = point_for_queue(world, queue_id)
         if point is not None and point.facility_id == facility_id:
             return min(configured, point.service_capacity)
     if (
         MOVEMENT_STATE_KEY in world.model_state
         and "facility_geometry" in world.model_configs
-        and facility_id in (_geometry(world).facility_points if _geometry(world) is not None else {})
+        and facility_id
+        in (_geometry(world).facility_points if _geometry(world) is not None else {})
     ):
         return min(configured, 1)
     return configured
@@ -1105,6 +1213,7 @@ def _schedule_queue_trip(
         FACILITY_QUEUES_STATE_KEY,
         request_for_agent,
     )
+
     queue_request = (
         request_for_agent(world, agent_id, queue_id=queue_id)
         if queue_id is not None and FACILITY_QUEUES_STATE_KEY in world.model_state
@@ -1126,7 +1235,10 @@ def _schedule_queue_trip(
         raise ValueError("physical queue reservation has no matching active queue task")
     sequence = world.allocate_event_sequence()
     event_id = f"physical-queue-trip-{sequence}"
-    purpose = f"{'resource' if resource else 'toilet'}_queue_{'position' if phase == 'position' else 'service'}"
+    purpose = (
+        f"{'resource' if resource else 'toilet'}_queue_"
+        f"{'position' if phase == 'position' else 'service'}"
+    )
     event = ScheduledEvent(
         event_id=event_id,
         kind=EventKind.COMPLETION,
@@ -1140,7 +1252,11 @@ def _schedule_queue_trip(
             "purpose": purpose,
             "destination_zone_id": facility_id and world.facilities[facility_id].zone_id,
             "facility_id": facility_id,
-            **({"queue_id": queue_id, "request_id": queue_request["request_id"]} if queue_request is not None else {}),
+            **(
+                {"queue_id": queue_id, "request_id": queue_request["request_id"]}
+                if queue_request is not None
+                else {}
+            ),
             "origin_zone_id": route.origin_zone_id,
             "route_zone_ids": list(route.zone_ids),
             "route_edge_ids": list(route.edge_ids),
@@ -1156,9 +1272,15 @@ def _schedule_queue_trip(
             "queue_phase": phase,
             "queue_requested_at": queue_task.start_minute,
             "fifo_position": (
-                world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][queue_id]["queued_request_ids"].index(queue_request["request_id"])
+                world.model_state[FACILITY_QUEUES_STATE_KEY]["queues"][queue_id][
+                    "queued_request_ids"
+                ].index(queue_request["request_id"])
                 if queue_request is not None
-                else (world.facilities[facility_id].resource_queue_agent_ids if resource else world.facilities[facility_id].queue_agent_ids).index(agent_id)
+                else (
+                    world.facilities[facility_id].resource_queue_agent_ids
+                    if resource
+                    else world.facilities[facility_id].queue_agent_ids
+                ).index(agent_id)
             ),
         },
     )
@@ -1237,7 +1359,9 @@ def _facility_move_invalidated_journey(world: WorldState, journey: dict[str, Any
     if not isinstance(facility_id, str):
         return False
     overlay = world.model_state.get("geometry_overlay_v1", {})
-    override = overlay.get("facility_points", {}).get(facility_id) if isinstance(overlay, dict) else None
+    override = (
+        overlay.get("facility_points", {}).get(facility_id) if isinstance(overlay, dict) else None
+    )
     return (
         isinstance(override, dict)
         and type(override.get("minute")) is int
@@ -1250,12 +1374,9 @@ def _replan_physical_queue_trip(
 ) -> None:
     """Suppress a stale in-room trip and schedule a new typed arrival if reachable."""
     from sheltersim.domain.facility_queues import request_for_agent
+
     old_event = next(
-        (
-            event
-            for event in world.event_queue.pending()
-            if event.event_id == journey["event_id"]
-        ),
+        (event for event in world.event_queue.pending() if event.event_id == journey["event_id"]),
         None,
     )
     if old_event is not None:
@@ -1281,7 +1402,9 @@ def _replan_physical_queue_trip(
     else:
         request = request_for_agent(world, agent_id, queue_id=queue_id) if queue_id else None
         route = facility_approach_route(
-            world, agent_id, facility_id,
+            world,
+            agent_id,
+            facility_id,
             request["service_point_id"] if request is not None else None,
         )
     if route is None or not route[1]:
@@ -1294,9 +1417,7 @@ def _replan_physical_queue_trip(
         return
     if route[0].travel_minutes <= 0 or len(route[1]) < 2:
         target = route[1][-1]
-        state["positions"][agent_id] = _position_record(
-            facility.zone_id, target, "physical"
-        )
+        state["positions"][agent_id] = _position_record(facility.zone_id, target, "physical")
         world.metric_state["physical_queue_replan_count"] = (
             world.metric_state.get("physical_queue_replan_count", 0.0) + 1.0
         )
@@ -1367,7 +1488,12 @@ def route_is_physically_clear(
         return True
     route = next((item for item in geometry.routes if item.edge_id == edge_id), None)
     clearance = {"independent": 0.25, "assisted": 0.4, "wheelchair": 0.45}.get(mobility)
-    if route is None or clearance is None or not route.accessible and mobility in {"wheelchair", "assisted"}:
+    if (
+        route is None
+        or clearance is None
+        or not route.accessible
+        and mobility in {"wheelchair", "assisted"}
+    ):
         return False
     if route.width_m + 1e-9 < 2.0 * clearance:
         return False
@@ -1395,8 +1521,7 @@ def route_is_physically_clear(
                 opening.wall_id == wall.id
                 and (opening.accessible or mobility == "independent")
                 and opening.width_m + 1e-9 >= 2.0 * clearance
-                and _distance(crossing, opening.center)
-                <= opening.width_m / 2.0 - clearance + 1e-9
+                and _distance(crossing, opening.center) <= opening.width_m / 2.0 - clearance + 1e-9
                 for opening in openings
             )
             if not allowed:
@@ -1457,8 +1582,14 @@ def plan_in_room_route(
             second_length = math.hypot(*outgoing)
             if first_length <= 1e-9 or second_length <= 1e-9:
                 continue
-            normal_first = (orientation * incoming[1] / first_length, -orientation * incoming[0] / first_length)
-            normal_second = (orientation * outgoing[1] / second_length, -orientation * outgoing[0] / second_length)
+            normal_first = (
+                orientation * incoming[1] / first_length,
+                -orientation * incoming[0] / first_length,
+            )
+            normal_second = (
+                orientation * outgoing[1] / second_length,
+                -orientation * outgoing[0] / second_length,
+            )
             miter = (normal_first[0] + normal_second[0], normal_first[1] + normal_second[1])
             miter_length = math.hypot(*miter)
             if miter_length <= 1e-9:
@@ -1534,7 +1665,9 @@ def in_room_travel_minutes(world: WorldState, agent_id: str, path: tuple[Point2D
 
 
 def facility_approach_route(
-    world: WorldState, agent_id: str, facility_id: str,
+    world: WorldState,
+    agent_id: str,
+    facility_id: str,
     service_point_id: str | None = None,
 ) -> tuple[ZoneRoute, tuple[Point2D, ...]] | None:
     """Plan an in-room route to a walkable service point beside the facility footprint."""
@@ -1621,7 +1754,9 @@ def facility_approach_route(
         return None
     _, _, path = min(options, key=lambda item: (item[0], item[1]))
     duration = in_room_travel_minutes(world, agent_id, path)
-    if len(path) == 1 or all(_distance(first, second) <= 1e-8 for first, second in zip(path, path[1:])):
+    if len(path) == 1 or all(
+        _distance(first, second) <= 1e-8 for first, second in zip(path, path[1:])
+    ):
         duration = 0
     route = ZoneRoute(
         origin_zone_id=facility.zone_id,
@@ -1682,8 +1817,7 @@ def _room_segment_clear(
             item.wall_id == wall.id
             and item.width_m + 1e-9 >= 2.0 * clearance
             and (item.accessible or mobility == "independent")
-            and _distance(crossing, item.center)
-            <= item.width_m / 2.0 - clearance + 1e-8
+            and _distance(crossing, item.center) <= item.width_m / 2.0 - clearance + 1e-8
             for item in constraints.openings
         ):
             return False
@@ -1707,7 +1841,9 @@ def _segment_inside_polygon(start: Point2D, end: Point2D, polygon: tuple[Point2D
     cuts = sorted(set(cuts))
     for left, right in zip(cuts, cuts[1:]):
         middle = (left + right) / 2.0
-        sample = Point2D(x=start.x + (end.x - start.x) * middle, y=start.y + (end.y - start.y) * middle)
+        sample = Point2D(
+            x=start.x + (end.x - start.x) * middle, y=start.y + (end.y - start.y) * middle
+        )
         if not point_in_polygon(sample, polygon):
             return False
     return True
@@ -1719,9 +1855,7 @@ def _segment_hits_polygon(start: Point2D, end: Point2D, polygon: tuple[Point2D, 
     for first, second in zip(polygon, (*polygon[1:], polygon[0])):
         if _segment_intersection(start, end, first, second) is not None:
             return True
-    return point_in_polygon(
-        Point2D(x=(start.x + end.x) / 2.0, y=(start.y + end.y) / 2.0), polygon
-    )
+    return point_in_polygon(Point2D(x=(start.x + end.x) / 2.0, y=(start.y + end.y) / 2.0), polygon)
 
 
 def _segment_clear_of_polygon(
@@ -1731,12 +1865,16 @@ def _segment_clear_of_polygon(
     if _segment_hits_polygon(start, end, polygon):
         return False
     for first, second in zip(polygon, (*polygon[1:], polygon[0])):
-        if min(
-            _point_segment_distance(start, first, second),
-            _point_segment_distance(end, first, second),
-            _point_segment_distance(first, start, end),
-            _point_segment_distance(second, start, end),
-        ) + 1e-9 < clearance:
+        if (
+            min(
+                _point_segment_distance(start, first, second),
+                _point_segment_distance(end, first, second),
+                _point_segment_distance(first, start, end),
+                _point_segment_distance(second, start, end),
+            )
+            + 1e-9
+            < clearance
+        ):
             return False
     return True
 
@@ -1754,7 +1892,9 @@ def _point_segment_distance(point: Point2D, start: Point2D, end: Point2D) -> flo
     return _distance(point, nearest)
 
 
-def _segment_intersection(start: Point2D, end: Point2D, first: Point2D, second: Point2D) -> Point2D | None:
+def _segment_intersection(
+    start: Point2D, end: Point2D, first: Point2D, second: Point2D
+) -> Point2D | None:
     t = _segment_intersection_parameter(start, end, first, second)
     if t is not None:
         return Point2D(x=start.x + (end.x - start.x) * t, y=start.y + (end.y - start.y) * t)
@@ -1772,7 +1912,9 @@ def _segment_intersection(start: Point2D, end: Point2D, first: Point2D, second: 
     return Point2D(x=start.x + dx * midpoint, y=start.y + dy * midpoint)
 
 
-def _segment_intersection_parameter(start: Point2D, end: Point2D, first: Point2D, second: Point2D) -> float | None:
+def _segment_intersection_parameter(
+    start: Point2D, end: Point2D, first: Point2D, second: Point2D
+) -> float | None:
     dx, dy = end.x - start.x, end.y - start.y
     ex, ey = second.x - first.x, second.y - first.y
     denominator = dx * ey - dy * ex
@@ -1804,7 +1946,9 @@ def _point_along_polyline(points: tuple[Point2D, ...], progress: float) -> Point
     for first, second, length in zip(points, points[1:], lengths):
         if remaining <= length:
             ratio = 0.0 if length <= 1e-12 else remaining / length
-            return Point2D(x=first.x + (second.x - first.x) * ratio, y=first.y + (second.y - first.y) * ratio)
+            return Point2D(
+                x=first.x + (second.x - first.x) * ratio, y=first.y + (second.y - first.y) * ratio
+            )
         remaining -= length
     return points[-1]
 

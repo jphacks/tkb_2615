@@ -170,15 +170,14 @@ class EventDispatcher:
                         if SOCIAL_NETWORK_STATE_KEY in world.model_state:
                             observe_event(world, event, minute)
 
-            if any(
-                pending.event_id == event.event_id
-                for pending in world.event_queue.pending()
-            ):
+            if any(pending.event_id == event.event_id for pending in world.event_queue.pending()):
                 world.event_queue.remove(event.event_id)
             record = world.event_log.find(event.event_id)
             if record is not None:
                 if record.event.to_dict() != event.to_dict() or record.status is not status:
-                    raise ValueError("transactional event record disagrees with its dispatch result")
+                    raise ValueError(
+                        "transactional event record disagrees with its dispatch result"
+                    )
             else:
                 record = EventLogRecord(
                     event=event,
@@ -196,7 +195,9 @@ class EventDispatcher:
                         existing.event.to_dict() != additional.event.to_dict()
                         or existing.status is not additional.status
                     ):
-                        raise ValueError("transactional follow-up record disagrees with dispatch result")
+                        raise ValueError(
+                            "transactional follow-up record disagrees with dispatch result"
+                        )
                     outcomes.append(existing)
                     event_outcomes.append(existing)
                 else:
@@ -220,9 +221,7 @@ class ProximityContactHandler:
             canonical_proximity_contact_config,
         )
 
-        config = canonical_proximity_contact_config(
-            world.model_configs.get("social_proximity")
-        )
+        config = canonical_proximity_contact_config(world.model_configs.get("social_proximity"))
         expected_provenance = {
             "source_type",
             "source_id",
@@ -319,6 +318,7 @@ class InformationRumorHandler:
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         state = _information_runtime_state(world)
         from sheltersim.contracts.policies import selected_models
+
         if set(event.payload) != {"message_id", "truth_status", "origin_agent_id"}:
             raise EventApplicationError("information_rumor payload fields do not match")
         if event.source_id is None:
@@ -382,6 +382,7 @@ class InformationCorrectionHandler:
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         state = _information_runtime_state(world)
         from sheltersim.contracts.policies import selected_models
+
         if set(event.payload) != {"message_id", "zone_id", "belief"}:
             raise EventApplicationError("information_correction payload fields do not match")
         if event.source_id is None:
@@ -441,9 +442,13 @@ class InformationCorrectionHandler:
                 )
                 acceptances[agent_id] = (
                     CounterRNG(world.seed).random(
-                        "correction-acceptance-v1", event.due_minute, event.event_id,
-                        agent_id, message_id,
-                    ) < probability
+                        "correction-acceptance-v1",
+                        event.due_minute,
+                        event.event_id,
+                        agent_id,
+                        message_id,
+                    )
+                    < probability
                 )
             if previous is not None:
                 old_belief = prior_state.belief
@@ -492,9 +497,8 @@ class InformationCorrectionHandler:
                     previous_state.share_propensity if previous_state is not None else 0.5
                 ),
                 correction_exposed=True,
-                correction_accepted=accepted or bool(
-                    previous_state is not None and previous_state.correction_accepted
-                ),
+                correction_accepted=accepted
+                or bool(previous_state is not None and previous_state.correction_accepted),
                 last_correction_accepted=accepted,
                 ever_misbelieved=(
                     bool(previous_state and previous_state.ever_misbelieved)
@@ -621,8 +625,7 @@ class InformationContactHandler:
             }
             if rank[previous_belief] >= rank[belief] and not (
                 evidence_aware
-                and belief
-                in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+                and belief in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
             ):
                 raise EventSuppressed("recipient already has an equally strong belief")
         accepted = True
@@ -664,7 +667,9 @@ class InformationContactHandler:
                 message_id=message_id,
             )
             if evidence_aware and belief is InformationBeliefStatus.HEARD
-            else previous_state.belief_strength if previous_state else 0.5
+            else previous_state.belief_strength
+            if previous_state
+            else 0.5
         )
         state["beliefs"][recipient_id][message_id] = AgentInformationState(
             message_id=message_id,
@@ -682,8 +687,7 @@ class InformationContactHandler:
             belief_strength=(
                 (1.0 if belief is InformationBeliefStatus.VERIFIED else 0.0)
                 if accepted
-                and belief
-                in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
+                and belief in (InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED)
                 else belief_strength
             ),
             share_propensity=(previous_state.share_propensity if previous_state else 0.5),
@@ -698,7 +702,8 @@ class InformationContactHandler:
             ),
             last_correction_accepted=(
                 accepted
-                if belief in (
+                if belief
+                in (
                     InformationBeliefStatus.VERIFIED,
                     InformationBeliefStatus.REJECTED,
                 )
@@ -741,9 +746,7 @@ def _information_runtime_state(world: WorldState) -> dict[str, Any]:
 def _claim_is_misbelieved(truth_status: Any, belief_strength: float) -> bool:
     from sheltersim.domain.models import InformationTruthStatus
 
-    return (
-        truth_status is InformationTruthStatus.TRUE and belief_strength < 0.5
-    ) or (
+    return (truth_status is InformationTruthStatus.TRUE and belief_strength < 0.5) or (
         truth_status is InformationTruthStatus.FALSE and belief_strength > 0.5
     )
 
@@ -797,10 +800,9 @@ def _current_information_contact_basis(
     )
     if not same_zone and not adjacent:
         return None
-    if (
-        _current_household_id(world, sender.id) is not None
-        and _current_household_id(world, sender.id) == _current_household_id(world, recipient.id)
-    ):
+    if _current_household_id(world, sender.id) is not None and _current_household_id(
+        world, sender.id
+    ) == _current_household_id(world, recipient.id):
         return "family"
     return "same_zone" if same_zone else "adjacent_zone"
 
@@ -1022,14 +1024,18 @@ class InfrastructureEventHandler:
             ),
             event.event_id,
         )
-        source_ids = tuple(sorted({
-            value
-            for value in (
-                event.source_id,
-                event.provenance.get("source_id"),
+        source_ids = tuple(
+            sorted(
+                {
+                    value
+                    for value in (
+                        event.source_id,
+                        event.provenance.get("source_id"),
+                    )
+                    if isinstance(value, str) and value
+                }
             )
-            if isinstance(value, str) and value
-        }))
+        )
         for facility_id, facility in sorted(world.facilities.items()):
             previous = previous_units.get(facility_id)
             current = facility.working_units
@@ -1442,7 +1448,9 @@ class SocialInteractionHandler:
             if _social_payload_fields(event.payload) != expected:
                 raise EventApplicationError("autonomous social action payload fields do not match")
             participant_id = event.payload.get("participant_agent_id")
-            participant = world.agents.get(participant_id) if isinstance(participant_id, str) else None
+            participant = (
+                world.agents.get(participant_id) if isinstance(participant_id, str) else None
+            )
             if (
                 participant is None
                 or participant.id == agent.id
@@ -1465,17 +1473,34 @@ class SocialInteractionHandler:
                 raise EventApplicationError("social action duration must be within 1..1440 minutes")
             if interaction_type == "family_care" and (
                 _current_household_id(world, agent.id) is None
-                or _current_household_id(world, agent.id) != _current_household_id(world, participant.id)
+                or _current_household_id(world, agent.id)
+                != _current_household_id(world, participant.id)
             ):
                 raise EventSuppressed("family support target is no longer in the same household")
             if interaction_type == "voluntary_support":
-                actor_need = max(agent.stress, agent.needs.toilet_urgency, agent.needs.hunger, agent.needs.fatigue, agent.needs.hydration_need)
-                target_need = max(participant.stress, participant.needs.toilet_urgency, participant.needs.hunger, participant.needs.fatigue, participant.needs.hydration_need)
+                actor_need = max(
+                    agent.stress,
+                    agent.needs.toilet_urgency,
+                    agent.needs.hunger,
+                    agent.needs.fatigue,
+                    agent.needs.hydration_need,
+                )
+                target_need = max(
+                    participant.stress,
+                    participant.needs.toilet_urgency,
+                    participant.needs.hunger,
+                    participant.needs.fatigue,
+                    participant.needs.hydration_need,
+                )
                 if target_need <= actor_need + 0.15:
-                    raise EventSuppressed("the selected person no longer has a higher immediate need")
+                    raise EventSuppressed(
+                        "the selected person no longer has a higher immediate need"
+                    )
             body = world.model_state.get("body_state_v1", {}).get("agents", {})
             actor_body = body.get(agent.id, {})
-            positive_signal = actor_body.get("positive_affect", 0.5) - actor_body.get("negative_affect", 0.0)
+            positive_signal = actor_body.get("positive_affect", 0.5) - actor_body.get(
+                "negative_affect", 0.0
+            )
             signal = min(1.0, max(-1.0, positive_signal))
             state = world.model_state.get("body_state_v1", {})
             config = state.get("config", {}) if isinstance(state, dict) else {}
@@ -1572,9 +1597,10 @@ class SocialInteractionHandler:
                 raise EventApplicationError("cooperation stress threshold is invalid")
             if participant is None or participant.id == agent.id:
                 raise EventApplicationError("cooperation requires two different known Agents")
-            same_group = (
-                _current_household_id(world, agent.id) is not None
-                and _current_household_id(world, agent.id) == _current_household_id(world, participant.id)
+            same_group = _current_household_id(
+                world, agent.id
+            ) is not None and _current_household_id(world, agent.id) == _current_household_id(
+                world, participant.id
             )
             if (
                 event.payload.get("zone_id") != agent.zone_id
@@ -1714,8 +1740,12 @@ class EffectProgramPopulationHandler:
         expected_base = {"program_id", "effect_id", "op", "zone_id", "count"}
         if op == "add_evacuees":
             expected = expected_base | {
-                "household_size", "mobility", "language", "admission_zone_ids",
-                "approach_route_id", "person_context_overrides",
+                "household_size",
+                "mobility",
+                "language",
+                "admission_zone_ids",
+                "approach_route_id",
+                "person_context_overrides",
             }
             previous_expected = expected - {"person_context_overrides"}
             prior_arrival_expected = previous_expected - {"approach_route_id"}
@@ -1835,9 +1865,7 @@ class ToiletServiceCompletionHandler:
         if agent_id in body:
             # A completed sanitation visit can reduce hygiene pressure; it does
             # not erase the need when the facility itself is poorly maintained.
-            body[agent_id]["hygiene_need"] = max(
-                0.0, body[agent_id]["hygiene_need"] - 0.2
-            )
+            body[agent_id]["hygiene_need"] = max(0.0, body[agent_id]["hygiene_need"] - 0.2)
         if self.after_complete is not None:
             self.after_complete(world, event)
 
@@ -1859,7 +1887,9 @@ class AgentTravelCompletionHandler:
         origin_zone_id = event.payload.get("origin_zone_id")
         if not isinstance(origin_zone_id, str):
             route_zones = event.payload.get("route_zone_ids", ())
-            origin_zone_id = route_zones[0] if isinstance(route_zones, (list, tuple)) and route_zones else None
+            origin_zone_id = (
+                route_zones[0] if isinstance(route_zones, (list, tuple)) and route_zones else None
+            )
         if not all(
             isinstance(item, str) and item
             for item in (agent_id, task_id, destination_zone_id, purpose)
@@ -1870,15 +1900,18 @@ class AgentTravelCompletionHandler:
         task = world.active_tasks.get(task_id)
         agent = world.agents.get(agent_id)
         queue_purpose = purpose in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
+            "toilet_queue_position",
+            "resource_queue_position",
+            "toilet_queue_service",
+            "resource_queue_service",
         }
-        if (
-            task is None
-            or task.kind not in (
-                "travel_to_toilet", "travel_to_resource", "travel_return",
-                "staff_support_travel", "toilet_queue", "resource_service_queue",
-            )
+        if task is None or task.kind not in (
+            "travel_to_toilet",
+            "travel_to_resource",
+            "travel_return",
+            "staff_support_travel",
+            "toilet_queue",
+            "resource_service_queue",
         ):
             raise EventApplicationError("travel completion does not match an active task")
         if agent is None or task.agent_id != agent_id:
@@ -1888,23 +1921,34 @@ class AgentTravelCompletionHandler:
             expected_kind = "resource_service_queue" if resource else "toilet_queue"
             facility = world.facilities.get(facility_id) if isinstance(facility_id, str) else None
             queue = (
-                facility.resource_queue_agent_ids if resource and facility is not None
-                else facility.queue_agent_ids if facility is not None
+                facility.resource_queue_agent_ids
+                if resource and facility is not None
+                else facility.queue_agent_ids
+                if facility is not None
                 else ()
             )
             movement = world.model_state.get("movement_v1", {})
-            journey = movement.get("journeys", {}).get(agent_id, {}) if isinstance(movement, dict) else {}
+            journey = (
+                movement.get("journeys", {}).get(agent_id, {}) if isinstance(movement, dict) else {}
+            )
             from sheltersim.domain.facility_queues import (
                 FACILITY_QUEUES_STATE_KEY,
                 facility_has_independent_queues,
             )
-            independent = isinstance(facility_id, str) and facility_has_independent_queues(world, facility_id)
+
+            independent = isinstance(facility_id, str) and facility_has_independent_queues(
+                world, facility_id
+            )
             request_id = event.payload.get("request_id")
             queue_id = event.payload.get("queue_id")
             if independent:
                 queue_state = world.model_state[FACILITY_QUEUES_STATE_KEY]
-                request = queue_state["requests"].get(request_id) if isinstance(request_id, str) else None
-                queue_row = queue_state["queues"].get(queue_id) if isinstance(queue_id, str) else None
+                request = (
+                    queue_state["requests"].get(request_id) if isinstance(request_id, str) else None
+                )
+                queue_row = (
+                    queue_state["queues"].get(queue_id) if isinstance(queue_id, str) else None
+                )
                 queue_contains_request = (
                     isinstance(request, dict)
                     and isinstance(queue_row, dict)
@@ -1913,7 +1957,9 @@ class AgentTravelCompletionHandler:
                     and request["facility_id"] == facility_id
                     and request["queue_id"] == queue_id
                 )
-                service_point_id = request.get("service_point_id") if isinstance(request, dict) else None
+                service_point_id = (
+                    request.get("service_point_id") if isinstance(request, dict) else None
+                )
                 at_reserved_destination = (
                     agent_is_at_queue_slot(world, agent_id, facility_id, queue_id)
                     or agent_is_at_queue_trip_destination(world, agent_id, journey)
@@ -1956,7 +2002,9 @@ class AgentTravelCompletionHandler:
                 )
                 or (not journey and event.due_minute != world.minute_index)
             ):
-                raise EventApplicationError("physical queue travel does not match its FIFO reservation")
+                raise EventApplicationError(
+                    "physical queue travel does not match its FIFO reservation"
+                )
             return
         if task.due_minute != event.due_minute:
             raise EventApplicationError("travel completion does not match an active due task")
@@ -2001,7 +2049,9 @@ class AgentTravelCompletionHandler:
         elif purpose == "staff_support_travel":
             request_id = event.payload.get("request_id")
             staff_id = event.payload.get("staff_id")
-            request = world.support_requests.get(request_id) if isinstance(request_id, str) else None
+            request = (
+                world.support_requests.get(request_id) if isinstance(request_id, str) else None
+            )
             staff_member = world.staff.get(staff_id) if isinstance(staff_id, str) else None
             if (
                 task.kind != "staff_support_travel"
@@ -2026,7 +2076,9 @@ class AgentTravelCompletionHandler:
             rooms = overlay.get("temporary_rooms", {}) if isinstance(overlay, dict) else {}
             room = rooms.get(reservation.get("room_id")) if isinstance(reservation, dict) else None
             movement = world.model_state.get(MOVEMENT_STATE_KEY, {})
-            journey = movement.get("journeys", {}).get(agent_id) if isinstance(movement, dict) else None
+            journey = (
+                movement.get("journeys", {}).get(agent_id) if isinstance(movement, dict) else None
+            )
             bed_index = reservation.get("bed_index") if isinstance(reservation, dict) else None
             bed = (
                 room.get("bed_points_m", [])[bed_index]
@@ -2064,18 +2116,22 @@ class AgentTravelCompletionHandler:
                 or relocation.get("from_zone_id") != origin_zone_id
                 or relocation.get("to_zone_id") != destination_zone_id
             ):
-                raise EventApplicationError("presence relocation completion does not match its route")
+                raise EventApplicationError(
+                    "presence relocation completion does not match its route"
+                )
         else:
             raise EventApplicationError(f"unsupported travel purpose {purpose!r}")
 
         if purpose == "sleep_bed":
-            movement["positions"][agent_id].update({
-                "zone_id": destination_zone_id,
-                "point": bed,
-                "edge_id": None,
-                "progress": 1.0,
-                "position_kind": "physical",
-            })
+            movement["positions"][agent_id].update(
+                {
+                    "zone_id": destination_zone_id,
+                    "point": bed,
+                    "edge_id": None,
+                    "progress": 1.0,
+                    "position_kind": "physical",
+                }
+            )
         del world.active_tasks[task_id]
         agent.zone_id = destination_zone_id
         # A person who walked to a temporary room's bed chose to sleep, so they
@@ -2098,6 +2154,7 @@ class AgentTravelCompletionHandler:
             and isinstance(facility_id, str)
         ):
             from sheltersim.domain.facility_queues import facility_has_independent_queues
+
             if not facility_has_independent_queues(world, facility_id):
                 approach = facility_approach_route(world, agent_id, facility_id)
                 if approach is None:
@@ -2247,7 +2304,9 @@ class AgentTravelCompletionHandler:
                 outcome="rejected",
                 reason="room_route_blocked",
                 facility_id=facility_id,
-                origin_zone_id=origin_zone_id if isinstance(origin_zone_id, str) else world.agents[agent_id].zone_id,
+                origin_zone_id=origin_zone_id
+                if isinstance(origin_zone_id, str)
+                else world.agents[agent_id].zone_id,
             )
             world.metric_state["resource_service_request_rejected_count"] = (
                 world.metric_state.get("resource_service_request_rejected_count", 0.0) + 1.0
@@ -2489,9 +2548,7 @@ class StaffUnavailabilityHandler:
             ]
             operations = candidate.model_state.get("staff_operations_v1", {})
             operation_record = (
-                operations.get("staff", {}).get(staff_id)
-                if isinstance(operations, dict)
-                else None
+                operations.get("staff", {}).get(staff_id) if isinstance(operations, dict) else None
             )
             autonomous_operation = (
                 operation_record is not None and operation_record.get("phase") != "idle"
@@ -2620,8 +2677,7 @@ def _interrupt_support_task(
     support_trips = [
         candidate
         for candidate in world.active_tasks.values()
-        if candidate.kind == "staff_support_travel"
-        and candidate.agent_id == agent.id
+        if candidate.kind == "staff_support_travel" and candidate.agent_id == agent.id
     ]
     if len(support_trips) > 1:
         raise EventApplicationError("resident has duplicate trips to assigned support")
@@ -2648,7 +2704,9 @@ def _interrupt_support_task(
         )
         del world.active_tasks[travel_task.id]
         movement = world.model_state.get(MOVEMENT_STATE_KEY)
-        position = movement.get("positions", {}).get(agent.id) if isinstance(movement, dict) else None
+        position = (
+            movement.get("positions", {}).get(agent.id) if isinstance(movement, dict) else None
+        )
         if isinstance(position, dict) and position.get("zone_id") in world.zones:
             agent.zone_id = position["zone_id"]
         finish_movement(world, agent.id)
@@ -2703,13 +2761,17 @@ def _apply_operational_transaction(
     result = operation(candidate)
     if isinstance(result, tuple) and result:
         if any(not isinstance(record, EventLogRecord) for record in result):
-            raise EventApplicationError("transactional follow-up records must be EventLogRecord values")
+            raise EventApplicationError(
+                "transactional follow-up records must be EventLogRecord values"
+            )
         candidate.event_queue.remove(event.event_id)
-        candidate.event_log.append(EventLogRecord(
-            event=event,
-            realized_minute=candidate.minute_index,
-            status=EventStatus.APPLIED,
-        ))
+        candidate.event_log.append(
+            EventLogRecord(
+                event=event,
+                realized_minute=candidate.minute_index,
+                status=EventStatus.APPLIED,
+            )
+        )
         for record in result:
             candidate.event_log.append(record)
         if "shared_operations" in candidate.model_configs:
@@ -2733,11 +2795,13 @@ def _apply_operational_transaction(
 
 
 def _ensure_event_identity_free(world: WorldState, event: ScheduledEvent) -> None:
-    if any(
-        current.event_id == event.event_id or current.sequence == event.sequence
-        for current in world.event_queue.pending()
-    ) or world.event_log.contains_id(event.event_id) or world.event_log.contains_sequence(
-        event.sequence
+    if (
+        any(
+            current.event_id == event.event_id or current.sequence == event.sequence
+            for current in world.event_queue.pending()
+        )
+        or world.event_log.contains_id(event.event_id)
+        or world.event_log.contains_sequence(event.sequence)
     ):
         raise EventApplicationError(f"generated event identity {event.event_id!r} is not unique")
 
@@ -2802,8 +2866,7 @@ class StaffSupportCompletionHandler:
                 )
             }
             relational_care_deltas = {
-                identity: deltas for identity, deltas in relational_care_deltas.items()
-                if deltas
+                identity: deltas for identity, deltas in relational_care_deltas.items() if deltas
             }
             from sheltersim.contracts.population import population_context_people
 
@@ -2816,57 +2879,93 @@ class StaffSupportCompletionHandler:
                 )
         if care_request is not None and agent is not None:
             body_state = world.model_state.get("body_state_v1")
-            body = body_state.get("agents", {}).get(agent.id) if isinstance(body_state, dict) else None
+            body = (
+                body_state.get("agents", {}).get(agent.id) if isinstance(body_state, dict) else None
+            )
             if care_request.get("support_kind") == "emotional_support":
-                before.extend((
-                    ("agent", agent.id, "stress", agent.stress, "normalized_0_1"),
-                    ("agent", agent.id, "trust", agent.trust, "normalized_0_1"),
-                ))
-            if isinstance(body_state, dict) and isinstance(body, dict) and (
-                care_request.get("support_kind") == "emotional_support"
-                or care_request.get("support_kind") == "hygiene_support"
-                or typed_care_deltas
+                before.extend(
+                    (
+                        ("agent", agent.id, "stress", agent.stress, "normalized_0_1"),
+                        ("agent", agent.id, "trust", agent.trust, "normalized_0_1"),
+                    )
+                )
+            if (
+                isinstance(body_state, dict)
+                and isinstance(body, dict)
+                and (
+                    care_request.get("support_kind") == "emotional_support"
+                    or care_request.get("support_kind") == "hygiene_support"
+                    or typed_care_deltas
+                )
             ):
                 for field in ("reassurance", "positive_affect", "negative_affect"):
                     if care_request.get("support_kind") == "emotional_support":
-                        before.append((
-                            "model_state", agent.id,
-                            f"body_state_v1.agents.{field}",
-                            float(body[field]), "normalized_0_1",
-                        ))
+                        before.append(
+                            (
+                                "model_state",
+                                agent.id,
+                                f"body_state_v1.agents.{field}",
+                                float(body[field]),
+                                "normalized_0_1",
+                            )
+                        )
                 if care_request.get("support_kind") == "hygiene_support":
-                    before.append((
-                        "model_state", agent.id,
-                        "body_state_v1.agents.hygiene_need",
-                        float(body["hygiene_need"]), "normalized_0_1",
-                    ))
+                    before.append(
+                        (
+                            "model_state",
+                            agent.id,
+                            "body_state_v1.agents.hygiene_need",
+                            float(body["hygiene_need"]),
+                            "normalized_0_1",
+                        )
+                    )
                 for path in typed_care_deltas:
                     if path == "agent.stress":
-                        before.append((
-                            "agent", agent.id, "stress", float(agent.stress),
-                            "normalized_0_1",
-                        ))
+                        before.append(
+                            (
+                                "agent",
+                                agent.id,
+                                "stress",
+                                float(agent.stress),
+                                "normalized_0_1",
+                            )
+                        )
                     elif path.startswith("body_state_v1.agents."):
                         field = path.rsplit(".", 1)[-1]
-                        before.append((
-                            "model_state", agent.id, path, float(body[field]),
-                            "normalized_0_1",
-                        ))
+                        before.append(
+                            (
+                                "model_state",
+                                agent.id,
+                                path,
+                                float(body[field]),
+                                "normalized_0_1",
+                            )
+                        )
         for dependent_id, deltas in relational_care_deltas.items():
             dependent = world.agents[dependent_id]
             dependent_body = world.model_state["body_state_v1"]["agents"][dependent_id]
             for path in deltas:
                 if path == "agent.stress":
-                    before.append((
-                        "agent", dependent_id, "stress", float(dependent.stress),
-                        "normalized_0_1",
-                    ))
+                    before.append(
+                        (
+                            "agent",
+                            dependent_id,
+                            "stress",
+                            float(dependent.stress),
+                            "normalized_0_1",
+                        )
+                    )
                 elif path.startswith("body_state_v1.agents."):
                     field = path.rsplit(".", 1)[-1]
-                    before.append((
-                        "model_state", dependent_id, path,
-                        float(dependent_body[field]), "normalized_0_1",
-                    ))
+                    before.append(
+                        (
+                            "model_state",
+                            dependent_id,
+                            path,
+                            float(dependent_body[field]),
+                            "normalized_0_1",
+                        )
+                    )
         try:
             complete_support_task(
                 world,
@@ -2891,36 +2990,36 @@ class StaffSupportCompletionHandler:
             or typed_care_deltas
         ):
             body_state = world.model_state.get("body_state_v1")
-            body = body_state.get("agents", {}).get(agent.id) if isinstance(body_state, dict) else None
+            body = (
+                body_state.get("agents", {}).get(agent.id) if isinstance(body_state, dict) else None
+            )
             config = body_state.get("config", {}) if isinstance(body_state, dict) else {}
             if isinstance(body, dict):
                 support_kind = care_request.get("support_kind")
                 if support_kind == "emotional_support":
-                    relief = float(config.get(
-                        "complaint_reassurance_gain_by_agent", {}
-                    ).get(
-                        agent.id,
-                        config.get("complaint_reassurance_gain", 0.0),
-                    ))
+                    relief = float(
+                        config.get("complaint_reassurance_gain_by_agent", {}).get(
+                            agent.id,
+                            config.get("complaint_reassurance_gain", 0.0),
+                        )
+                    )
                     agent.stress = max(0.0, agent.stress - relief)
                     agent.trust = min(1.0, agent.trust + relief * 0.25)
                     body["reassurance"] = min(1.0, body["reassurance"] + relief)
                     body["positive_affect"] = min(1.0, body["positive_affect"] + relief * 0.5)
                     body["negative_affect"] = max(0.0, body["negative_affect"] - relief * 0.5)
                 elif support_kind == "hygiene_support":
-                    relief = float(config.get(
-                        "hygiene_support_relief_by_agent", {}
-                    ).get(
-                        agent.id,
-                        config.get("hygiene_support_relief", 0.0),
-                    ))
+                    relief = float(
+                        config.get("hygiene_support_relief_by_agent", {}).get(
+                            agent.id,
+                            config.get("hygiene_support_relief", 0.0),
+                        )
+                    )
                     from sheltersim.policies.registry import create_care_outcome_formula
 
                     care_formula = create_care_outcome_formula(world.model_configs)
                     if care_formula is None:
-                        body["hygiene_need"] = max(
-                            0.0, body["hygiene_need"] - relief
-                        )
+                        body["hygiene_need"] = max(0.0, body["hygiene_need"] - relief)
                     else:
                         body["hygiene_need"] = care_formula.hygiene_need_after_support(
                             float(body["hygiene_need"]), relief
@@ -2941,9 +3040,7 @@ class StaffSupportCompletionHandler:
                         dependent_body = body_state["agents"][dependent_id]
                         for path, delta in deltas.items():
                             if path == "agent.stress":
-                                dependent.stress = min(
-                                    1.0, max(0.0, dependent.stress + delta)
-                                )
+                                dependent.stress = min(1.0, max(0.0, dependent.stress + delta))
                             elif path.startswith("body_state_v1.agents."):
                                 field = path.rsplit(".", 1)[-1]
                                 dependent_body[field] = min(
@@ -2962,14 +3059,16 @@ class StaffSupportCompletionHandler:
                     for kind, identity, path, _, _ in before
                 }
                 for kind, identity, path, previous, unit in before:
-                    changes.append(NumericStateChange(
-                        entity_kind=kind,
-                        entity_id=identity,
-                        field_path=path,
-                        before=previous,
-                        after=after_values[(kind, identity, path)],
-                        unit=unit,
-                    ))
+                    changes.append(
+                        NumericStateChange(
+                            entity_kind=kind,
+                            entity_id=identity,
+                            field_path=path,
+                            before=previous,
+                            after=after_values[(kind, identity, path)],
+                            unit=unit,
+                        )
+                    )
                 observation = (
                     "observed_change"
                     if any(change.before != change.after for change in changes)
@@ -3104,8 +3203,13 @@ def _staff_operation_measurements(
     if task_kind == "cleaning" and isinstance(target_zone_id, str):
         zone = world.model_state.get("staff_operations_v1", {}).get("zones", {}).get(target_zone_id)
         if isinstance(zone, dict):
-            add("model_state", target_zone_id, "staff_operations_v1.zones.sanitation",
-                zone.get("sanitation"), "normalized_0_1")
+            add(
+                "model_state",
+                target_zone_id,
+                "staff_operations_v1.zones.sanitation",
+                zone.get("sanitation"),
+                "normalized_0_1",
+            )
     elif task_kind == "maintenance" and isinstance(target_id, str):
         facility = world.facilities.get(target_id)
         if facility is not None:
@@ -3119,8 +3223,13 @@ def _staff_operation_measurements(
             body = body_agents.get(agent.id)
             if isinstance(body, dict):
                 for field in ("uncertainty", "reassurance", "positive_affect"):
-                    add("model_state", agent.id, f"body_state_v1.agents.{field}",
-                        body.get(field), "normalized_0_1")
+                    add(
+                        "model_state",
+                        agent.id,
+                        f"body_state_v1.agents.{field}",
+                        body.get(field),
+                        "normalized_0_1",
+                    )
     return values
 
 
@@ -3147,4 +3256,3 @@ class SupportRequestTimeoutHandler:
             raise EventApplicationError(str(exc)) from exc
         if not changed:
             raise EventSuppressed("support request is no longer pending")
-

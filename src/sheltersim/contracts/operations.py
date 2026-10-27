@@ -32,6 +32,7 @@ class NumericStateChange(ExtensionModel):
     after: Finite
     unit: str = Field(min_length=1, max_length=80)
 
+
 class ActionLifecycleReceipt(ExtensionModel):
     """The existing event-log wire shape for one applied action transition."""
 
@@ -62,9 +63,15 @@ class ActionLifecycleReceipt(ExtensionModel):
 
 
 SupportKind = Literal[
-    "medical_assessment", "medication_support", "caregiver_assistance",
-    "privacy_accommodation", "mobility_assistance", "hygiene_support",
-    "emotional_support", "language_access", "dependent_assistance",
+    "medical_assessment",
+    "medication_support",
+    "caregiver_assistance",
+    "privacy_accommodation",
+    "mobility_assistance",
+    "hygiene_support",
+    "emotional_support",
+    "language_access",
+    "dependent_assistance",
 ]
 
 
@@ -80,7 +87,9 @@ class CareTransitionReceipt(ExtensionModel):
     status: Literal["requested", "assigned", "started", "completed", "interrupted", "declined"]
     minute: int = Field(strict=True, ge=0)
     staff_id: Identifier | None = None
-    outcome_observation: Literal["not_applicable", "observed_change", "observed_no_change", "not_measured"] = "not_applicable"
+    outcome_observation: Literal[
+        "not_applicable", "observed_change", "observed_no_change", "not_measured"
+    ] = "not_applicable"
     state_changes: tuple[NumericStateChange, ...] = Field(default=(), max_length=32)
     causation_id: Identifier | None = None
     source_ids: tuple[Identifier, ...] = ()
@@ -119,9 +128,9 @@ class StaffSupportContinuityReceipt(ExtensionModel):
     task_id: Identifier
     previous_staff_id: Identifier
     status: Literal["requeued", "unresolved"]
-    cause_type: Literal[
-        "staff_unavailable", "staff_shift_change", "route_unreachable"
-    ] = "staff_unavailable"
+    cause_type: Literal["staff_unavailable", "staff_shift_change", "route_unreachable"] = (
+        "staff_unavailable"
+    )
     minute: int = Field(strict=True, ge=0)
     causation_id: Identifier
     source_ids: tuple[Identifier, ...] = ()
@@ -172,7 +181,10 @@ class FacilityRecoveryReceipt(ExtensionModel):
 
     @model_validator(mode="after")
     def recovery_record_changes_capacity(self) -> FacilityRecoveryReceipt:
-        if self.status in {"degraded", "outage", "restored"} and self.working_units == self.previous_working_units:
+        if (
+            self.status in {"degraded", "outage", "restored"}
+            and self.working_units == self.previous_working_units
+        ):
             raise ValueError("capacity transition must record different before/after working units")
         return self
 
@@ -186,9 +198,7 @@ class StaffOperationReceipt(ExtensionModel):
     event_id: Identifier
     task_id: Identifier
     staff_id: Identifier
-    task_kind: Literal[
-        "cleaning", "maintenance", "information_outreach", "intake", "patrol"
-    ]
+    task_kind: Literal["cleaning", "maintenance", "information_outreach", "intake", "patrol"]
     target_id: Identifier | None = None
     target_zone_id: Identifier
     reason: str = Field(min_length=1, max_length=240)
@@ -197,9 +207,7 @@ class StaffOperationReceipt(ExtensionModel):
     start_minute: int = Field(strict=True, ge=0)
     arrival_minute: int = Field(strict=True, ge=0)
     travel_minutes: int = Field(strict=True, ge=0)
-    outcome_observation: Literal[
-        "observed_change", "observed_no_change", "not_measured"
-    ]
+    outcome_observation: Literal["observed_change", "observed_no_change", "not_measured"]
     state_changes: tuple[NumericStateChange, ...] = Field(default=(), max_length=256)
     total_state_change_count: int = Field(strict=True, ge=0)
     state_changes_truncated: bool = False
@@ -253,7 +261,15 @@ class FacilityQueueTransitionReceipt(ExtensionModel):
     facility_id: Identifier
     agent_id: Identifier
     service_kind: Literal["toilet", "water", "meal"]
-    transition: Literal["queued", "service_started", "completed", "cancelled", "interrupted", "requeued", "abandoned"]
+    transition: Literal[
+        "queued",
+        "service_started",
+        "completed",
+        "cancelled",
+        "interrupted",
+        "requeued",
+        "abandoned",
+    ]
     minute: int = Field(strict=True, ge=0)
     requested_minute: int = Field(strict=True, ge=0)
     task_id: Identifier
@@ -266,7 +282,10 @@ class FacilityQueueTransitionReceipt(ExtensionModel):
     def queue_transition_time_is_valid(self) -> FacilityQueueTransitionReceipt:
         if self.requested_minute > self.minute:
             raise ValueError("facility queue request cannot originate in the future")
-        if self.wait_minutes is not None and self.wait_minutes > self.minute - self.requested_minute:
+        if (
+            self.wait_minutes is not None
+            and self.wait_minutes > self.minute - self.requested_minute
+        ):
             raise ValueError("queue wait cannot exceed elapsed time since request")
         if self.transition in {"queued", "requeued"} and self.queue_position is None:
             raise ValueError("queued transitions require a queue position")
@@ -305,14 +324,20 @@ class CareRequestState(ExtensionModel):
 class SharedOperationsState(ExtensionModel):
     schema_version: Literal[1] = 1
     policy_version: Literal[SHARED_OPERATIONS_POLICY]
-    support_requests: dict[Identifier, CareRequestState] = Field(default_factory=dict, max_length=100_000)
-    history: list[OperationHistoryRecord] = Field(default_factory=list, max_length=MAX_SHARED_OPERATION_HISTORY)
+    support_requests: dict[Identifier, CareRequestState] = Field(
+        default_factory=dict, max_length=100_000
+    )
+    history: list[OperationHistoryRecord] = Field(
+        default_factory=list, max_length=MAX_SHARED_OPERATION_HISTORY
+    )
     history_truncated: bool = False
 
     @model_validator(mode="after")
     def support_request_projection_contains_only_active_requests(self) -> SharedOperationsState:
-        if any(key != row.request_id or row.status not in {"requested", "assigned", "started"}
-               for key, row in self.support_requests.items()):
+        if any(
+            key != row.request_id or row.status not in {"requested", "assigned", "started"}
+            for key, row in self.support_requests.items()
+        ):
             raise ValueError("support_requests contains an invalid or terminal request")
         return self
 
@@ -361,10 +386,15 @@ class TemporaryRoomGeometry(ExtensionModel):
         if self.sleeping_capacity > self.people_capacity:
             raise ValueError("temporary room sleeping capacity cannot exceed people capacity")
         if self.sleeping_capacity and len(self.bed_points_m) != self.sleeping_capacity:
-            raise ValueError("a physical sleeping room requires one explicit bed point per sleeping place")
+            raise ValueError(
+                "a physical sleeping room requires one explicit bed point per sleeping place"
+            )
         if self.sleeping_capacity == 0 and self.bed_points_m:
             raise ValueError("bed points require a positive sleeping capacity")
-        if any(not _strictly_inside(point, self.polygon_m, point_in_polygon) for point in self.bed_points_m):
+        if any(
+            not _strictly_inside(point, self.polygon_m, point_in_polygon)
+            for point in self.bed_points_m
+        ):
             raise ValueError("temporary room bed points must lie strictly inside its polygon")
         if len(self.route_edge_ids) != len(set(self.route_edge_ids)):
             raise ValueError("temporary room route edge IDs must be unique")
@@ -436,11 +466,15 @@ def _segments_intersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D) -> bool:
     epsilon = 1e-9
 
     def cross(first: Point2D, second: Point2D, third: Point2D) -> float:
-        return (second.x - first.x) * (third.y - first.y) - (second.y - first.y) * (third.x - first.x)
+        return (second.x - first.x) * (third.y - first.y) - (second.y - first.y) * (
+            third.x - first.x
+        )
 
     def on_segment(first: Point2D, second: Point2D, point: Point2D) -> bool:
-        return (min(first.x, second.x) - epsilon <= point.x <= max(first.x, second.x) + epsilon
-                and min(first.y, second.y) - epsilon <= point.y <= max(first.y, second.y) + epsilon)
+        return (
+            min(first.x, second.x) - epsilon <= point.x <= max(first.x, second.x) + epsilon
+            and min(first.y, second.y) - epsilon <= point.y <= max(first.y, second.y) + epsilon
+        )
 
     ab_c, ab_d = cross(a, b, c), cross(a, b, d)
     cd_a, cd_b = cross(c, d, a), cross(c, d, b)
@@ -448,13 +482,17 @@ def _segments_intersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D) -> bool:
         (cd_a > epsilon and cd_b < -epsilon) or (cd_a < -epsilon and cd_b > epsilon)
     ):
         return True
-    return ((abs(ab_c) <= epsilon and on_segment(a, b, c))
-            or (abs(ab_d) <= epsilon and on_segment(a, b, d))
-            or (abs(cd_a) <= epsilon and on_segment(c, d, a))
-            or (abs(cd_b) <= epsilon and on_segment(c, d, b)))
+    return (
+        (abs(ab_c) <= epsilon and on_segment(a, b, c))
+        or (abs(ab_d) <= epsilon and on_segment(a, b, d))
+        or (abs(cd_a) <= epsilon and on_segment(c, d, a))
+        or (abs(cd_b) <= epsilon and on_segment(c, d, b))
+    )
 
 
 def _strictly_inside(point: Point2D, polygon: tuple[Point2D, ...], point_in_polygon: Any) -> bool:
     if not point_in_polygon(point, polygon):
         return False
-    return not any(_segments_intersect(point, point, a, b) for a, b in zip(polygon, (*polygon[1:], polygon[0])))
+    return not any(
+        _segments_intersect(point, point, a, b) for a, b in zip(polygon, (*polygon[1:], polygon[0]))
+    )

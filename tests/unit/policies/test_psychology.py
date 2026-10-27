@@ -117,7 +117,7 @@ def test_sleep_debt_rest_and_unspecified_requirement_are_explicit_assumptions() 
 
 
 def test_acute_distress_is_a_compatibility_alias_and_recovers_at_restless_ticks(
-    research_psychology_scenario
+    research_psychology_scenario,
 ) -> None:
     world = WorldState.from_scenario(research_psychology_scenario())
     agent = world.agents["A001"]
@@ -343,7 +343,7 @@ def test_false_claim_pressure_reaches_uncertainty_stress_and_trace() -> None:
 
 
 def test_psychology_trace_delta_fields_reconstruct_applied_stress_delta(
-    research_psychology_scenario
+    research_psychology_scenario,
 ) -> None:
     world = WorldState.from_scenario(research_psychology_scenario())
     agent = world.agents["A001"]

@@ -53,13 +53,18 @@ class HouseholdSizeMix(RegionModel):
 
     @model_validator(mode="after")
     def validate_weights(self) -> HouseholdSizeMix:
-        if not self.size_weights or any(
-            isinstance(size, bool)
-            or not 1 <= size <= 10
-            or not math.isfinite(weight)
-            or weight < 0
-            for size, weight in self.size_weights.items()
-        ) or not math.isfinite(sum(self.size_weights.values())) or sum(self.size_weights.values()) <= 0:
+        if (
+            not self.size_weights
+            or any(
+                isinstance(size, bool)
+                or not 1 <= size <= 10
+                or not math.isfinite(weight)
+                or weight < 0
+                for size, weight in self.size_weights.items()
+            )
+            or not math.isfinite(sum(self.size_weights.values()))
+            or sum(self.size_weights.values()) <= 0
+        ):
             raise ValueError("household size weights must include positive weights for sizes 1..10")
         return self
 
@@ -103,9 +108,7 @@ class HouseholdRelationshipPattern(RegionModel):
     relationship: Literal[
         "parent_child", "caregiver_child", "caregiver_support", "partner", "relative"
     ]
-    source_id: str | None = Field(
-        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
-    )
+    source_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
 class HouseholdTemplate(RegionModel):
@@ -129,15 +132,31 @@ class HouseholdTemplate(RegionModel):
         for item in self.relationships:
             caregiver = item.caregiver_member_index
             dependent = item.dependent_member_index
-            if caregiver >= len(self.members) or dependent >= len(self.members) or caregiver == dependent:
-                raise ValueError("household relationship member indexes must be distinct template slots")
+            if (
+                caregiver >= len(self.members)
+                or dependent >= len(self.members)
+                or caregiver == dependent
+            ):
+                raise ValueError(
+                    "household relationship member indexes must be distinct template slots"
+                )
             caregiver_role = self.members[caregiver].role
             dependent_role = self.members[dependent].role
-            if item.relationship in {"parent_child", "caregiver_child", "caregiver_support"} and caregiver_role == "child":
+            if (
+                item.relationship in {"parent_child", "caregiver_child", "caregiver_support"}
+                and caregiver_role == "child"
+            ):
                 raise ValueError("a declared caregiver slot cannot have the child role")
-            if item.relationship in {"parent_child", "caregiver_child"} and dependent_role in {"adult", "caregiver"}:
-                raise ValueError("a parent/caregiver-child dependent slot cannot require an adult role")
-            if item.relationship == "partner" and (caregiver_role == "child" or dependent_role == "child"):
+            if item.relationship in {"parent_child", "caregiver_child"} and dependent_role in {
+                "adult",
+                "caregiver",
+            }:
+                raise ValueError(
+                    "a parent/caregiver-child dependent slot cannot require an adult role"
+                )
+            if item.relationship == "partner" and (
+                caregiver_role == "child" or dependent_role == "child"
+            ):
                 raise ValueError("operator-declared partner slots cannot require the child role")
             pair = (caregiver, dependent, item.relationship)
             if pair in pairs:
@@ -193,7 +212,9 @@ class HouseholdCompositionInput(RegionModel):
             or not math.isfinite(sum(self.household_size_weights.values()))
             or sum(self.household_size_weights.values()) <= 0
         ):
-            raise ValueError("operator household-size weights must have a positive finite total for sizes 1..10")
+            raise ValueError(
+                "operator household-size weights must have a positive finite total for sizes 1..10"
+            )
         return self
 
 
@@ -209,7 +230,8 @@ def _default_household_templates() -> tuple[HouseholdTemplate, ...]:
             ),
             relationships=tuple(
                 HouseholdRelationshipPattern(
-                    caregiver_member_index=0, dependent_member_index=adults + child,
+                    caregiver_member_index=0,
+                    dependent_member_index=adults + child,
                     relationship="parent_child",
                 )
                 for child in range(children)
@@ -227,11 +249,13 @@ def _default_household_templates() -> tuple[HouseholdTemplate, ...]:
         template("adults-2-children-2", 2, 2, 0.4),
     ]
     for size in range(5, 11):
-        templates.extend((
-            template(f"adults-{size}", size, 0, 0.3),
-            template(f"adults-3-children-{size - 3}", 3, size - 3, 0.4),
-            template(f"adults-2-children-{size - 2}", 2, size - 2, 0.3),
-        ))
+        templates.extend(
+            (
+                template(f"adults-{size}", size, 0, 0.3),
+                template(f"adults-3-children-{size - 3}", 3, size - 3, 0.4),
+                template(f"adults-2-children-{size - 2}", 2, size - 2, 0.3),
+            )
+        )
     return tuple(templates)
 
 
@@ -249,8 +273,12 @@ class PopulationConditionInput(RegionModel):
     medication_support_rate: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     care_support_need_rates: dict[
         Literal[
-            "caregiver_assistance", "privacy_accommodation", "mobility_assistance",
-            "hygiene_support", "emotional_support", "language_access",
+            "caregiver_assistance",
+            "privacy_accommodation",
+            "mobility_assistance",
+            "hygiene_support",
+            "emotional_support",
+            "language_access",
             "dependent_assistance",
         ],
         float,
@@ -280,28 +308,45 @@ class PopulationConditionInput(RegionModel):
                 or not math.isfinite(sum(distribution.values()))
                 or sum(distribution.values()) <= 0
             ):
-                raise ValueError(f"{distribution_name} weights must contain a positive finite total")
+                raise ValueError(
+                    f"{distribution_name} weights must contain a positive finite total"
+                )
         if any(
             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", key)
             or not math.isfinite(rate)
             or not 0 <= rate <= 1
             for key, rate in self.additional_access_need_rates.items()
         ):
-            raise ValueError("additional access-need rates must be finite probabilities from 0 to 1")
+            raise ValueError(
+                "additional access-need rates must be finite probabilities from 0 to 1"
+            )
         if any(
             not math.isfinite(rate) or not 0 <= rate <= 1
             for rate in self.care_support_need_rates.values()
         ):
             raise ValueError("care support-need rates must be finite probabilities from 0 to 1")
         if self.pet_household_rate is not None and self.pet_count_weights:
-            raise ValueError("pet household rate and pet count distribution cannot both be supplied")
+            raise ValueError(
+                "pet household rate and pet count distribution cannot both be supplied"
+            )
         if self.pet_count_weights and (
-            any(isinstance(count, bool) or not 0 <= count <= 10 or not math.isfinite(weight) or weight < 0 for count, weight in self.pet_count_weights.items())
+            any(
+                isinstance(count, bool)
+                or not 0 <= count <= 10
+                or not math.isfinite(weight)
+                or weight < 0
+                for count, weight in self.pet_count_weights.items()
+            )
             or not math.isfinite(sum(self.pet_count_weights.values()))
             or sum(self.pet_count_weights.values()) <= 0
         ):
-            raise ValueError("pet count distribution must use counts 0..10 and positive finite weights")
-        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", item.rhythm_id) for item in self.daily_rhythms):
+            raise ValueError(
+                "pet count distribution must use counts 0..10 and positive finite weights"
+            )
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", item.rhythm_id)
+            for item in self.daily_rhythms
+        ):
             raise ValueError("daily rhythm IDs must be stable identifiers")
         if len({item.rhythm_id for item in self.daily_rhythms}) != len(self.daily_rhythms):
             raise ValueError("daily rhythm IDs must be unique")
@@ -331,9 +376,15 @@ class GeneratedPersonRequirements(RegionModel):
     medication_support_required: bool | None = None
     care_support_needs: tuple[
         Literal[
-            "medical_assessment", "medication_support", "caregiver_assistance",
-            "privacy_accommodation", "mobility_assistance", "hygiene_support",
-            "emotional_support", "language_access", "dependent_assistance",
+            "medical_assessment",
+            "medication_support",
+            "caregiver_assistance",
+            "privacy_accommodation",
+            "mobility_assistance",
+            "hygiene_support",
+            "emotional_support",
+            "language_access",
+            "dependent_assistance",
         ],
         ...,
     ] = ()
@@ -369,7 +420,9 @@ class GeneratedPopulation(RegionModel):
     def profile_household_and_trait_ids_match(self) -> GeneratedPopulation:
         profile_by_id = {profile.id: profile for profile in self.profile_set.profiles}
         if set(profile_by_id) != set(self.population.people):
-            raise ValueError("generated profiles and population traits must have identical person IDs")
+            raise ValueError(
+                "generated profiles and population traits must have identical person IDs"
+            )
         household_counts: dict[str, int] = {}
         for profile_id, profile in profile_by_id.items():
             traits = self.population.people[profile_id]
@@ -387,18 +440,28 @@ class GeneratedPopulation(RegionModel):
         for household_id, template_id in self.household_template_ids.items():
             template = templates.get(template_id)
             if template is None or len(template.members) != self.household_sizes[household_id]:
-                raise ValueError("household template assignment must match the generated member count")
+                raise ValueError(
+                    "household template assignment must match the generated member count"
+                )
         if set(self.unselected_template_ids) & set(self.household_template_ids.values()):
             raise ValueError("unselected household templates cannot also be assigned")
         if set(self.unselected_template_ids) - set(templates):
-            raise ValueError("unselected template IDs must belong to the supplied composition input")
+            raise ValueError(
+                "unselected template IDs must belong to the supplied composition input"
+            )
         if self.person_requirements:
             requirement_ids = [item.person_id for item in self.person_requirements]
-            if len(requirement_ids) != len(set(requirement_ids)) or set(requirement_ids) != set(profile_by_id):
-                raise ValueError("person requirement previews must contain one record per generated profile")
+            if len(requirement_ids) != len(set(requirement_ids)) or set(requirement_ids) != set(
+                profile_by_id
+            ):
+                raise ValueError(
+                    "person requirement previews must contain one record per generated profile"
+                )
             for item in self.person_requirements:
                 if item.household_id != profile_by_id[item.person_id].group_id:
-                    raise ValueError("person requirement household ID must match ProfileSpec.group_id")
+                    raise ValueError(
+                        "person requirement household ID must match ProfileSpec.group_id"
+                    )
         for relationship in self.household_relationships:
             caregiver = profile_by_id.get(relationship.caregiver_id)
             dependent = profile_by_id.get(relationship.dependent_id)
@@ -409,18 +472,30 @@ class GeneratedPopulation(RegionModel):
                 or caregiver.group_id != relationship.household_id
                 or dependent.group_id != relationship.household_id
             ):
-                raise ValueError("household relationship endpoints must be distinct members of the same household")
+                raise ValueError(
+                    "household relationship endpoints must be distinct members of the same "
+                    "household"
+                )
             if relationship.source_id not in self.population.source_ids:
                 raise ValueError("household relationships must cite a population source ID")
             if relationship.relationship in {"parent_child", "caregiver_child"}:
                 parent_age = self.population.people[relationship.caregiver_id].age_years
                 child_age = self.population.people[relationship.dependent_id].age_years
                 if child_age >= 18 or parent_age < 18 or parent_age - child_age < 16:
-                    raise ValueError("synthetic parent/guardian links require an adult caregiver at least 16 years older than a minor")
+                    raise ValueError(
+                        "synthetic parent/guardian links require an adult caregiver at least "
+                        "16 years older than a minor"
+                    )
             elif relationship.relationship == "caregiver_support":
                 caregiver_age = self.population.people[relationship.caregiver_id].age_years
-                if caregiver_age < 18 or not self.population.people[relationship.dependent_id].medical_support:
-                    raise ValueError("synthetic care-support links require an adult caregiver and a person with a support need")
+                if (
+                    caregiver_age < 18
+                    or not self.population.people[relationship.dependent_id].medical_support
+                ):
+                    raise ValueError(
+                        "synthetic care-support links require an adult caregiver and a "
+                        "person with a support need"
+                    )
             elif relationship.relationship == "partner":
                 if any(
                     self.population.people[person_id].age_years < 18
@@ -429,7 +504,8 @@ class GeneratedPopulation(RegionModel):
                     raise ValueError("operator-declared partner links require two adults")
         if self.person_requirements:
             relation_pairs = {
-                (item.caregiver_id, item.dependent_id) for item in self.household_relationships
+                (item.caregiver_id, item.dependent_id)
+                for item in self.household_relationships
                 if item.relationship in {"parent_child", "caregiver_child", "caregiver_support"}
             }
             requirements = {item.person_id: item for item in self.person_requirements}
@@ -440,8 +516,13 @@ class GeneratedPopulation(RegionModel):
                 expected_dependents = {
                     dependent for caregiver, dependent in relation_pairs if caregiver == person_id
                 }
-                if set(item.caregiver_ids) != expected_caregivers or set(item.dependent_ids) != expected_dependents:
-                    raise ValueError("person caregiver/dependent lists must match household relationship records")
+                if (
+                    set(item.caregiver_ids) != expected_caregivers
+                    or set(item.dependent_ids) != expected_dependents
+                ):
+                    raise ValueError(
+                        "person caregiver/dependent lists must match household relationship records"
+                    )
                 age = self.population.people[person_id].age_years
                 has_guardian = any(
                     relation.relationship in {"parent_child", "caregiver_child"}
@@ -449,15 +530,23 @@ class GeneratedPopulation(RegionModel):
                     for relation in self.household_relationships
                 )
                 expected_guardian_status = (
-                    "not_applicable" if age >= 18
-                    else "accompanied" if has_guardian
+                    "not_applicable"
+                    if age >= 18
+                    else "accompanied"
+                    if has_guardian
                     else "unaccompanied"
                 )
                 if item.guardian_status != expected_guardian_status:
-                    raise ValueError("minor guardian status must agree with explicit caregiver links")
+                    raise ValueError(
+                        "minor guardian status must agree with explicit caregiver links"
+                    )
                 if item.requires_review != bool(item.review_reasons):
                     raise ValueError("person review flag must agree with explicit review reasons")
-                if age < 18 and not has_guardian and "unaccompanied_minor" not in item.review_reasons:
+                if (
+                    age < 18
+                    and not has_guardian
+                    and "unaccompanied_minor" not in item.review_reasons
+                ):
                     raise ValueError("an unaccompanied minor must be flagged for operator review")
             pet_records: dict[str, int] = {}
             for item in self.person_requirements:
@@ -518,7 +607,9 @@ class HouseholdGenerator:
             household_number += 1
             household_id = f"H{household_number:06d}"
             remaining = count - index
-            size = min(remaining, _draw_weighted_size(rng.random("population", "household", index), mix))
+            size = min(
+                remaining, _draw_weighted_size(rng.random("population", "household", index), mix)
+            )
             household_sizes[household_id] = size
             for member_index in range(index, index + size):
                 household_by_index[member_index] = household_id
@@ -546,7 +637,9 @@ class HouseholdGenerator:
             template_id = _draw_weighted_key(
                 rng.random("population", "household_template", str(household_number)), weights
             )
-            selected[household_id] = next(item for item in candidates if item.template_id == template_id)
+            selected[household_id] = next(
+                item for item in candidates if item.template_id == template_id
+            )
         return selected
 
 
@@ -584,7 +677,11 @@ class SyntheticPopulationGenerator:
 
         bands = tuple(age_bands or ())
         mix = household_mix
-        if mix is None and household_composition is not None and household_composition.household_size_weights:
+        if (
+            mix is None
+            and household_composition is not None
+            and household_composition.household_size_weights
+        ):
             mix = HouseholdSizeMix(
                 size_weights=household_composition.household_size_weights,
                 source_ids=household_composition.source_ids or (OPERATOR_POPULATION_SOURCE_ID,),
@@ -594,14 +691,34 @@ class SyntheticPopulationGenerator:
         if age_assumed:
             # Equal weights across broad bands are a transparent generic fallback, not census data.
             bands = (
-                AgeBand(label="child", age_min=0, age_max=17, population_count=1, source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,)),
-                AgeBand(label="adult", age_min=18, age_max=64, population_count=1, source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,)),
-                AgeBand(label="older_adult", age_min=65, age_max=90, population_count=1, source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,)),
+                AgeBand(
+                    label="child",
+                    age_min=0,
+                    age_max=17,
+                    population_count=1,
+                    source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,),
+                ),
+                AgeBand(
+                    label="adult",
+                    age_min=18,
+                    age_max=64,
+                    population_count=1,
+                    source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,),
+                ),
+                AgeBand(
+                    label="older_adult",
+                    age_min=65,
+                    age_max=90,
+                    population_count=1,
+                    source_ids=(SYNTHETIC_AGE_ASSUMPTION_ID,),
+                ),
             )
         if not bands:
             raise ValueError("at least one age band is required")
         if sum(band.population_count for band in bands) <= 0:
-            raise ValueError("resident age bands must contain a positive observed or assumed population total")
+            raise ValueError(
+                "resident age bands must contain a positive observed or assumed population total"
+            )
         ordered_bands = sorted(bands, key=lambda band: band.age_min)
         if any(
             current.age_min <= previous.age_max
@@ -617,14 +734,21 @@ class SyntheticPopulationGenerator:
         assert mix is not None
 
         selection = evacuation_selection or EvacuationSelection()
-        unknown_selection_bands = set(selection.age_band_multipliers) - {band.label for band in bands}
+        unknown_selection_bands = set(selection.age_band_multipliers) - {
+            band.label for band in bands
+        }
         if unknown_selection_bands:
-            raise ValueError("evacuation selection references unknown resident age bands: " + ", ".join(sorted(unknown_selection_bands)))
+            raise ValueError(
+                "evacuation selection references unknown resident age bands: "
+                + ", ".join(sorted(unknown_selection_bands))
+            )
         resident_age_distribution = ResidentPopulationSampler.distribution(bands)
         evacuee_age_distribution = EvacuationSelector.distribution(
             resident_age_distribution, selection
         )
-        configured_languages = conditions.language_weights or {language: 1.0 for language in languages}
+        configured_languages = conditions.language_weights or {
+            language: 1.0 for language in languages
+        }
         if not conditions.language_weights and len(languages) == 1:
             configured_languages = {languages[0]: 1.0}
         language_ids = tuple(sorted(configured_languages))
@@ -633,7 +757,9 @@ class SyntheticPopulationGenerator:
         normalized_language_weights = _normalize_weights(configured_languages)
         information_choices = _normalize_weights(conditions.information_access_weights)
         rhythm_by_id = {item.rhythm_id: item for item in conditions.daily_rhythms}
-        rhythm_choices = _normalize_weights({item.rhythm_id: item.weight for item in conditions.daily_rhythms})
+        rhythm_choices = _normalize_weights(
+            {item.rhythm_id: item.weight for item in conditions.daily_rhythms}
+        )
 
         profile_set = self.profile_generator.generate(
             count=count,
@@ -649,15 +775,24 @@ class SyntheticPopulationGenerator:
             household_composition is not None
             and household_composition.source_kind == "assumption"
             and _maximum_supported_age(
-                bands=bands, selected_distribution=evacuee_age_distribution,
-                minimum_age=0, maximum_age=17, age_band_label=None,
-            ) is None
+                bands=bands,
+                selected_distribution=evacuee_age_distribution,
+                minimum_age=0,
+                maximum_age=17,
+                age_band_label=None,
+            )
+            is None
         ):
             # Assumed templates must not make an adult-only selection fail.
-            household_composition = household_composition.model_copy(update={"templates": tuple(
-                template for template in household_composition.templates
-                if all(member.role != "child" for member in template.members)
-            )})
+            household_composition = household_composition.model_copy(
+                update={
+                    "templates": tuple(
+                        template
+                        for template in household_composition.templates
+                        if all(member.role != "child" for member in template.members)
+                    )
+                }
+            )
         rng = CounterRNG(seed)
         household_sizes, household_by_index = HouseholdGenerator.group_indices(count, rng, mix)
         household_templates = HouseholdGenerator.choose_templates(
@@ -675,9 +810,11 @@ class SyntheticPopulationGenerator:
                 + ", ".join(sorted(unknown_template_bands))
             )
 
-        source_id_set = {
-            source for band in bands for source in band.source_ids
-        } | set(mix.source_ids) | {SYNTHETIC_TRAIT_ASSUMPTION_ID}
+        source_id_set = (
+            {source for band in bands for source in band.source_ids}
+            | set(mix.source_ids)
+            | {SYNTHETIC_TRAIT_ASSUMPTION_ID}
+        )
         language_assumed = not language_source_ids and not (
             conditions.language_weights and conditions.source_ids
         )
@@ -689,7 +826,9 @@ class SyntheticPopulationGenerator:
         source_id_set.update(language_source_records)
         source_id_set.update(selection.source_ids)
         source_id_set.update(conditions.source_ids)
-        source_id_set.update(source_id for rhythm in conditions.daily_rhythms for source_id in rhythm.source_ids)
+        source_id_set.update(
+            source_id for rhythm in conditions.daily_rhythms for source_id in rhythm.source_ids
+        )
         if household_composition is not None:
             source_id_set.update(household_composition.source_ids)
             source_id_set.update(
@@ -703,7 +842,10 @@ class SyntheticPopulationGenerator:
                 for relationship in template.relationships
                 if relationship.source_id is not None
             )
-            if household_composition.source_kind == "operator" and not household_composition.source_ids:
+            if (
+                household_composition.source_kind == "operator"
+                and not household_composition.source_ids
+            ):
                 source_id_set.add(OPERATOR_POPULATION_SOURCE_ID)
         operator_composition = (
             household_composition is not None and household_composition.source_kind == "operator"
@@ -721,7 +863,11 @@ class SyntheticPopulationGenerator:
             or operator_composition
         )
         has_explicit_selection = bool(selection.age_band_multipliers)
-        if (has_explicit_condition_input or has_explicit_selection) and not conditions.source_ids and not selection.source_ids:
+        if (
+            (has_explicit_condition_input or has_explicit_selection)
+            and not conditions.source_ids
+            and not selection.source_ids
+        ):
             source_id_set.add(OPERATOR_POPULATION_SOURCE_ID)
         source_ids = tuple(sorted(source_id_set))
         profiles: list[ProfileSpec] = []
@@ -736,7 +882,9 @@ class SyntheticPopulationGenerator:
             household_members.setdefault(household_id, []).append(member_index)
         pattern_by_index: dict[int, HouseholdMemberPattern] = {}
         for household_id, template in household_templates.items():
-            for member_index, pattern in zip(sorted(household_members[household_id]), template.members):
+            for member_index, pattern in zip(
+                sorted(household_members[household_id]), template.members
+            ):
                 pattern_by_index[member_index] = pattern
 
         household_relationships: list[HouseholdRelationship] = []
@@ -754,7 +902,11 @@ class SyntheticPopulationGenerator:
                 source_id = (
                     link.source_id
                     or (template.source_ids[0] if template.source_ids else None)
-                    or (household_composition.source_ids[0] if household_composition and household_composition.source_ids else None)
+                    or (
+                        household_composition.source_ids[0]
+                        if household_composition and household_composition.source_ids
+                        else None
+                    )
                     or OPERATOR_POPULATION_SOURCE_ID
                 )
                 household_relationships.append(
@@ -770,7 +922,9 @@ class SyntheticPopulationGenerator:
                     child_caregiver_by_index.setdefault(dependent_index, set()).add(caregiver_index)
                 if link.relationship == "caregiver_support":
                     support_required_by_relationship.add(dependent_index)
-                    support_caregiver_by_index.setdefault(dependent_index, set()).add(caregiver_index)
+                    support_caregiver_by_index.setdefault(dependent_index, set()).add(
+                        caregiver_index
+                    )
 
         for household_id, member_indexes in sorted(household_members.items()):
             ages_by_index.update(
@@ -785,16 +939,15 @@ class SyntheticPopulationGenerator:
             )
 
         for index, profile in enumerate(profile_set.profiles):
-            medical_support_by_index[index] = (
-                index in support_required_by_relationship
-                or (
-                    rng.random("population", profile.id, "medical_support") < conditions.medical_support_rate
-                    if conditions.medical_support_rate is not None
-                    else False
-                )
+            medical_support_by_index[index] = index in support_required_by_relationship or (
+                rng.random("population", profile.id, "medical_support")
+                < conditions.medical_support_rate
+                if conditions.medical_support_rate is not None
+                else False
             )
             medication_support_by_index[index] = (
-                rng.random("population", profile.id, "medication_support") < conditions.medication_support_rate
+                rng.random("population", profile.id, "medication_support")
+                < conditions.medication_support_rate
                 if conditions.medication_support_rate is not None
                 else False
             )
@@ -803,11 +956,16 @@ class SyntheticPopulationGenerator:
                 for support_kind, rate in sorted(conditions.care_support_need_rates.items())
                 if rng.random("population", profile.id, "care_support_need", support_kind) < rate
             )
-            if pattern_by_index.get(index) is not None and pattern_by_index[index].role == "dependent":
+            if (
+                pattern_by_index.get(index) is not None
+                and pattern_by_index[index].role == "dependent"
+            ):
                 medical_support_by_index[index] = True
             rhythm_by_index[index] = (
                 rhythm_by_id[
-                    _draw_weighted_key(rng.random("population", profile.id, "daily_rhythm"), rhythm_choices)
+                    _draw_weighted_key(
+                        rng.random("population", profile.id, "daily_rhythm"), rhythm_choices
+                    )
                 ]
                 if rhythm_choices
                 else None
@@ -817,11 +975,15 @@ class SyntheticPopulationGenerator:
         for household_id, member_indexes in sorted(household_members.items()):
             household_pet_count[household_id] = (
                 _draw_weighted_integer(
-                    rng.random("population", household_id, "pet_count"), conditions.pet_count_weights
+                    rng.random("population", household_id, "pet_count"),
+                    conditions.pet_count_weights,
                 )
                 if conditions.pet_count_weights
                 else (
-                    int(rng.random("population", household_id, "has_pet") < conditions.pet_household_rate)
+                    int(
+                        rng.random("population", household_id, "has_pet")
+                        < conditions.pet_household_rate
+                    )
                     if conditions.pet_household_rate is not None
                     else None
                 )
@@ -867,21 +1029,28 @@ class SyntheticPopulationGenerator:
                 household_id=household_id,
                 household_role=role,
                 languages=(assigned_language,),
-                accessibility_needs=tuple(sorted(
-                    ({"mobility_support"} if updated.mobility is not Mobility.INDEPENDENT else set())
-                    | set(extra_access_needs)
-                )),
+                accessibility_needs=tuple(
+                    sorted(
+                        (
+                            {"mobility_support"}
+                            if updated.mobility is not Mobility.INDEPENDENT
+                            else set()
+                        )
+                        | set(extra_access_needs)
+                    )
+                ),
                 # PopulationSpec v1 uses this legacy field for household support
                 # relationship validation; typed medical/medication distinctions
                 # are carried separately by GeneratedPersonRequirements/PersonContext.
                 medical_support=support_required,
                 source_ids=tuple(sorted(set(source_ids) | set(conditions.source_ids))),
             )
-            caregiver_indexes_for_person = (
-                child_caregiver_by_index.get(index, set())
-                | support_caregiver_by_index.get(index, set())
+            caregiver_indexes_for_person = child_caregiver_by_index.get(
+                index, set()
+            ) | support_caregiver_by_index.get(index, set())
+            caregivers = tuple(
+                profile_set.profiles[item].id for item in sorted(caregiver_indexes_for_person)
             )
-            caregivers = tuple(profile_set.profiles[item].id for item in sorted(caregiver_indexes_for_person))
             dependent_indexes = {
                 dependent_index
                 for dependent_index, caregiver_indexes in child_caregiver_by_index.items()
@@ -892,9 +1061,13 @@ class SyntheticPopulationGenerator:
                 if index in caregiver_indexes
             }
             dependents = tuple(profile_set.profiles[item].id for item in sorted(dependent_indexes))
-            information_access = _draw_weighted_key(
-                rng.random("population", profile.id, "information_access"), information_choices
-            ) if information_choices else None
+            information_access = (
+                _draw_weighted_key(
+                    rng.random("population", profile.id, "information_access"), information_choices
+                )
+                if information_choices
+                else None
+            )
             pet_count = household_pet_count[household_id]
             if index != min(household_members[household_id]):
                 pet_count = None
@@ -910,8 +1083,10 @@ class SyntheticPopulationGenerator:
                     household_id=household_id,
                     household_role=role,
                     guardian_status=(
-                        "not_applicable" if age >= 18
-                        else "accompanied" if index in child_caregiver_by_index
+                        "not_applicable"
+                        if age >= 18
+                        else "accompanied"
+                        if index in child_caregiver_by_index
                         else "unaccompanied"
                     ),
                     caregiver_ids=caregivers,
@@ -924,7 +1099,9 @@ class SyntheticPopulationGenerator:
                         else None
                     ),
                     medication_support_required=(
-                        medication_support if conditions.medication_support_rate is not None else None
+                        medication_support
+                        if conditions.medication_support_rate is not None
+                        else None
                     ),
                     care_support_needs=care_support_needs,
                     information_access=information_access,
@@ -947,7 +1124,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_AGE_ASSUMPTION_ID,
                     "subject": "synthetic_age_band_mix",
                     "value": {"child": 1, "adult": 1, "older_adult": 1},
-                    "reason": "No selected regional age table was supplied; equal band weights are only a generic simulation default.",
+                    "reason": (
+                        "No selected regional age table was supplied; equal band weights are "
+                        "only a generic simulation default."
+                    ),
                     "source_id": SYNTHETIC_AGE_ASSUMPTION_ID,
                 }
             )
@@ -956,7 +1136,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_AGE_ASSUMPTION_ID,
                     "title": "Generic synthetic age-band assumption",
                     "source_kind": "assumption",
-                    "description": "Not an official statistic and not calibrated to the requested municipality.",
+                    "description": (
+                        "Not an official statistic and not calibrated to the requested "
+                        "municipality."
+                    ),
                 }
             )
         if household_assumed:
@@ -965,7 +1148,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                     "subject": "synthetic_household_size_mix",
                     "value": {str(size): weight for size, weight in mix.size_weights.items()},
-                    "reason": "No selected regional household table was supplied; weights are a generator heuristic.",
+                    "reason": (
+                        "No selected regional household table was supplied; weights are a "
+                        "generator heuristic."
+                    ),
                     "source_id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                 }
             )
@@ -974,7 +1160,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                     "title": "Generic synthetic household-size assumption",
                     "source_kind": "assumption",
-                    "description": "Not an official statistic and not calibrated to the requested municipality.",
+                    "description": (
+                        "Not an official statistic and not calibrated to the requested "
+                        "municipality."
+                    ),
                 }
             )
         if language_assumed:
@@ -983,7 +1172,11 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                     "subject": "synthetic_language_mix",
                     "value": normalized_language_weights,
-                    "reason": "No source was supplied for the language assignment weights; one primary language is sampled per synthetic profile and the weights are not calibrated to the requested region.",
+                    "reason": (
+                        "No source was supplied for the language assignment weights; one primary "
+                        "language is sampled per synthetic profile and the weights are not "
+                        "calibrated to the requested region."
+                    ),
                     "source_id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                 }
             )
@@ -992,7 +1185,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                     "title": "Synthetic language assignment assumption",
                     "source_kind": "assumption",
-                    "description": "One primary language is sampled per synthetic profile; not calibrated to census, visa, or municipal language data.",
+                    "description": (
+                        "One primary language is sampled per synthetic profile; not calibrated "
+                        "to census, visa, or municipal language data."
+                    ),
                 }
             )
         if not selection.age_band_multipliers:
@@ -1001,7 +1197,11 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_EVACUATION_SELECTION_ID,
                     "subject": "evacuation_selection_by_age",
                     "value": {band.label: 1.0 for band in bands},
-                    "reason": "No evacuation-selection data was supplied; selection is uniform across the observed resident distribution and is not an official evacuation rate.",
+                    "reason": (
+                        "No evacuation-selection data was supplied; selection is uniform across "
+                        "the observed resident distribution and is not an official evacuation "
+                        "rate."
+                    ),
                     "source_id": SYNTHETIC_EVACUATION_SELECTION_ID,
                 }
             )
@@ -1010,7 +1210,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_EVACUATION_SELECTION_ID,
                     "title": "Uniform synthetic evacuation-selection assumption",
                     "source_kind": "assumption",
-                    "description": "No evacuation-rate data was supplied; the resident distribution is used without an age-specific selection adjustment.",
+                    "description": (
+                        "No evacuation-rate data was supplied; the resident distribution is used "
+                        "without an age-specific selection adjustment."
+                    ),
                 }
             )
         assumptions.append(
@@ -1023,23 +1226,35 @@ class SyntheticPopulationGenerator:
                     "relationships_created_from_age_or_co_residence": False,
                     "unlinked_minor_requires_review": True,
                 },
-                "reason": "A shared household ID is not evidence of a family relationship. Parent, partner, and care links are created only from explicit household templates; age checks only reject implausible declared links. Unlinked minors remain flagged for operator review.",
+                "reason": (
+                    "A shared household ID is not evidence of a family relationship. Parent, "
+                    "partner, and care links are created only from explicit household templates; "
+                    "age checks only reject implausible declared links. Unlinked minors remain "
+                    "flagged for operator review."
+                ),
                 "source_id": SYNTHETIC_HOUSEHOLD_CONSTRUCTION_ID,
             }
         )
-        unselected_template_ids = tuple(
-            sorted(
-                {item.template_id for item in household_composition.templates}
-                - {item.template_id for item in household_templates.values()}
+        unselected_template_ids = (
+            tuple(
+                sorted(
+                    {item.template_id for item in household_composition.templates}
+                    - {item.template_id for item in household_templates.values()}
+                )
             )
-        ) if operator_composition else ()
+            if operator_composition
+            else ()
+        )
         if unselected_template_ids:
             assumptions.append(
                 {
                     "id": OPERATOR_POPULATION_SOURCE_ID,
                     "subject": "unselected_household_templates",
                     "value": list(unselected_template_ids),
-                    "reason": "These operator templates did not match a generated household size in this seed and were not applied.",
+                    "reason": (
+                        "These operator templates did not match a generated household size in "
+                        "this seed and were not applied."
+                    ),
                     "source_id": OPERATOR_POPULATION_SOURCE_ID,
                 }
             )
@@ -1049,10 +1264,18 @@ class SyntheticPopulationGenerator:
                     "id": household_composition.source_ids[0],
                     "subject": "synthetic_household_composition_templates",
                     "value": {
-                        "applied_template_ids": sorted({item.template_id for item in household_templates.values()}),
-                        "minor_count": sum(1 for person in people.values() if person.age_years < 18),
+                        "applied_template_ids": sorted(
+                            {item.template_id for item in household_templates.values()}
+                        ),
+                        "minor_count": sum(
+                            1 for person in people.values() if person.age_years < 18
+                        ),
                     },
-                    "reason": "No household composition was entered, so generic synthetic templates place each generated minor with a linked adult. They describe no real family and are not regional statistics.",
+                    "reason": (
+                        "No household composition was entered, so generic synthetic templates "
+                        "place each generated minor with a linked adult. They describe no real "
+                        "family and are not regional statistics."
+                    ),
                     "source_id": household_composition.source_ids[0],
                 }
             )
@@ -1061,7 +1284,10 @@ class SyntheticPopulationGenerator:
                     "id": source_id,
                     "title": "Generic synthetic household composition templates",
                     "source_kind": "assumption",
-                    "description": "Template shapes and weights are a generator heuristic; operator-entered compositions replace them.",
+                    "description": (
+                        "Template shapes and weights are a generator heuristic; operator-entered "
+                        "compositions replace them."
+                    ),
                 }
                 for source_id in household_composition.source_ids
             )
@@ -1070,7 +1296,9 @@ class SyntheticPopulationGenerator:
                 "id": SYNTHETIC_HOUSEHOLD_CONSTRUCTION_ID,
                 "title": "Synthetic household relationship policy",
                 "source_kind": "assumption",
-                "description": "Household membership never creates family or guardian links by itself.",
+                "description": (
+                    "Household membership never creates family or guardian links by itself."
+                ),
             }
         )
         assumptions.append(
@@ -1079,16 +1307,26 @@ class SyntheticPopulationGenerator:
                 "subject": "synthetic_person_traits",
                 "value": {
                     "medical_support": "unknown unless an explicit rate is supplied",
-                    "support_need_rule": "explicit medical, medication, or additional access need raises support_need to at least 0.5",
+                    "support_need_rule": (
+                        "explicit medical, medication, or additional access need raises "
+                        "support_need to at least 0.5"
+                    ),
                     "mobility_support_from_profile": True,
-                    "household_role_rule": "child below 18; alone for a one-person adult household; otherwise adult or dependent when explicit support is linked",
+                    "household_role_rule": (
+                        "child below 18; alone for a one-person adult household; otherwise adult "
+                        "or dependent when explicit support is linked"
+                    ),
                     "mobility_weights": {
                         "independent": profile_set.manifest.template.independent_weight,
                         "assisted": profile_set.manifest.template.assisted_weight,
                         "wheelchair": profile_set.manifest.template.wheelchair_weight,
                     },
                 },
-                "reason": "Medical support, information access, and pet status remain unknown unless an explicit input rate or distribution is supplied. Mobility weights and caregiver links are generic generation rules, not local data.",
+                "reason": (
+                    "Medical support, information access, and pet status remain unknown unless "
+                    "an explicit input rate or distribution is supplied. Mobility weights and "
+                    "caregiver links are generic generation rules, not local data."
+                ),
                 "source_id": SYNTHETIC_TRAIT_ASSUMPTION_ID,
             }
         )
@@ -1097,16 +1335,27 @@ class SyntheticPopulationGenerator:
                 "id": SYNTHETIC_TRAIT_ASSUMPTION_ID,
                 "title": "Synthetic person-trait mapping",
                 "source_kind": "assumption",
-                "description": "Traits are generated from the documented profile template; mobility, medical support, and household relations are not inferred from age or identity.",
+                "description": (
+                    "Traits are generated from the documented profile template; mobility, "
+                    "medical support, and household relations are not inferred from age or "
+                    "identity."
+                ),
             }
         )
-        if (has_explicit_condition_input or has_explicit_selection) and not conditions.source_ids and not selection.source_ids:
+        if (
+            (has_explicit_condition_input or has_explicit_selection)
+            and not conditions.source_ids
+            and not selection.source_ids
+        ):
             sources.append(
                 {
                     "id": OPERATOR_POPULATION_SOURCE_ID,
                     "title": "Operator-entered population generation conditions",
                     "source_kind": "operator",
-                    "description": "Input rates and categories were entered by the scenario operator and are not regional statistics.",
+                    "description": (
+                        "Input rates and categories were entered by the scenario operator and "
+                        "are not regional statistics."
+                    ),
                 }
             )
         declared_household_source_ids = set()
@@ -1123,7 +1372,10 @@ class SyntheticPopulationGenerator:
                 for relationship in template.relationships
                 if relationship.source_id is not None
             )
-            if household_composition.source_kind == "operator" and not household_composition.source_ids:
+            if (
+                household_composition.source_kind == "operator"
+                and not household_composition.source_ids
+            ):
                 declared_household_source_ids.add(OPERATOR_POPULATION_SOURCE_ID)
         described_source_ids = {str(item.get("id")) for item in sources}
         for source_id in sorted(declared_household_source_ids - described_source_ids):
@@ -1131,9 +1383,12 @@ class SyntheticPopulationGenerator:
                 {
                     "id": source_id,
                     "title": "Operator-declared household composition reference",
-                    "source_kind": household_composition.source_kind if household_composition else "operator",
+                    "source_kind": household_composition.source_kind
+                    if household_composition
+                    else "operator",
                     "description": (
-                        "This is a user-supplied source ID declaration. The generator does not verify the citation or its applicability."
+                        "This is a user-supplied source ID declaration. The generator does "
+                        "not verify the citation or its applicability."
                     ),
                 }
             )
@@ -1158,7 +1413,8 @@ class SyntheticPopulationGenerator:
                         - {item.template_id for item in household_templates.values()}
                     )
                 )
-                if household_composition is not None else ()
+                if household_composition is not None
+                else ()
             ),
             household_composition=household_composition,
             person_requirements=tuple(generated_requirements),
@@ -1240,7 +1496,8 @@ def _sample_household_ages(
         )
         if supported_maximum is None:
             raise ValueError(
-                f"household template has no selected age support for person slot {profiles[slot_to_index[slot]].id!r} "
+                "household template has no selected age support for person slot "
+                f"{profiles[slot_to_index[slot]].id!r} "
                 f"within ages {minimum_age}..{maximum_age}"
             )
         minimum_by_slot[slot] = minimum_age
@@ -1253,7 +1510,9 @@ def _sample_household_ages(
     for caregiver, dependents in children_by_caregiver.items():
         for dependent in dependents:
             caregivers_by_dependent.setdefault(dependent, set()).add(caregiver)
-    remaining_caregivers = [len(caregivers_by_dependent.get(slot, ())) for slot in range(len(template.members))]
+    remaining_caregivers = [
+        len(caregivers_by_dependent.get(slot, ())) for slot in range(len(template.members))
+    ]
     forward_ready = [slot for slot, count in enumerate(remaining_caregivers) if count == 0]
     propagated_maximum = dict(maximum_by_slot)
     visited = 0
@@ -1366,7 +1625,14 @@ def age_bands_from_observations(
             label = row.category_labels.get(candidate, "")
             age_range = _parse_age_range(label)
             unit = (row.unit or "").casefold()
-            scale = {"人": 1, "person": 1, "persons": 1, "people": 1, "千人": 1_000, "万人": 10_000}.get(unit)
+            scale = {
+                "人": 1,
+                "person": 1,
+                "persons": 1,
+                "people": 1,
+                "千人": 1_000,
+                "万人": 10_000,
+            }.get(unit)
             scaled_count = row.value * scale if scale is not None else None
             if (
                 age_range is None
@@ -1430,7 +1696,14 @@ def household_mix_from_observations(
             if size < 1 or size > 10 or size in counts:
                 counts = {}
                 break
-            unit_scale = {"世帯": 1, "世帯数": 1, "household": 1, "households": 1, "千世帯": 1_000, "万世帯": 10_000}[unit]
+            unit_scale = {
+                "世帯": 1,
+                "世帯数": 1,
+                "household": 1,
+                "households": 1,
+                "千世帯": 1_000,
+                "万世帯": 10_000,
+            }[unit]
             scaled_count = row.value * unit_scale
             if abs(scaled_count - round(scaled_count)) > 1e-8:
                 counts = {}
@@ -1503,7 +1776,9 @@ def _evacuee_age_distribution(
     }
     total = sum(weighted.values())
     if total <= 0 or not math.isfinite(total):
-        raise ValueError("resident distribution and evacuation selection have no positive age-band weight")
+        raise ValueError(
+            "resident distribution and evacuation selection have no positive age-band weight"
+        )
     return {label: weight / total for label, weight in weighted.items()}
 
 
@@ -1556,4 +1831,3 @@ def _parse_age_range(label: str) -> tuple[int, int] | None:
         return None
     low, high = int(interval.group(1)), int(interval.group(2))
     return (low, high) if 0 <= low <= high <= 120 else None
-

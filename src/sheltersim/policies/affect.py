@@ -24,12 +24,20 @@ class AffectPropagationPolicy(Protocol):
     model_id: str
 
     def contact(
-        self, source: dict[str, Any], target: dict[str, Any], *, rate: float,
+        self,
+        source: dict[str, Any],
+        target: dict[str, Any],
+        *,
+        rate: float,
         relationship_trust: float,
     ) -> AffectContribution: ...
 
     def social_action(
-        self, signal: float, *, rate: float, relationship_trust: float,
+        self,
+        signal: float,
+        *,
+        rate: float,
+        relationship_trust: float,
     ) -> AffectContribution: ...
 
 
@@ -38,8 +46,14 @@ class LinearAffectPropagationPolicy:
 
     model_id = "linear-positive-negative-v1"
 
-    def contact(self, source: dict[str, Any], target: dict[str, Any], *, rate: float,
-                relationship_trust: float) -> AffectContribution:
+    def contact(
+        self,
+        source: dict[str, Any],
+        target: dict[str, Any],
+        *,
+        rate: float,
+        relationship_trust: float,
+    ) -> AffectContribution:
         del relationship_trust
         positive = _bounded_difference(source["positive_affect"], target["positive_affect"], rate)
         negative = _bounded_difference(source["negative_affect"], target["negative_affect"], rate)
@@ -50,8 +64,9 @@ class LinearAffectPropagationPolicy:
             uncertainty=max(0.0, negative - positive) * 0.25,
         )
 
-    def social_action(self, signal: float, *, rate: float,
-                      relationship_trust: float) -> AffectContribution:
+    def social_action(
+        self, signal: float, *, rate: float, relationship_trust: float
+    ) -> AffectContribution:
         del relationship_trust
         effect = rate * signal
         return AffectContribution(
@@ -68,15 +83,26 @@ class TrustWeightedAffectPropagationPolicy(LinearAffectPropagationPolicy):
 
     model_id = "trust-weighted-positive-negative-v1"
 
-    def contact(self, source: dict[str, Any], target: dict[str, Any], *, rate: float,
-                relationship_trust: float) -> AffectContribution:
+    def contact(
+        self,
+        source: dict[str, Any],
+        target: dict[str, Any],
+        *,
+        rate: float,
+        relationship_trust: float,
+    ) -> AffectContribution:
         weighted_rate = rate * (0.5 + _unit(relationship_trust))
-        return super().contact(source, target, rate=weighted_rate, relationship_trust=relationship_trust)
+        return super().contact(
+            source, target, rate=weighted_rate, relationship_trust=relationship_trust
+        )
 
-    def social_action(self, signal: float, *, rate: float,
-                      relationship_trust: float) -> AffectContribution:
+    def social_action(
+        self, signal: float, *, rate: float, relationship_trust: float
+    ) -> AffectContribution:
         weighted_rate = rate * (0.5 + _unit(relationship_trust))
-        return super().social_action(signal, rate=weighted_rate, relationship_trust=relationship_trust)
+        return super().social_action(
+            signal, rate=weighted_rate, relationship_trust=relationship_trust
+        )
 
 
 _AFFECT_FACTORIES = {
@@ -101,7 +127,9 @@ def affect_policy_catalog() -> dict[str, dict[str, Any]]:
             "formula": "delta = clamp((source - target) * rate, -rate, rate)",
             "source_id": "ASM-AFFECT-TRANSFER-V1",
             "reference": "assumption; no external calibration supplied",
-            "coefficient": {"rate": {"unit": "fraction_per_recorded_contact", "lower": 0.0, "upper": 1.0}},
+            "coefficient": {
+                "rate": {"unit": "fraction_per_recorded_contact", "lower": 0.0, "upper": 1.0}
+            },
             "evidence": "assumption; no external calibration supplied",
             "external_validation": False,
         },

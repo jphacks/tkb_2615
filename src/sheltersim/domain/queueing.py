@@ -24,9 +24,12 @@ def prepare_facility_queue(
     movement = world.model_state.get("movement_v1", {})
     if isinstance(movement, dict) and any(
         journey.get("facility_id") == facility_id
-        and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
+        and journey.get("purpose")
+        in {
+            "toilet_queue_position",
+            "resource_queue_position",
+            "toilet_queue_service",
+            "resource_queue_service",
         }
         for journey in movement.get("journeys", {}).values()
     ):
@@ -87,9 +90,13 @@ def prepare_independent_facility_queue(
         return
     movement = world.model_state.get("movement_v1", {})
     if isinstance(movement, dict) and any(
-        journey.get("queue_id") == queue_id and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
+        journey.get("queue_id") == queue_id
+        and journey.get("purpose")
+        in {
+            "toilet_queue_position",
+            "resource_queue_position",
+            "toilet_queue_service",
+            "resource_queue_service",
         }
         for journey in movement.get("journeys", {}).values()
     ):
@@ -168,7 +175,6 @@ def _abandon_and_retry(
     if movement_state is not None and "facility_geometry" in world.model_configs:
         from sheltersim.contracts.extensions import Point2D
         from sheltersim.domain.movement import (
-            MOVEMENT_STATE_KEY,
             _geometry,
             _zone_center,
             in_room_travel_minutes,
@@ -249,10 +255,14 @@ def _abandon_and_retry(
         from sheltersim.domain.facility_queues import (
             record_queue_transition,
         )
+
         request = finish_facility_queue_service(world, task.id, status="abandoned")
         if request is not None:
             record_queue_transition(
-                world, request, transition="abandoned", task_id=task.id,
+                world,
+                request,
+                transition="abandoned",
+                task_id=task.id,
                 wait_minutes=minute - request["requested_minute"],
                 causation_id=task.id,
             )
@@ -263,11 +273,13 @@ def _abandon_and_retry(
             event=abandon,
             realized_minute=minute,
             status=EventStatus.APPLIED,
-            detail="Agent left a prolonged low-urgency queue and will reconsider after a bounded delay",
+            detail=(
+                "Agent left a prolonged low-urgency queue and will reconsider after a bounded delay"
+            ),
         )
     )
     if route is not None and route.travel_minutes > 0:
-        from sheltersim.domain.movement import MOVEMENT_STATE_KEY, start_movement
+        from sheltersim.domain.movement import start_movement
 
         sequence = world.allocate_event_sequence()
         task_id = f"queue-abandon-travel-{sequence}"

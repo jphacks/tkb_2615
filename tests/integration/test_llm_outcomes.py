@@ -63,8 +63,13 @@ class TruncatedProvider:
 
     def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
         del max_output_tokens, timeout_seconds
-        return ProviderResponse(text='{"profiles":[{"profile_index":0,', model_id=model_id,
-                                input_tokens=10, output_tokens=5, elapsed_ms=0.0)
+        return ProviderResponse(
+            text='{"profiles":[{"profile_index":0,',
+            model_id=model_id,
+            input_tokens=10,
+            output_tokens=5,
+            elapsed_ms=0.0,
+        )
 
 
 def test_capped_run_manifest_reports_degraded_fallbacks(
@@ -146,10 +151,17 @@ def test_prepare_cli_warns_when_scenario_draft_falls_back(
 ) -> None:
     source = tmp_path / "scenario.json"
     source.write_text(small_benchmark_scenario(30).canonical_json(), encoding="utf-8")
-    monkeypatch.setattr(cli, "_cli_accounted_router",
-                        lambda *_args, **_kwargs: _router(TruncatedProvider()))
-    arguments = ["prepare", "--scenario", str(source), "--generate-scenario",
-                 "--output", str(tmp_path / "draft.json")]
+    monkeypatch.setattr(
+        cli, "_cli_accounted_router", lambda *_args, **_kwargs: _router(TruncatedProvider())
+    )
+    arguments = [
+        "prepare",
+        "--scenario",
+        str(source),
+        "--generate-scenario",
+        "--output",
+        str(tmp_path / "draft.json"),
+    ]
 
     assert cli.main(arguments) == 0
 
@@ -167,8 +179,9 @@ def test_project_report_exists_before_the_run_is_marked_completed(
     scenario = small_benchmark_scenario(30)
     store = ProjectStore(tmp_path)
     store.create_project("project")
-    saved = store.save_scenario("project", scenario,
-                                approved_hash=digest(json.loads(scenario.canonical_json())))
+    saved = store.save_scenario(
+        "project", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+    )
     store.create_run("project", "run", scenario.id, saved["scenario_version"])
     TimelineStore(store, "project", "run").record(
         BranchRuntime.from_world(WorldState.from_scenario(scenario))
@@ -211,13 +224,23 @@ def test_runtime_calls_leave_the_review_its_allowance(
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     store = ProjectStore(tmp_path / "projects")
     store.create_project("project")
-    settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=4,
-                           budget_usd=10.0)
+    settings = LLMSettings(
+        mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=4, budget_usd=10.0
+    )
     ledger = UsageLedger(store, "project", "cli-run-week")
     ledger.create(usage_limits(settings))
-    router = LLMRouter(settings, provider=AccountedProvider(
-        AcceptingProvider(), ledger, settings, "runtime", "main",
-        campaign_ledger=task_campaign_ledger(store)), tape=ResponseTape())
+    router = LLMRouter(
+        settings,
+        provider=AccountedProvider(
+            AcceptingProvider(),
+            ledger,
+            settings,
+            "runtime",
+            "main",
+            campaign_ledger=task_campaign_ledger(store),
+        ),
+        tape=ResponseTape(),
+    )
 
     run_scenario(small_benchmark_scenario(200), tmp_path / "run", llm_router=router)
 
@@ -225,8 +248,6 @@ def test_runtime_calls_leave_the_review_its_allowance(
     review = [record for record in router.records if record.stage == "review"]
     accepted_runtime = [record for record in runtime if record.outcome == "recorded"]
     assert len(accepted_runtime) == settings.max_api_calls - ANALYSIS_RESERVED_CALLS
-    assert {record.outcome for record in runtime} - {"recorded"} == {
-        "runtime_call_share_exhausted"
-    }
+    assert {record.outcome for record in runtime} - {"recorded"} == {"runtime_call_share_exhausted"}
     # Before the reserve, runtime decisions used every call and the review fell back.
     assert [record.outcome for record in review] == ["recorded"]

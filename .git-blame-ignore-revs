@@ -1,0 +1,11 @@
+# 動作を変えない一括整形のcommit（#139）。git blameで整形前の変更をたどるときに飛ばします。
+# 設定方法はdocs/testing.mdの「通常のoffline確認」を参照してください。
+
+# Apply ruff format to the whole repository
+bd7760e9468d7294364fa44ca119b2ca6346231d
+
+# Sort imports with ruff
+d1f1c677e3740105410104844d45a4d44a2f72aa
+
+# Split long string literals to fit the line length
+c757cfcad1b464526646ed9b0dabaf9fb668ffbc

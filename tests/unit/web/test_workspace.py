@@ -345,8 +345,13 @@ def test_repeated_identical_preview_reuses_the_saved_reply(
         def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
             del max_output_tokens, timeout_seconds
             calls.append(task.prompt_version)
-            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
-                                    output_tokens=5, elapsed_ms=0.0)
+            return ProviderResponse(
+                text=task.fallback_text,
+                model_id=model_id,
+                input_tokens=10,
+                output_tokens=5,
+                elapsed_ms=0.0,
+            )
 
     real_router = workspace_module.accounted_router
 
@@ -360,9 +365,13 @@ def test_repeated_identical_preview_reuses_the_saved_reply(
     store = ProjectStore(tmp_path / "projects")
     store.create_project("project")
     api = ProjectAPI(store, recover=False)
-    monkeypatch.setattr(api.workspace.research, "research",
-                        lambda query, **_kwargs: RegionResearchResult(
-                            request=query, researched_at=datetime.now(UTC)))
+    monkeypatch.setattr(
+        api.workspace.research,
+        "research",
+        lambda query, **_kwargs: RegionResearchResult(
+            request=query, researched_at=datetime.now(UTC)
+        ),
+    )
     body = {"text": "横浜市で地震が発生。避難者30人、期間は1日。"}
     try:
         first = api.workspace.preview("project", body)
@@ -390,8 +399,13 @@ def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
         def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
             del max_output_tokens, timeout_seconds
             calls.append(task.prompt_version)
-            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
-                                    output_tokens=5, elapsed_ms=0.0)
+            return ProviderResponse(
+                text=task.fallback_text,
+                model_id=model_id,
+                input_tokens=10,
+                output_tokens=5,
+                elapsed_ms=0.0,
+            )
 
     real_router = workspace_module.accounted_router
 
@@ -405,8 +419,9 @@ def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
     scenario = small_benchmark_scenario(30)
     store = ProjectStore(tmp_path / "projects")
     store.create_project("project")
-    saved = store.save_scenario("project", scenario,
-                                approved_hash=digest(json.loads(scenario.canonical_json())))
+    saved = store.save_scenario(
+        "project", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+    )
     store.create_run("project", "run", scenario.id, saved["scenario_version"])
     TimelineStore(store, "project", "run").record(
         BranchRuntime.from_world(WorldState.from_scenario(scenario))

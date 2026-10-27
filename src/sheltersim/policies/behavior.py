@@ -184,7 +184,9 @@ class WorldView:
             psychology_state.get("agents", {}) if isinstance(psychology_state, dict) else {}
         )
         presence_state = world.model_state.get("population_presence_v1", {})
-        presence_people = presence_state.get("people", {}) if isinstance(presence_state, dict) else {}
+        presence_people = (
+            presence_state.get("people", {}) if isinstance(presence_state, dict) else {}
+        )
         context_people = {
             identity: PersonContext.model_validate(raw)
             for identity, raw in population_context_people(world).items()
@@ -232,13 +234,9 @@ class WorldView:
                                     message.time,
                                 )
                             )
-                misinformation_by_agent[agent_id] = (
-                    min(1.0, pressure), tuple(sources)
-                )
+                misinformation_by_agent[agent_id] = (min(1.0, pressure), tuple(sources))
         else:
-            misinformation_by_agent = {
-                agent_id: (0.0, ()) for agent_id in world.agents
-            }
+            misinformation_by_agent = {agent_id: (0.0, ()) for agent_id in world.agents}
         sanitation_by_zone = (
             {
                 zone_id: record.get("sanitation", 1.0)
@@ -283,9 +281,7 @@ class WorldView:
                     hydration_need=agent.needs.hydration_need,
                 ),
                 stress=agent.stress,
-                chronic_distress=psychology_agents.get(agent_id, {}).get(
-                    "long_term_distress", 0.0
-                ),
+                chronic_distress=psychology_agents.get(agent_id, {}).get("long_term_distress", 0.0),
                 trust=agent.trust,
                 next_decision_at=agent.next_decision_at,
                 resource_service_enabled=world.schema_version == 6,
@@ -342,14 +338,24 @@ class WorldView:
                 zone_environment_assumption_ids=(
                     environment_by_zone[agent.zone_id].noise_assumption_ids
                 ),
-                ventilation_effectiveness=environment_by_zone[agent.zone_id].ventilation_effectiveness,
+                ventilation_effectiveness=environment_by_zone[
+                    agent.zone_id
+                ].ventilation_effectiveness,
                 lighting_level=environment_by_zone[agent.zone_id].lighting_level,
                 privacy_level=environment_by_zone[agent.zone_id].privacy_level,
                 temperature_c=environment_by_zone[agent.zone_id].temperature_c,
-                ventilation_hygiene_growth_per_minute=environment_by_zone[agent.zone_id].ventilation_hygiene_growth_per_minute,
-                privacy_discontent_per_minute=environment_by_zone[agent.zone_id].privacy_discontent_per_minute,
-                condition_modifier_event_ids=environment_by_zone[agent.zone_id].condition_modifier_event_ids,
-                condition_assumption_ids=environment_by_zone[agent.zone_id].condition_assumption_ids,
+                ventilation_hygiene_growth_per_minute=environment_by_zone[
+                    agent.zone_id
+                ].ventilation_hygiene_growth_per_minute,
+                privacy_discontent_per_minute=environment_by_zone[
+                    agent.zone_id
+                ].privacy_discontent_per_minute,
+                condition_modifier_event_ids=environment_by_zone[
+                    agent.zone_id
+                ].condition_modifier_event_ids,
+                condition_assumption_ids=environment_by_zone[
+                    agent.zone_id
+                ].condition_assumption_ids,
                 demand_modifiers=environment_by_zone[agent.zone_id].demand_modifiers,
                 min_rest_decision_minutes=(
                     environment_by_zone[agent.zone_id].min_rest_decision_minutes
@@ -365,13 +371,31 @@ class WorldView:
                 negative_affect=body_agents.get(agent_id, {}).get("negative_affect", 0.0),
                 hygiene_need=body_agents.get(agent_id, {}).get("hygiene_need", 0.0),
                 sanitation_level=sanitation_by_zone.get(agent.zone_id, 1.0),
-                caregiver_ids=tuple(context_people[agent_id].caregiver_ids) if agent_id in context_people else (),
-                care_for_ids=tuple(context_people[agent_id].care_for_ids) if agent_id in context_people else (),
-                parent_ids=tuple(context_people[agent_id].parent_ids) if agent_id in context_people else (),
+                caregiver_ids=tuple(context_people[agent_id].caregiver_ids)
+                if agent_id in context_people
+                else (),
+                care_for_ids=tuple(context_people[agent_id].care_for_ids)
+                if agent_id in context_people
+                else (),
+                parent_ids=tuple(context_people[agent_id].parent_ids)
+                if agent_id in context_people
+                else (),
                 roles=tuple(context_people[agent_id].roles) if agent_id in context_people else (),
-                usual_wake_minute=(context_people[agent_id].usual_wake_minute if agent_id in context_people else None),
-                usual_sleep_minute=(context_people[agent_id].usual_sleep_minute if agent_id in context_people else None),
-                required_sleep_minutes=(context_people[agent_id].required_sleep_minutes if agent_id in context_people else None),
+                usual_wake_minute=(
+                    context_people[agent_id].usual_wake_minute
+                    if agent_id in context_people
+                    else None
+                ),
+                usual_sleep_minute=(
+                    context_people[agent_id].usual_sleep_minute
+                    if agent_id in context_people
+                    else None
+                ),
+                required_sleep_minutes=(
+                    context_people[agent_id].required_sleep_minutes
+                    if agent_id in context_people
+                    else None
+                ),
                 personal_context_present=agent_id in context_people,
             )
             for agent_id, agent in sorted(world.agents.items())
@@ -805,7 +829,10 @@ class UtilityBehaviorPolicy:
             or self.sleep_debt_utility_weight < 0.0
         ):
             raise ValueError("sleep debt utility weight must be finite and non-negative")
-        if len(self.decision_interval_minutes_by_agent) > 100 or len(self.temperature_by_agent) > 100:
+        if (
+            len(self.decision_interval_minutes_by_agent) > 100
+            or len(self.temperature_by_agent) > 100
+        ):
             raise ValueError("per-Agent behavior coefficients exceed the 100-resident limit")
         if any(
             not isinstance(agent_id, str)
@@ -893,7 +920,8 @@ class UtilityBehaviorPolicy:
         if information_query_enabled:
             support_trigger = (
                 "support_need>=0.25 and maximum need/stress>=0.50, or information query pressure "
-                f">={self.information_query_threshold:g} or uncertainty>=0.65; no_open_support_request and "
+                f">={self.information_query_threshold:g} or uncertainty>=0.65; "
+                "no_open_support_request and "
                 "support_cooldown_elapsed"
             )
         else:
@@ -917,9 +945,7 @@ class UtilityBehaviorPolicy:
             and agent.support_cooldown_remaining_minutes == 0
         )
         zone_peers = tuple(
-            peer_id
-            for peer_id in view.zone_members.get(agent.zone_id, ())
-            if peer_id != agent_id
+            peer_id for peer_id in view.zone_members.get(agent.zone_id, ()) if peer_id != agent_id
         )
         family_peers = tuple(
             peer_id
@@ -934,7 +960,9 @@ class UtilityBehaviorPolicy:
             or agent.id in view.agents[peer_id].parent_ids
         )
         if explicit_care_peers:
-            family_peers = tuple(peer_id for peer_id in family_peers if peer_id in explicit_care_peers)
+            family_peers = tuple(
+                peer_id for peer_id in family_peers if peer_id in explicit_care_peers
+            )
         elif agent.personal_context_present:
             family_peers = ()
         family_target = max(
@@ -960,7 +988,8 @@ class UtilityBehaviorPolicy:
                 view.agents[peer_id].needs.hunger,
                 view.agents[peer_id].needs.fatigue,
                 view.agents[peer_id].needs.hydration_need,
-            ) > distress + 0.15
+            )
+            > distress + 0.15
         )
         help_target = max(
             help_targets,
@@ -997,10 +1026,9 @@ class UtilityBehaviorPolicy:
             # windows and 45-minute half-width are explicit assumptions until
             # they are replaced by the registered behavioral policy.
             minute_since_wake = (minute_of_day - agent.usual_wake_minute) % 1440
-            meal_rhythm_due = min(
-                abs(minute_since_wake - meal_offset)
-                for meal_offset in (120, 420, 660)
-            ) <= 45
+            meal_rhythm_due = (
+                min(abs(minute_since_wake - meal_offset) for meal_offset in (120, 420, 660)) <= 45
+            )
         candidates = [
             (ActionKind.WAIT, True, "always", 0.10 + 0.15 * (1.0 - distress), 0),
             (
@@ -1021,9 +1049,9 @@ class UtilityBehaviorPolicy:
                 ActionKind.SLEEP,
                 needs.fatigue >= 0.65 or agent.sleep_debt_minutes >= 240.0 or sleep_rhythm_due,
                 "fatigue>=0.65 or sleep_debt_minutes>=240 or individual_sleep_window",
-                0.25 + 0.90 * needs.fatigue + _sleep_debt_utility(
-                    agent, self.policy_version, self.sleep_debt_utility_weight
-                )
+                0.25
+                + 0.90 * needs.fatigue
+                + _sleep_debt_utility(agent, self.policy_version, self.sleep_debt_utility_weight)
                 + (0.20 if sleep_rhythm_due else 0.0)
                 - 0.20 * max(0.0, agent.lighting_level - 0.3),
                 0,
@@ -1046,7 +1074,9 @@ class UtilityBehaviorPolicy:
                 ActionKind.SEEK_INFORMATION,
                 can_seek_information,
                 "information_query_pressure>=threshold or uncertainty>=0.65",
-                0.20 + 0.55 * agent.uncertainty + self.information_query_utility_weight * agent.information_query_pressure,
+                0.20
+                + 0.55 * agent.uncertainty
+                + self.information_query_utility_weight * agent.information_query_pressure,
                 int(agent.uncertainty >= 0.9),
             ),
         ]
@@ -1057,7 +1087,10 @@ class UtilityBehaviorPolicy:
                         ActionKind.SOCIALIZE,
                         bool(zone_peers),
                         "at least one co-located person is available",
-                        0.10 + 0.25 * agent.uncertainty + 0.15 * agent.negative_affect + 0.10 * (1.0 - agent.reassurance),
+                        0.10
+                        + 0.25 * agent.uncertainty
+                        + 0.15 * agent.negative_affect
+                        + 0.10 * (1.0 - agent.reassurance),
                         0,
                     ),
                     (
@@ -1069,28 +1102,41 @@ class UtilityBehaviorPolicy:
                             view.agents[family_target].needs.hunger,
                             view.agents[family_target].needs.fatigue,
                             view.agents[family_target].needs.hydration_need,
-                        ) >= 0.25,
+                        )
+                        >= 0.25,
                         "co-located family or care-linked person has an unmet need",
-                        0.12 + (0.45 * max(
-                            view.agents[family_target].stress,
-                            view.agents[family_target].needs.toilet_urgency,
-                            view.agents[family_target].needs.hunger,
-                            view.agents[family_target].needs.fatigue,
-                            view.agents[family_target].needs.hydration_need,
-                        ) if family_target is not None else 0.0),
+                        0.12
+                        + (
+                            0.45
+                            * max(
+                                view.agents[family_target].stress,
+                                view.agents[family_target].needs.toilet_urgency,
+                                view.agents[family_target].needs.hunger,
+                                view.agents[family_target].needs.fatigue,
+                                view.agents[family_target].needs.hydration_need,
+                            )
+                            if family_target is not None
+                            else 0.0
+                        ),
                         int(family_target is not None and view.agents[family_target].stress >= 0.8),
                     ),
                     (
                         ActionKind.HELP_OTHERS,
                         help_target is not None,
                         "co-located person has substantially higher immediate need or stress",
-                        0.15 + (0.4 * max(
-                            view.agents[help_target].stress,
-                            view.agents[help_target].needs.toilet_urgency,
-                            view.agents[help_target].needs.hunger,
-                            view.agents[help_target].needs.fatigue,
-                            view.agents[help_target].needs.hydration_need,
-                        ) if help_target is not None else 0.0),
+                        0.15
+                        + (
+                            0.4
+                            * max(
+                                view.agents[help_target].stress,
+                                view.agents[help_target].needs.toilet_urgency,
+                                view.agents[help_target].needs.hunger,
+                                view.agents[help_target].needs.fatigue,
+                                view.agents[help_target].needs.hydration_need,
+                            )
+                            if help_target is not None
+                            else 0.0
+                        ),
                         int(help_target is not None and view.agents[help_target].stress >= 0.8),
                     ),
                 ]
@@ -1110,7 +1156,8 @@ class UtilityBehaviorPolicy:
                         ActionKind.COLLECT_MEAL,
                         needs.hunger >= self.hunger_action_threshold or meal_rhythm_due,
                         f"hunger>={self.hunger_action_threshold:g} or individual_meal_window",
-                        self.meal_utility_base + self.meal_utility_need_weight * needs.hunger
+                        self.meal_utility_base
+                        + self.meal_utility_need_weight * needs.hunger
                         + (0.12 if meal_rhythm_due else 0.0),
                         int(needs.hunger >= 0.85),
                     ),
@@ -1308,9 +1355,7 @@ def _sleep_debt_utility(
     return sleep_debt_utility_weight * agent.sleep_debt_minutes / required_sleep
 
 
-def _target_for_action(
-    view: WorldView, agent: AgentView, action: ActionKind
-) -> str | None:
+def _target_for_action(view: WorldView, agent: AgentView, action: ActionKind) -> str | None:
     """Choose a co-located partner in stable order for typed, replayable actions."""
     if action is ActionKind.SOCIALIZE:
         return next(
@@ -1356,7 +1401,8 @@ def _target_for_action(
                 view.agents[peer].needs.hunger,
                 view.agents[peer].needs.fatigue,
                 view.agents[peer].needs.hydration_need,
-            ) > own_pressure + 0.15
+            )
+            > own_pressure + 0.15
         )
     eligible = tuple(peers)
     if not eligible:

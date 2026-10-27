@@ -23,7 +23,9 @@ _BODY_UNITS = {
     "positive_affect_decay_per_minute": "normalized_affect_per_minute",
     "negative_affect_stress_rate": "normalized_stress_per_affect_per_minute",
     "hygiene_growth_per_minute": "normalized_hygiene_need_per_minute",
-    "sanitation_hygiene_growth_per_minute": "normalized_hygiene_need_per_minute_per_sanitation_deficit",
+    "sanitation_hygiene_growth_per_minute": (
+        "normalized_hygiene_need_per_minute_per_sanitation_deficit"
+    ),
     "sanitation_stress_rate": "normalized_stress_per_sanitation_deficit_per_minute",
     "affect_transfer_rate": "normalized_affect_per_recorded_contact",
     "relationship_trust_gain": "normalized_trust_per_recorded_contact",
@@ -39,7 +41,9 @@ _BODY_UNITS = {
     "hygiene_support_relief": "normalized_hygiene_need_per_completed_staff_support",
     "caregiver_assistance_stress_relief": "normalized_stress_relief_per_caregiver_assistance",
     "caregiver_assistance_reassurance_gain": "normalized_reassurance_per_caregiver_assistance",
-    "privacy_accommodation_discontent_relief": "normalized_discontent_relief_per_privacy_accommodation",
+    "privacy_accommodation_discontent_relief": (
+        "normalized_discontent_relief_per_privacy_accommodation"
+    ),
     "mobility_assistance_stress_relief": "normalized_stress_relief_per_mobility_assistance",
     "language_access_uncertainty_relief": "normalized_uncertainty_relief_per_language_access",
     "medical_assessment_uncertainty_relief": "normalized_uncertainty_relief_per_medical_assessment",
@@ -53,11 +57,14 @@ _BODY_UNITS = {
 _BODY_BOUNDS = {
     name: [
         0.0,
-        10.0 if name in {
+        10.0
+        if name
+        in {
             "awake_sleep_debt_minutes_per_minute",
             "rest_sleep_debt_recovery_per_minute",
             "sleep_sleep_debt_recovery_per_minute",
-        } else 1.0,
+        }
+        else 1.0,
     ]
     for name in _BODY_UNITS
     if name != "social_interaction_minutes"
@@ -96,7 +103,9 @@ _ENVIRONMENT_UNITS = {
     "max_rest_decision_minutes": "minute",
     "max_active_modifiers_per_zone": "modifier_count",
     "lighting_sleep_efficiency_loss": "relative_sleep_efficiency_per_normalized_lighting",
-    "ventilation_hygiene_growth_per_minute": "normalized_hygiene_need_per_minute_per_ventilation_deficit",
+    "ventilation_hygiene_growth_per_minute": (
+        "normalized_hygiene_need_per_minute_per_ventilation_deficit"
+    ),
     "privacy_discontent_per_minute": "normalized_discontent_per_minute_per_privacy_deficit",
     "temperature_stress_per_degree_minute": "normalized_stress_per_celsius_degree_per_minute",
     "comfortable_min_temperature_c": "degree_celsius",
@@ -163,69 +172,85 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
     per_agent_parameters = {
         "sleep_debt_stress_rate_by_agent": (
             "normalized_stress_per_sleep_debt_minute_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate sleep-debt response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate sleep-debt response; others "
+            "use the shared coefficient",
         ),
         "negative_affect_stress_rate_by_agent": (
             "normalized_stress_per_negative_affect_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate negative-affect response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate negative-affect response; "
+            "others use the shared coefficient",
         ),
         "discontent_stress_rate_by_agent": (
             "normalized_stress_per_discontent_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate discontent response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate discontent response; others "
+            "use the shared coefficient",
         ),
         "complaint_reassurance_gain_by_agent": (
             "normalized_reassurance_per_staff_response_by_agent_id",
-            "Residents with an explicit ID may use a separate staff reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate staff reassurance response; "
+            "others use the shared coefficient",
         ),
         "hygiene_support_relief_by_agent": (
             "normalized_hygiene_need_per_completed_staff_support_by_agent_id",
-            "Residents with an explicit ID may use a separate hygiene-support response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate hygiene-support response; "
+            "others use the shared coefficient",
         ),
         "caregiver_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_caregiver_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate caregiver stress response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate caregiver stress response; "
+            "others use the shared coefficient",
         ),
         "caregiver_assistance_reassurance_gain_by_agent": (
             "normalized_reassurance_per_caregiver_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate caregiver reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate caregiver reassurance "
+            "response; others use the shared coefficient",
         ),
         "privacy_accommodation_discontent_relief_by_agent": (
             "normalized_discontent_relief_per_privacy_accommodation_by_agent_id",
-            "Residents with an explicit ID may use a separate privacy response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate privacy response; others use "
+            "the shared coefficient",
         ),
         "mobility_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_mobility_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate mobility response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate mobility response; others use "
+            "the shared coefficient",
         ),
         "language_access_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_language_access_by_agent_id",
-            "Residents with an explicit ID may use a separate language-access response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate language-access response; "
+            "others use the shared coefficient",
         ),
         "medical_assessment_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_medical_assessment_by_agent_id",
-            "Residents with an explicit ID may use a separate medical-assessment response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate medical-assessment response; "
+            "others use the shared coefficient",
         ),
         "medication_support_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_medication_support_by_agent_id",
-            "Residents with an explicit ID may use a separate medication-support response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate medication-support response; "
+            "others use the shared coefficient",
         ),
         "dependent_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_dependent_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate dependent stress response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate dependent stress response; "
+            "others use the shared coefficient",
         ),
         "dependent_assistance_reassurance_gain_by_agent": (
             "normalized_reassurance_per_dependent_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate dependent reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate dependent reassurance "
+            "response; others use the shared coefficient",
         ),
     }
     for field, (unit, applicability) in per_agent_parameters.items():
         body[f"{field}.*"] = _parameter(
-            {}, unit, bounds=[0.0, 1.0], scope="per_agent_id", replaceable=True,
+            {},
+            unit,
+            bounds=[0.0, 1.0],
+            scope="per_agent_id",
+            replaceable=True,
             applicability=applicability,
         )
-    body["relationship_distance_scale_m"] = _parameter(
-        2.0, "metre", bounds=[0.1, 100.0]
-    )
+    body["relationship_distance_scale_m"] = _parameter(2.0, "metre", bounds=[0.1, 100.0])
     body["affect_policy"] = _parameter(
         "linear-positive-negative-v1", "installed_policy_id", replaceable=True
     )
@@ -237,19 +262,23 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
             for mobility, speed in movement_config["speed_m_per_minute_by_mobility"].items()
         )
     }
-    movement.update({
-        name: _parameter(
-            movement_config[name],
-            _MOVEMENT_UNITS[name],
-            bounds=[1.0, None] if name == "maximum_density_slowdown" else [0.0, None],
-        )
-        for name in ("density_slowdown_per_person_m2", "maximum_density_slowdown")
-    })
+    movement.update(
+        {
+            name: _parameter(
+                movement_config[name],
+                _MOVEMENT_UNITS[name],
+                bounds=[1.0, None] if name == "maximum_density_slowdown" else [0.0, None],
+            )
+            for name in ("density_slowdown_per_person_m2", "maximum_density_slowdown")
+        }
+    )
     staff = canonical_staff_dynamics_config(None)
-    staff_v2 = canonical_staff_dynamics_config({
-        "policy_version": "continuous-duty-fatigue-v2",
-        "source_id": "ASM-STAFF-DYNAMICS-V2",
-    })
+    staff_v2 = canonical_staff_dynamics_config(
+        {
+            "policy_version": "continuous-duty-fatigue-v2",
+            "source_id": "ASM-STAFF-DYNAMICS-V2",
+        }
+    )
     staff_bounds = {
         "max_continuous_work_minutes": [1, 1440],
         "rest_minutes": [1, 480],
@@ -264,8 +293,13 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
         for name in staff_bounds
     }
     staff_v2_parameters["shift_windows_by_staff.*"] = _parameter(
-        {}, "minute_of_week_intervals", bounds=[0, 10080], lower=0, upper=10080,
-        scope="per_staff_shift_windows", replaceable=True,
+        {},
+        "minute_of_week_intervals",
+        bounds=[0, 10080],
+        lower=0,
+        upper=10080,
+        scope="per_staff_shift_windows",
+        replaceable=True,
         applicability=(
             "Weekly [start,end) on-duty intervals for explicitly named staff IDs; "
             "intervals repeat every week and do not represent measured availability."
@@ -326,7 +360,9 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
         if name in _ENVIRONMENT_UNITS
     }
     environment_parameters["baseline_by_zone.*"] = _parameter(
-        {}, "typed_zone_environment_baseline", scope="per_zone_id",
+        {},
+        "typed_zone_environment_baseline",
+        scope="per_zone_id",
         field_units={
             "ventilation_effectiveness": "normalized_0_1",
             "lighting_level": "normalized_0_1",
@@ -342,9 +378,11 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
     )
     return {
         "body_state_v1": _model(
-            "life-state-feedback-v1", "ASM-LIFE-STATE-FEEDBACK-V1",
+            "life-state-feedback-v1",
+            "ASM-LIFE-STATE-FEEDBACK-V1",
             "bounded minute-step need, sleep-debt, hygiene, uncertainty, affect, and trust updates",
-            body, implementation_version="3",
+            body,
+            implementation_version="3",
         ),
         "affect_propagation": {
             model_id: {
@@ -362,47 +400,73 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
             for model_id, metadata in affect_policy_catalog().items()
         },
         "movement_v1": _model(
-            "spatial-route-and-room-waypoint-v2", "ASM-SPATIAL-MOVEMENT-V2",
-            "declared metre-scale route length divided by mobility speed and bounded density slowdown",
+            "spatial-route-and-room-waypoint-v2",
+            "ASM-SPATIAL-MOVEMENT-V2",
+            "declared metre-scale route length divided by mobility speed and bounded density "
+            "slowdown",
             movement,
         ),
         "staff_dynamics_v1": _model(
-            "continuous-duty-fatigue-v1", "ASM-STAFF-DYNAMICS-V1",
+            "continuous-duty-fatigue-v1",
+            "ASM-STAFF-DYNAMICS-V1",
             "continuous-duty fatigue without shift windows or off-shift recovery",
-            {name: value for name, value in staff_parameters.items()
-             if name not in {"shift_windows_by_staff.*", "off_shift_fatigue_recovery_per_minute"}},
+            {
+                name: value
+                for name, value in staff_parameters.items()
+                if name not in {"shift_windows_by_staff.*", "off_shift_fatigue_recovery_per_minute"}
+            },
         ),
         "staff_dynamics_shift_v2": _model(
-            "continuous-duty-fatigue-v2", "ASM-STAFF-DYNAMICS-V2",
+            "continuous-duty-fatigue-v2",
+            "ASM-STAFF-DYNAMICS-V2",
             "fatigue rises with continuous duty and recovers during off-shift or required rest",
-            staff_v2_parameters, implementation_version="2",
+            staff_v2_parameters,
+            implementation_version="2",
         ),
         "staff_operations_v1": _model(
-            "autonomous-routed-staff-v1", "ASM-STAFF-OPERATIONS-V1",
+            "autonomous-routed-staff-v1",
+            "ASM-STAFF-OPERATIONS-V1",
             "bounded workload rotation and role-compatible task urgency over reachable routes",
-            operation_parameters, implementation_version="2",
+            operation_parameters,
+            implementation_version="2",
         ),
         "zone_environment_v1": _model(
-            "zone-environment-v2", "ASM-H19-ZONE-ENVIRONMENT-V2",
+            "zone-environment-v2",
+            "ASM-H19-ZONE-ENVIRONMENT-V2",
             "active typed condition modifiers feed rest, hygiene, privacy, and temperature stress",
-            environment_parameters, implementation_version="2",
+            environment_parameters,
+            implementation_version="2",
         ),
         "zone_environment_legacy_v1": _model(
-            "zone-environment-v1", "ASM-H19-ZONE-ENVIRONMENT-V1",
+            "zone-environment-v1",
+            "ASM-H19-ZONE-ENVIRONMENT-V1",
             "legacy noise and action-demand modifiers without condition feedback",
-            {name: value for name, value in environment_parameters.items()
-             if name not in {
-                 "lighting_sleep_efficiency_loss", "ventilation_hygiene_growth_per_minute",
-                 "privacy_discontent_per_minute", "temperature_stress_per_degree_minute",
-                 "comfortable_min_temperature_c", "comfortable_max_temperature_c",
-                 "baseline_by_zone.*",
-             }},
+            {
+                name: value
+                for name, value in environment_parameters.items()
+                if name
+                not in {
+                    "lighting_sleep_efficiency_loss",
+                    "ventilation_hygiene_growth_per_minute",
+                    "privacy_discontent_per_minute",
+                    "temperature_stress_per_degree_minute",
+                    "comfortable_min_temperature_c",
+                    "comfortable_max_temperature_c",
+                    "baseline_by_zone.*",
+                }
+            },
         ),
     }
 
 
-def _model(model_id: str, source_id: str, formula: str,
-           parameters: dict[str, dict[str, Any]], *, implementation_version: str = "1") -> dict[str, Any]:
+def _model(
+    model_id: str,
+    source_id: str,
+    formula: str,
+    parameters: dict[str, dict[str, Any]],
+    *,
+    implementation_version: str = "1",
+) -> dict[str, Any]:
     return {
         "implementation_id": model_id,
         "implementation_version": implementation_version,

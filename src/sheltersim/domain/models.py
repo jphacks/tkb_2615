@@ -143,9 +143,7 @@ class AgentInformationState:
             self.correction_accepted, bool
         ):
             raise ValueError("correction exposure and acceptance must be boolean")
-        if not isinstance(self.ever_misbelieved, bool) or not isinstance(
-            self.ever_forgotten, bool
-        ):
+        if not isinstance(self.ever_misbelieved, bool) or not isinstance(self.ever_forgotten, bool):
             raise ValueError("historical information flags must be boolean")
         if not isinstance(self.last_correction_accepted, bool):
             raise ValueError("last correction outcome must be boolean")
@@ -181,25 +179,37 @@ class AgentInformationState:
     def from_dict(cls, document: dict[str, Any]) -> AgentInformationState:
         legacy_fields = {"message_id", "belief", "source", "last_contact", "last_event_id"}
         current_fields = legacy_fields | {
-            "exposed", "belief_strength", "share_propensity", "correction_exposed",
+            "exposed",
+            "belief_strength",
+            "share_propensity",
+            "correction_exposed",
             "correction_accepted",
         }
         historical_fields = current_fields | {"ever_misbelieved", "ever_forgotten"}
         extended_fields = historical_fields | {"last_correction_accepted"}
         if not isinstance(document, dict) or set(document) not in (
-            legacy_fields, current_fields, historical_fields, extended_fields
+            legacy_fields,
+            current_fields,
+            historical_fields,
+            extended_fields,
         ):
             raise ValueError("AgentInformationState fields do not match the supported schema")
         values = dict(document)
         if set(document) == legacy_fields:
             belief = InformationBeliefStatus(document["belief"])
             corrected = belief in (
-                InformationBeliefStatus.VERIFIED, InformationBeliefStatus.REJECTED
+                InformationBeliefStatus.VERIFIED,
+                InformationBeliefStatus.REJECTED,
             )
             values.update(
                 exposed=True,
-                belief_strength=(1.0 if belief is InformationBeliefStatus.VERIFIED else
-                                 0.0 if belief is InformationBeliefStatus.REJECTED else 0.5),
+                belief_strength=(
+                    1.0
+                    if belief is InformationBeliefStatus.VERIFIED
+                    else 0.0
+                    if belief is InformationBeliefStatus.REJECTED
+                    else 0.5
+                ),
                 share_propensity=(0.0 if belief is InformationBeliefStatus.UNKNOWN else 0.5),
                 correction_exposed=corrected,
                 correction_accepted=corrected,
@@ -302,12 +312,17 @@ class InformationSpreadConfig:
                 else 4.0
                 if name == "query_utility_weight"
                 else 1.0
-                if name in {
-                    "correction_acceptance_probability", "correction_trust_sensitivity",
-                    "correction_source_sensitivity", "rumor_belief_probability",
-                    "rumor_trust_sensitivity", "rumor_source_sensitivity",
+                if name
+                in {
+                    "correction_acceptance_probability",
+                    "correction_trust_sensitivity",
+                    "correction_source_sensitivity",
+                    "rumor_belief_probability",
+                    "rumor_trust_sensitivity",
+                    "rumor_source_sensitivity",
                     "default_source_reliability",
-                    "distress_sharing_sensitivity", "share_propensity_decay_per_minute",
+                    "distress_sharing_sensitivity",
+                    "share_propensity_decay_per_minute",
                     "forgetting_rate_per_minute",
                 }
                 else 1.0
@@ -321,17 +336,14 @@ class InformationSpreadConfig:
                 raise ValueError(
                     f"information_spread {name} must be finite and between 0 and {maximum}"
                 )
-        if (
-            len(self.correction_source_reliability_by_id) > 100
-            or any(
-                not isinstance(source_id, str)
-                or not _INFORMATION_ID.fullmatch(source_id)
-                or type(value) not in (int, float)
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0.0 <= value <= 1.0
-                for source_id, value in self.correction_source_reliability_by_id.items()
-            )
+        if len(self.correction_source_reliability_by_id) > 100 or any(
+            not isinstance(source_id, str)
+            or not _INFORMATION_ID.fullmatch(source_id)
+            or type(value) not in (int, float)
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+            for source_id, value in self.correction_source_reliability_by_id.items()
         ):
             raise ValueError(
                 "correction source reliability must map up to 100 source IDs to [0, 1]"

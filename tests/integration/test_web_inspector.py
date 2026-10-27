@@ -67,5 +67,3 @@ def test_query_filters_are_bounded_and_run_ids_cannot_escape_root(
         inspector.agent(run_id, "unknown-agent")
     with pytest.raises(WebQueryError, match="duration"):
         inspector.zone_map(run_id, at_minute=99)
-
-

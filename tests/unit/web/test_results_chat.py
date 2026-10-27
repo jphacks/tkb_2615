@@ -34,12 +34,7 @@ def test_exact_field_fallback_refuses_unknown_aliases_and_ambiguous_fields() -> 
     sources = [{"alias": "S1", "label": "Selected Agent"}]
 
     assert _deterministic_exact_field_claim("S2 stress_mean", evidence, sources) is None
-    assert (
-        _deterministic_exact_field_claim(
-            "S1 stress_mean and trust", evidence, sources
-        )
-        is None
-    )
+    assert _deterministic_exact_field_claim("S1 stress_mean and trust", evidence, sources) is None
 
 
 def test_proof_matching_accepts_only_exact_copies() -> None:
@@ -55,5 +50,3 @@ def test_proof_matching_accepts_only_exact_copies() -> None:
     assert not _proof_matches("synthetic assumptions", "synthetic assumption")
     assert not _proof_matches(_MISSING, "25")
     assert not _proof_matches({"nested": 1}, '{"nested":1}')
-
-

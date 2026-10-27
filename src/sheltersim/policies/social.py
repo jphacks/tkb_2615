@@ -118,7 +118,9 @@ class SocialPropagationParameters:
         if source_type is not None and source_type != "assumption":
             raise ValueError("social_propagation source_type must be assumption")
         if configured_source is not None and configured_source not in {
-            _SOURCE_ID, _BOSSE_SOURCE_ID, _DEGROOT_SOURCE_ID
+            _SOURCE_ID,
+            _BOSSE_SOURCE_ID,
+            _DEGROOT_SOURCE_ID,
         }:
             raise ValueError("social_propagation source_id does not match its model assumption")
         if (
@@ -402,8 +404,7 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
 
         previous_cooldowns = _read_runtime_state(runtime_state)[1]
         cooldowns = {
-            agent_id: due for agent_id, due in previous_cooldowns.items()
-            if due > view.minute_index
+            agent_id: due for agent_id, due in previous_cooldowns.items() if due > view.minute_index
         }
         output: list[AgentStateDelta] = []
         contact_traces: list[SocialContactTrace] = []
@@ -414,25 +415,17 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
             delta = base_by_id[agent_id]
             contacts = by_recipient.get(agent_id, [])
             recipient = view.agents[agent_id]
-            eligible = (
-                contacts
-                if view.minute_index >= previous_cooldowns.get(agent_id, 0)
-                else []
-            )
+            eligible = contacts if view.minute_index >= previous_cooldowns.get(agent_id, 0) else []
             weights: list[float] = []
             for contact in eligible:
                 sender = view.agents[contact.source_id]
-                expressiveness = self.parameters.source_expressiveness_by_agent.get(
-                    sender.id, 1.0
-                )
+                expressiveness = self.parameters.source_expressiveness_by_agent.get(sender.id, 1.0)
                 channel_strength = {
                     "family": self.parameters.family_channel_strength,
                     "same_zone": self.parameters.same_zone_channel_strength,
                     "nearby_zone": self.parameters.nearby_zone_channel_strength,
                 }.get(contact.contact_basis, 0.0)
-                weights.append(
-                    expressiveness * channel_strength * recipient.stress_sensitivity
-                )
+                weights.append(expressiveness * channel_strength * recipient.stress_sensitivity)
             weight_total = math.fsum(weights)
             shift = 0.0
             pair_shifts: list[float] = []
@@ -444,7 +437,9 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
                 aggregate_rate = gamma
                 current = view.agents[agent_id].stress
                 raw_pair_shifts = [
-                    gamma * weight / weight_total
+                    gamma
+                    * weight
+                    / weight_total
                     * (view.agents[contact.source_id].stress - current)
                     for contact, weight in zip(eligible, weights, strict=True)
                 ]

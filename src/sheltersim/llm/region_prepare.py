@@ -15,8 +15,14 @@ from sheltersim.experiments.initial_scenario import (
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.contracts import LLMStage, LLMTask
 from sheltersim.llm.provider import LLMRouter
-from sheltersim.region.models import RegionModel, RegionResearchResult
+from sheltersim.region.conditions import (
+    OPERATOR_CONDITION_SOURCE_ID,
+    InitialResourceCondition,
+    OperationalConditions,
+)
 from sheltersim.region.facility import FacilityZoneCondition
+from sheltersim.region.models import RegionModel, RegionResearchResult
+from sheltersim.region.plan_import import ImportedPlanGeometry
 from sheltersim.region.population import (
     AgeBand,
     EvacuationSelection,
@@ -25,9 +31,6 @@ from sheltersim.region.population import (
     age_bands_from_observations,
     household_mix_from_observations,
 )
-from sheltersim.region.conditions import OperationalConditions
-from sheltersim.region.conditions import InitialResourceCondition, OPERATOR_CONDITION_SOURCE_ID
-from sheltersim.region.plan_import import ImportedPlanGeometry
 
 _MAX_INPUT_LENGTH = 4_000
 _DISASTER_TERMS = (
@@ -63,22 +66,35 @@ def parse_scenario_text(text: str, *, router: LLMRouter | None = None) -> Scenar
             stage=LLMStage.PREPARE,
             input_text=(
                 "Extract scenario values only when they are explicitly stated in the user's text. "
-                "Do not invent municipality, disaster, population, duration, floor area, facility counts, initial stock, schedules, trait percentages, hazard exposure, or official statistics. "
+                "Do not invent municipality, disaster, population, duration, floor area, "
+                "facility counts, initial stock, schedules, trait percentages, hazard "
+                "exposure, or official statistics. "
                 "Unknown water or food stock must stay null; never convert unknown to zero. "
                 "Treat season as context and do not infer temperature effects from season alone. "
-                "For an explicitly stated operating schedule, use minutes from scenario start and include only supported typed condition kinds in the schema; convert stated hours or days exactly, and leave unstated start/end times unknown. "
-                "Power outages require an explicitly supplied component_id plus infrastructure dependency_edges; equipment failures require a known facility_id and units_out. Never invent IDs or dependency paths. "
-            "Use facility_zones only for explicitly requested optional/custom zones; do not remove sleeping, toilet, food, water, intake, medical, staff, or corridor functions. "
-                "A disaster name alone is context, not evidence of a facility outage, route closure, heat/cold stress, or damage event. "
-                "Use population rates and distributions only when the user stated them or attached source data. "
-                "Return an empty string for every unstated scalar and empty arrays or default objects for unstated structured conditions.\n\n"
-                + text
+                "For an explicitly stated operating schedule, use minutes from scenario "
+                "start and include only supported typed condition kinds in the schema; "
+                "convert stated hours or days exactly, and leave unstated start/end times "
+                "unknown. "
+                "Power outages require an explicitly supplied component_id plus "
+                "infrastructure dependency_edges; equipment failures require a known "
+                "facility_id and units_out. Never invent IDs or dependency paths. "
+                "Use facility_zones only for explicitly requested optional/custom zones; do "
+                "not remove sleeping, toilet, food, water, intake, medical, staff, or "
+                "corridor functions. "
+                "A disaster name alone is context, not evidence of a facility outage, route "
+                "closure, heat/cold stress, or damage event. "
+                "Use population rates and distributions only when the user stated them or "
+                "attached source data. "
+                "Return an empty string for every unstated scalar and empty arrays or "
+                "default objects for unstated structured conditions.\n\n" + text
             ),
             state_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             prompt_version="region-scenario-extraction-v1",
             schema_version=1,
             output_schema=_intent_json_schema(),
-            fallback_text=json.dumps(_to_llm_contract(explicit), ensure_ascii=False, separators=(",", ":")),
+            fallback_text=json.dumps(
+                _to_llm_contract(explicit), ensure_ascii=False, separators=(",", ":")
+            ),
             max_output_tokens=1_600,
         )
         try:
@@ -98,12 +114,8 @@ def parse_scenario_text(text: str, *, router: LLMRouter | None = None) -> Scenar
     missing = tuple(field for field in required if not explicit.get(field))
     request = None
     if not missing:
-        field_origins = {
-            field: "user" for field in rule_fields
-        }
-        field_origins.update(
-            {field: "llm_extracted" for field in set(explicit) - rule_fields}
-        )
+        field_origins = {field: "user" for field in rule_fields}
+        field_origins.update({field: "llm_extracted" for field in set(explicit) - rule_fields})
         for field in ("duration_days", "seed", "accessible_toilet_count"):
             field_origins.setdefault(field, "default")
         request = InitialScenarioRequest.model_validate(
@@ -132,7 +144,9 @@ def parse_scenario_text(text: str, *, router: LLMRouter | None = None) -> Scenar
             }
         )
     if router is not None:
-        warnings.append("生成された条件は下書きです。地域・人数・期間・設備を確認してから確定してください。")
+        warnings.append(
+            "生成された条件は下書きです。地域・人数・期間・設備を確認してから確定してください。"
+        )
     return ScenarioIntentParse(
         request=request,
         missing_fields=missing,
@@ -190,22 +204,16 @@ def build_scenario_from_text(
         "extraction_source": parsed.source,
         "extraction_warnings": list(parsed.warnings),
     }
-    draft = draft.model_copy(
-        update={"scenario": ScenarioSpec.model_validate(document)}
-    )
+    draft = draft.model_copy(update={"scenario": ScenarioSpec.model_validate(document)})
     return parsed, draft
 
 
 def _parse_explicit_fields(text: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    municipality_code = re.search(
-        r"(?:自治体|市町村)コード\s*[:：=]?\s*(\d{5})(?!\d)", text
-    )
+    municipality_code = re.search(r"(?:自治体|市町村)コード\s*[:：=]?\s*(\d{5})(?!\d)", text)
     if municipality_code:
         values["municipality_code"] = municipality_code.group(1)
-    population = re.search(
-        r"([0-9][0-9,]*)\s*(?:人|名|people|evacuees)", text, re.IGNORECASE
-    )
+    population = re.search(r"([0-9][0-9,]*)\s*(?:人|名|people|evacuees)", text, re.IGNORECASE)
     if population:
         values["evacuees"] = int(population.group(1).replace(",", ""))
     duration = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:日間|日|days?|d)", text, re.IGNORECASE)
@@ -221,7 +229,9 @@ def _parse_explicit_fields(text: str) -> dict[str, Any]:
     area = re.search(r"([0-9][0-9,.]*)\s*(?:m2|m²|㎡|平方メートル)", text, re.IGNORECASE)
     if area:
         values["gross_area_m2"] = float(area.group(1).replace(",", ""))
-    accessible = re.search(r"([0-9]+)\s*(?:基|台)\s*(?:の)?\s*(?:車いす|車椅子|バリアフリー)?\s*(?:トイレ|便所)", text)
+    accessible = re.search(
+        r"([0-9]+)\s*(?:基|台)\s*(?:の)?\s*(?:車いす|車椅子|バリアフリー)?\s*(?:トイレ|便所)", text
+    )
     if accessible is None:
         accessible = re.search(
             r"(?:車いす|車椅子|バリアフリー)?\s*(?:トイレ|便所)\s*([0-9]+)\s*(?:基|台)",
@@ -233,12 +243,14 @@ def _parse_explicit_fields(text: str) -> dict[str, Any]:
     if staff:
         values["staff_count"] = int(staff.group(1))
     water = re.search(
-        r"(?:飲料水|備蓄水|水(?:の在庫|在庫)?|water(?: stock)?)\s*[:：=]?\s*([0-9][0-9,.]*)\s*(ml|mL|リットル|ℓ|L|l)",
+        r"(?:飲料水|備蓄水|水(?:の在庫|在庫)?|water(?: stock)?)"
+        r"\s*[:：=]?\s*([0-9][0-9,.]*)\s*(ml|mL|リットル|ℓ|L|l)",
         text,
         re.IGNORECASE,
     )
     food = re.search(
-        r"(?:食料|食糧|食事在庫|food(?: stock)?|meal(?: stock)?)\s*[:：=]?\s*([0-9][0-9,]*)\s*(?:食分|食|meal units?)",
+        r"(?:食料|食糧|食事在庫|food(?: stock)?|meal(?: stock)?)"
+        r"\s*[:：=]?\s*([0-9][0-9,]*)\s*(?:食分|食|meal units?)",
         text,
         re.IGNORECASE,
     )
@@ -284,7 +296,9 @@ def _parse_explicit_fields(text: str) -> dict[str, Any]:
         ("車いす対応", ("車椅子", "車いす", "wheelchair", "バリアフリー")),
     )
     conditions = [
-        label for label, terms in condition_map if any(term.casefold() in text.casefold() for term in terms)
+        label
+        for label, terms in condition_map
+        if any(term.casefold() in text.casefold() for term in terms)
     ]
     if conditions:
         values["facility_conditions"] = conditions
@@ -303,7 +317,8 @@ def _extract_municipality(text: str) -> str | None:
     if municipality_match:
         return municipality_match.group(0)
     english_match = re.search(
-        r"\bin\s+([A-Za-z][A-Za-z .'-]{1,40}?)(?=\s+(?:for|during|with|disaster|flood|earthquake)|[,.;]|$)",
+        r"\bin\s+([A-Za-z][A-Za-z .'-]{1,40}?)"
+        r"(?=\s+(?:for|during|with|disaster|flood|earthquake)|[,.;]|$)",
         text,
         re.IGNORECASE,
     )
@@ -313,20 +328,38 @@ def _extract_municipality(text: str) -> str | None:
 def _merge_explicit(explicit: dict[str, Any], extracted: dict[str, Any]) -> dict[str, Any]:
     merged = dict(explicit)
     for key, value in extracted.items():
-        if key == "operational_conditions" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+        if (
+            key == "operational_conditions"
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
             merged[key] = _merge_operational_conditions(merged[key], value)
-        elif key == "population_conditions" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+        elif (
+            key == "population_conditions"
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
             merged[key] = _merge_condition_object(merged[key], value)
-        elif key == "evacuation_selection" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+        elif (
+            key == "evacuation_selection"
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
             merged[key] = _merge_condition_object(merged[key], value)
-        elif key == "zone_area_shares" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+        elif (
+            key == "zone_area_shares"
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
             merged[key] = merged[key] | value
         elif key not in merged and value is not None:
             merged[key] = value
     return merged
 
 
-def _merge_operational_conditions(explicit: dict[str, Any], extracted: dict[str, Any]) -> dict[str, Any]:
+def _merge_operational_conditions(
+    explicit: dict[str, Any], extracted: dict[str, Any]
+) -> dict[str, Any]:
     merged = _merge_condition_object(explicit, extracted)
     explicit_stock = explicit.get("initial_resources", {})
     extracted_stock = extracted.get("initial_resources", {})
@@ -354,8 +387,18 @@ def _merge_operational_conditions(explicit: dict[str, Any], extracted: dict[str,
         if isinstance(left, list) and isinstance(right, list):
             identity_field = "facility_id" if list_key == "equipment" else None
             if identity_field:
-                by_id = {item[identity_field]: item for item in right if isinstance(item, dict) and identity_field in item}
-                by_id.update({item[identity_field]: item for item in left if isinstance(item, dict) and identity_field in item})
+                by_id = {
+                    item[identity_field]: item
+                    for item in right
+                    if isinstance(item, dict) and identity_field in item
+                }
+                by_id.update(
+                    {
+                        item[identity_field]: item
+                        for item in left
+                        if isinstance(item, dict) and identity_field in item
+                    }
+                )
                 merged[list_key] = [by_id[key] for key in sorted(by_id)]
             else:
                 merged[list_key] = [*left, *right]
@@ -414,9 +457,21 @@ def _intent_json_schema() -> dict[str, Any]:
             },
         },
         "required": [
-            "municipality", "disaster", "evacuees", "duration_days", "gross_area_m2",
-            "accessible_toilet_count", "staff_count", "seed", "season", "facility_conditions",
-            "facility_zones", "operational_conditions", "population_conditions", "evacuation_selection", "zone_area_shares",
+            "municipality",
+            "disaster",
+            "evacuees",
+            "duration_days",
+            "gross_area_m2",
+            "accessible_toilet_count",
+            "staff_count",
+            "seed",
+            "season",
+            "facility_conditions",
+            "facility_zones",
+            "operational_conditions",
+            "population_conditions",
+            "evacuation_selection",
+            "zone_area_shares",
         ],
     }
     return schema
@@ -435,9 +490,15 @@ def _to_llm_contract(values: dict[str, Any]) -> dict[str, Any]:
         "season": str(values.get("season") or ""),
         "facility_conditions": list(values.get("facility_conditions") or []),
         "facility_zones": values.get("facility_zones", []),
-        "operational_conditions": values.get("operational_conditions", OperationalConditions().model_dump(mode="json")),
-        "population_conditions": values.get("population_conditions", PopulationConditionInput().model_dump(mode="json")),
-        "evacuation_selection": values.get("evacuation_selection", EvacuationSelection().model_dump(mode="json")),
+        "operational_conditions": values.get(
+            "operational_conditions", OperationalConditions().model_dump(mode="json")
+        ),
+        "population_conditions": values.get(
+            "population_conditions", PopulationConditionInput().model_dump(mode="json")
+        ),
+        "evacuation_selection": values.get(
+            "evacuation_selection", EvacuationSelection().model_dump(mode="json")
+        ),
         "zone_area_shares": values.get("zone_area_shares", {}),
     }
 
@@ -462,7 +523,9 @@ def _parse_llm_contract(value: Any) -> dict[str, Any]:
             parsed[field] = converter(raw)
     conditions = value.get("facility_conditions", [])
     if conditions:
-        if not isinstance(conditions, list) or any(not isinstance(item, str) for item in conditions):
+        if not isinstance(conditions, list) or any(
+            not isinstance(item, str) for item in conditions
+        ):
             raise ValueError("facility_conditions must be an array of strings")
         parsed["facility_conditions"] = conditions
     zone_conditions = value.get("facility_zones", [])
@@ -488,10 +551,11 @@ def _parse_llm_contract(value: Any) -> dict[str, Any]:
     if value.get("zone_area_shares"):
         shares = value["zone_area_shares"]
         if not isinstance(shares, dict) or any(
-            not isinstance(key, str) or not isinstance(weight, (int, float)) or isinstance(weight, bool)
+            not isinstance(key, str)
+            or not isinstance(weight, (int, float))
+            or isinstance(weight, bool)
             for key, weight in shares.items()
         ):
             raise ValueError("zone_area_shares must map standard zone IDs to numeric fractions")
         parsed["zone_area_shares"] = shares
     return parsed
-

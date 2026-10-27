@@ -69,7 +69,7 @@ def resource_dispatcher() -> EventDispatcher:
 
 
 def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
-    scenario_with_stock
+    scenario_with_stock,
 ) -> None:
     old_fixture = ScenarioSpec.load(SCENARIO_FIXTURE)
     assert old_fixture.schema_version == 3
@@ -105,9 +105,7 @@ def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
         "support_fairness_promoted_assignment_count",
     ):
         legacy_row.pop(key)
-    legacy_metrics = MetricsRecorder.from_dict(
-        {"schema_version": 1, "snapshots": [legacy_row]}
-    )
+    legacy_metrics = MetricsRecorder.from_dict({"schema_version": 1, "snapshots": [legacy_row]})
     assert legacy_metrics.to_dict() == {
         "schema_version": 4,
         "snapshots": [asdict(metrics.snapshots[0])],
@@ -115,7 +113,7 @@ def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
 
 
 def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis(
-    scenario_with_stock
+    scenario_with_stock,
 ) -> None:
     original = WorldState.from_scenario(scenario_with_stock(food_meal_units=2))
     original.schedule_event(
@@ -190,7 +188,7 @@ def test_resource_scenario_v2_migration_and_v3_stock_rejections(scenario_with_st
 
 
 def test_resource_operations_balance_inventory_and_preserve_audit_sources(
-    scenario_with_stock
+    scenario_with_stock,
 ) -> None:
     world = WorldState.from_scenario(
         scenario_with_stock(
@@ -426,7 +424,7 @@ def test_world_rejects_resource_accounting_or_reservation_corruption(scenario_wi
 
 
 def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tampering(
-    scenario_with_stock
+    scenario_with_stock,
 ) -> None:
     with pytest.raises(ValidationError, match="references unknown zone"):
         scenario = scenario_with_stock(food_meal_units=1).model_dump(mode="json")

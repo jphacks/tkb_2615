@@ -98,7 +98,14 @@ def validate_facility_queue_state(world: WorldState) -> None:
         point = expected[queue_id]
         if (
             not isinstance(row, dict)
-            or set(row) != {"facility_id", "service_point_id", "queued_request_ids", "active_request_ids", "last_stall"}
+            or set(row)
+            != {
+                "facility_id",
+                "service_point_id",
+                "queued_request_ids",
+                "active_request_ids",
+                "last_stall",
+            }
             or row["facility_id"] != point.facility_id
             or row["service_point_id"] != point.id
             or not isinstance(row["queued_request_ids"], list)
@@ -132,7 +139,8 @@ def validate_facility_queue_state(world: WorldState) -> None:
                 or request.get("service_kind") not in {"toilet", "water", "meal"}
                 or type(request.get("requested_minute")) is not int
                 or not 0 <= request["requested_minute"] <= world.minute_index
-                or request.get("status") != ("queued" if request_id in row["queued_request_ids"] else "active")
+                or request.get("status")
+                != ("queued" if request_id in row["queued_request_ids"] else "active")
                 or not isinstance(request.get("queue_task_id"), str)
                 or not isinstance(request.get("active_task_id"), str)
             ):
@@ -143,28 +151,49 @@ def validate_facility_queue_state(world: WorldState) -> None:
             active_agents.add(agent_id)
             facility = world.facilities[point.facility_id]
             agent = world.agents[agent_id]
-            expected_kind = "water_station" if request["service_kind"] == "water" else "meal_distribution" if request["service_kind"] == "meal" else None
+            expected_kind = (
+                "water_station"
+                if request["service_kind"] == "water"
+                else "meal_distribution"
+                if request["service_kind"] == "meal"
+                else None
+            )
             if expected_kind is not None and facility.kind != expected_kind:
                 raise ValueError("facility queue service kind does not match its resource facility")
             if request_id in row["queued_request_ids"]:
                 task = world.active_tasks.get(request["queue_task_id"])
                 if (
-                    task is None or task.kind not in {"toilet_queue", "resource_service_queue"}
-                    or task.agent_id != agent_id or task.resource_id != point.facility_id
-                    or agent.activity.value != "queued" or agent.target_id != point.facility_id
+                    task is None
+                    or task.kind not in {"toilet_queue", "resource_service_queue"}
+                    or task.agent_id != agent_id
+                    or task.resource_id != point.facility_id
+                    or agent.activity.value != "queued"
+                    or agent.target_id != point.facility_id
                 ):
                     raise ValueError("queued service request has no matching task and Agent state")
-                mirror = facility.resource_queue_agent_ids if request["service_kind"] in {"water", "meal"} else facility.queue_agent_ids
+                mirror = (
+                    facility.resource_queue_agent_ids
+                    if request["service_kind"] in {"water", "meal"}
+                    else facility.queue_agent_ids
+                )
                 if agent_id not in mirror:
-                    raise ValueError("independent queue request is missing from the facility projection")
+                    raise ValueError(
+                        "independent queue request is missing from the facility projection"
+                    )
             else:
                 task = world.active_tasks.get(request["active_task_id"])
                 if (
-                    task is None or task.agent_id != agent_id or task.resource_id != point.facility_id
-                    or task.kind not in {"toilet_service", "resource_service_water", "resource_service_food"}
-                    or agent.activity.value != "in_service" or agent.target_id != point.facility_id
+                    task is None
+                    or task.agent_id != agent_id
+                    or task.resource_id != point.facility_id
+                    or task.kind
+                    not in {"toilet_service", "resource_service_water", "resource_service_food"}
+                    or agent.activity.value != "in_service"
+                    or agent.target_id != point.facility_id
                 ):
-                    raise ValueError("active service request has no matching service task and Agent state")
+                    raise ValueError(
+                        "active service request has no matching service task and Agent state"
+                    )
                 if request["service_kind"] == "toilet" and (
                     point.access.required_staff_skills or task.staff_id is not None
                 ):
@@ -178,10 +207,19 @@ def validate_facility_queue_state(world: WorldState) -> None:
                         or staff_member.work_queue != [task.id]
                         or staff_member.busy_until != task.due_minute
                     ):
-                        raise ValueError("staff-required toilet service has no matching skilled staff reservation")
-                mirror = facility.resource_active_agent_ids if request["service_kind"] in {"water", "meal"} else facility.active_agent_ids
+                        raise ValueError(
+                            "staff-required toilet service has no matching skilled staff "
+                            "reservation"
+                        )
+                mirror = (
+                    facility.resource_active_agent_ids
+                    if request["service_kind"] in {"water", "meal"}
+                    else facility.active_agent_ids
+                )
                 if agent_id not in mirror:
-                    raise ValueError("active independent service is missing from the facility projection")
+                    raise ValueError(
+                        "active independent service is missing from the facility projection"
+                    )
     if set(state["requests"]) != {
         request_id
         for row in state["queues"].values()
@@ -213,10 +251,15 @@ def choose_queue_id(world: WorldState, facility_id: str, agent_id: str) -> str |
     for point in service_points(world):
         if point.facility_id != facility_id:
             continue
-        if point.access.accessibility == "restricted" and not set(point.access.required_access_tags) <= access_tags:
+        if (
+            point.access.accessibility == "restricted"
+            and not set(point.access.required_access_tags) <= access_tags
+        ):
             continue
         queue = state["queues"][point.queue_id]
-        candidates.append((len(queue["queued_request_ids"]) + len(queue["active_request_ids"]), point.queue_id))
+        candidates.append(
+            (len(queue["queued_request_ids"]) + len(queue["active_request_ids"]), point.queue_id)
+        )
     return min(candidates)[1] if candidates else None
 
 
@@ -225,9 +268,11 @@ def point_for_queue(world: WorldState, queue_id: str) -> FacilityServicePoint | 
 
 
 def queue_ids_for_facility(world: WorldState, facility_id: str) -> tuple[str, ...]:
-    return tuple(sorted(
-        point.queue_id for point in service_points(world) if point.facility_id == facility_id
-    ))
+    return tuple(
+        sorted(
+            point.queue_id for point in service_points(world) if point.facility_id == facility_id
+        )
+    )
 
 
 def facility_has_independent_queues(world: WorldState, facility_id: str) -> bool:
@@ -255,18 +300,23 @@ def request_for_task(world: WorldState, task_id: str) -> dict[str, Any] | None:
     if request is not None:
         return request
     if isinstance(state, dict):
-        return next((row for row in state["requests"].values() if row["active_task_id"] == task_id), None)
+        return next(
+            (row for row in state["requests"].values() if row["active_task_id"] == task_id), None
+        )
     return None
 
 
-def request_for_agent(world: WorldState, agent_id: str, *, queue_id: str | None = None) -> dict[str, Any] | None:
+def request_for_agent(
+    world: WorldState, agent_id: str, *, queue_id: str | None = None
+) -> dict[str, Any] | None:
     """Return the live queue reservation owned by an Agent."""
     state = world.model_state.get(FACILITY_QUEUES_STATE_KEY)
     if not isinstance(state, dict):
         return None
     return next(
         (
-            row for row in state["requests"].values()
+            row
+            for row in state["requests"].values()
             if row["agent_id"] == agent_id and (queue_id is None or row["queue_id"] == queue_id)
         ),
         None,
@@ -277,12 +327,21 @@ def queue_agent_ids(world: WorldState, queue_id: str) -> list[str]:
     state = world.model_state.get(FACILITY_QUEUES_STATE_KEY)
     if not isinstance(state, dict) or queue_id not in state["queues"]:
         return []
-    return [state["requests"][request_id]["agent_id"] for request_id in state["queues"][queue_id]["queued_request_ids"]]
+    return [
+        state["requests"][request_id]["agent_id"]
+        for request_id in state["queues"][queue_id]["queued_request_ids"]
+    ]
 
 
 def enqueue(
-    world: WorldState, *, queue_id: str, request_id: str, task_id: str,
-    agent_id: str, service_kind: str, requested_minute: int,
+    world: WorldState,
+    *,
+    queue_id: str,
+    request_id: str,
+    task_id: str,
+    agent_id: str,
+    service_kind: str,
+    requested_minute: int,
 ) -> None:
     state = world.model_state.get(FACILITY_QUEUES_STATE_KEY)
     point = point_for_queue(world, queue_id)
@@ -338,13 +397,20 @@ def mark_stall(world: WorldState, queue_id: str, request_id: str, reason: str) -
     if not isinstance(state, dict) or queue_id not in state["queues"]:
         return
     state["queues"][queue_id]["last_stall"] = {
-        "minute": world.minute_index, "request_id": request_id, "reason": reason,
+        "minute": world.minute_index,
+        "request_id": request_id,
+        "reason": reason,
     }
 
 
 def record_queue_transition(
-    world: WorldState, request: dict[str, Any], *, transition: str,
-    task_id: str, wait_minutes: int | None = None, causation_id: str | None = None,
+    world: WorldState,
+    request: dict[str, Any],
+    *,
+    transition: str,
+    task_id: str,
+    wait_minutes: int | None = None,
+    causation_id: str | None = None,
 ) -> None:
     """Persist typed queue evidence into EventLog without inventing a scheduled event."""
     sequence = world.allocate_event_sequence()
@@ -385,8 +451,15 @@ def record_queue_transition(
         payload=payload,
         source_id=FACILITY_QUEUES_POLICY_VERSION,
         causation_id=causation_id,
-        provenance={"source_type": "assumption", "source_id": "ASM-FACILITY-QUEUES-V1", "policy_version": FACILITY_QUEUES_POLICY_VERSION},
+        provenance={
+            "source_type": "assumption",
+            "source_id": "ASM-FACILITY-QUEUES-V1",
+            "policy_version": FACILITY_QUEUES_POLICY_VERSION,
+        },
     )
     from sheltersim.contracts.operations import FacilityQueueTransitionReceipt
+
     FacilityQueueTransitionReceipt.model_validate(payload)
-    world.event_log.append(EventLogRecord(event=event, realized_minute=world.minute_index, status=EventStatus.APPLIED))
+    world.event_log.append(
+        EventLogRecord(event=event, realized_minute=world.minute_index, status=EventStatus.APPLIED)
+    )

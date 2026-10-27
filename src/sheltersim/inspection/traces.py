@@ -272,7 +272,14 @@ class RunArtifactWriter:
         if self.trace_level is not TraceLevel.OFF:
             snapshot = _sanitize(dict(observed_state)) if observed_state is not None else None
             assert self._spool is not None
-            self._spool.append("decisions", _sanitize(_decision_document(proposal, full=self.trace_level is TraceLevel.FULL, observed_state=snapshot)))
+            self._spool.append(
+                "decisions",
+                _sanitize(
+                    _decision_document(
+                        proposal, full=self.trace_level is TraceLevel.FULL, observed_state=snapshot
+                    )
+                ),
+            )
 
     def record_llm_call(self, record: Any) -> None:
         """Persist a sanitized call record immediately, including failures and budget stops."""
@@ -326,9 +333,7 @@ class RunArtifactWriter:
             return
         self._append_jsonl_line("psychology_contributions.jsonl", _sanitize(dict(trace)))
         self._psychology_trace_minute_count += 1
-        self._accumulate_psychology_contributions(
-            int(trace["minute_index"]), agent_contributions
-        )
+        self._accumulate_psychology_contributions(int(trace["minute_index"]), agent_contributions)
 
     def _accumulate_psychology_contributions(
         self,
@@ -365,19 +370,13 @@ class RunArtifactWriter:
             stress_after = float(record["stress_after"])
             bucket["stress_before_total"] += stress_before
             bucket["stress_after_total"] += stress_after
-            bucket["high_distress_minutes"] += int(
-                stress_after >= self._high_distress_threshold
-            )
+            bucket["high_distress_minutes"] += int(stress_after >= self._high_distress_threshold)
             raw_stress_delta = record.get("raw_stress_delta")
             bucket["raw_stress_delta_total"] += float(
-                stress_after - stress_before
-                if raw_stress_delta is None
-                else raw_stress_delta
+                stress_after - stress_before if raw_stress_delta is None else raw_stress_delta
             )
             bucket["applied_stress_delta_total"] += stress_after - stress_before
-            bucket["social_stress_delta_total"] += float(
-                record.get("social_stress_delta", 0.0)
-            )
+            bucket["social_stress_delta_total"] += float(record.get("social_stress_delta", 0.0))
             components = record.get("component_contributions", {})
             if not isinstance(components, Mapping):
                 raise ValueError("psychology component contributions must be an object")
@@ -453,7 +452,9 @@ class RunArtifactWriter:
         information_state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
         information_summary = None
         if information_state is not None:
-            self._write_jsonl("information_contacts.jsonl", self._spool.records("information_contacts"))
+            self._write_jsonl(
+                "information_contacts.jsonl", self._spool.records("information_contacts")
+            )
             information_summary = information_spread_summary(
                 information_state,
                 agent_count=len(world.agents),
@@ -548,7 +549,9 @@ class RunArtifactWriter:
             }
         if information_summary is not None:
             manifest["information_spread_summary"] = information_summary
-            manifest["information_contact_trace_count"] = self._spool.counts.get("information_contacts", 0)
+            manifest["information_contact_trace_count"] = self._spool.counts.get(
+                "information_contacts", 0
+            )
         self._write_json("manifest.json", manifest)
         self._spool.close(remove=True)
         self._finalized = True
@@ -603,7 +606,16 @@ class RunArtifactWriter:
         temporary = destination.with_name(destination.name + ".tmp")
         with temporary.open("w", encoding="utf-8", newline="") as stream:
             for record in records:
-                stream.write(json.dumps(_sanitize(record), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n")
+                stream.write(
+                    json.dumps(
+                        _sanitize(record),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    )
+                    + "\n"
+                )
         temporary.replace(destination)
 
     def _append_jsonl_line(self, filename: str, record: Any) -> None:
@@ -890,10 +902,15 @@ def _model_assumptions(scenario: ScenarioSpec, *, execution_mode: str) -> dict[s
         }
     if information_config.enabled:
         assumptions["information_spread"] = information_config.provenance()
-    for domain, config_name in (("social", "social_propagation"), ("information", "information_spread")):
+    for domain, config_name in (
+        ("social", "social_propagation"),
+        ("information", "information_spread"),
+    ):
         if config_name in assumptions:
             assumptions[config_name]["policy_version"] = selected[domain]
-            assumptions[config_name]["operator_source_id"] = installed_catalog[selected[domain]]["assumption_source_id"]
+            assumptions[config_name]["operator_source_id"] = installed_catalog[selected[domain]][
+                "assumption_source_id"
+            ]
     return assumptions
 
 

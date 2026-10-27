@@ -179,7 +179,9 @@ def test_long_wait_complaint_is_a_candidate_bound_typed_event_with_audited_effec
     assert context["participants"]["A001"]["stress"] == 0.8
 
     restored = Checkpoint.capture(world).restore_world()
-    restored_event = next(item for item in restored.event_queue.pending() if item.event_id == event.event_id)
+    restored_event = next(
+        item for item in restored.event_queue.pending() if item.event_id == event.event_id
+    )
     assert restored_event.payload["conversation_state_context"] == context
 
     outcome = apply_due_social_event(restored, event.event_id)
@@ -787,4 +789,3 @@ def test_social_acceptance_and_llm_usage_are_saved_in_separate_artifacts(tmp_pat
     assert "prompt" not in social_record
     assert manifest["social_decision_count"] == 1
     assert manifest["llm_usage"]["api_request_count"] == 1
-

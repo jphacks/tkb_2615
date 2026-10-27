@@ -90,7 +90,7 @@ def test_agent_dynamics_config_rejects_unsupported_values(raw) -> None:
 
 
 def test_facility_knowledge_is_independent_of_psychology_selection(
-    single_agent_awareness_scenario
+    single_agent_awareness_scenario,
 ) -> None:
     known_sets = []
     for psychology in ("mean-reverting-life-state-v1", "mean-reverting-distress-v1"):
@@ -121,7 +121,7 @@ def test_unknown_initial_facility_id_is_rejected(single_agent_awareness_scenario
 
 
 def test_legacy_scenario_without_awareness_keeps_prior_global_knowledge(
-    single_agent_awareness_scenario
+    single_agent_awareness_scenario,
 ) -> None:
     document = single_agent_awareness_scenario([]).model_dump(mode="json")
     document["model_configs"].pop("facility_awareness")

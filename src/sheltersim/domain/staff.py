@@ -216,7 +216,8 @@ class StaffService:
             care_receipt = care_receipt_for_request(world, request.id)
             support_kind = (
                 care_receipt.get("support_kind", "emotional_support")
-                if care_receipt is not None else "emotional_support"
+                if care_receipt is not None
+                else "emotional_support"
             )
             required_skills = _CARE_SKILL_ALTERNATIVES.get(support_kind, {"support"})
             person = next(
@@ -238,7 +239,8 @@ class StaffService:
             if person is None:
                 if record_wait_metrics:
                     qualified = [
-                        staff for staff in world.staff.values()
+                        staff
+                        for staff in world.staff.values()
                         if required_skills.intersection(staff.skills)
                     ]
                     if any(staff.active_task_id is not None for staff in qualified):
@@ -322,8 +324,7 @@ class StaffService:
             world.schedule_event(event)
             if event.provenance["fairness_promoted"]:
                 world.metric_state["support_fairness_promoted_assignment_count"] = (
-                    world.metric_state.get("support_fairness_promoted_assignment_count", 0.0)
-                    + 1.0
+                    world.metric_state.get("support_fairness_promoted_assignment_count", 0.0) + 1.0
                 )
             assigned.append(request.id)
             available_staff.remove(person)
@@ -467,14 +468,18 @@ def support_wait_reason_codes(
         if staff.active_task_id is not None:
             blockers.add("staff_busy")
         operation = (
-            operations.get("staff", {}).get(staff.id)
-            if isinstance(operations, dict) else None
+            operations.get("staff", {}).get(staff.id) if isinstance(operations, dict) else None
         )
         if isinstance(operation, dict) and operation.get("phase") != "idle":
             blockers.add("staff_on_other_operation")
         dynamics = world.model_state.get("staff_dynamics_v1", {})
-        dynamics_staff = dynamics.get("staff", {}).get(staff.id) if isinstance(dynamics, dict) else None
-        if isinstance(dynamics_staff, dict) and dynamics_staff.get("rest_until_minute", 0) > sample_minute:
+        dynamics_staff = (
+            dynamics.get("staff", {}).get(staff.id) if isinstance(dynamics, dict) else None
+        )
+        if (
+            isinstance(dynamics_staff, dict)
+            and dynamics_staff.get("rest_until_minute", 0) > sample_minute
+        ):
             blockers.add("staff_resting")
         elif not staff_dynamics_on_shift(world, staff.id, sample_minute):
             blockers.add("staff_off_shift")
@@ -507,7 +512,8 @@ def _support_route_wait_reasons(
     if agent is None:
         return set(), False
     candidates = [
-        person for person in staff
+        person
+        for person in staff
         if person.active_task_id is None
         and staff_is_available(world, person.id)
         and staff_dynamics_is_available(world, person.id, minute)
@@ -526,10 +532,9 @@ def _support_route_wait_reasons(
     graph = ZoneGraph.from_states(world.zones, world.zone_edges, edge_capacities=capacities)
     if "facility_geometry" in world.model_configs:
         inaccessible = {
-            edge.id for edge in graph.edges
-            if not route_is_physically_clear(
-                world, edge.id, mobility=agent.profile.mobility.value
-            )
+            edge.id
+            for edge in graph.edges
+            if not route_is_physically_clear(world, edge.id, mobility=agent.profile.mobility.value)
         }
         graph = ZoneGraph(
             zones=graph.zones,
@@ -560,7 +565,11 @@ def _support_route_wait_reasons(
         route = router.route(agent.zone_id, destination, agent.id, edge_loads=edge_loads)
         if route is None:
             unconstrained = router.route(agent.zone_id, destination, agent.id, edge_loads={})
-            reasons.add("route_capacity_full" if unconstrained is not None else "no_route_to_qualified_staff")
+            reasons.add(
+                "route_capacity_full"
+                if unconstrained is not None
+                else "no_route_to_qualified_staff"
+            )
             continue
         route = route_with_movement_time(world, agent.id, route)
         zone = world.zones[destination]
@@ -580,9 +589,7 @@ def _support_route_wait_reasons(
     return reasons, route_is_feasible
 
 
-def support_waited_minutes(
-    world: WorldState, request_id: str, *, minute: int | None = None
-) -> int:
+def support_waited_minutes(world: WorldState, request_id: str, *, minute: int | None = None) -> int:
     """Return elapsed wait, stopping at service start once a resident arrives."""
     request = world.support_requests.get(request_id)
     if request is None:

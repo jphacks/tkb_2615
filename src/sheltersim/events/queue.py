@@ -85,12 +85,22 @@ class EventLog:
 
     _records: list[EventLogRecord] = field(default_factory=list, repr=False)
     _ids: set[str] = field(default_factory=set, init=False, repr=False, compare=False)
-    _by_id: dict[str, EventLogRecord] = field(default_factory=dict, init=False, repr=False, compare=False)
-    _first_care_request_event: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
-    _completed_support_kinds_by_agent: dict[str, set[str]] = field(default_factory=dict, init=False, repr=False, compare=False)
-    _applied_facility_event_ids: dict[str, set[str]] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _by_id: dict[str, EventLogRecord] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _first_care_request_event: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _completed_support_kinds_by_agent: dict[str, set[str]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _applied_facility_event_ids: dict[str, set[str]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     _sequences: set[int] = field(default_factory=set, init=False, repr=False, compare=False)
-    _by_minute: dict[int, list[EventLogRecord]] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _by_minute: dict[int, list[EventLogRecord]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     _max_sequence: int = field(default=-1, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -138,7 +148,7 @@ class EventLog:
     def __len__(self) -> int:
         return len(self._records)
 
-    def recent(self, limit: int = 100) -> tuple[EventLogRecord,...]:
+    def recent(self, limit: int = 100) -> tuple[EventLogRecord, ...]:
         """Bounded observational tail; avoids copying the complete realized log."""
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("invalid event tail limit")
@@ -190,13 +200,11 @@ class EventLog:
                 and isinstance(agent_id, str)
                 and isinstance(support_kind, str)
             ):
-                self._completed_support_kinds_by_agent.setdefault(agent_id, set()).add(
-                    support_kind
-                )
-        if (
-            record.status.value == "applied"
-            and record.event.event_type in {"facility_outage", "facility_recovery"}
-        ):
+                self._completed_support_kinds_by_agent.setdefault(agent_id, set()).add(support_kind)
+        if record.status.value == "applied" and record.event.event_type in {
+            "facility_outage",
+            "facility_recovery",
+        }:
             facility_id = record.event.payload.get("facility_id")
             if isinstance(facility_id, str):
                 self._applied_facility_event_ids.setdefault(facility_id, set()).add(

@@ -32,8 +32,10 @@ class ProjectServices:
         self.queries = ProjectQueries(self.store)
         self.evaluations = EvaluationStore(self.store)
         from sheltersim.web.plan_services import PlanServices
+
         self.plans = PlanServices(self.store)
         from sheltersim.storage.experiments import ExperimentStore
+
         self.experiments = ExperimentStore(self.store)
 
     def get(self, parts: list[str], query: dict[str, list[str]]) -> dict[str, Any] | None:
@@ -71,6 +73,7 @@ class ProjectServices:
             from sheltersim.events.effects import available_primitives
             from sheltersim.region.plan_import import ManualPlanTrace, PlanSourceProvenance
             from sheltersim.storage.experiments import ExperimentInput, ObservationTarget
+
             return {
                 "schema_version": 1,
                 "history_query": HistoryQuery.model_json_schema(),
@@ -103,7 +106,9 @@ class ProjectServices:
                 "shared_operations_state": SharedOperationsState.model_json_schema(),
                 "action_lifecycle_receipt": ActionLifecycleReceipt.model_json_schema(),
                 "care_transition_receipt": CareTransitionReceipt.model_json_schema(),
-                "staff_support_continuity_receipt": StaffSupportContinuityReceipt.model_json_schema(),
+                (
+                    "staff_support_continuity_receipt"
+                ): StaffSupportContinuityReceipt.model_json_schema(),
                 "staff_handoff_receipt": StaffHandoffReceipt.model_json_schema(),
                 "facility_recovery_receipt": FacilityRecoveryReceipt.model_json_schema(),
                 "operational_demand_snapshot": OperationalDemandSnapshot.model_json_schema(),
@@ -126,42 +131,103 @@ class ProjectServices:
                         "enabled_by": "geometry_overlay.schema_version=3 or 4",
                         "arrival_parameters": {
                             "admission_zone_ids": "explicit ordered fallback zones",
-                            "approach_route_id": "optional FacilityGeometry.arrival_approach_routes ID ending at the preferred zone",
+                            "approach_route_id": (
+                                "optional FacilityGeometry.arrival_approach_routes ID ending at "
+                                "the preferred zone"
+                            ),
                         },
-                        "capacity": "active room people_capacity; assignments persist through expiry",
-                        "arrival_movement": "optional operator/source-supplied route with explicit metric coordinates and walking speed, checkpointed progress, entrance waiting, and admission history; route-free arrivals retain direct admission",
+                        "capacity": (
+                            "active room people_capacity; assignments persist through expiry"
+                        ),
+                        "arrival_movement": (
+                            "optional operator/source-supplied route with explicit metric "
+                            "coordinates and walking speed, checkpointed progress, entrance "
+                            "waiting, and admission history; route-free arrivals retain direct "
+                            "admission"
+                        ),
                     },
                 },
                 "time_semantics": {
-                    "operation_receipts": "event realized_minute; transition occurs at this boundary",
+                    "operation_receipts": (
+                        "event realized_minute; transition occurs at this boundary"
+                    ),
                     "timeline_frames": "before_tick",
                     "operational_demand": "before_tick observed state only",
                 },
                 "errors": {
-                    "household_preview": ["stale_preview_hash", "unknown_synthetic_agent_id", "cross_household_relation", "invalid_guardian_graph", "non_synthetic_identity", "age_unavailable"],
-                    "operation_receipts": ["contract_not_enabled", "unapplied_or_unmatched_event", "event_payload_mismatch", "identity_or_transition_mismatch", "unobserved_state_result"],
-                    "service_point": ["geometry_schema_invalid", "service_point_unknown_facility", "service_point_outside_zone", "service_point_in_obstacle", "service_point_on_wall", "service_point_outside_equipment", "service_point_in_other_equipment", "service_point_access_route_missing", "service_point_capacity_exceeds_facility"],
-                    "plan_geometry": ["plan_geometry_revision_stale_base", "plan_geometry_revision_asset_mismatch", "plan_raster_preview_context_mismatch", "plan_raster_preview_trace_calibration_mismatch", "plan_geometry_raster_context_invalid", "plan_geometry_raster_provenance_missing", "plan_geometry_raster_provenance_mismatch", "plan_geometry_raster_asset_binding_mismatch", "plan_raster_preview_missing", "plan_raster_preview_reference_conflict", "plan_raster_provenance_missing", "plan_raster_provenance_mismatch", "plan_trace_page_reference_mismatch", "invalid_plan_trace_page_index"],
+                    "household_preview": [
+                        "stale_preview_hash",
+                        "unknown_synthetic_agent_id",
+                        "cross_household_relation",
+                        "invalid_guardian_graph",
+                        "non_synthetic_identity",
+                        "age_unavailable",
+                    ],
+                    "operation_receipts": [
+                        "contract_not_enabled",
+                        "unapplied_or_unmatched_event",
+                        "event_payload_mismatch",
+                        "identity_or_transition_mismatch",
+                        "unobserved_state_result",
+                    ],
+                    "service_point": [
+                        "geometry_schema_invalid",
+                        "service_point_unknown_facility",
+                        "service_point_outside_zone",
+                        "service_point_in_obstacle",
+                        "service_point_on_wall",
+                        "service_point_outside_equipment",
+                        "service_point_in_other_equipment",
+                        "service_point_access_route_missing",
+                        "service_point_capacity_exceeds_facility",
+                    ],
+                    "plan_geometry": [
+                        "plan_geometry_revision_stale_base",
+                        "plan_geometry_revision_asset_mismatch",
+                        "plan_raster_preview_context_mismatch",
+                        "plan_raster_preview_trace_calibration_mismatch",
+                        "plan_geometry_raster_context_invalid",
+                        "plan_geometry_raster_provenance_missing",
+                        "plan_geometry_raster_provenance_mismatch",
+                        "plan_geometry_raster_asset_binding_mismatch",
+                        "plan_raster_preview_missing",
+                        "plan_raster_preview_reference_conflict",
+                        "plan_raster_provenance_missing",
+                        "plan_raster_provenance_mismatch",
+                        "plan_trace_page_reference_mismatch",
+                        "invalid_plan_trace_page_index",
+                    ],
                 },
             }
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "evidence" and not query:
             from sheltersim.contracts.runtime import state_catalog
             from sheltersim.experiments.validation import evidence_context
+
             run = self.store.run(project_id, parts[2])
             scenario = self.store.scenario(project_id, run["scenario_id"], run["scenario_version"])
             result = evidence_context(scenario)
             from sheltersim.domain.simulator_state import simulator_state_catalog
+
             result["state_contracts"] = state_catalog()
             result["simulator_states"] = simulator_state_catalog()
             from sheltersim.contracts.evidence import operator_evidence_catalog
+
             result["operator_evidence"] = operator_evidence_catalog()
             from sheltersim.policies.agents_social_manifest import agents_social_model_catalog
+
             result["agents_social_operators"] = agents_social_model_catalog()
             paths = sorted(self.store._path(project_id, "datasets").glob("*.json"))
             result["project_datasets"] = [self.store._read(path) for path in paths[:100]]
             result["project_datasets_truncated"] = len(paths) > 100
             return result
-        if len(parts) == 2 and parts[1] in {"drafts", "assets", "evaluations", "datasets", "usage", "geometries"}:
+        if len(parts) == 2 and parts[1] in {
+            "drafts",
+            "assets",
+            "evaluations",
+            "datasets",
+            "usage",
+            "geometries",
+        }:
             values = one_query(query, {"limit", "cursor"})
             limit = int(values.get("limit", "25"))
             if not 1 <= limit <= 100:
@@ -171,50 +237,108 @@ class ProjectServices:
             if kind == "drafts":
                 rows = self.artifacts.drafts(project_id)
             elif kind == "assets":
-                rows = [self.store._read(p) for p in sorted(
-                    self.store._path(project_id, "assets").glob("*/asset.json"))]
+                rows = [
+                    self.store._read(p)
+                    for p in sorted(self.store._path(project_id, "assets").glob("*/asset.json"))
+                ]
             else:
-                rows = [self.store._read(p) for p in sorted(
-                    self.store._path(project_id, kind).glob("*.json"))]
+                rows = [
+                    self.store._read(p)
+                    for p in sorted(self.store._path(project_id, kind).glob("*.json"))
+                ]
                 if kind == "usage":
-                    rows = [UsageLedger(self.store, project_id, row["account_id"]).summary() for row in rows]
+                    rows = [
+                        UsageLedger(self.store, project_id, row["account_id"]).summary()
+                        for row in rows
+                    ]
                 if kind == "evaluations":
-                    rows = [{k: v for k, v in row.items() if k not in {"runs", "comparisons"}} for row in rows]
-            result = page(rows, {"project_id": project_id, "kind": kind}, digest(rows),
-                          limit=limit, cursor=values.get("cursor"))
+                    rows = [
+                        {k: v for k, v in row.items() if k not in {"runs", "comparisons"}}
+                        for row in rows
+                    ]
+            result = page(
+                rows,
+                {"project_id": project_id, "kind": kind},
+                digest(rows),
+                limit=limit,
+                cursor=values.get("cursor"),
+            )
             if kind == "usage":
-                result["project_totals"] = {key: sum(row["totals"][key] for row in rows)
-                                            for key in ("calls", "input_tokens", "output_tokens", "cost_nusd")}
+                result["project_totals"] = {
+                    key: sum(row["totals"][key] for row in rows)
+                    for key in ("calls", "input_tokens", "output_tokens", "cost_nusd")
+                }
             return result
-        if len(parts)==2 and parts[1]=="experiments":
-            values=one_query(query,{"limit","cursor"});limit=int(values.get("limit","25"))
-            if not 1<=limit<=100:raise StorageError("invalid_page_limit")
-            rows=[self.store._read(path) for path in sorted(self.store._path(project_id,"experiments").glob("*/experiment.json"))]
-            return page(rows,{"project":project_id,"kind":"experiments"},digest(rows),limit=limit,cursor=values.get("cursor"))
-        if len(parts)==3 and parts[1]=="experiments" and not query:
-            return self.experiments.plan(project_id,parts[2])
-        if len(parts)==4 and parts[1]=="experiments" and parts[3] in {"cells","results","fit"}:
-            record=self.experiments.plan(project_id,parts[2])
-            if parts[3]=="fit" and not query:return self.store._read(self.experiments._path(project_id,parts[2],"fit.json"))
-            values=one_query(query,{"limit","cursor"});limit=int(values.get("limit","25"))
-            if not 1<=limit<=100:raise StorageError("invalid_page_limit")
-            generation_path=self.experiments._path(project_id,parts[2],"result-generation.json")
-            generation=self.store._read(generation_path)["generation"] if generation_path.exists() else 0
-            anchor=digest({"plan":record["plan_hash"],"generation":generation if parts[3]=="results" else 0})
-            result=page(record["cells"],{"project":project_id,"experiment":parts[2],"section":parts[3]},anchor,limit=limit,cursor=values.get("cursor"))
-            if parts[3]=="results":
-                rows=[]
+        if len(parts) == 2 and parts[1] == "experiments":
+            values = one_query(query, {"limit", "cursor"})
+            limit = int(values.get("limit", "25"))
+            if not 1 <= limit <= 100:
+                raise StorageError("invalid_page_limit")
+            rows = [
+                self.store._read(path)
+                for path in sorted(
+                    self.store._path(project_id, "experiments").glob("*/experiment.json")
+                )
+            ]
+            return page(
+                rows,
+                {"project": project_id, "kind": "experiments"},
+                digest(rows),
+                limit=limit,
+                cursor=values.get("cursor"),
+            )
+        if len(parts) == 3 and parts[1] == "experiments" and not query:
+            return self.experiments.plan(project_id, parts[2])
+        if (
+            len(parts) == 4
+            and parts[1] == "experiments"
+            and parts[3] in {"cells", "results", "fit"}
+        ):
+            record = self.experiments.plan(project_id, parts[2])
+            if parts[3] == "fit" and not query:
+                return self.store._read(self.experiments._path(project_id, parts[2], "fit.json"))
+            values = one_query(query, {"limit", "cursor"})
+            limit = int(values.get("limit", "25"))
+            if not 1 <= limit <= 100:
+                raise StorageError("invalid_page_limit")
+            generation_path = self.experiments._path(project_id, parts[2], "result-generation.json")
+            generation = (
+                self.store._read(generation_path)["generation"] if generation_path.exists() else 0
+            )
+            anchor = digest(
+                {
+                    "plan": record["plan_hash"],
+                    "generation": generation if parts[3] == "results" else 0,
+                }
+            )
+            result = page(
+                record["cells"],
+                {"project": project_id, "experiment": parts[2], "section": parts[3]},
+                anchor,
+                limit=limit,
+                cursor=values.get("cursor"),
+            )
+            if parts[3] == "results":
+                rows = []
                 for cell in result["items"]:
-                    path=self.experiments._path(project_id,parts[2],"results",cell["cell_id"]+".json")
-                    rows.append(self.store._read(path) if path.exists() else {"cell_id":cell["cell_id"],"status":"not_collected"})
-                result["items"]=rows
+                    path = self.experiments._path(
+                        project_id, parts[2], "results", cell["cell_id"] + ".json"
+                    )
+                    rows.append(
+                        self.store._read(path)
+                        if path.exists()
+                        else {"cell_id": cell["cell_id"], "status": "not_collected"}
+                    )
+                result["items"] = rows
             return result
         if len(parts) == 3 and parts[1] == "geometries" and not query:
-            return self.plans.geometry(project_id,parts[2])
+            return self.plans.geometry(project_id, parts[2])
         if len(parts) == 3 and parts[1] == "drafts" and not query:
             return self.artifacts.draft(project_id, parts[2])
         if len(parts) == 3 and parts[1] == "uploads" and not query:
-            return self.store._read(self.store._path(project_id, "uploads", parts[2], "upload.json"))
+            return self.store._read(
+                self.store._path(project_id, "uploads", parts[2], "upload.json")
+            )
         if len(parts) in {3, 4} and parts[1] == "assets" and not query:
             if len(parts) == 4 and parts[3] != "content":
                 raise StorageError("unknown_asset_operation")
@@ -232,133 +356,292 @@ class ProjectServices:
             limit = int(values.get("limit", "25"))
             if not 1 <= limit <= 100:
                 raise StorageError("invalid_page_limit")
-            return page(record[section], {"project_id": project_id, "evaluation": parts[2],
-                        "section": section}, digest(record), limit=limit, cursor=values.get("cursor"))
-        if len(parts) == 6 and parts[1] == "runs" and parts[3] == "checkpoints" and parts[5] == "section":
+            return page(
+                record[section],
+                {"project_id": project_id, "evaluation": parts[2], "section": section},
+                digest(record),
+                limit=limit,
+                cursor=values.get("cursor"),
+            )
+        if (
+            len(parts) == 6
+            and parts[1] == "runs"
+            and parts[3] == "checkpoints"
+            and parts[5] == "section"
+        ):
             from sheltersim.storage.checkpoints import CheckpointArchive
-            values=one_query(query,{"kind","offset","limit"})
-            paths={"events":("world_state","event_log"),"kpis":("metrics_state","snapshots")}
-            if values.get("kind") not in paths:raise StorageError("unsupported_checkpoint_section")
-            path=self.store._path(project_id,"runs",parts[2],"checkpoints",f"{parts[4]}.json")
-            record=self.store._read(path)
-            if record.get("checkpoint_hash")!=parts[4]:raise StorageError("checkpoint_pointer_corrupt")
-            return {"schema_version":1,**CheckpointArchive(path.parent).list_page(record,paths[values["kind"]],
-                offset=int(values.get("offset","0")),limit=int(values.get("limit","100")))}
-        if len(parts)==4 and parts[1]=="runs" and parts[3]=="audit":
-            values=one_query(query,{"kind","limit","cursor","branch_id","operation","stage","model_id","status"})
-            limit=int(values.get("limit","25"))
-            if not 1<=limit<=100:raise StorageError("invalid_page_limit")
-            kind=values.get("kind","approvals");run=self.store.run(project_id,parts[2])
-            filters={key:value for key,value in values.items() if key in {"branch_id","operation","stage","model_id","status"}}
-            if kind=="usage":
-                binding=self.store._path(project_id,"runs",parts[2],"usage.json")
-                if not binding.exists():return {"schema_version":1,"items":[],"next_cursor":None,"coverage":"legacy_account_not_initialized","unrecorded_spend":"unknown"}
-                ledger=UsageLedger(self.store,project_id,self.store._read(binding)["account_id"])
-                rows,anchor=ledger.receipt_records(filters)
-            elif kind=="branches":
-                if filters:raise StorageError("audit_filters_apply_only_to_usage")
-                rows=[{"record_kind":"branch_lineage",**row} for row in run["branches"]];anchor=digest(rows)
-            elif kind=="approvals":
-                if filters:raise StorageError("audit_filters_apply_only_to_usage")
-                source=self.store._read(self.store._path(project_id,"scenarios",run["scenario_id"],f"v{run['scenario_version']}.json"))
+
+            values = one_query(query, {"kind", "offset", "limit"})
+            paths = {"events": ("world_state", "event_log"), "kpis": ("metrics_state", "snapshots")}
+            if values.get("kind") not in paths:
+                raise StorageError("unsupported_checkpoint_section")
+            path = self.store._path(project_id, "runs", parts[2], "checkpoints", f"{parts[4]}.json")
+            record = self.store._read(path)
+            if record.get("checkpoint_hash") != parts[4]:
+                raise StorageError("checkpoint_pointer_corrupt")
+            return {
+                "schema_version": 1,
+                **CheckpointArchive(path.parent).list_page(
+                    record,
+                    paths[values["kind"]],
+                    offset=int(values.get("offset", "0")),
+                    limit=int(values.get("limit", "100")),
+                ),
+            }
+        if len(parts) == 4 and parts[1] == "runs" and parts[3] == "audit":
+            values = one_query(
+                query,
+                {
+                    "kind",
+                    "limit",
+                    "cursor",
+                    "branch_id",
+                    "operation",
+                    "stage",
+                    "model_id",
+                    "status",
+                },
+            )
+            limit = int(values.get("limit", "25"))
+            if not 1 <= limit <= 100:
+                raise StorageError("invalid_page_limit")
+            kind = values.get("kind", "approvals")
+            run = self.store.run(project_id, parts[2])
+            filters = {
+                key: value
+                for key, value in values.items()
+                if key in {"branch_id", "operation", "stage", "model_id", "status"}
+            }
+            if kind == "usage":
+                binding = self.store._path(project_id, "runs", parts[2], "usage.json")
+                if not binding.exists():
+                    return {
+                        "schema_version": 1,
+                        "items": [],
+                        "next_cursor": None,
+                        "coverage": "legacy_account_not_initialized",
+                        "unrecorded_spend": "unknown",
+                    }
+                ledger = UsageLedger(
+                    self.store, project_id, self.store._read(binding)["account_id"]
+                )
+                rows, anchor = ledger.receipt_records(filters)
+            elif kind == "branches":
+                if filters:
+                    raise StorageError("audit_filters_apply_only_to_usage")
+                rows = [{"record_kind": "branch_lineage", **row} for row in run["branches"]]
+                anchor = digest(rows)
+            elif kind == "approvals":
+                if filters:
+                    raise StorageError("audit_filters_apply_only_to_usage")
+                source = self.store._read(
+                    self.store._path(
+                        project_id,
+                        "scenarios",
+                        run["scenario_id"],
+                        f"v{run['scenario_version']}.json",
+                    )
+                )
                 if digest(source["scenario"]) != source["scenario_hash"]:
                     raise StorageError("saved scenario integrity mismatch")
-                rows=[{"record_kind":"approved_scenario_binding","scenario_id":run["scenario_id"],"scenario_version":run["scenario_version"],
-                    "scenario_hash":source["scenario_hash"],"approved":source["approved"],"seed":run["seed"],
-                    "run_id":run["run_id"],"approval_time":None,"approval_time_status":"not_recorded","model_versions":run["model_versions"]}];anchor=digest(rows)
-            else:raise StorageError("unsupported_run_audit_kind")
-            result=page(rows,{"project":project_id,"run":parts[2],"kind":kind,**filters},anchor,limit=limit,cursor=values.get("cursor"))
-            result.update({"coverage":"persisted_records_only","verified":False,
-                "ordering":"saved_sequence_then_receipt_id; legacy request order may be unavailable" if kind=="usage" else "stored_reference_order",
-                "limits":"No raw prompts/responses, provider keys, host ownership records or invented approval dates."})
+                rows = [
+                    {
+                        "record_kind": "approved_scenario_binding",
+                        "scenario_id": run["scenario_id"],
+                        "scenario_version": run["scenario_version"],
+                        "scenario_hash": source["scenario_hash"],
+                        "approved": source["approved"],
+                        "seed": run["seed"],
+                        "run_id": run["run_id"],
+                        "approval_time": None,
+                        "approval_time_status": "not_recorded",
+                        "model_versions": run["model_versions"],
+                    }
+                ]
+                anchor = digest(rows)
+            else:
+                raise StorageError("unsupported_run_audit_kind")
+            result = page(
+                rows,
+                {"project": project_id, "run": parts[2], "kind": kind, **filters},
+                anchor,
+                limit=limit,
+                cursor=values.get("cursor"),
+            )
+            result.update(
+                {
+                    "coverage": "persisted_records_only",
+                    "verified": False,
+                    "ordering": (
+                        "saved_sequence_then_receipt_id; legacy request order may be unavailable"
+                    )
+                    if kind == "usage"
+                    else "stored_reference_order",
+                    "limits": (
+                        "No raw prompts/responses, provider keys, host ownership records or "
+                        "invented approval dates."
+                    ),
+                }
+            )
             return result
-        if len(parts)==4 and parts[1]=="runs" and parts[3]=="index":
+        if len(parts) == 4 and parts[1] == "runs" and parts[3] == "index":
             from sheltersim.storage.history_index import HistoryIndex
-            values=one_query(query,{"branch_id"});branch=values.get("branch_id","main")
-            reference=self.store.branch_reference(project_id,parts[2],branch)
-            index=HistoryIndex(self.store,project_id,parts[2])
-            status="required";indexed=None
+
+            values = one_query(query, {"branch_id"})
+            branch = values.get("branch_id", "main")
+            reference = self.store.branch_reference(project_id, parts[2], branch)
+            index = HistoryIndex(self.store, project_id, parts[2])
+            status = "required"
+            indexed = None
             if index.path.exists():
                 with index.connect() as db:
-                    row=db.execute("SELECT hash,minute FROM heads WHERE branch=?",(branch,)).fetchone()
+                    row = db.execute(
+                        "SELECT hash,minute FROM heads WHERE branch=?", (branch,)
+                    ).fetchone()
                     if row:
-                        indexed={"checkpoint_hash":row["hash"],"computed_until":row["minute"]}
-                        status="ready" if row["hash"]==reference.checkpoint_hash else "stale"
-            return {"schema_version":1,"status":status,"branch_id":branch,"source_checkpoint_hash":reference.checkpoint_hash,
-                    "indexed":indexed,"rebuild_operation":"POST same route with {branch_id}","verified":False}
+                        indexed = {"checkpoint_hash": row["hash"], "computed_until": row["minute"]}
+                        status = "ready" if row["hash"] == reference.checkpoint_hash else "stale"
+            return {
+                "schema_version": 1,
+                "status": status,
+                "branch_id": branch,
+                "source_checkpoint_hash": reference.checkpoint_hash,
+                "indexed": indexed,
+                "rebuild_operation": "POST same route with {branch_id}",
+                "verified": False,
+            }
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "checkpoints":
             from sheltersim.storage.history_index import HistoryIndex
-            values = one_query(query, {"branch_id","start","end","limit","cursor"})
+
+            values = one_query(query, {"branch_id", "start", "end", "limit", "cursor"})
             branch = values.get("branch_id", "main")
-            reference = self.store.branch_reference(project_id,parts[2],branch)
-            return HistoryIndex(self.store,project_id,parts[2]).checkpoints(branch,
-                int(values.get("start",str(reference.fork_minute))),int(values.get("end",str(reference.computed_until))),
-                int(values.get("limit","25")),values.get("cursor"))
+            reference = self.store.branch_reference(project_id, parts[2], branch)
+            return HistoryIndex(self.store, project_id, parts[2]).checkpoints(
+                branch,
+                int(values.get("start", str(reference.fork_minute))),
+                int(values.get("end", str(reference.computed_until))),
+                int(values.get("limit", "25")),
+                values.get("cursor"),
+            )
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "usage" and not query:
             self.store.run(project_id, parts[2])
             path = self.store._path(project_id, "runs", parts[2], "usage.json")
             if not path.exists():
                 return {"schema_version": 1, "status": "legacy_account_not_initialized"}
-            return UsageLedger(self.store, project_id, self.store._read(path)["account_id"]).summary()
-        if len(parts) == 6 and parts[1] == "runs" and parts[3] == "branches" and parts[5] == "compatibility" and not query:
+            return UsageLedger(
+                self.store, project_id, self.store._read(path)["account_id"]
+            ).summary()
+        if (
+            len(parts) == 6
+            and parts[1] == "runs"
+            and parts[3] == "branches"
+            and parts[5] == "compatibility"
+            and not query
+        ):
             from sheltersim.contracts.policies import model_signatures
-            reference=self.store.branch_reference(project_id,parts[2],parts[4])
-            saved=self.store.checkpoint_fields(project_id,parts[2],reference.checkpoint_hash,("model_versions","runtime_state"))
-            run=self.store.run(project_id,parts[2])
-            installed={}
+
+            reference = self.store.branch_reference(project_id, parts[2], parts[4])
+            saved = self.store.checkpoint_fields(
+                project_id, parts[2], reference.checkpoint_hash, ("model_versions", "runtime_state")
+            )
+            run = self.store.run(project_id, parts[2])
+            installed = {}
             try:
-                scenario=self.store.scenario(project_id,run["scenario_id"],run["scenario_version"])
-                installed=model_signatures(scenario.model_configs)
+                scenario = self.store.scenario(
+                    project_id, run["scenario_id"], run["scenario_version"]
+                )
+                installed = model_signatures(scenario.model_configs)
                 # Checkpoint includes the controller/interpreter versions as well.
-                checkpoint=self.store.load_checkpoint(project_id,parts[2],reference.checkpoint_hash)
+                checkpoint = self.store.load_checkpoint(
+                    project_id, parts[2], reference.checkpoint_hash
+                )
                 checkpoint.restore_world()
-                differences=[];compatible=True;limitation=None
-            except (ValueError,TypeError,KeyError):
-                differences=[{"component":key,"recorded":saved["model_versions"].get(key),"installed":installed.get(key)}
-                    for key in sorted(set(saved["model_versions"])|set(installed))
+                differences = []
+                compatible = True
+                limitation = None
+            except (ValueError, TypeError, KeyError):
+                differences = [
+                    {
+                        "component": key,
+                        "recorded": saved["model_versions"].get(key),
+                        "installed": installed.get(key),
+                    }
+                    for key in sorted(set(saved["model_versions"]) | set(installed))
                     if (
-                        key.startswith(("policy:","state:","simulator:","operator:"))
+                        key.startswith(("policy:", "state:", "simulator:", "operator:"))
                         or key == "model_suite"
                     )
-                    if saved["model_versions"].get(key)!=installed.get(key)]
-                compatible=False;limitation="Installed schema/model validation requires an explicit migration/new Run; original checkpoint is retained."
-            settings=saved["runtime_state"].get("llm_settings",{})
-            return {"schema_version":1,"continuation_model_state_compatible":compatible,"checkpoint_hash":reference.checkpoint_hash,
-                    "recorded_versions":saved["model_versions"],"installed_policy_state_versions":installed,
-                    "differences":differences,"limitation":limitation,"saved_router_settings":settings,
-                    "live_configuration_still_required":saved["runtime_state"].get("llm",{}).get("mode") not in (None,"offline"),
-                    "verified":False,"side_effects":"none; no provider and no migration executed"}
-        if len(parts) == 6 and parts[1] == "runs" and parts[3] == "branches" and parts[5] == "history":
-            values: dict[str, Any] = one_query(query, set(HistoryQuery.model_fields)-{"schema_version"})
+                    if saved["model_versions"].get(key) != installed.get(key)
+                ]
+                compatible = False
+                limitation = (
+                    "Installed schema/model validation requires an explicit migration/new Run; "
+                    "original checkpoint is retained."
+                )
+            settings = saved["runtime_state"].get("llm_settings", {})
+            return {
+                "schema_version": 1,
+                "continuation_model_state_compatible": compatible,
+                "checkpoint_hash": reference.checkpoint_hash,
+                "recorded_versions": saved["model_versions"],
+                "installed_policy_state_versions": installed,
+                "differences": differences,
+                "limitation": limitation,
+                "saved_router_settings": settings,
+                "live_configuration_still_required": saved["runtime_state"]
+                .get("llm", {})
+                .get("mode")
+                not in (None, "offline"),
+                "verified": False,
+                "side_effects": "none; no provider and no migration executed",
+            }
+        if (
+            len(parts) == 6
+            and parts[1] == "runs"
+            and parts[3] == "branches"
+            and parts[5] == "history"
+        ):
+            values: dict[str, Any] = one_query(
+                query, set(HistoryQuery.model_fields) - {"schema_version"}
+            )
             for name in ("start", "end", "step", "limit"):
                 if name in values:
                     values[name] = int(values[name])
-            return self.queries.history(project_id, parts[2], parts[4], HistoryQuery.model_validate(values))
+            return self.queries.history(
+                project_id, parts[2], parts[4], HistoryQuery.model_validate(values)
+            )
         return None
 
     def post(self, parts: list[str], body: dict[str, Any]) -> dict[str, Any] | None:
         from sheltersim.web.projects import fields
+
         if len(parts) < 2:
             return None
         project_id = parts[0]
         if len(parts) == 4 and parts[1] in {"drafts", "assets"} and parts[3] == "delete":
             fields(body, {"confirmation"})
-            return self.artifacts.delete(project_id, parts[1], parts[2], confirmation=body["confirmation"])
-        if len(parts)==3 and parts[1]=="experiments":
-            return self.experiments.create(project_id,parts[2],body)
-        if len(parts)==6 and parts[1]=="experiments" and parts[3]=="cells":
-            if parts[5]=="prepare":return self.experiments.prepare(self.api,project_id,parts[2],parts[4],body)
-            if parts[5]=="collect":
-                fields(body,set());return self.experiments.collect(project_id,parts[2],parts[4])
-        if len(parts)==4 and parts[1]=="experiments":
-            if parts[3]=="finalize":
-                fields(body,{"evaluation_id"});return self.experiments.finalize(project_id,parts[2],body["evaluation_id"])
-            if parts[3]=="fit":
-                fields(body,set());return self.experiments.fit(project_id,parts[2])
+            return self.artifacts.delete(
+                project_id, parts[1], parts[2], confirmation=body["confirmation"]
+            )
+        if len(parts) == 3 and parts[1] == "experiments":
+            return self.experiments.create(project_id, parts[2], body)
+        if len(parts) == 6 and parts[1] == "experiments" and parts[3] == "cells":
+            if parts[5] == "prepare":
+                return self.experiments.prepare(self.api, project_id, parts[2], parts[4], body)
+            if parts[5] == "collect":
+                fields(body, set())
+                return self.experiments.collect(project_id, parts[2], parts[4])
+        if len(parts) == 4 and parts[1] == "experiments":
+            if parts[3] == "finalize":
+                fields(body, {"evaluation_id"})
+                return self.experiments.finalize(project_id, parts[2], body["evaluation_id"])
+            if parts[3] == "fit":
+                fields(body, set())
+                return self.experiments.fit(project_id, parts[2])
         if len(parts) == 4 and parts[1] == "assets" and parts[3] == "plan-preview":
-            return self.plans.preview(project_id,parts[2],body)
+            return self.plans.preview(project_id, parts[2], body)
         if len(parts) == 3 and parts[1] == "geometries":
-            return self.plans.approve(project_id,parts[2],body)
+            return self.plans.approve(project_id, parts[2], body)
         if len(parts) == 3 and parts[1] == "drafts":
             return self.artifacts.save_draft(project_id, parts[2], DraftInput.model_validate(body))
         if len(parts) == 3 and parts[1] == "uploads":
@@ -368,26 +651,36 @@ class ProjectServices:
                 return self.artifacts.chunk(project_id, parts[2], AssetChunk.model_validate(body))
             if parts[3] in {"finish", "abort"}:
                 fields(body, set())
-                return (self.artifacts.finish(project_id, parts[2]) if parts[3] == "finish"
-                        else self.artifacts.delete_upload(project_id, parts[2]))
+                return (
+                    self.artifacts.finish(project_id, parts[2])
+                    if parts[3] == "finish"
+                    else self.artifacts.delete_upload(project_id, parts[2])
+                )
         if len(parts) == 2 and parts[1] == "first-divergence":
             from sheltersim.contracts.workspace import DivergenceQuery
-            return self.queries.first_divergence(project_id,DivergenceQuery.model_validate(body))
+
+            return self.queries.first_divergence(project_id, DivergenceQuery.model_validate(body))
         if len(parts) == 2 and parts[1] == "comparison-query":
             return self.queries.compare(project_id, ComparisonQuery.model_validate(body))
         if len(parts) == 2 and parts[1] == "condition-differences":
             from sheltersim.contracts.workspace import ComparisonDifferenceQuery
             from sheltersim.web.comparison_evidence import condition_differences
-            return condition_differences(self.store,project_id,ComparisonDifferenceQuery.model_validate(body))
+
+            return condition_differences(
+                self.store, project_id, ComparisonDifferenceQuery.model_validate(body)
+            )
         if len(parts) == 3 and parts[1] == "evaluations":
             fields(body, {"report", "approved_hash"})
-            return self.evaluations.import_report(project_id, parts[2], body["report"], body["approved_hash"])
+            return self.evaluations.import_report(
+                project_id, parts[2], body["report"], body["approved_hash"]
+            )
         if len(parts) == 3 and parts[1] == "datasets":
             return self.evaluations.dataset(project_id, parts[2], body)
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "index":
             fields(body, {"branch_id"})
             from sheltersim.storage.history_index import HistoryIndex
-            return HistoryIndex(self.store,project_id,parts[2]).rebuild(body["branch_id"])
+
+            return HistoryIndex(self.store, project_id, parts[2]).rebuild(body["branch_id"])
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "rerun":
             fields(body, {"new_run_id"}, {"scenario", "approved_hash", "approved"})
             source = self.store.run(project_id, parts[2])
@@ -396,9 +689,19 @@ class ProjectServices:
                 if body.get("approved") is not True:
                     raise StorageError("edited_scenario_requires_approval")
                 from sheltersim.experiments.scenario import ScenarioSpec
-                record = self.store.save_scenario(project_id, ScenarioSpec.model_validate(body["scenario"]),
-                                                 approved_hash=body.get("approved_hash"))
+
+                record = self.store.save_scenario(
+                    project_id,
+                    ScenarioSpec.model_validate(body["scenario"]),
+                    approved_hash=body.get("approved_hash"),
+                )
                 scenario_id, version = record["scenario_id"], record["scenario_version"]
-            return self.api.post([project_id, "runs"], {"run_id": body["new_run_id"],
-                "scenario_id": scenario_id, "scenario_version": version})
+            return self.api.post(
+                [project_id, "runs"],
+                {
+                    "run_id": body["new_run_id"],
+                    "scenario_id": scenario_id,
+                    "scenario_version": version,
+                },
+            )
         return None

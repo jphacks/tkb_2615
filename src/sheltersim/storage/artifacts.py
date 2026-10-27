@@ -23,8 +23,9 @@ class ArtifactStore:
     def draft(self, project_id: str, draft_id: str) -> dict[str, Any]:
         path = self.store._path(project_id, "drafts", draft_id, "current.json")
         pointer = self.store._read(path)
-        revision = self.store._read(self.store._path(
-            project_id, "drafts", draft_id, f"v{pointer['revision']}.json"))
+        revision = self.store._read(
+            self.store._path(project_id, "drafts", draft_id, f"v{pointer['revision']}.json")
+        )
         if pointer["content_hash"] != digest(revision["content"]):
             raise StorageError("draft_integrity_mismatch")
         return revision
@@ -42,18 +43,31 @@ class ArtifactStore:
             if request.expected_hash != (prior["content_hash"] if prior else None):
                 raise StorageError("draft_conflict: reload the current revision")
             revision = 1 + (prior["revision"] if prior else 0)
-            record = {"schema_version": 1, "draft_id": draft_id, "kind": request.kind,
-                      "revision": revision, "content_hash": digest(content), "content": content}
-            self.store._write(self.store._path(project_id, "drafts", draft_id,
-                                               f"v{revision}.json"), record, immutable=True)
-            self.store._write(pointer, {key: value for key, value in record.items()
-                                       if key not in {"content", "kind"}})
+            record = {
+                "schema_version": 1,
+                "draft_id": draft_id,
+                "kind": request.kind,
+                "revision": revision,
+                "content_hash": digest(content),
+                "content": content,
+            }
+            self.store._write(
+                self.store._path(project_id, "drafts", draft_id, f"v{revision}.json"),
+                record,
+                immutable=True,
+            )
+            self.store._write(
+                pointer,
+                {key: value for key, value in record.items() if key not in {"content", "kind"}},
+            )
             return record
 
     def drafts(self, project_id: str) -> list[dict[str, Any]]:
         self.store._read(self.store._path(project_id, "project.json"))
-        return [self.store._read(path) for path in sorted(
-            self.store._path(project_id, "drafts").glob("*/current.json"))]
+        return [
+            self.store._read(path)
+            for path in sorted(self.store._path(project_id, "drafts").glob("*/current.json"))
+        ]
 
     def _bytes(self, path: Any, data: bytes) -> None:
         if path.exists():
@@ -88,11 +102,18 @@ class ArtifactStore:
             self.store._read(self.store._path(project_id, "project.json"))
             if self.store.usage()["bytes"] + request.byte_count * 2 > self.store.max_bytes:
                 raise StorageError("storage_capacity_exceeded")
-            record = {**safe_document(request.model_dump(mode="json")),
-                      "upload_id": upload_id, "chunks": 0, "received_bytes": 0,
-                      "status": "uploading"}
-            self.store._write(self.store._path(project_id, "uploads", upload_id,
-                                               "upload.json"), record, immutable=True)
+            record = {
+                **safe_document(request.model_dump(mode="json")),
+                "upload_id": upload_id,
+                "chunks": 0,
+                "received_bytes": 0,
+                "status": "uploading",
+            }
+            self.store._write(
+                self.store._path(project_id, "uploads", upload_id, "upload.json"),
+                record,
+                immutable=True,
+            )
             return record
 
     def chunk(self, project_id: str, upload_id: str, request: AssetChunk) -> dict[str, Any]:
@@ -107,7 +128,9 @@ class ArtifactStore:
             record = self.store._read(path)
             if record["status"] != "uploading":
                 raise StorageError("asset_already_completed")
-            chunk_path = self.store._path(project_id, "uploads", upload_id, f"chunk-{request.index}")
+            chunk_path = self.store._path(
+                project_id, "uploads", upload_id, f"chunk-{request.index}"
+            )
             if request.index < record["chunks"] and chunk_path.read_bytes() == data:
                 return record  # byte-identical retry does not append twice
             if record["status"] != "uploading" or request.index != record["chunks"]:
@@ -130,8 +153,10 @@ class ArtifactStore:
             metadata = self.store._path(project_id, "assets", asset_id, "asset.json")
             if record["status"] == "completed":
                 return self.store._read(metadata)
-            data = b"".join(self.store._path(project_id, "uploads", upload_id,
-                           f"chunk-{index}").read_bytes() for index in range(record["chunks"]))
+            data = b"".join(
+                self.store._path(project_id, "uploads", upload_id, f"chunk-{index}").read_bytes()
+                for index in range(record["chunks"])
+            )
             if hashlib.sha256(data).hexdigest() != asset_id:
                 raise StorageError("asset_hash_mismatch")
             mime = record["media_type"]
@@ -148,13 +173,28 @@ class ArtifactStore:
                 if not isinstance(document, dict) or safe_document(document) != document:
                     raise StorageError("invalid_or_sensitive_plan_json")
             self._bytes(self.store._path(project_id, "assets", asset_id, "content"), data)
-            result = {key: record[key] for key in (
-                "schema_version", "media_type", "byte_count", "sha256",
-                "permission_confirmed", "sensitive_building", "license_note",
-            )}
-            result.update({"asset_id": asset_id, "status": "stored_uninterpreted",
-                           "file_name":record.get("file_name"),"source_kind":record.get("source_kind","operator_upload"),
-                           "coordinate_system":record.get("coordinate_system","unknown"),"rights_status":"operator_permission_asserted"})
+            result = {
+                key: record[key]
+                for key in (
+                    "schema_version",
+                    "media_type",
+                    "byte_count",
+                    "sha256",
+                    "permission_confirmed",
+                    "sensitive_building",
+                    "license_note",
+                )
+            }
+            result.update(
+                {
+                    "asset_id": asset_id,
+                    "status": "stored_uninterpreted",
+                    "file_name": record.get("file_name"),
+                    "source_kind": record.get("source_kind", "operator_upload"),
+                    "coordinate_system": record.get("coordinate_system", "unknown"),
+                    "rights_status": "operator_permission_asserted",
+                }
+            )
             if not metadata.exists():
                 self.store._write(metadata, result, immutable=True)
             record["status"] = "completed"
@@ -163,7 +203,9 @@ class ArtifactStore:
                 self.store._path(project_id, "uploads", upload_id, f"chunk-{index}").unlink()
             return self.store._read(metadata)
 
-    def asset(self, project_id: str, asset_id: str, *, include_content: bool = False) -> dict[str, Any]:
+    def asset(
+        self, project_id: str, asset_id: str, *, include_content: bool = False
+    ) -> dict[str, Any]:
         record = self.store._read(self.store._path(project_id, "assets", asset_id, "asset.json"))
         if include_content:
             data = self.store._path(project_id, "assets", asset_id, "content").read_bytes()
@@ -174,14 +216,18 @@ class ArtifactStore:
 
     def delete_upload(self, project_id: str, upload_id: str) -> dict[str, Any]:
         import shutil
+
         with self.store.transaction():
             folder = self.store._path(project_id, "uploads", upload_id)
             self.store._read(folder / "upload.json")
             shutil.rmtree(folder)
         return {"deleted": upload_id}
 
-    def delete(self, project_id: str, kind: str, identity: str, *, confirmation: str) -> dict[str, Any]:
+    def delete(
+        self, project_id: str, kind: str, identity: str, *, confirmation: str
+    ) -> dict[str, Any]:
         import shutil
+
         if kind not in {"drafts", "assets"} or confirmation != identity:
             raise StorageError("artifact_delete_requires_exact_confirmation")
         with self.store.transaction():
@@ -193,6 +239,8 @@ class ArtifactStore:
                     root = self.store._path(project_id, category)
                     for path in root.rglob("*.json"):
                         if identity in canonical(self.store._read(path)):
-                            raise StorageError("asset_in_use: retain source or remove its draft first")
+                            raise StorageError(
+                                "asset_in_use: retain source or remove its draft first"
+                            )
             shutil.rmtree(folder)
         return {"deleted": identity, "kind": kind}

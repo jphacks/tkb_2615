@@ -46,9 +46,7 @@ def main() -> int:
         variant="research-full",
     )
     candidate = apply_default_model_suite(base, force=True)
-    git_head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
+    git_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     with tempfile.TemporaryDirectory(prefix="core-model-suite-mechanism-probe-") as scratch:
         scratch_path = Path(scratch)
         rows = {}

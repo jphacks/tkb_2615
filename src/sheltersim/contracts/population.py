@@ -20,9 +20,10 @@ class HouseholdRelationshipCorrection(ExtensionModel):
     guardian_status: Literal["accompanied", "unaccompanied", "not_applicable"] | None = None
 
     def has_change(self) -> bool:
-        return any(value is not None for value in (
-            self.parent_ids, self.caregiver_ids, self.guardian_status
-        ))
+        return any(
+            value is not None
+            for value in (self.parent_ids, self.caregiver_ids, self.guardian_status)
+        )
 
 
 class HouseholdCorrectionRequest(ExtensionModel):
@@ -36,7 +37,9 @@ class HouseholdCorrectionRequest(ExtensionModel):
         if len(ids) != len(set(ids)):
             raise ValueError("each synthetic person may be corrected once per preview")
         if any(not row.has_change() for row in self.corrections):
-            raise ValueError("each household correction must change at least one relationship field")
+            raise ValueError(
+                "each household correction must change at least one relationship field"
+            )
         return self
 
 
@@ -108,9 +111,7 @@ def population_context_people(world: Any) -> dict[str, dict[str, Any]]:
         merged.update(saved_people)
     population_state = world.model_state.get("population_dynamics_v1", {})
     dynamic_people = (
-        population_state.get("profile_context", {})
-        if isinstance(population_state, dict)
-        else {}
+        population_state.get("profile_context", {}) if isinstance(population_state, dict) else {}
     )
     if isinstance(dynamic_people, dict):
         merged.update(dynamic_people)
@@ -125,16 +126,24 @@ def validate_population_context(scenario: Any) -> None:
     profiles = {profile.id: profile for profile in scenario.profiles}
     if not set(context.people) <= set(profiles):
         raise ValueError("person context references an unknown initial profile")
-    claimed_sources = set(context.resident_distribution_source_ids) | set(context.evacuation_selection_source_ids)
+    claimed_sources = set(context.resident_distribution_source_ids) | set(
+        context.evacuation_selection_source_ids
+    )
     for identity, person in context.people.items():
-        relatives = [*person.parent_ids, *person.caregiver_ids, *person.care_for_ids,
-                     *person.partner_ids, *person.relative_ids]
+        relatives = [
+            *person.parent_ids,
+            *person.caregiver_ids,
+            *person.care_for_ids,
+            *person.partner_ids,
+            *person.relative_ids,
+        ]
         if identity in relatives or not set(relatives) <= set(profiles):
             raise ValueError("synthetic relationship contains a self/unknown reference")
         if person.household_id is not None and person.household_id != profiles[identity].group_id:
             raise ValueError("initial household context must agree with Profile.group_id")
-        facts = person.model_dump(exclude_defaults=True, exclude_none=True,
-                                  exclude={"household_id", "source_ids"})
+        facts = person.model_dump(
+            exclude_defaults=True, exclude_none=True, exclude={"household_id", "source_ids"}
+        )
         if facts and not person.source_ids:
             raise ValueError("synthetic personal-context assumptions require source IDs")
         claimed_sources.update(person.source_ids)
@@ -158,9 +167,12 @@ def validate_population_context(scenario: Any) -> None:
     seen_members: set[str] = set()
     for identity, household in context.households.items():
         members = set(household.member_ids)
-        if (len(members) != len(household.member_ids) or seen_members.intersection(members)
-                or not members <= set(profiles)
-                or any(profiles[key].group_id != identity for key in members)):
+        if (
+            len(members) != len(household.member_ids)
+            or seen_members.intersection(members)
+            or not members <= set(profiles)
+            or any(profiles[key].group_id != identity for key in members)
+        ):
             raise ValueError("household membership conflicts with immutable initial profiles")
         seen_members.update(members)
         claimed_sources.update(household.source_ids)
@@ -169,7 +181,9 @@ def validate_population_context(scenario: Any) -> None:
         raise ValueError("population context provenance references an unknown source")
 
 
-def correct_synthetic_household_relationships(scenario: Any, request: HouseholdCorrectionRequest) -> Any:
+def correct_synthetic_household_relationships(
+    scenario: Any, request: HouseholdCorrectionRequest
+) -> Any:
     """Return a new ScenarioSpec for an approved-preview workflow; never edit a saved Run.
 
     The generated profile IDs and immutable Profile.group_id assignments are exact
@@ -180,9 +194,16 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
 
     from sheltersim.experiments.scenario import ScenarioSpec
 
-    scenario = ScenarioSpec.model_validate(scenario.model_dump(mode="json") if hasattr(scenario, "model_dump") else scenario)
-    if "population_context" not in scenario.model_configs or "population" not in scenario.model_configs:
-        raise ValueError("household_context_unavailable: generate a new synthetic population preview")
+    scenario = ScenarioSpec.model_validate(
+        scenario.model_dump(mode="json") if hasattr(scenario, "model_dump") else scenario
+    )
+    if (
+        "population_context" not in scenario.model_configs
+        or "population" not in scenario.model_configs
+    ):
+        raise ValueError(
+            "household_context_unavailable: generate a new synthetic population preview"
+        )
     context = PopulationContext.model_validate(scenario.model_configs["population_context"])
     population = scenario.model_configs["population"]
     people = deepcopy({key: value.model_dump(mode="json") for key, value in context.people.items()})
@@ -191,8 +212,17 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
     sources = list(deepcopy(scenario.provenance).get("sources", []))
     correction_source = "OPERATOR-HOUSEHOLD-REVIEW-V1"
     if not any(row.get("id") == correction_source for row in sources):
-        sources.append({"id": correction_source, "title": "Operator-reviewed synthetic household relationships",
-                        "source_kind": "operator", "description": "Relationship links reviewed in a scenario preview; no real-person identity is accepted."})
+        sources.append(
+            {
+                "id": correction_source,
+                "title": "Operator-reviewed synthetic household relationships",
+                "source_kind": "operator",
+                "description": (
+                    "Relationship links reviewed in a scenario preview; no real-person identity "
+                    "is accepted."
+                ),
+            }
+        )
     changed_ids: set[str] = set()
     for correction in request.corrections:
         profile = profiles.get(correction.agent_id)
@@ -202,23 +232,44 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
             raise ValueError(f"unknown_synthetic_agent_id: {correction.agent_id}")
         if profile.provenance.source_kind not in {"synthetic", "assumption"}:
             raise ValueError("household correction is limited to synthetic or assumption profiles")
-        if (profile.group_id is None or correction.household_id != profile.group_id
-                or person.get("household_id") != profile.group_id):
-            raise ValueError("household correction cannot move a person across immutable household IDs")
+        if (
+            profile.group_id is None
+            or correction.household_id != profile.group_id
+            or person.get("household_id") != profile.group_id
+        ):
+            raise ValueError(
+                "household correction cannot move a person across immutable household IDs"
+            )
         age = trait.get("age_years")
         if type(age) is not int:
             raise ValueError("synthetic_age_unavailable: regenerate a population with age traits")
-        proposed_parents = list(correction.parent_ids) if correction.parent_ids is not None else list(person.get("parent_ids", []))
-        proposed_caregivers = list(correction.caregiver_ids) if correction.caregiver_ids is not None else list(person.get("caregiver_ids", []))
+        proposed_parents = (
+            list(correction.parent_ids)
+            if correction.parent_ids is not None
+            else list(person.get("parent_ids", []))
+        )
+        proposed_caregivers = (
+            list(correction.caregiver_ids)
+            if correction.caregiver_ids is not None
+            else list(person.get("caregiver_ids", []))
+        )
         prior_caregivers = list(person.get("caregiver_ids", []))
-        if len(proposed_parents) != len(set(proposed_parents)) or len(proposed_caregivers) != len(set(proposed_caregivers)):
+        if len(proposed_parents) != len(set(proposed_parents)) or len(proposed_caregivers) != len(
+            set(proposed_caregivers)
+        ):
             raise ValueError("household relationship IDs must be unique")
         for related_id in (*proposed_parents, *proposed_caregivers):
             related_profile = profiles.get(related_id)
             related_trait = traits.get(related_id) if isinstance(traits, dict) else None
-            if (related_profile is None or related_id not in people or related_trait is None
-                    or related_profile.group_id != profile.group_id):
-                raise ValueError("parent and caregiver links must target generated members of the same household")
+            if (
+                related_profile is None
+                or related_id not in people
+                or related_trait is None
+                or related_profile.group_id != profile.group_id
+            ):
+                raise ValueError(
+                    "parent and caregiver links must target generated members of the same household"
+                )
         for parent_id in proposed_parents:
             parent_age = traits[parent_id].get("age_years")
             if type(parent_age) is not int or parent_age <= age:
@@ -248,18 +299,20 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
             if caregiver_id in proposed_caregivers:
                 care_for.add(correction.agent_id)
             caregiver_context["care_for_ids"] = sorted(care_for)
-            caregiver_context["source_ids"] = sorted(set(caregiver_context.get("source_ids", [])) | {correction_source})
+            caregiver_context["source_ids"] = sorted(
+                set(caregiver_context.get("source_ids", [])) | {correction_source}
+            )
             changed_ids.add(caregiver_id)
         for parent_id in proposed_parents:
             parent_context = people[parent_id]
-            parent_context["source_ids"] = sorted(set(parent_context.get("source_ids", [])) | {correction_source})
+            parent_context["source_ids"] = sorted(
+                set(parent_context.get("source_ids", [])) | {correction_source}
+            )
             changed_ids.add(parent_id)
     # Roles and the old region preview are derived from the corrected typed graph so
     # the approved artifact has one consistent account of the reviewed assignment.
     parents = {
-        parent_id
-        for person in people.values()
-        for parent_id in person.get("parent_ids", [])
+        parent_id for person in people.values() for parent_id in person.get("parent_ids", [])
     }
     for identity, person in people.items():
         roles = set(person.get("roles", [])) - {"parent", "child", "caregiver", "dependent"}
@@ -273,14 +326,17 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
         age = traits.get(identity, {}).get("age_years")
         if type(age) is int and age < 18:
             person["guardian_status"] = (
-                "accompanied" if person.get("parent_ids") or person.get("caregiver_ids")
+                "accompanied"
+                if person.get("parent_ids") or person.get("caregiver_ids")
                 else "unaccompanied"
             )
         if identity in changed_ids:
             person["source_ids"] = sorted(set(person.get("source_ids", [])) | {correction_source})
-    updated_context = context.model_copy(update={"people": {
-        key: PersonContext.model_validate(value) for key, value in people.items()
-    }})
+    updated_context = context.model_copy(
+        update={
+            "people": {key: PersonContext.model_validate(value) for key, value in people.items()}
+        }
+    )
     configs = deepcopy(scenario.model_configs)
     configs["population_context"] = updated_context.model_dump(mode="json")
     provenance = deepcopy(scenario.provenance)
@@ -303,7 +359,11 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
         has_guardian = bool(person.get("parent_ids") or person.get("caregiver_ids"))
         if type(age) is int:
             requirement["guardian_status"] = (
-                "not_applicable" if age >= 18 else "accompanied" if has_guardian else "unaccompanied"
+                "not_applicable"
+                if age >= 18
+                else "accompanied"
+                if has_guardian
+                else "unaccompanied"
             )
         requirement["caregiver_ids"] = list(person.get("caregiver_ids", []))
         requirement["dependent_ids"] = sorted(
@@ -316,12 +376,19 @@ def correct_synthetic_household_relationships(scenario: Any, request: HouseholdC
         requirement["review_reasons"] = sorted(reasons)
         requirement["requires_review"] = bool(reasons)
     population_preview["unaccompanied_minor_ids"] = sorted(
-        identity for identity, person in people.items()
+        identity
+        for identity, person in people.items()
         if type(traits.get(identity, {}).get("age_years")) is int
         and traits[identity]["age_years"] < 18
-        and not person.get("parent_ids") and not person.get("caregiver_ids")
+        and not person.get("parent_ids")
+        and not person.get("caregiver_ids")
     )
     provenance["population_generation"] = population_preview
-    return ScenarioSpec.model_validate(scenario.model_copy(update={
-        "model_configs": configs, "provenance": provenance,
-    }).model_dump(mode="json"))
+    return ScenarioSpec.model_validate(
+        scenario.model_copy(
+            update={
+                "model_configs": configs,
+                "provenance": provenance,
+            }
+        ).model_dump(mode="json")
+    )

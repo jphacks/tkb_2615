@@ -205,9 +205,7 @@ def _summary(world: Any, *, variant: str, seed: int, run_dir: Path) -> dict[str,
                 actions[record["action"]] += 1
     info = world.model_state.get(INFORMATION_SPREAD_STATE_KEY, {})
     information_summary = (
-        information_spread_summary(info, agent_count=len(world.agents))
-        if info
-        else {}
+        information_spread_summary(info, agent_count=len(world.agents)) if info else {}
     )
     summary: dict[str, Any] = {
         "variant": variant,
@@ -222,14 +220,10 @@ def _summary(world: Any, *, variant: str, seed: int, run_dir: Path) -> dict[str,
         "action_records": dict(sorted(actions.items())),
         "information_exposure_count": information_summary.get("exposure_count", 0),
         "wrong_belief_count": information_summary.get("wrong_belief_count", 0),
-        "current_wrong_belief_count": information_summary.get(
-            "current_wrong_belief_count", 0
-        ),
+        "current_wrong_belief_count": information_summary.get("current_wrong_belief_count", 0),
         "ever_wrong_belief_count": information_summary.get("ever_wrong_belief_count", 0),
         "correction_exposure_count": information_summary.get("correction_exposures", 0),
-        "correction_acceptance_count": information_summary.get(
-            "correction_acceptances", 0
-        ),
+        "correction_acceptance_count": information_summary.get("correction_acceptances", 0),
         "forgotten_information_count": information_summary.get("ever_forgotten_count", 0),
         "currently_forgotten_information_count": information_summary.get(
             "currently_forgotten_count", 0
@@ -331,8 +325,7 @@ def _trace_metrics(run_dir: Path, *, agent_count: int) -> dict[str, Any]:
     resource_shortage_minutes = None
     if has_resource_ledger:
         resource_shortage_minutes = sum(
-            int(row["water_ml_remaining"]) == 0
-            or int(row["food_meal_units_remaining"]) == 0
+            int(row["water_ml_remaining"]) == 0 or int(row["food_meal_units_remaining"]) == 0
             for row in metric_rows
         )
     return {
@@ -347,9 +340,7 @@ def _trace_metrics(run_dir: Path, *, agent_count: int) -> dict[str, Any]:
         ),
         "high_distress_reascent_count": reascents if trace_enabled else None,
         "social_positive_stress_influence": social_positive if trace_enabled else None,
-        "social_negative_stress_influence_magnitude": (
-            social_negative if trace_enabled else None
-        ),
+        "social_negative_stress_influence_magnitude": (social_negative if trace_enabled else None),
         "toilet_queue_mean_length": statistics.fmean(queues) if queues else 0.0,
         "toilet_queue_person_minutes": sum(queues),
         "toilet_wait_mean_minutes_final": wait_means[-1] if wait_means else 0.0,

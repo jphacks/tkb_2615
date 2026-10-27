@@ -405,9 +405,10 @@ def _apply_to_world(world: WorldState, command: BranchCommand) -> None:
         world.staff[command.staff_id] = StaffState(
             id=command.staff_id, zone_id=command.zone_id, skills=command.skills
         )
+        from sheltersim.domain.movement import staff_position_snapshots
         from sheltersim.domain.staff_dynamics import add_staff
         from sheltersim.domain.staff_operations import add_staff_operations_agent
-        from sheltersim.domain.movement import staff_position_snapshots
+
         add_staff(world, command.staff_id)
         add_staff_operations_agent(world, command.staff_id)
         if "movement_v1" in world.model_state:
@@ -439,17 +440,21 @@ def _apply_to_world(world: WorldState, command: BranchCommand) -> None:
                 installed_facility_placement_enabled,
                 place_installed_facility,
             )
+
             if not installed_facility_placement_enabled(world):
                 raise BranchError("this floor plan cannot place added toilets")
-            event_id = "branch-add-toilet-" + hashlib.sha256(
-                command.facility_id.encode("utf-8")
-            ).hexdigest()[:16]
+            event_id = (
+                "branch-add-toilet-"
+                + hashlib.sha256(command.facility_id.encode("utf-8")).hexdigest()[:16]
+            )
             try:
-                place_installed_facility(world, command.facility_id, event_id=event_id,
-                                         source_ids=())
+                place_installed_facility(
+                    world, command.facility_id, event_id=event_id, source_ids=()
+                )
             except ValueError as exc:
                 raise BranchError(str(exc)) from exc
         from sheltersim.domain.agent_dynamics import announce_installed_facility
+
         announce_installed_facility(world, command.facility_id)
     elif isinstance(command, SetZoneEdgeCommand):
         edge = world.zone_edges.get(command.edge_id)

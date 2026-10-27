@@ -31,11 +31,13 @@ class RegionDatasetError(RegionProviderError):
     """A public endpoint responded, but its CSV content failed schema validation."""
 
 
-_ALLOWED_HOSTS = frozenset({
-    "msearch.gsi.go.jp",
-    "api.e-stat.go.jp",
-    "hinanmap.gsi.go.jp",
-})
+_ALLOWED_HOSTS = frozenset(
+    {
+        "msearch.gsi.go.jp",
+        "api.e-stat.go.jp",
+        "hinanmap.gsi.go.jp",
+    }
+)
 _MAX_RESPONSE_BYTES = 2_000_000
 _MAX_SHELTER_CSV_BYTES = 32_000_000
 _TIMEOUT_SECONDS = 8
@@ -48,9 +50,7 @@ _JSON_CACHE_LOCK = RLock()
 _GSI_CSV_CACHE: OrderedDict[str, tuple[float, "GsiCsvSnapshot"]] = OrderedDict()
 _CSV_CACHE_LOCK = RLock()
 _GSI_CSV_FETCH_LOCK = RLock()
-_GSI_SHELTER_CSV_URL = (
-    "https://hinanmap.gsi.go.jp/hinanjocp/defaultFtpData/csv/mergeFromCity_1.csv"
-)
+_GSI_SHELTER_CSV_URL = "https://hinanmap.gsi.go.jp/hinanjocp/defaultFtpData/csv/mergeFromCity_1.csv"
 _MAX_MUNICIPAL_SHELTERS = 500
 _MAX_MUNICIPALITY_CODE_SUGGESTIONS = 30
 _MAX_GSI_CSV_ROWS = 250_000
@@ -68,7 +68,9 @@ _GSI_SHELTER_REQUIRED_HEADERS = frozenset(
 
 
 class _SameHostRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request: Request, response: Any, code: int, message: str, headers: Any, url: str) -> Request | None:
+    def redirect_request(
+        self, request: Request, response: Any, code: int, message: str, headers: Any, url: str
+    ) -> Request | None:
         original = urlsplit(request.full_url)
         target = urlsplit(url)
         if (
@@ -92,9 +94,7 @@ def _get_json(url: str) -> Any:
             if key.casefold() != "appid"
         ]
     )
-    cache_url = urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, cache_query, "")
-    )
+    cache_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, cache_query, ""))
     cache_key = hashlib.sha256(cache_url.encode("utf-8")).hexdigest()
     now = time.monotonic()
     with _JSON_CACHE_LOCK:
@@ -181,9 +181,7 @@ def _get_gsi_shelter_snapshot_locked(url: str) -> GsiCsvSnapshot:
         chunks = bytearray()
         with opener.open(request, timeout=_TIMEOUT_SECONDS) as response:
             if response.status != 200:
-                raise RegionProviderError(
-                    f"public-data endpoint returned HTTP {response.status}"
-                )
+                raise RegionProviderError(f"public-data endpoint returned HTTP {response.status}")
             content_length = response.headers.get("Content-Length")
             expected_content_length: int | None = None
             if content_length:
@@ -215,7 +213,9 @@ def _get_gsi_shelter_snapshot_locked(url: str) -> GsiCsvSnapshot:
                 if len(chunks) > _MAX_SHELTER_CSV_BYTES:
                     raise RegionProviderError("GSI shelter CSV exceeded the 32 MB safety limit")
             if expected_content_length is not None and len(chunks) != expected_content_length:
-                raise RegionProviderError("GSI shelter CSV download was truncated or had extra bytes")
+                raise RegionProviderError(
+                    "GSI shelter CSV download was truncated or had extra bytes"
+                )
             etag = response.headers.get("ETag")
             last_modified = response.headers.get("Last-Modified")
         try:
@@ -279,13 +279,13 @@ def _validate_gsi_shelter_csv(text: str) -> None:
             if row_number > _MAX_GSI_CSV_ROWS + 1:
                 raise RegionDatasetError("GSI designated-shelter CSV exceeded the row safety limit")
             if None in row or None in row.values():
-                raise RegionDatasetError("GSI designated-shelter CSV row has an invalid column count")
+                raise RegionDatasetError(
+                    "GSI designated-shelter CSV row has an invalid column count"
+                )
             common_id = (row.get("共通ID") or "").strip()
             if common_id:
                 signature = tuple(
-                    (field, row.get(field) or "")
-                    for field in reader.fieldnames
-                    if field != "NO"
+                    (field, row.get(field) or "") for field in reader.fieldnames if field != "NO"
                 )
                 previous = seen_common_ids.get(common_id)
                 if previous is not None and previous != signature:
@@ -495,10 +495,7 @@ class GsiShelterProvider:
             municipality=municipality,
             municipality_code=code,
             municipality_name_verified=municipality_name_verified,
-            shelters=tuple(
-                dict(row, __shelter_subtype=subtype)
-                for subtype, row in rows_by_code
-            ),
+            shelters=tuple(dict(row, __shelter_subtype=subtype) for subtype, row in rows_by_code),
             status="matched",
             complete=invalid_records == 0,
             matched_count=len(rows_by_code),
@@ -573,7 +570,10 @@ class EStatProvider:
             return ()
         if not query.strip() or not 1 <= limit <= 50:
             raise ValueError("query must be non-empty and limit must be between 1 and 50")
-        url = f"{self.base_url}/getStatsList?{urlencode({'appId': self.app_id, 'searchWord': query, 'limit': limit})}"
+        url = (
+            f"{self.base_url}/getStatsList?"
+            f"{urlencode({'appId': self.app_id, 'searchWord': query, 'limit': limit})}"
+        )
         root = _get_json(url).get("GET_STATS_LIST", {})
         if not isinstance(root, dict):
             return ()
@@ -608,7 +608,8 @@ class EStatProvider:
         if not table_id.strip():
             raise ValueError("an e-Stat table ID must be selected")
         document = _get_json(
-            f"{self.base_url}/getMetaInfo?{urlencode({'appId': self.app_id, 'statsDataId': table_id})}"
+            f"{self.base_url}/getMetaInfo?"
+            f"{urlencode({'appId': self.app_id, 'statsDataId': table_id})}"
         )
         root = document.get("GET_META_INFO", {})
         metadata = root.get("METADATA_INF", {}) if isinstance(root, dict) else {}
@@ -663,7 +664,9 @@ class EStatProvider:
             "title": title,
             "geographic_scope": _nested_text(table_info.get("AREA")),
             "content_sha256": hashlib.sha256(
-                json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                json.dumps(
+                    document, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
             ).hexdigest(),
             "areas": areas,
             "periods": periods,
@@ -679,7 +682,9 @@ class EStatProvider:
         period_code: str | None = None,
         category_codes: dict[str, str] | None = None,
     ) -> tuple[dict[str, Any], ...]:
-        """Fetch only the table, area, period, and dimensions explicitly selected by the operator."""
+        """Fetch only the table, area, period, and dimensions explicitly selected by the
+        operator.
+        """
         if not self.app_id:
             return ()
         if not table_id.strip() or not area_code.strip():
@@ -696,11 +701,15 @@ class EStatProvider:
         for dimension_id, code in (category_codes or {}).items():
             match = re.fullmatch(r"cat(\d{2})", dimension_id)
             if match is None or not code:
-                raise ValueError("e-Stat category selections must use a catNN dimension and a class code")
+                raise ValueError(
+                    "e-Stat category selections must use a catNN dimension and a class code"
+                )
             params[f"cdCat{match.group(1)}"] = code
         response_document = _get_json(f"{self.base_url}/getStatsData?{urlencode(params)}")
         response_sha256 = hashlib.sha256(
-            json.dumps(response_document, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            json.dumps(
+                response_document, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
         ).hexdigest()
         root = response_document.get("GET_STATS_DATA", {})
         if not isinstance(root, dict):
@@ -729,7 +738,9 @@ class EStatProvider:
                     "title": str(title or table_id),
                     "area_code": str(item.get("@area") or area_code),
                     "area_label": area_labels.get(str(item.get("@area") or area_code)),
-                    "period_code": str(item.get("@time")) if item.get("@time") is not None else None,
+                    "period_code": str(item.get("@time"))
+                    if item.get("@time") is not None
+                    else None,
                     "category_codes": {
                         key[1:]: str(value)
                         for key, value in item.items()
@@ -780,4 +791,3 @@ def _class_label_maps(class_info: Any) -> tuple[dict[str, str], dict[str, dict[s
         elif dimension_id:
             category_labels[dimension_id] = labels
     return area_labels, category_labels
-

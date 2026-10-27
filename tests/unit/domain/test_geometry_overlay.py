@@ -454,8 +454,10 @@ def test_generated_scenarios_announce_and_place_installed_facilities(generated_s
     )
     assert scenario.model_configs["geometry_overlay"] == {"schema_version": 4}
     manifest = json.loads(open("fixtures/source-manifest.json", encoding="utf-8").read())
-    for source_id in (INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
-                      INSTALLED_FACILITY_PLACEMENT_SOURCE_ID):
+    for source_id in (
+        INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+        INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
+    ):
         assert any(row["id"] == source_id for row in scenario.provenance["assumptions"])
         assert any(row["id"] == source_id for row in manifest["assumptions"])
 

@@ -78,13 +78,15 @@ class FrameCache:
             document = json.loads(raw)
         except (OSError, EOFError, ValueError):
             return None
-        if (not isinstance(document, dict)
-                or set(document) != {"schema_version", "projection_version", "checkpoint_hash",
-                                     "frame_hash", "frame"}
-                or document["schema_version"] != 1
-                or document["projection_version"] != FRAME_PROJECTION_VERSION
-                or document["checkpoint_hash"] != checkpoint_hash
-                or not isinstance(document["frame"], dict)):
+        if (
+            not isinstance(document, dict)
+            or set(document)
+            != {"schema_version", "projection_version", "checkpoint_hash", "frame_hash", "frame"}
+            or document["schema_version"] != 1
+            or document["projection_version"] != FRAME_PROJECTION_VERSION
+            or document["checkpoint_hash"] != checkpoint_hash
+            or not isinstance(document["frame"], dict)
+        ):
             return None
         encoded_frame = canonical(document["frame"]).encode()
         if hashlib.sha256(encoded_frame).hexdigest() != document["frame_hash"]:

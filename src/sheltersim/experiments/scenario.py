@@ -174,9 +174,7 @@ class ResourceServiceConfig(ContractModel):
 class ToiletServiceConfig(ContractModel):
     """Versioned, source-attributed discrete toilet service duration bounds."""
 
-    duration_distribution: Literal["discrete_uniform_inclusive"] = (
-        "discrete_uniform_inclusive"
-    )
+    duration_distribution: Literal["discrete_uniform_inclusive"] = "discrete_uniform_inclusive"
     minimum_minutes: int = Field(default=4, strict=True, ge=1, le=1440)
     maximum_minutes: int = Field(default=8, strict=True, ge=1, le=1440)
     source_type: Literal["assumption"] = "assumption"
@@ -207,12 +205,8 @@ class PsychologyModelConfig(ContractModel):
     resting_stress_recovery: float = Field(default=0.003, ge=0.0, le=0.25, allow_inf_nan=False)
     sleeping_stress_recovery: float = Field(default=0.006, ge=0.0, le=0.25, allow_inf_nan=False)
     need_pressure_threshold: float = Field(default=0.35, ge=0.0, le=1.0, allow_inf_nan=False)
-    toilet_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
-        default_factory=dict
-    )
-    hunger_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
-        default_factory=dict
-    )
+    toilet_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(default_factory=dict)
+    hunger_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(default_factory=dict)
     awake_fatigue_growth_by_agent: dict[StableId, StrictFloat | StrictInt] = Field(
         default_factory=dict
     )
@@ -230,9 +224,7 @@ class PsychologyModelConfig(ContractModel):
     chronic_high_distress_weight: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False
     )
-    high_distress_threshold: float | None = Field(
-        default=None, ge=0.0, le=1.0, allow_inf_nan=False
-    )
+    high_distress_threshold: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def bounded_agent_rates(self) -> PsychologyModelConfig:
@@ -244,11 +236,11 @@ class PsychologyModelConfig(ContractModel):
                 or not 0.0 <= value <= 0.25
                 for value in values.values()
             ):
-                raise ValueError(f"{field_name} must contain at most 10000 finite rates in [0, 0.25]")
+                raise ValueError(
+                    f"{field_name} must contain at most 10000 finite rates in [0, 0.25]"
+                )
         if len(self.baseline_distress_by_agent) > 10_000 or any(
-            type(value) not in (int, float)
-            or not math.isfinite(value)
-            or not 0.0 <= value <= 1.0
+            type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= 1.0
             for value in self.baseline_distress_by_agent.values()
         ):
             raise ValueError(
@@ -957,9 +949,7 @@ class ScenarioSpec(ContractModel):
             from sheltersim.domain.movement import canonical_movement_config
 
             try:
-                movement_config = canonical_movement_config(
-                    self.model_configs["movement_model"]
-                )
+                movement_config = canonical_movement_config(self.model_configs["movement_model"])
             except ValueError as exc:
                 raise ValueError(f"invalid movement_model config: {exc}") from exc
             object.__setattr__(
@@ -977,8 +967,7 @@ class ScenarioSpec(ContractModel):
             unknown_ids = set(behavior_config.get(field_name, {})) - profile_ids
             if unknown_ids:
                 raise ValueError(
-                    f"behavior.{field_name} references unknown Agent IDs: "
-                    f"{sorted(unknown_ids)[:5]}"
+                    f"behavior.{field_name} references unknown Agent IDs: {sorted(unknown_ids)[:5]}"
                 )
         staff_config = self.model_configs.get("staff", {})
         for name, lower, upper in (
@@ -1001,7 +990,8 @@ class ScenarioSpec(ContractModel):
                 or not 1 <= fairness_minutes <= timeout_minutes
             ):
                 raise ValueError(
-                    "staff support_fairness_minutes must be positive and no greater than the unresolved timeout"
+                    "staff support_fairness_minutes must be positive and no greater than the "
+                    "unresolved timeout"
                 )
         validate_scenario_extensions(self)
         return self

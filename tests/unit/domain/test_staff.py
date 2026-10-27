@@ -505,9 +505,7 @@ def test_no_qualified_worker_is_counted_as_request_minutes_and_exported() -> Non
     assert snapshot.support_no_qualified_worker_request_minutes == 1.0
     sources = json.loads(snapshot.source_ids_json)
     assert sources["support_requests_without_qualified_staff"] == ["A001"]
-    assert sources["support_wait_by_agent"]["A001"]["reason_codes"] == [
-        "no_qualified_staff"
-    ]
+    assert sources["support_wait_by_agent"]["A001"]["reason_codes"] == ["no_qualified_staff"]
 
     recorder = MetricsRecorder()
     recorder.capture(world)
@@ -535,11 +533,13 @@ def test_busy_and_off_shift_support_delay_exposure_is_checkpointed_and_exported(
         staff_id: StaffState(id=staff_id, zone_id="sleeping", skills=("support",))
         for staff_id in ("S01", "S02")
     }
-    world.model_configs["staff_dynamics"] = canonical_staff_dynamics_config({
-        "shift_windows_by_staff": {
-            "S02": [{"start_minute": 100, "end_minute": 200}],
-        },
-    })
+    world.model_configs["staff_dynamics"] = canonical_staff_dynamics_config(
+        {
+            "shift_windows_by_staff": {
+                "S02": [{"start_minute": 100, "end_minute": 200}],
+            },
+        }
+    )
     initialize_simulator_extensions(world)
     service = StaffService(world, task_duration_minutes=10, unresolved_after_minutes=30)
 
@@ -572,11 +572,15 @@ def test_busy_and_off_shift_support_delay_exposure_is_checkpointed_and_exported(
     version_three = dict(serialized)
     version_three["schema_version"] = 3
     version_three["snapshots"] = [
-        {key: value for key, value in serialized["snapshots"][0].items()
-         if key not in {
-             "support_wait_staff_busy_request_minutes",
-             "support_wait_staff_off_shift_request_minutes",
-         }}
+        {
+            key: value
+            for key, value in serialized["snapshots"][0].items()
+            if key
+            not in {
+                "support_wait_staff_busy_request_minutes",
+                "support_wait_staff_off_shift_request_minutes",
+            }
+        }
     ]
     migrated = MetricsRecorder.from_dict(version_three)
     assert migrated.snapshots[0].support_wait_staff_busy_request_minutes == 0.0

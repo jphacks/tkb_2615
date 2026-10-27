@@ -64,9 +64,9 @@ def _world(
         environment_values = {"max_rest_decision_minutes": max_rest_minutes}
         if temperature_model is not None or formula_models:
             environment_values["policy_version"] = "zone-environment-v2"
-        document["model_configs"]["zone_environment"] = ScenarioZoneEnvironmentConfig.model_validate(
-            environment_values
-        ).model_dump(mode="json")
+        document["model_configs"]["zone_environment"] = (
+            ScenarioZoneEnvironmentConfig.model_validate(environment_values).model_dump(mode="json")
+        )
     selections = dict(formula_models or {})
     if temperature_model is not None:
         selections["zone_environment"] = temperature_model
@@ -288,9 +288,7 @@ def test_environment_formula_factory_changes_temperature_response_and_signature(
 
 
 def test_environment_factories_independently_change_rest_hygiene_and_privacy() -> None:
-    rest_multiplicative = _world(
-        formula_models={"zone_rest": "zone-rest-multiplicative-v1"}
-    )
+    rest_multiplicative = _world(formula_models={"zone_rest": "zone-rest-multiplicative-v1"})
     rest_limiting = _world(formula_models={"zone_rest": "zone-rest-limiting-v1"})
     for world in (rest_multiplicative, rest_limiting):
         _activate(
@@ -306,18 +304,10 @@ def test_environment_factories_independently_change_rest_hygiene_and_privacy() -
         pytest.approx(0.6)
     )
 
-    linear = _world(
-        formula_models={"zone_hygiene": "zone-hygiene-linear-v1"}
-    )
-    quadratic = _world(
-        formula_models={"zone_hygiene": "zone-hygiene-quadratic-v1"}
-    )
-    threshold = _world(
-        formula_models={"zone_privacy": "zone-privacy-threshold-v1"}
-    )
-    proportional = _world(
-        formula_models={"zone_privacy": "zone-privacy-proportional-v1"}
-    )
+    linear = _world(formula_models={"zone_hygiene": "zone-hygiene-linear-v1"})
+    quadratic = _world(formula_models={"zone_hygiene": "zone-hygiene-quadratic-v1"})
+    threshold = _world(formula_models={"zone_privacy": "zone-privacy-threshold-v1"})
+    proportional = _world(formula_models={"zone_privacy": "zone-privacy-proportional-v1"})
     effects = (
         _effect("low-ventilation", "set_ventilation", {"effectiveness": 0.3}),
         _effect("low-privacy", "set_privacy", {"level": 0.2}),

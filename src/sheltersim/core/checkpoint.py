@@ -90,7 +90,8 @@ class Checkpoint:
     def _legacy_queue_migration_required(self) -> bool:
         installed = model_signatures(self.world_state.get("model_configs", {}))
         recorded = {
-            key: value for key, value in self.model_versions.items()
+            key: value
+            for key, value in self.model_versions.items()
             if key.startswith(("policy:", "simulator:", "state:", "operator:"))
             or key == "model_suite"
         }
@@ -108,7 +109,8 @@ class Checkpoint:
             == {key: value for key, value in installed.items() if key != queue_signature}
         )
         if not compatible and (
-            recorded or "state_contracts" in configs
+            recorded
+            or "state_contracts" in configs
             or any(key.startswith("operator:") for key in installed)
         ):
             raise CheckpointError(
@@ -124,6 +126,7 @@ class Checkpoint:
                 FACILITY_QUEUES_LEGACY_MODE_KEY,
                 independent_queues_required,
             )
+
             if not independent_queues_required(world_document.get("model_configs", {})):
                 raise CheckpointError(
                     "legacy queue migration was requested for an unrelated scenario"

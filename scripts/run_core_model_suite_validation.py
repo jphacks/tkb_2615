@@ -33,9 +33,7 @@ def _state_hash(world: Any) -> str:
 
 def validate(seed: int, duration: int, *, candidate_only: bool = False) -> dict[str, Any]:
     document = json.loads(
-        (ROOT / "fixtures/scenarios/research_operational_100_7d.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "fixtures/scenarios/research_operational_100_7d.json").read_text(encoding="utf-8")
     )
     document["id"] = f"core-model-suite-validation-{seed}-{duration}"
     document["seed"] = seed
@@ -45,9 +43,7 @@ def validate(seed: int, duration: int, *, candidate_only: bool = False) -> dict[
     ]
     base = ScenarioSpec.model_validate(document)
     candidate = apply_default_model_suite(base, force=True)
-    git_head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
+    git_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
     with tempfile.TemporaryDirectory(prefix="core-model-suite-validation-") as scratch:
         scratch_path = Path(scratch)
@@ -65,9 +61,7 @@ def validate(seed: int, duration: int, *, candidate_only: bool = False) -> dict[
                 seed=seed,
                 run_dir=scratch_path / "candidate",
             )
-            agents = candidate_world.model_state.get("body_state_v1", {}).get(
-                "agents", {}
-            )
+            agents = candidate_world.model_state.get("body_state_v1", {}).get("agents", {})
             debts = [item["sleep_debt_minutes"] for item in agents.values()]
             candidate_result["body_state"] = {
                 "sleep_debt_mean_minutes": sum(debts) / len(debts) if debts else None
@@ -76,12 +70,8 @@ def validate(seed: int, duration: int, *, candidate_only: bool = False) -> dict[
             candidate_result["scenario_sha256"] = hashlib.sha256(
                 candidate.canonical_json().encode("utf-8")
             ).hexdigest()
-            candidate_result["model_signatures"] = model_signatures(
-                candidate.model_configs
-            )
-            candidate_result["policy_registry"] = candidate.model_configs.get(
-                "policy_registry", {}
-            )
+            candidate_result["model_signatures"] = model_signatures(candidate.model_configs)
+            candidate_result["policy_registry"] = candidate.model_configs.get("policy_registry", {})
             return {
                 "schema_version": 1,
                 "study_id": f"{CORE_MODEL_SUITE_V2}-candidate-only",
@@ -144,8 +134,10 @@ def validate(seed: int, duration: int, *, candidate_only: bool = False) -> dict[
         for result, scenario in ((baseline, base), (candidate_result, candidate)):
             body = result.setdefault("body_state", {})
             agents = (
-                baseline_world if scenario is base else candidate_world
-            ).model_state.get("body_state_v1", {}).get("agents", {})
+                (baseline_world if scenario is base else candidate_world)
+                .model_state.get("body_state_v1", {})
+                .get("agents", {})
+            )
             debts = [item["sleep_debt_minutes"] for item in agents.values()]
             body["sleep_debt_mean_minutes"] = sum(debts) / len(debts) if debts else None
             result["scenario_id"] = scenario.id

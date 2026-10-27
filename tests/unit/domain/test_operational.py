@@ -836,14 +836,11 @@ def test_interrupted_support_is_reassigned_and_only_new_completion_resolves_requ
     outcomes = _dispatcher().dispatch_due(world, 2)
     ingest_applied_shared_operation_records(world, outcomes)
     continuity = [
-        record for record in outcomes
-        if record.event.event_type == "staff_support_continuity"
+        record for record in outcomes if record.event.event_type == "staff_support_continuity"
     ]
     assert len(continuity) == 1
     assert continuity[0].status is EventStatus.APPLIED
-    continuity_receipt = StaffSupportContinuityReceipt.model_validate(
-        continuity[0].event.payload
-    )
+    continuity_receipt = StaffSupportContinuityReceipt.model_validate(continuity[0].event.payload)
     assert continuity_receipt.request_id == receipt.request_id
     assert continuity_receipt.agent_id == "A001"
     assert continuity_receipt.task_id == first_task_id
@@ -1005,8 +1002,7 @@ def test_support_timeout_suppression_and_recreation_after_absence() -> None:
     _set_minute(expired, 4)
     expired_outcomes = _dispatcher().dispatch_due(expired, 4)
     continuity = next(
-        row for row in expired_outcomes
-        if row.event.event_type == "staff_support_continuity"
+        row for row in expired_outcomes if row.event.event_type == "staff_support_continuity"
     )
     assert continuity.event.payload["status"] == "unresolved"
     request = expired.support_requests[expired_receipt.request_id]

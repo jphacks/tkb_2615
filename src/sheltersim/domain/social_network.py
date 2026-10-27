@@ -118,9 +118,7 @@ def validate_social_network_state(world: WorldState) -> None:
                 "last_interaction",
             }
             or any(
-                not isinstance(record[key], int)
-                or isinstance(record[key], bool)
-                or record[key] < 0
+                not isinstance(record[key], int) or isinstance(record[key], bool) or record[key] < 0
                 for key in ("contact_count", "conversation_count", "cooperation_count")
             )
             or not isinstance(record["shared_message_ids"], list)
@@ -191,7 +189,9 @@ def record_interaction(
     if actor_id == participant_id:
         return
     state = _state(world)
-    for index, (recipient, source) in enumerate(((actor_id, participant_id), (participant_id, actor_id))):
+    for index, (recipient, source) in enumerate(
+        ((actor_id, participant_id), (participant_id, actor_id))
+    ):
         record = _relationship(state, recipient, source)
         record["conversation_count"] += 1
         record["last_contact_minute"] = minute
@@ -199,13 +199,13 @@ def record_interaction(
         if interaction == "cooperation":
             record["cooperation_count"] += 1
         directional_delta = (
-            directed_trust_deltas[index]
-            if directed_trust_deltas is not None
-            else trust_delta
+            directed_trust_deltas[index] if directed_trust_deltas is not None else trust_delta
         )
         if directional_delta is not None:
             current = record["trust"]
-            record["trust"] = min(1.0, max(0.0, (0.5 if current is None else current) + directional_delta))
+            record["trust"] = min(
+                1.0, max(0.0, (0.5 if current is None else current) + directional_delta)
+            )
     state["interaction_count"] += 1
 
 
@@ -251,7 +251,8 @@ def observe_event(world: WorldState, event: ScheduledEvent, minute: int) -> None
     actor_id = payload.get("agent_id")
     participant_id = payload.get("participant_agent_id")
     if (
-        interaction in {
+        interaction
+        in {
             "cooperation",
             "information_reaction",
             "reassurance_exchange",
@@ -272,7 +273,11 @@ def observe_event(world: WorldState, event: ScheduledEvent, minute: int) -> None
             config = body_state.get("config", {}) if isinstance(body_state, dict) else {}
             signal = min(
                 1.0,
-                max(-1.0, actor_record.get("positive_affect", 0.5) - actor_record.get("negative_affect", 0.0)),
+                max(
+                    -1.0,
+                    actor_record.get("positive_affect", 0.5)
+                    - actor_record.get("negative_affect", 0.0),
+                ),
             )
             relief = config.get("social_action_affect_transfer", 0.02) * signal
             actor_delta = (
@@ -350,4 +355,3 @@ def _sync_body_trust(world: WorldState, recipient_id: str, source_id: str) -> No
     )
     if body_record is not None and social_record is not None:
         social_record["trust"] = body_record["trust"]
-

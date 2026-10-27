@@ -86,12 +86,12 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
 
     relationship_key = json.dumps([actor, participant], separators=(",", ":"))
     body_relationship_key = json.dumps([participant, actor], separators=(",", ":"))
-    social_before_exit = json.loads(json.dumps(
-        world.model_state["social_network_v1"]["relationships"][relationship_key]
-    ))
-    body_before_exit = json.loads(json.dumps(
-        world.model_state["body_state_v1"]["relationships"][body_relationship_key]
-    ))
+    social_before_exit = json.loads(
+        json.dumps(world.model_state["social_network_v1"]["relationships"][relationship_key])
+    )
+    body_before_exit = json.loads(
+        json.dumps(world.model_state["body_state_v1"]["relationships"][body_relationship_key])
+    )
     social_events, truncated = social_event_records(world)
     assert not truncated
     assert social_events[-1]["interaction_type"] == "reassurance_exchange"
@@ -103,8 +103,11 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
     apply_population_presence_command(
         world,
         ScheduledEvent(
-            event_id=f"temporary-exit-{sequence}", kind=EventKind.INTERVENTION,
-            due_minute=2, priority=0, sequence=sequence,
+            event_id=f"temporary-exit-{sequence}",
+            kind=EventKind.INTERVENTION,
+            due_minute=2,
+            priority=0,
+            sequence=sequence,
             event_type="population_presence",
             payload={},
         ),
@@ -114,8 +117,7 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
     )
     assert actor not in world.agents
     assert any(
-        row["namespace"] == "social_network_v1"
-        and row["pair_key"] == relationship_key
+        row["namespace"] == "social_network_v1" and row["pair_key"] == relationship_key
         for row in world.model_state["population_lifecycle_v1"]["relationship_archive"]
     )
 
@@ -124,15 +126,24 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
     apply_population_presence_command(
         world,
         ScheduledEvent(
-            event_id=f"return-{sequence}", kind=EventKind.INTERVENTION,
-            due_minute=3, priority=0, sequence=sequence,
+            event_id=f"return-{sequence}",
+            kind=EventKind.INTERVENTION,
+            due_minute=3,
+            priority=0,
+            sequence=sequence,
             event_type="population_presence",
             payload={},
         ),
         PopulationPresenceCommand(action="return", agent_id=actor, zone_id="sleeping"),
     )
-    assert world.model_state["social_network_v1"]["relationships"][relationship_key] == social_before_exit
-    assert world.model_state["body_state_v1"]["relationships"][body_relationship_key] == body_before_exit
+    assert (
+        world.model_state["social_network_v1"]["relationships"][relationship_key]
+        == social_before_exit
+    )
+    assert (
+        world.model_state["body_state_v1"]["relationships"][body_relationship_key]
+        == body_before_exit
+    )
     world.validate()
 
     checkpoint = Checkpoint.from_json(Checkpoint.capture(world).to_json())
@@ -145,10 +156,15 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
     index = HistoryIndex(store, "project", "run")
     index.ingest("main", checkpoint, rebuild=True)
     index.ingest("sibling", checkpoint, rebuild=True)
-    index.add_turn("main", {
-        "turn_id": "turn-1", "conversation_id": "conversation-1", "minute": 3,
-        "status": "unavailable",
-    })
+    index.add_turn(
+        "main",
+        {
+            "turn_id": "turn-1",
+            "conversation_id": "conversation-1",
+            "minute": 3,
+            "status": "unavailable",
+        },
+    )
     # Rebuild may replace derived projections after a version change without
     # altering the immutable EventLog, deleting saved turns or duplicating rows.
     index.ingest("main", checkpoint, rebuild=True)
@@ -186,8 +202,7 @@ def test_structured_interaction_is_indexed_without_utterance_and_restores_social
         "observed_model_effects": row["observed_model_effects"],
     }
     effects_by_kind = {
-        effect["state_kind"]: effect["deltas"]
-        for effect in row["observed_model_effects"]
+        effect["state_kind"]: effect["deltas"] for effect in row["observed_model_effects"]
     }
     assert effects_by_kind["relationship_update"]["relationship_trust_delta"] > 0
     assert effects_by_kind["reassurance_exchange"] == {
@@ -263,31 +278,33 @@ def test_social_dialogue_rejects_future_proposal_state_without_applying_effects(
     context["captured_minute"] = 2
     before = (world.agents[participant].stress, world.agents[participant].trust)
     sequence = world.allocate_event_sequence()
-    world.schedule_event(ScheduledEvent(
-        event_id=f"future-social-context-{sequence}",
-        kind=EventKind.ENDOGENOUS,
-        due_minute=1,
-        priority=35,
-        sequence=sequence,
-        event_type="social_interaction",
-        payload={
-            "interaction_type": "reassurance_exchange",
-            "agent_id": actor,
-            "participant_agent_id": participant,
-            "conversation_state_context": context,
-            "zone_id": world.agents[actor].zone_id,
-            "topic_id": "emotional_check_in",
-            "action": "offer_reassurance",
-            "reason_short": "autonomous_need_choice",
-            "interaction_duration_minutes": 5,
-        },
-        source_id="event-triggered-social-v2",
-        provenance={
-            "source_type": "assumption",
-            "source_id": "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
-            "policy_version": "event-triggered-social-v2",
-        },
-    ))
+    world.schedule_event(
+        ScheduledEvent(
+            event_id=f"future-social-context-{sequence}",
+            kind=EventKind.ENDOGENOUS,
+            due_minute=1,
+            priority=35,
+            sequence=sequence,
+            event_type="social_interaction",
+            payload={
+                "interaction_type": "reassurance_exchange",
+                "agent_id": actor,
+                "participant_agent_id": participant,
+                "conversation_state_context": context,
+                "zone_id": world.agents[actor].zone_id,
+                "topic_id": "emotional_check_in",
+                "action": "offer_reassurance",
+                "reason_short": "autonomous_need_choice",
+                "interaction_duration_minutes": 5,
+            },
+            source_id="event-triggered-social-v2",
+            provenance={
+                "source_type": "assumption",
+                "source_id": "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
+                "policy_version": "event-triggered-social-v2",
+            },
+        )
+    )
 
     outcome = EventDispatcher({"social_interaction": SocialInteractionHandler()}).dispatch_due(
         world, 1

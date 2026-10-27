@@ -35,7 +35,9 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
         raise ValueError("staff_dynamics config has unsupported fields")
     legacy = raw.get("policy_version") == STAFF_DYNAMICS_POLICY_VERSION or (
         "policy_version" not in raw
-        and not {"shift_windows_by_staff", "off_shift_fatigue_recovery_per_minute"}.intersection(raw)
+        and not {"shift_windows_by_staff", "off_shift_fatigue_recovery_per_minute"}.intersection(
+            raw
+        )
     )
     policy_version = (
         STAFF_DYNAMICS_POLICY_VERSION if legacy else SHIFT_STAFF_DYNAMICS_POLICY_VERSION
@@ -57,7 +59,8 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
     }
     if (
         config["schema_version"] != 1
-        or config["policy_version"] not in {
+        or config["policy_version"]
+        not in {
             STAFF_DYNAMICS_POLICY_VERSION,
             SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
         }
@@ -66,8 +69,7 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
     ):
         raise ValueError("unsupported staff_dynamics policy or source")
     if config["policy_version"] == STAFF_DYNAMICS_POLICY_VERSION and (
-        config["shift_windows_by_staff"]
-        or config["off_shift_fatigue_recovery_per_minute"] != 0.0
+        config["shift_windows_by_staff"] or config["off_shift_fatigue_recovery_per_minute"] != 0.0
     ):
         raise ValueError("staff shift and off-shift recovery assumptions require policy v2")
     for name, lower, upper in (
@@ -75,11 +77,7 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
         ("rest_minutes", 1, 8 * 60),
     ):
         value = config[name]
-        if (
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or not lower <= value <= upper
-        ):
+        if not isinstance(value, int) or isinstance(value, bool) or not lower <= value <= upper:
             raise ValueError(f"staff_dynamics {name} is outside its supported range")
     per_staff_maxima = config["max_continuous_work_minutes_by_staff"]
     if not isinstance(per_staff_maxima, dict):
@@ -91,13 +89,22 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
             or type(value) is not int
             or not 1 <= value <= 24 * 60
         ):
-            raise ValueError("staff_dynamics per-staff work limits must be integer minutes in 1..1440")
+            raise ValueError(
+                "staff_dynamics per-staff work limits must be integer minutes in 1..1440"
+            )
     windows = config["shift_windows_by_staff"]
     if not isinstance(windows, dict):
         raise ValueError("staff_dynamics shift_windows_by_staff must be an object")
     for staff_id, rows in windows.items():
-        if not isinstance(staff_id, str) or not staff_id or not isinstance(rows, list) or len(rows) > 21:
-            raise ValueError("staff_dynamics shift windows require a staff ID and at most 21 intervals")
+        if (
+            not isinstance(staff_id, str)
+            or not staff_id
+            or not isinstance(rows, list)
+            or len(rows) > 21
+        ):
+            raise ValueError(
+                "staff_dynamics shift windows require a staff ID and at most 21 intervals"
+            )
         intervals: list[tuple[int, int]] = []
         for row in rows:
             if (
@@ -107,7 +114,9 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
                 or type(row["end_minute"]) is not int
                 or not 0 <= row["start_minute"] < row["end_minute"] <= 10_080
             ):
-                raise ValueError("staff shift intervals must be non-empty [start,end) weekly minutes")
+                raise ValueError(
+                    "staff shift intervals must be non-empty [start,end) weekly minutes"
+                )
             intervals.append((row["start_minute"], row["end_minute"]))
         ordered = sorted(intervals)
         if any(first[1] > second[0] for first, second in zip(ordered, ordered[1:])):
@@ -158,10 +167,12 @@ def validate_staff_shift_windows_override(
             (dict(row) for row in rows),
             key=lambda row: (row["start_minute"], row["end_minute"]),
         )
-    canonical_staff_dynamics_config({
-        "policy_version": SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
-        "shift_windows_by_staff": normalized,
-    })
+    canonical_staff_dynamics_config(
+        {
+            "policy_version": SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
+            "shift_windows_by_staff": normalized,
+        }
+    )
     return normalized
 
 
@@ -204,12 +215,16 @@ def validate_staff_dynamics_state(world: WorldState) -> None:
     ):
         raise ValueError("staff_dynamics_v1 has an invalid exact schema")
     config = canonical_staff_dynamics_config(state["config"])
-    if state.get("policy_version") != config["policy_version"] or state.get("source_id") != config["source_id"]:
+    if (
+        state.get("policy_version") != config["policy_version"]
+        or state.get("source_id") != config["source_id"]
+    ):
         raise ValueError("staff_dynamics_v1 model identity does not match its config")
     legacy_config = {
         key: value
         for key, value in config.items()
-        if key not in {
+        if key
+        not in {
             "shift_windows_by_staff",
             "off_shift_fatigue_recovery_per_minute",
             "max_continuous_work_minutes_by_staff",
@@ -238,7 +253,12 @@ def validate_staff_dynamics_state(world: WorldState) -> None:
         }
         if not isinstance(record, dict) or set(record) != expected:
             raise ValueError(f"staff_dynamics_v1 record for {staff_id!r} is invalid")
-        for name in ("consecutive_work_minutes", "total_work_minutes", "total_rest_minutes", "rest_until_minute"):
+        for name in (
+            "consecutive_work_minutes",
+            "total_work_minutes",
+            "total_rest_minutes",
+            "rest_until_minute",
+        ):
             value = record[name]
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"staff_dynamics_v1 {name} for {staff_id!r} is invalid")
@@ -265,15 +285,11 @@ def update_staff_dynamics(world: WorldState, minute: int) -> None:
     config = state["config"]
     for staff_id, staff in sorted(world.staff.items()):
         record = state["staff"][staff_id]
-        maximum = fatigue_formula.maximum_minutes(
-            config["max_continuous_work_minutes"], staff_id
-        )
+        maximum = fatigue_formula.maximum_minutes(config["max_continuous_work_minutes"], staff_id)
         if staff.active_task_id is not None:
             record["consecutive_work_minutes"] += 1
             record["total_work_minutes"] += 1
-            record["fatigue"] = fatigue_formula.fatigue(
-                record["consecutive_work_minutes"], maximum
-            )
+            record["fatigue"] = fatigue_formula.fatigue(record["consecutive_work_minutes"], maximum)
             record["last_activity"] = "working"
             continue
         if not staff_is_available(world, staff_id) or not _on_shift(state, staff_id, minute):

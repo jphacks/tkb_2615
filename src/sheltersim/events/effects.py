@@ -308,9 +308,7 @@ class _StaffRoleParameters(StrictContract):
 class StaffTaskOrderParameters(StrictContract):
     """One immediate, explicit order for a registered routed staff task."""
 
-    task_kind: Literal[
-        "cleaning", "maintenance", "information_outreach", "intake", "patrol"
-    ]
+    task_kind: Literal["cleaning", "maintenance", "information_outreach", "intake", "patrol"]
     target_zone_id: StableId
     target_id: StableId | None = None
     reason: Annotated[str, StringConstraints(strict=True, min_length=1, max_length=200)]
@@ -437,9 +435,16 @@ class PrimitiveRegistry:
 
 DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
     [
-        PrimitiveSpec("move_facility", MoveFacilityParameters, frozenset({"facility"}),
-                      frozenset({"metre_2d"}), frozenset({GEOMETRY_OVERLAY_KEY}), False,
-                      "Permanently move an idle facility within its existing zone; cross-zone transfer is unsupported."),
+        PrimitiveSpec(
+            "move_facility",
+            MoveFacilityParameters,
+            frozenset({"facility"}),
+            frozenset({"metre_2d"}),
+            frozenset({GEOMETRY_OVERLAY_KEY}),
+            False,
+            "Permanently move an idle facility within its existing zone; cross-zone transfer "
+            "is unsupported.",
+        ),
         PrimitiveSpec(
             "transfer_equipment",
             EquipmentTransferParameters,
@@ -447,14 +452,28 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"metre_2d"}),
             frozenset({GEOMETRY_OVERLAY_KEY}),
             False,
-            "Permanently transfer an idle positioned facility between connected zones and move its service points.",
+            "Permanently transfer an idle positioned facility between connected zones and "
+            "move its service points.",
         ),
-        PrimitiveSpec("set_partition", PartitionParameters, frozenset({"zone"}),
-                      frozenset({"metre_2d"}), frozenset({GEOMETRY_OVERLAY_KEY}), True,
-                      "Install a bounded polygon obstacle without narrowing occupied or declared passages."),
-        PrimitiveSpec("set_route_access", RouteAccessParameters, frozenset({"route"}),
-                      frozenset({"boolean"}), frozenset({GEOMETRY_OVERLAY_KEY}), True,
-                      "Temporarily close a route; active journeys replan and prior unrelated closures cannot be reopened."),
+        PrimitiveSpec(
+            "set_partition",
+            PartitionParameters,
+            frozenset({"zone"}),
+            frozenset({"metre_2d"}),
+            frozenset({GEOMETRY_OVERLAY_KEY}),
+            True,
+            "Install a bounded polygon obstacle without narrowing occupied or declared passages.",
+        ),
+        PrimitiveSpec(
+            "set_route_access",
+            RouteAccessParameters,
+            frozenset({"route"}),
+            frozenset({"boolean"}),
+            frozenset({GEOMETRY_OVERLAY_KEY}),
+            True,
+            "Temporarily close a route; active journeys replan and prior unrelated closures "
+            "cannot be reopened.",
+        ),
         PrimitiveSpec(
             "temporary_room_geometry",
             TemporaryRoomGeometry,
@@ -489,7 +508,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"facility_unit"}),
             frozenset({"facility_capacity", SHARED_OPERATIONS_KEY}),
             False,
-            "Restore explicitly identified working units when the observed capacity still matches the repair precondition.",
+            "Restore explicitly identified working units when the observed capacity still "
+            "matches the repair precondition.",
         ),
         PrimitiveSpec(
             "staff_handoff",
@@ -498,7 +518,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"staff_member"}),
             frozenset({"staff_operations_v1", SHARED_OPERATIONS_KEY}),
             False,
-            "Reassign an on-site staff operation to a qualified replacement already at the work location.",
+            "Reassign an on-site staff operation to a qualified replacement already at the "
+            "work location.",
         ),
         PrimitiveSpec(
             "staff_task_order",
@@ -507,7 +528,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"staff_task_order"}),
             frozenset({"staff_operations_v1", SHARED_OPERATIONS_KEY}),
             False,
-            "Order one idle qualified worker to perform a registered task now, with routed travel and an applied completion receipt.",
+            "Order one idle qualified worker to perform a registered task now, with routed "
+            "travel and an applied completion receipt.",
         ),
         PrimitiveSpec(
             "deliver_resource",
@@ -597,7 +619,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"person_capacity"}),
             frozenset({"temporary_spaces_v1"}),
             True,
-            "Add approved population and sleeping capacity in a zone for a bounded interval; no unsurveyed floorplan position is created.",
+            "Add approved population and sleeping capacity in a zone for a bounded interval; "
+            "no unsurveyed floorplan position is created.",
         ),
         PrimitiveSpec(
             "water_outage",
@@ -629,22 +652,43 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
                 "decision interval."
             ),
         ),
-        PrimitiveSpec("set_ventilation", VentilationParameters, frozenset({"zone"}),
-                      frozenset({"relative_ventilation_effectiveness_0_1"}),
-                      frozenset({ZONE_ENVIRONMENT_POLICY}), True,
-                      "Temporarily set relative ventilation effectiveness; it is not an air-change measurement."),
-        PrimitiveSpec("set_lighting", LightingParameters, frozenset({"zone"}),
-                      frozenset({"normalized_lighting_0_1"}),
-                      frozenset({ZONE_ENVIRONMENT_POLICY}), True,
-                      "Temporarily change normalized lighting and its experimental sleep-recovery effect."),
-        PrimitiveSpec("set_privacy", PrivacyParameters, frozenset({"zone"}),
-                      frozenset({"normalized_privacy_0_1"}),
-                      frozenset({ZONE_ENVIRONMENT_POLICY}), True,
-                      "Temporarily change normalized zone privacy and its discontent feedback."),
-        PrimitiveSpec("set_temperature", TemperatureParameters, frozenset({"zone"}),
-                      frozenset({"celsius"}),
-                      frozenset({ZONE_ENVIRONMENT_POLICY}), True,
-                      "Temporarily set an assumed zone temperature in degrees Celsius."),
+        PrimitiveSpec(
+            "set_ventilation",
+            VentilationParameters,
+            frozenset({"zone"}),
+            frozenset({"relative_ventilation_effectiveness_0_1"}),
+            frozenset({ZONE_ENVIRONMENT_POLICY}),
+            True,
+            "Temporarily set relative ventilation effectiveness; it is not an air-change "
+            "measurement.",
+        ),
+        PrimitiveSpec(
+            "set_lighting",
+            LightingParameters,
+            frozenset({"zone"}),
+            frozenset({"normalized_lighting_0_1"}),
+            frozenset({ZONE_ENVIRONMENT_POLICY}),
+            True,
+            "Temporarily change normalized lighting and its experimental sleep-recovery effect.",
+        ),
+        PrimitiveSpec(
+            "set_privacy",
+            PrivacyParameters,
+            frozenset({"zone"}),
+            frozenset({"normalized_privacy_0_1"}),
+            frozenset({ZONE_ENVIRONMENT_POLICY}),
+            True,
+            "Temporarily change normalized zone privacy and its discontent feedback.",
+        ),
+        PrimitiveSpec(
+            "set_temperature",
+            TemperatureParameters,
+            frozenset({"zone"}),
+            frozenset({"celsius"}),
+            frozenset({ZONE_ENVIRONMENT_POLICY}),
+            True,
+            "Temporarily set an assumed zone temperature in degrees Celsius.",
+        ),
     ]
 )
 
@@ -741,9 +785,7 @@ def available_primitives(
     ]
 
 
-def _toilet_placement_issues(
-    world: WorldState, additions: list[tuple[str, str, int]]
-) -> list[str]:
+def _toilet_placement_issues(world: WorldState, additions: list[tuple[str, str, int]]) -> list[str]:
     """Check that every added toilet gets a floor-plan point in the current state."""
     if not installed_facility_placement_enabled(world):
         return [
@@ -763,7 +805,11 @@ def _toilet_placement_issues(
         for index in range(count):
             facility_id = f"placement-check-{len(candidate.facilities)}-{index}"
             candidate.facilities[facility_id] = FacilityState(
-                id=facility_id, kind="toilet", zone_id=zone_id, capacity=1, working_units=1,
+                id=facility_id,
+                kind="toilet",
+                zone_id=zone_id,
+                capacity=1,
+                working_units=1,
             )
             point = installed_facility_point(candidate, facility_id)
             if point is None:
@@ -773,7 +819,9 @@ def _toilet_placement_issues(
                 ]
             candidate.model_state[GEOMETRY_OVERLAY_KEY]["facility_points"][facility_id] = {
                 "point_m": point.model_dump(mode="json"),
-                "event_id": "placement-check", "source_ids": [], "minute": candidate.minute_index,
+                "event_id": "placement-check",
+                "source_ids": [],
+                "minute": candidate.minute_index,
             }
     return []
 
@@ -846,7 +894,9 @@ def validate_effect_program(
             pending_params = pending.payload.get("parameters")
             if isinstance(pending_zone, str) and isinstance(pending_params, Mapping):
                 try:
-                    capacity = _TemporarySpaceParameters.model_validate(pending_params).people_capacity
+                    capacity = _TemporarySpaceParameters.model_validate(
+                        pending_params
+                    ).people_capacity
                 except ValueError:
                     continue
                 temporary_capacity_by_zone[pending_zone] = (
@@ -878,7 +928,9 @@ def validate_effect_program(
         target_id = effect.target_selector.target_id
         if effect.op == "temporary_room_geometry":
             if parameters.room_id in temporary_room_ids:
-                issues.append(f"{label} temporary room ID {parameters.room_id!r} already exists or is pending")
+                issues.append(
+                    f"{label} temporary room ID {parameters.room_id!r} already exists or is pending"
+                )
             temporary_room_ids.add(parameters.room_id)
         if effect.op == "add_temporary_space" and isinstance(target_id, str):
             temporary_capacity_by_zone[target_id] = (
@@ -887,7 +939,9 @@ def validate_effect_program(
         if effect.op == "set_staff_role":
             staff = world.staff.get(target_id or "")
             operations = world.model_state.get("staff_operations_v1", {})
-            operation = operations.get("staff", {}).get(target_id) if isinstance(operations, dict) else None
+            operation = (
+                operations.get("staff", {}).get(target_id) if isinstance(operations, dict) else None
+            )
             if staff is None:
                 issues.append(f"{label} references unknown staff member {target_id!r}")
             elif staff.active_task_id is not None or (
@@ -914,29 +968,43 @@ def validate_effect_program(
                     duration = world.model_state["staff_operations_v1"]["config"][
                         "task_duration_minutes"
                     ][parameters.task_kind]
-                    staff_order_effects.setdefault(target_id, []).append((
-                        effect.start_minute,
-                        effect.start_minute + route.travel_minutes + duration,
-                    ))
+                    staff_order_effects.setdefault(target_id, []).append(
+                        (
+                            effect.start_minute,
+                            effect.start_minute + route.travel_minutes + duration,
+                        )
+                    )
                 except ValueError as exc:
                     issues.append(f"{label} {exc}")
         if effect.op in GEOMETRY_OPERATORS:
             try:
                 if target_id is None or effect.target_selector.candidate_ids:
-                    raise ValueError("target_missing: geometry operations require an explicit target")
-                validate_geometry_change(world, effect.op, target_id,
-                    parameters.model_dump(mode="json"), effect.end_minute)
+                    raise ValueError(
+                        "target_missing: geometry operations require an explicit target"
+                    )
+                validate_geometry_change(
+                    world,
+                    effect.op,
+                    target_id,
+                    parameters.model_dump(mode="json"),
+                    effect.end_minute,
+                )
                 if effect.op == "transfer_equipment" and (
                     effect.target_selector.kind != "equipment"
                     or parameters.equipment_id != target_id
                     or parameters.from_zone_id != world.facilities[target_id].zone_id
                 ):
-                    raise ValueError("precondition_failed: equipment target and source zone must match the selected facility")
+                    raise ValueError(
+                        "precondition_failed: equipment target and source zone must match "
+                        "the selected facility"
+                    )
             except ValueError as exc:
                 issues.append(f"{label} {exc}")
         if effect.op == "population_presence":
             if "population_presence_v1" not in world.model_state:
-                issues.append(f"{label} requires the common population_presence_v1 transition ledger")
+                issues.append(
+                    f"{label} requires the common population_presence_v1 transition ledger"
+                )
             selected_ids = (
                 list(effect.target_selector.candidate_ids)
                 if parameters.action == "reunite"
@@ -944,8 +1012,14 @@ def validate_effect_program(
             )
             if (
                 effect.target_selector.kind != "person"
-                or (parameters.action == "reunite" and (target_id is not None or len(selected_ids) < 2))
-                or (parameters.action != "reunite" and (target_id is None or effect.target_selector.candidate_ids))
+                or (
+                    parameters.action == "reunite"
+                    and (target_id is not None or len(selected_ids) < 2)
+                )
+                or (
+                    parameters.action != "reunite"
+                    and (target_id is None or effect.target_selector.candidate_ids)
+                )
             ):
                 issues.append(f"{label} requires one person ID or at least two reunion candidates")
                 continue
@@ -974,7 +1048,9 @@ def validate_effect_program(
                         world.zone_edges,
                         edge_capacities=route_config.get("max_agents_in_transit_by_edge", {}),
                     )
-                    route = SpaceRouter(graph).route(world.agents[target_id].zone_id, parameters.zone_id, target_id)
+                    route = SpaceRouter(graph).route(
+                        world.agents[target_id].zone_id, parameters.zone_id, target_id
+                    )
                     if route is None:
                         issues.append(f"{label} has no accessible route to its destination")
         elif target_id is None or effect.target_selector.candidate_ids:
@@ -1047,7 +1123,9 @@ def validate_effect_program(
         if TEMPORARY_SPACES_STATE_KEY in primitive.required_policies and (
             TEMPORARY_SPACES_STATE_KEY not in world.model_state
         ):
-            issues.append(f"{label} requires simulator_extensions.enabled and temporary_spaces_v1 state")
+            issues.append(
+                f"{label} requires simulator_extensions.enabled and temporary_spaces_v1 state"
+            )
         if "staff_operations_v1" in primitive.required_policies and (
             "staff_operations_v1" not in world.model_state
         ):
@@ -1064,7 +1142,10 @@ def validate_effect_program(
         if effect.op in {"set_ventilation", "set_lighting", "set_privacy", "set_temperature"}:
             environment = world.model_configs.get("zone_environment", {})
             try:
-                if ScenarioZoneEnvironmentConfig.model_validate(environment).policy_version != "zone-environment-v2":
+                if (
+                    ScenarioZoneEnvironmentConfig.model_validate(environment).policy_version
+                    != "zone-environment-v2"
+                ):
                     issues.append(f"{label} requires zone-environment-v2")
             except ValueError:
                 pass
@@ -1094,13 +1175,19 @@ def validate_effect_program(
         if effect.op == "add_evacuees":
             unknown_admission_zones = set(parameters.admission_zone_ids) - set(world.zones)
             if target_id in parameters.admission_zone_ids or unknown_admission_zones:
-                issues.append(f"{label} alternate admission zones must be known and exclude its preferred zone")
+                issues.append(
+                    f"{label} alternate admission zones must be known and exclude its "
+                    "preferred zone"
+                )
             overlay_config = world.model_configs.get("geometry_overlay", {})
             if parameters.admission_zone_ids and (
                 not isinstance(overlay_config, dict)
                 or overlay_config.get("schema_version") not in {3, 4}
             ):
-                issues.append(f"{label} alternate physical room admission requires geometry_overlay schema_version=3 or 4")
+                issues.append(
+                    f"{label} alternate physical room admission requires geometry_overlay "
+                    "schema_version=3 or 4"
+                )
             if parameters.approach_route_id is not None:
                 if parameters.admission_zone_ids:
                     issues.append(
@@ -1112,8 +1199,11 @@ def validate_effect_program(
                         raise ValueError("arrival approach requires approved physical Geometry")
                     geometry = FacilityGeometry.model_validate(geometry_raw)
                     route = next(
-                        (item for item in geometry.arrival_approach_routes
-                         if item.route_id == parameters.approach_route_id),
+                        (
+                            item
+                            for item in geometry.arrival_approach_routes
+                            if item.route_id == parameters.approach_route_id
+                        ),
                         None,
                     )
                     if route is None:
@@ -1126,7 +1216,14 @@ def validate_effect_program(
                         )
                 except ValueError as exc:
                     issues.append(f"{label} arrival approach is invalid: {exc}")
-        if effect.op in {"set_ambient_noise", "modify_demand_rate", "set_ventilation", "set_lighting", "set_privacy", "set_temperature"}:
+        if effect.op in {
+            "set_ambient_noise",
+            "modify_demand_rate",
+            "set_ventilation",
+            "set_lighting",
+            "set_privacy",
+            "set_temperature",
+        }:
             if effect.end_minute is None:
                 issues.append(f"{label} requires end_minute so its modifier can expire")
             elif effect.end_minute >= world.duration_minutes:
@@ -1187,7 +1284,8 @@ def validate_effect_program(
                 facility.working_units < parameters.restored_working_units <= facility.capacity
             ):
                 issues.append(
-                    f"{label} restored_working_units must increase capacity without exceeding installed units"
+                    f"{label} restored_working_units must increase capacity without "
+                    "exceeding installed units"
                 )
             if active_facility_outage(world, target_id) or has_active_facility_modifier(
                 world, target_id
@@ -1213,14 +1311,18 @@ def validate_effect_program(
                 or record.get("task_id") != parameters.task_id
                 or task.due_minute <= world.minute_index
             ):
-                issues.append(f"{label} can only hand off active on-site work before its completion")
+                issues.append(
+                    f"{label} can only hand off active on-site work before its completion"
+                )
             if replacement is None:
                 issues.append(f"{label} replacement_staff_id must identify a known staff member")
             elif replacement.active_task_id is not None or replacement.zone_id != (
                 record.get("target_zone_id") if isinstance(record, dict) else None
             ):
                 issues.append(f"{label} replacement must be idle and already at the work location")
-            elif not _staff_has_task_skill(replacement.skills, record.get("task_kind") if isinstance(record, dict) else None):
+            elif not _staff_has_task_skill(
+                replacement.skills, record.get("task_kind") if isinstance(record, dict) else None
+            ):
                 issues.append(f"{label} replacement does not have the task skill")
             else:
                 from sheltersim.domain.operational import staff_is_available
@@ -1347,14 +1449,9 @@ def validate_effect_program(
             if effect.op in {"set_staff_role", "staff_handoff"} and any(
                 start <= effect.start_minute < end for start, end in intervals
             ):
-                issues.append(
-                    f"staff task order conflicts with {effect.op!r} for {staff_id!r}"
-                )
+                issues.append(f"staff task order conflicts with {effect.op!r} for {staff_id!r}")
             if effect.op == "set_staff_availability" and effect.end_minute is not None:
-                if any(
-                    effect.start_minute <= start < effect.end_minute
-                    for start, _ in intervals
-                ):
+                if any(effect.start_minute <= start < effect.end_minute for start, _ in intervals):
                     issues.append(
                         f"staff task order conflicts with availability change for {staff_id!r}"
                     )
@@ -1387,7 +1484,14 @@ def validate_effect_program(
                     (event.due_minute, end_minute, modifier_id)
                 )
         for effect in program.effects:
-            if effect.op in {"set_ambient_noise", "modify_demand_rate", "set_ventilation", "set_lighting", "set_privacy", "set_temperature"}:
+            if effect.op in {
+                "set_ambient_noise",
+                "modify_demand_rate",
+                "set_ventilation",
+                "set_lighting",
+                "set_privacy",
+                "set_temperature",
+            }:
                 if effect.end_minute is None or effect.target_selector.target_id is None:
                     continue
                 environment_intervals.setdefault(effect.target_selector.target_id, []).append(
@@ -1526,15 +1630,32 @@ def schedule_effect_program(
         target_id = effect.target_selector.target_id
         if effect.op in GEOMETRY_OPERATORS:
             modifier_id = _modifier_id(program.program_id, effect.effect_id)
-            payload = {"program_id": program.program_id, "effect_id": effect.effect_id,
-                "modifier_id": modifier_id, "target_id": target_id, "op": effect.op,
-                "parameters": parameters, "end_minute": effect.end_minute}
-            start_event = make_event(effect, due_minute=effect.start_minute,
-                event_type="effect_program_geometry", payload=payload, phase="start")
+            payload = {
+                "program_id": program.program_id,
+                "effect_id": effect.effect_id,
+                "modifier_id": modifier_id,
+                "target_id": target_id,
+                "op": effect.op,
+                "parameters": parameters,
+                "end_minute": effect.end_minute,
+            }
+            start_event = make_event(
+                effect,
+                due_minute=effect.start_minute,
+                event_type="effect_program_geometry",
+                payload=payload,
+                phase="start",
+            )
             if effect.end_minute is not None:
-                make_event(effect, due_minute=effect.end_minute,
-                    event_type="effect_program_geometry_expire", payload=payload,
-                    phase="expiry", priority=20, causation_id=start_event.event_id)
+                make_event(
+                    effect,
+                    due_minute=effect.end_minute,
+                    event_type="effect_program_geometry_expire",
+                    payload=payload,
+                    phase="expiry",
+                    priority=20,
+                    causation_id=start_event.event_id,
+                )
             continue
         if effect.op == "population_presence":
             command = {
@@ -1775,7 +1896,14 @@ def schedule_effect_program(
                 },
                 phase="start",
             )
-        elif effect.op in {"set_ambient_noise", "modify_demand_rate", "set_ventilation", "set_lighting", "set_privacy", "set_temperature"}:
+        elif effect.op in {
+            "set_ambient_noise",
+            "modify_demand_rate",
+            "set_ventilation",
+            "set_lighting",
+            "set_privacy",
+            "set_temperature",
+        }:
             modifier_id = _modifier_id(program.program_id, effect.effect_id)
             start_event = make_event(
                 effect,
@@ -1938,13 +2066,22 @@ class EffectProgramGeometryHandler:
         from sheltersim.domain.geometry_overlay import apply_geometry_change
 
         payload = event.payload
-        expected = {"program_id", "effect_id", "modifier_id", "target_id", "op", "parameters", "end_minute"}
+        expected = {
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "target_id",
+            "op",
+            "parameters",
+            "end_minute",
+        }
         if set(payload) != expected or payload.get("op") not in GEOMETRY_OPERATORS:
             raise EventApplicationError("geometry effect has invalid fields or operator")
         state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY, {})
         program = state.get("programs", {}).get(payload["program_id"], {})
-        if (program.get("operators", {}).get(payload["effect_id"]) != payload["op"]
-                or payload["modifier_id"] != _modifier_id(payload["program_id"], payload["effect_id"])):
+        if program.get("operators", {}).get(payload["effect_id"]) != payload["op"] or payload[
+            "modifier_id"
+        ] != _modifier_id(payload["program_id"], payload["effect_id"]):
             raise EventApplicationError("geometry effect does not reference its approved program")
         effect_event_guard_or_suppress(world, event)
         overlay = world.model_state.get(GEOMETRY_OVERLAY_KEY, {})
@@ -1961,7 +2098,9 @@ class EffectProgramGeometryHandler:
                 ):
                     active = False
             else:
-                active = payload["modifier_id"] in overlay.get("route_modifiers", {}).get(payload["target_id"], {}).get("modifiers", {})
+                active = payload["modifier_id"] in overlay.get("route_modifiers", {}).get(
+                    payload["target_id"], {}
+                ).get("modifiers", {})
             if not active:
                 raise EventSuppressed("geometry modifier was not applied or already expired")
         candidate = MutableWorldState.from_dict(world.to_dict())
@@ -2012,7 +2151,9 @@ class EffectProgramTemporarySpaceHandler:
             or TEMPORARY_SPACES_STATE_KEY not in marker.get("policy_dependencies", [])
             or zone_id not in world.zones
         ):
-            raise EventApplicationError("temporary-space event does not reference an approved installed effect")
+            raise EventApplicationError(
+                "temporary-space event does not reference an approved installed effect"
+            )
         if self.expire:
             if set(event.payload) != {"program_id", "effect_id", "modifier_id", "zone_id"}:
                 raise EventApplicationError("temporary-space expiry payload fields do not match")
@@ -2026,20 +2167,29 @@ class EffectProgramTemporarySpaceHandler:
                 or event.causation_id != space["start_event_id"]
                 or event.due_minute != space["end_minute"]
             ):
-                raise EventSuppressed("temporary-space effect did not start or does not match its expiry")
+                raise EventSuppressed(
+                    "temporary-space effect did not start or does not match its expiry"
+                )
             if not expire_temporary_space(
                 world, modifier_id, event_id=event.event_id, causation_id=event.causation_id
             ):
                 raise EventSuppressed("temporary-space effect is already expired")
             return
         expected = {
-            "program_id", "effect_id", "modifier_id", "op", "zone_id",
-            "parameters", "end_minute",
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "op",
+            "zone_id",
+            "parameters",
+            "end_minute",
         }
         if set(event.payload) != expected or event.payload.get("op") != "add_temporary_space":
             raise EventApplicationError("temporary-space event payload fields do not match")
         if program.get("operators", {}).get(effect_id) != event.payload.get("op"):
-            raise EventApplicationError("temporary-space operator differs from its approved program")
+            raise EventApplicationError(
+                "temporary-space operator differs from its approved program"
+            )
         if not should_apply_effect_guard(world, event):
             raise EventSuppressed("EffectProgram guard evaluated false")
         try:
@@ -2047,8 +2197,13 @@ class EffectProgramTemporarySpaceHandler:
         except ValueError as exc:
             raise EventApplicationError(f"temporary-space parameters are invalid: {exc}") from exc
         end_minute = event.payload.get("end_minute")
-        if type(end_minute) is not int or not event.due_minute < end_minute < world.duration_minutes:
-            raise EventApplicationError("temporary-space end minute is outside its approved interval")
+        if (
+            type(end_minute) is not int
+            or not event.due_minute < end_minute < world.duration_minutes
+        ):
+            raise EventApplicationError(
+                "temporary-space end minute is outside its approved interval"
+            )
         source_ids = [event.source_id]
         source_ids.extend(marker.get("assumption_ids", []))
         record = {
@@ -2190,17 +2345,23 @@ class EffectProgramStructureHandler:
         from sheltersim.domain.models import FacilityState, StaffState
 
         staff_order_fields = {
-            "program_id", "effect_id", "modifier_id", "op", "staff_id", "parameters",
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "op",
+            "staff_id",
+            "parameters",
         }
-        if set(event.payload) == staff_order_fields and event.payload.get("op") == "staff_task_order":
+        if (
+            set(event.payload) == staff_order_fields
+            and event.payload.get("op") == "staff_task_order"
+        ):
             marker = event.provenance.get("effect_program_v1")
             program_id = event.payload.get("program_id")
             effect_id = event.payload.get("effect_id")
             staff_id = event.payload.get("staff_id")
             state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY)
-            program = (
-                state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
-            )
+            program = state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
             if (
                 not isinstance(marker, Mapping)
                 or marker.get("program_id") != program_id
@@ -2215,13 +2376,17 @@ class EffectProgramStructureHandler:
                 or not isinstance(staff_id, str)
                 or event.due_minute != world.minute_index
             ):
-                raise EventApplicationError("staff task order does not reference a current approved program")
+                raise EventApplicationError(
+                    "staff task order does not reference a current approved program"
+                )
             try:
                 parameters = StaffTaskOrderParameters.model_validate(
                     event.payload.get("parameters")
                 )
             except (TypeError, ValueError) as exc:
-                raise EventApplicationError(f"staff task order parameters are invalid: {exc}") from exc
+                raise EventApplicationError(
+                    f"staff task order parameters are invalid: {exc}"
+                ) from exc
             effect_event_guard_or_suppress(world, event)
             candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
             from sheltersim.domain.staff_operations import order_staff_operation
@@ -2242,16 +2407,19 @@ class EffectProgramStructureHandler:
             return None
 
         if set(event.payload) == {
-            "program_id", "effect_id", "modifier_id", "op", "staff_id", "parameters",
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "op",
+            "staff_id",
+            "parameters",
         }:
             marker = event.provenance.get("effect_program_v1")
             program_id = event.payload.get("program_id")
             effect_id = event.payload.get("effect_id")
             staff_id = event.payload.get("staff_id")
             state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY)
-            program = (
-                state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
-            )
+            program = state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
             if (
                 not isinstance(marker, Mapping)
                 or marker.get("program_id") != program_id
@@ -2285,8 +2453,14 @@ class EffectProgramStructureHandler:
             candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
             operations = candidate.model_state.get("staff_operations_v1")
             task = candidate.active_tasks[handoff.task_id]
-            old_record = operations.get("staff", {}).get(staff_id) if isinstance(operations, dict) else None
-            replacement_record = operations.get("staff", {}).get(replacement_id) if isinstance(operations, dict) else None
+            old_record = (
+                operations.get("staff", {}).get(staff_id) if isinstance(operations, dict) else None
+            )
+            replacement_record = (
+                operations.get("staff", {}).get(replacement_id)
+                if isinstance(operations, dict)
+                else None
+            )
             old_staff = candidate.staff[staff_id]
             replacement = candidate.staff[replacement_id]
             if (
@@ -2314,14 +2488,17 @@ class EffectProgramStructureHandler:
             ):
                 raise EventApplicationError("staff handoff replacement is unavailable")
             completion_events = [
-                pending for pending in candidate.event_queue.pending()
+                pending
+                for pending in candidate.event_queue.pending()
                 if pending.event_type == "staff_operation_complete"
                 and pending.payload.get("task_id") == task.id
                 and pending.payload.get("staff_id") == staff_id
                 and pending.due_minute == task.due_minute
             ]
             if len(completion_events) != 1:
-                raise EventApplicationError("staff handoff requires one matching pending completion")
+                raise EventApplicationError(
+                    "staff handoff requires one matching pending completion"
+                )
             completion = completion_events[0]
             candidate.event_queue.replace(
                 completion.event_id,
@@ -2371,7 +2548,12 @@ class EffectProgramStructureHandler:
             return (receipt[0],) if receipt is not None else None
 
         if set(event.payload) == {
-            "program_id", "effect_id", "modifier_id", "op", "facility_id", "parameters",
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "op",
+            "facility_id",
+            "parameters",
         }:
             marker = event.provenance.get("effect_program_v1")
             state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY)
@@ -2379,9 +2561,7 @@ class EffectProgramStructureHandler:
             effect_id = event.payload.get("effect_id")
             op = event.payload.get("op")
             facility_id = event.payload.get("facility_id")
-            program = (
-                state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
-            )
+            program = state.get("programs", {}).get(program_id) if isinstance(state, dict) else None
             if (
                 not isinstance(marker, Mapping)
                 or marker.get("program_id") != program_id
@@ -2396,13 +2576,19 @@ class EffectProgramStructureHandler:
                 or event.payload.get("modifier_id") != _modifier_id(program_id, effect_id)
                 or not isinstance(facility_id, str)
             ):
-                raise EventApplicationError("facility repair does not reference an approved program")
+                raise EventApplicationError(
+                    "facility repair does not reference an approved program"
+                )
             try:
                 repair = FacilityRepairParameters.model_validate(event.payload.get("parameters"))
             except (TypeError, ValueError) as exc:
-                raise EventApplicationError(f"facility repair parameters are invalid: {exc}") from exc
+                raise EventApplicationError(
+                    f"facility repair parameters are invalid: {exc}"
+                ) from exc
             if repair.facility_id != facility_id or facility_id not in world.facilities:
-                raise EventApplicationError("facility repair target does not match a known facility")
+                raise EventApplicationError(
+                    "facility repair target does not match a known facility"
+                )
             if SHARED_OPERATIONS_KEY not in world.model_state:
                 raise EventApplicationError("facility repair requires shared receipt state")
             effect_event_guard_or_suppress(world, event)
@@ -2437,10 +2623,19 @@ class EffectProgramStructureHandler:
             return (receipt[0],) if receipt is not None else None
 
         if set(event.payload) == {
-            "program_id", "effect_id", "modifier_id", "op", "staff_id", "skills",
+            "program_id",
+            "effect_id",
+            "modifier_id",
+            "op",
+            "staff_id",
+            "skills",
         }:
             state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY)
-            program = state.get("programs", {}).get(event.payload.get("program_id")) if isinstance(state, dict) else None
+            program = (
+                state.get("programs", {}).get(event.payload.get("program_id"))
+                if isinstance(state, dict)
+                else None
+            )
             staff_id = event.payload.get("staff_id")
             if (
                 not isinstance(program, dict)
@@ -2449,15 +2644,21 @@ class EffectProgramStructureHandler:
                 or not isinstance(staff_id, str)
                 or staff_id not in world.staff
             ):
-                raise EventApplicationError("staff-role event does not reference an approved staff target")
+                raise EventApplicationError(
+                    "staff-role event does not reference an approved staff target"
+                )
             try:
                 role = _StaffRoleParameters.model_validate({"skills": event.payload.get("skills")})
             except ValueError as exc:
                 raise EventApplicationError(f"staff-role event skills are invalid: {exc}") from exc
             candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
             staff = candidate.staff[staff_id]
-            operations = candidate.model_state.get("staff_operations_v1", {}).get("staff", {}).get(staff_id)
-            if staff.active_task_id is not None or (isinstance(operations, dict) and operations.get("phase") != "idle"):
+            operations = (
+                candidate.model_state.get("staff_operations_v1", {}).get("staff", {}).get(staff_id)
+            )
+            if staff.active_task_id is not None or (
+                isinstance(operations, dict) and operations.get("phase") != "idle"
+            ):
                 raise EventApplicationError("staff role cannot change while work is active")
             staff.skills = tuple(sorted(role.skills))
             candidate.validate()
@@ -2523,6 +2724,7 @@ class EffectProgramStructureHandler:
                 add_staff_operations_agent(candidate, staff_id)
             if "movement_v1" in candidate.model_state:
                 from sheltersim.domain.movement import staff_position_snapshots
+
                 staff_position_snapshots(candidate)
         else:
             if len(candidate.facilities) + count > 200:
@@ -2543,7 +2745,9 @@ class EffectProgramStructureHandler:
                 if installed_facility_placement_enabled(candidate):
                     try:
                         place_installed_facility(
-                            candidate, facility_id, event_id=event.event_id,
+                            candidate,
+                            facility_id,
+                            event_id=event.event_id,
                             source_ids=(event.source_id,) if event.source_id else (),
                         )
                     except ValueError as exc:
@@ -2632,7 +2836,14 @@ class EffectProgramEnvironmentHandler:
             return
 
         op = event.payload.get("op")
-        if op not in {"set_ambient_noise", "modify_demand_rate", "set_ventilation", "set_lighting", "set_privacy", "set_temperature"}:
+        if op not in {
+            "set_ambient_noise",
+            "modify_demand_rate",
+            "set_ventilation",
+            "set_lighting",
+            "set_privacy",
+            "set_temperature",
+        }:
             raise EventApplicationError("zone environment operator is unsupported")
         if program["operators"].get(effect_id) != op:
             raise EventApplicationError("zone environment operator does not match its program")
@@ -2682,7 +2893,10 @@ class EffectProgramEnvironmentHandler:
         config = ScenarioZoneEnvironmentConfig.model_validate(
             world.model_configs["zone_environment"]
         )
-        if op in {"set_ventilation", "set_lighting", "set_privacy", "set_temperature"} and config.policy_version != "zone-environment-v2":
+        if (
+            op in {"set_ventilation", "set_lighting", "set_privacy", "set_temperature"}
+            and config.policy_version != "zone-environment-v2"
+        ):
             raise EventApplicationError("condition modifier requires zone-environment-v2")
         assumption_ids = marker.get("assumption_ids")
         if not isinstance(assumption_ids, (list, tuple)) or any(
@@ -2899,11 +3113,11 @@ def validate_effect_program_state(
                 "depart_evacuees": "effect_program_population",
                 "population_presence": "effect_program_population",
                 "add_temporary_space": "effect_program_temporary_space",
-                    "move_facility": "effect_program_geometry",
-                    "transfer_equipment": "effect_program_geometry",
-                    "set_partition": "effect_program_geometry",
-                    "set_route_access": "effect_program_geometry",
-                    "temporary_room_geometry": "effect_program_geometry",
+                "move_facility": "effect_program_geometry",
+                "transfer_equipment": "effect_program_geometry",
+                "set_partition": "effect_program_geometry",
+                "set_route_access": "effect_program_geometry",
+                "temporary_room_geometry": "effect_program_geometry",
             },
             "expiry": {
                 "set_facility_availability": "effect_program_expire",
@@ -2916,9 +3130,9 @@ def validate_effect_program_state(
                 "set_privacy": "effect_program_environment_expire",
                 "set_temperature": "effect_program_environment_expire",
                 "add_temporary_space": "effect_program_temporary_space_expire",
-                    "set_partition": "effect_program_geometry_expire",
-                    "set_route_access": "effect_program_geometry_expire",
-                    "temporary_room_geometry": "effect_program_geometry_expire",
+                "set_partition": "effect_program_geometry_expire",
+                "set_route_access": "effect_program_geometry_expire",
+                "temporary_room_geometry": "effect_program_geometry_expire",
             },
             "derived": {
                 "modify_supply_schedule": "resource_delivery",

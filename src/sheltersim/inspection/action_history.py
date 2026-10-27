@@ -1,4 +1,5 @@
 """Project applied completion/cancellation events, never selected proposals."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -37,22 +38,22 @@ def applied_action_record(event: dict[str, Any], minute: int) -> dict[str, Any] 
         ):
             return None
         row = receipt.model_dump(mode="json")
-        row.update({
-            "record_kind": "care",
-            "time_semantics": "recorded_event_minute",
-            "staff_id": receipt.previous_staff_id,
-            "source_id": event.get("source_id"),
-            "status": receipt.status,
-            "evidence_semantics": "applied_staff_support_continuity_after_interruption",
-        })
+        row.update(
+            {
+                "record_kind": "care",
+                "time_semantics": "recorded_event_minute",
+                "staff_id": receipt.previous_staff_id,
+                "source_id": event.get("source_id"),
+                "status": receipt.status,
+                "evidence_semantics": "applied_staff_support_continuity_after_interruption",
+            }
+        )
         return row
     if kind == "staff_operation_preempted":
         payload = event.get("payload", {})
-        if (
-            set(payload) != {"staff_id", "task_id", "request_id", "reason_code"}
-            or any(not isinstance(payload.get(field), str) for field in (
-                "staff_id", "task_id", "request_id", "reason_code"
-            ))
+        if set(payload) != {"staff_id", "task_id", "request_id", "reason_code"} or any(
+            not isinstance(payload.get(field), str)
+            for field in ("staff_id", "task_id", "request_id", "reason_code")
         ):
             return None
         return {
@@ -134,23 +135,43 @@ def applied_action_record(event: dict[str, Any], minute: int) -> dict[str, Any] 
         start_minute = event["due_minute"] - payload["interaction_duration_minutes"]
         start_time_status = "derived_from_duration_and_due_minute"
     row = {
-        "schema_version": 1, "record_kind": "actions", "event_id": event["event_id"],
-        "action_id": payload.get("task_id", event["event_id"]), "action": action,
-        "agent_id": payload.get("agent_id", payload.get("sender_agent_id")), "staff_id": payload.get("staff_id"),
+        "schema_version": 1,
+        "record_kind": "actions",
+        "event_id": event["event_id"],
+        "action_id": payload.get("task_id", event["event_id"]),
+        "action": action,
+        "agent_id": payload.get("agent_id", payload.get("sender_agent_id")),
+        "staff_id": payload.get("staff_id"),
         "target_id": payload.get(
             "facility_id",
-            payload.get("staff_id", payload.get(
-                "zone_id", payload.get("destination_zone_id",
-                    payload.get("participant_agent_id", payload.get("recipient_agent_id")))),
+            payload.get(
+                "staff_id",
+                payload.get(
+                    "zone_id",
+                    payload.get(
+                        "destination_zone_id",
+                        payload.get("participant_agent_id", payload.get("recipient_agent_id")),
+                    ),
+                ),
             ),
         ),
-        "purpose": payload.get("purpose"), "minute": minute,
-        "completion_minute": minute if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS else None,
-        "start_minute": start_minute, "start_time_status": start_time_status,
-        "status": "completed" if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS else "interrupted",
-        "outcome": "completed" if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS else "interrupted",
-        "reason_code": event.get("payload", {}).get("reason_short", kind), "causation_id": event.get("causation_id"),
-        "source_id": event["source_id"], "applied_event_ids": [event["event_id"]],
+        "purpose": payload.get("purpose"),
+        "minute": minute,
+        "completion_minute": minute
+        if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS
+        else None,
+        "start_minute": start_minute,
+        "start_time_status": start_time_status,
+        "status": "completed"
+        if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS
+        else "interrupted",
+        "outcome": "completed"
+        if kind in _COMPLETED or staff_role_update or kind in _STRUCTURED_CONTACTS
+        else "interrupted",
+        "reason_code": event.get("payload", {}).get("reason_short", kind),
+        "causation_id": event.get("causation_id"),
+        "source_id": event["source_id"],
+        "applied_event_ids": [event["event_id"]],
         "evidence_semantics": "applied_completion_or_cancellation_event_not_a_selected_proposal",
     }
     if staff_role_update:
@@ -165,22 +186,24 @@ def applied_action_record(event: dict[str, Any], minute: int) -> dict[str, Any] 
             row["action_detail"] = payload.get("action")
         else:
             if kind == "proximity_contact_update":
-                row.update({
-                    "status": "observed",
-                    "outcome": "observed",
-                    "completion_minute": None,
-                    "start_time_status": "point_observation",
-                    "agent_id": payload.get("first_agent_id"),
-                    "participant_agent_id": payload.get("second_agent_id"),
-                    "zone_id": payload.get("zone_id"),
-                    "observed_minute": payload.get("observed_minute"),
-                    "contact_distance_m": payload.get("distance_m"),
-                    "contact_minutes": 0,
-                    "first_point": payload.get("first_point"),
-                    "second_point": payload.get("second_point"),
-                    "speech_recorded": False,
-                    "evidence_semantics": "measured_physical_proximity_without_dialogue_claim",
-                })
+                row.update(
+                    {
+                        "status": "observed",
+                        "outcome": "observed",
+                        "completion_minute": None,
+                        "start_time_status": "point_observation",
+                        "agent_id": payload.get("first_agent_id"),
+                        "participant_agent_id": payload.get("second_agent_id"),
+                        "zone_id": payload.get("zone_id"),
+                        "observed_minute": payload.get("observed_minute"),
+                        "contact_distance_m": payload.get("distance_m"),
+                        "contact_minutes": 0,
+                        "first_point": payload.get("first_point"),
+                        "second_point": payload.get("second_point"),
+                        "speech_recorded": False,
+                        "evidence_semantics": "measured_physical_proximity_without_dialogue_claim",
+                    }
+                )
                 return row
             row["interaction_type"] = "information_contact"
             row["sender_agent_id"] = payload.get("sender_agent_id")
@@ -203,4 +226,3 @@ def applied_action_record(event: dict[str, Any], minute: int) -> dict[str, Any] 
         row["wait_minutes"] = payload.get("wait_minutes")
         row["retry_at_minute"] = payload.get("retry_at_minute")
     return row
-

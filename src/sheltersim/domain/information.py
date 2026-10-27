@@ -241,7 +241,8 @@ def information_spread_summary(state: Mapping[str, Any], *, agent_count: int) ->
         belief for agent_beliefs in beliefs.values() for belief in agent_beliefs.values()
     ]
     reached = sum(
-        1 for belief in exposed_states
+        1
+        for belief in exposed_states
         if AgentInformationState.from_dict(belief).belief is not InformationBeliefStatus.UNKNOWN
     )
     exposed = len(exposed_states)
@@ -277,8 +278,7 @@ def information_spread_summary(state: Mapping[str, Any], *, agent_count: int) ->
             if belief.correction_accepted:
                 correction_accepted_agents.add(agent_id)
             is_wrong = (
-                message.truth_status is InformationTruthStatus.TRUE
-                and belief.belief_strength < 0.5
+                message.truth_status is InformationTruthStatus.TRUE and belief.belief_strength < 0.5
             ) or (
                 message.truth_status is InformationTruthStatus.FALSE
                 and belief.belief_strength > 0.5

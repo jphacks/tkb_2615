@@ -472,14 +472,19 @@ def test_stored_tape_reloads_and_never_writes_sensitive_text(tmp_path: Path) -> 
     store = ProjectStore(tmp_path)
     store.create_project("project")
     path = store._path("project", "usage-tapes", "draft.json")
-    reply = ProviderResponse(text='{"ok":true}', model_id="m", input_tokens=1, output_tokens=1,
-                             elapsed_ms=0.0)
+    reply = ProviderResponse(
+        text='{"ok":true}', model_id="m", input_tokens=1, output_tokens=1, elapsed_ms=0.0
+    )
 
     StoredResponseTape(store, path).put("key", reply)
     assert StoredResponseTape(store, path).get("key") == reply
 
     risky = StoredResponseTape(store, store._path("project", "usage-tapes", "risky.json"))
-    risky.put("key", ProviderResponse(text="call 03-1234-5678", model_id="m", input_tokens=1,
-                                      output_tokens=1, elapsed_ms=0.0))
+    risky.put(
+        "key",
+        ProviderResponse(
+            text="call 03-1234-5678", model_id="m", input_tokens=1, output_tokens=1, elapsed_ms=0.0
+        ),
+    )
     assert risky.get("key") is not None  # still usable within this request
     assert not store._path("project", "usage-tapes", "risky.json").exists()

@@ -377,10 +377,14 @@ class EvidenceAwareInformationPolicy(InformationSpreadPolicy):
                 )
                 if forget_draw < forget_probability:
                     updated = AgentInformationState(
-                        message_id=message_id, belief=InformationBeliefStatus.UNKNOWN,
-                        source=belief.source, last_contact=belief.last_contact,
-                        last_event_id=belief.last_event_id, exposed=True,
-                        belief_strength=belief.belief_strength, share_propensity=0.0,
+                        message_id=message_id,
+                        belief=InformationBeliefStatus.UNKNOWN,
+                        source=belief.source,
+                        last_contact=belief.last_contact,
+                        last_event_id=belief.last_event_id,
+                        exposed=True,
+                        belief_strength=belief.belief_strength,
+                        share_propensity=0.0,
                         correction_exposed=belief.correction_exposed,
                         correction_accepted=belief.correction_accepted,
                         ever_misbelieved=belief.ever_misbelieved,

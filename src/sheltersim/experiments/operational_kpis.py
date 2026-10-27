@@ -84,10 +84,16 @@ def operational_kpi_values(world: WorldState, snapshot: MetricSnapshot) -> dict[
         "staff_load_ratio": snapshot.staff_load_ratio,
         "unresolved_support_request_count": snapshot.unresolved_support_request_count,
         "support_no_qualified_worker_count": snapshot.support_no_qualified_worker_count,
-        "support_no_qualified_worker_request_minutes": snapshot.support_no_qualified_worker_request_minutes,
-        "support_fairness_promoted_assignment_count": snapshot.support_fairness_promoted_assignment_count,
+        (
+            "support_no_qualified_worker_request_minutes"
+        ): snapshot.support_no_qualified_worker_request_minutes,
+        (
+            "support_fairness_promoted_assignment_count"
+        ): snapshot.support_fairness_promoted_assignment_count,
         "support_wait_staff_busy_request_minutes": snapshot.support_wait_staff_busy_request_minutes,
-        "support_wait_staff_off_shift_request_minutes": snapshot.support_wait_staff_off_shift_request_minutes,
+        (
+            "support_wait_staff_off_shift_request_minutes"
+        ): snapshot.support_wait_staff_off_shift_request_minutes,
     }
     for prefix in ("water_service", "meal_service"):
         count = world.metric_state.get(f"{prefix}_wait_count", 0.0)

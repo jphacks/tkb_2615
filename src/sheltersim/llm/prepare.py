@@ -41,8 +41,10 @@ def generate_scenario_draft(
             "Use a supplied zone_index and respect each finite zone capacity.",
             "Use only normalized numbers from 0 to 1 and the listed mobility categories.",
             "Generate at most 20 facility_outage or facility_recovery events.",
-            "Use the operator request only when its requirements fit these supplied fields and event types.",
-            "Do not invent a region, geography, physical hazard mechanics, measurements, or unsupported event types.",
+            "Use the operator request only when its requirements fit these supplied fields "
+            "and event types.",
+            "Do not invent a region, geography, physical hazard mechanics, measurements, or "
+            "unsupported event types.",
             "Unrepresentable parts of the request must not change the scenario output.",
             "Events must use valid facility_index values and fit the scenario time horizon.",
             "Use only the supplied numeric indexes; do not include names, prose, or personal data.",
@@ -108,7 +110,10 @@ def generate_scenario_draft(
         "assumption": "synthetic draft values; not empirical population or event probabilities",
         "request_supplied": bool(operator_request.strip()),
         "request_scope": (
-            "Only synthetic household/profile fields and supported facility outage/recovery events can be drafted."
+            (
+                "Only synthetic household/profile fields and supported facility outage/recovery "
+                "events can be drafted."
+            )
             if operator_request.strip()
             else "No natural-language scenario request was supplied."
         ),

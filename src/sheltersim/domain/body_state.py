@@ -66,8 +66,13 @@ def canonical_body_config(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("body_dynamics config must be an object")
     allowed = {
-        "schema_version", "policy_version", "source_id", *_DEFAULTS,
-        "social_interaction_minutes", "affect_policy", "relationship_distance_scale_m",
+        "schema_version",
+        "policy_version",
+        "source_id",
+        *_DEFAULTS,
+        "social_interaction_minutes",
+        "affect_policy",
+        "relationship_distance_scale_m",
         "sleep_debt_stress_rate_by_agent",
         "negative_affect_stress_rate_by_agent",
         "discontent_stress_rate_by_agent",
@@ -110,7 +115,10 @@ def canonical_body_config(raw: Any) -> dict[str, Any]:
             or not 0.0 <= value <= 1.0
         ):
             raise ValueError(f"body_dynamics {name} must be finite and within 0..1")
-    if type(config["social_interaction_minutes"]) is not int or not 1 <= config["social_interaction_minutes"] <= 1440:
+    if (
+        type(config["social_interaction_minutes"]) is not int
+        or not 1 <= config["social_interaction_minutes"] <= 1440
+    ):
         raise ValueError("body_dynamics social_interaction_minutes must be within 1..1440")
     if not isinstance(config["affect_policy"], str):
         raise ValueError("body_dynamics affect_policy must be an installed model ID")
@@ -122,12 +130,15 @@ def canonical_body_config(raw: Any) -> dict[str, Any]:
         or not math.isfinite(distance_scale)
         or not 0.1 <= distance_scale <= 100.0
     ):
-        raise ValueError("body_dynamics relationship_distance_scale_m must be within 0.1..100 metres")
+        raise ValueError(
+            "body_dynamics relationship_distance_scale_m must be within 0.1..100 metres"
+        )
     if config["awake_sleep_debt_minutes_per_minute"] > 10.0:
         raise ValueError("awake sleep debt rate cannot exceed 10 minutes per minute")
-    if config["rest_sleep_debt_recovery_per_minute"] > 10.0 or config[
-        "sleep_sleep_debt_recovery_per_minute"
-    ] > 10.0:
+    if (
+        config["rest_sleep_debt_recovery_per_minute"] > 10.0
+        or config["sleep_sleep_debt_recovery_per_minute"] > 10.0
+    ):
         raise ValueError("sleep debt recovery cannot exceed 10 minutes per minute")
     for field, label in (
         ("sleep_debt_stress_rate_by_agent", "sleep debt rates"),
@@ -143,7 +154,10 @@ def canonical_body_config(raw: Any) -> dict[str, Any]:
         ("medical_assessment_uncertainty_relief_by_agent", "medical-support uncertainty relief"),
         ("medication_support_uncertainty_relief_by_agent", "medication-support uncertainty relief"),
         ("dependent_assistance_stress_relief_by_agent", "dependent-assistance stress relief"),
-        ("dependent_assistance_reassurance_gain_by_agent", "dependent-assistance reassurance gains"),
+        (
+            "dependent_assistance_reassurance_gain_by_agent",
+            "dependent-assistance reassurance gains",
+        ),
     ):
         per_agent = config.get(field)
         if per_agent is None:
@@ -194,7 +208,16 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         return
     if (
         not isinstance(state, dict)
-        or set(state) != {"schema_version", "policy_version", "source_id", "config", "agents", "relationships", "history"}
+        or set(state)
+        != {
+            "schema_version",
+            "policy_version",
+            "source_id",
+            "config",
+            "agents",
+            "relationships",
+            "history",
+        }
         or state.get("schema_version") != 1
         or state.get("policy_version") != BODY_POLICY_VERSION
         or state.get("source_id") != BODY_SOURCE_ID
@@ -223,9 +246,7 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         "dependent_assistance_stress_relief_by_agent",
         "dependent_assistance_reassurance_gain_by_agent",
     )
-    configured_agent_ids = set().union(*(
-        set(config.get(field, {})) for field in per_agent_fields
-    ))
+    configured_agent_ids = set().union(*(set(config.get(field, {})) for field in per_agent_fields))
     if configured_agent_ids - set(world.agents):
         population = world.model_state.get("population_dynamics_v1", {})
         historical_ids = set(world.agents)
@@ -264,7 +285,15 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         )
     if state["config"] not in legacy_configs:
         raise ValueError("body_state_v1 config is not canonical")
-    fields = {"sleep_debt_minutes", "uncertainty", "reassurance", "discontent", "positive_affect", "negative_affect", "hygiene_need"}
+    fields = {
+        "sleep_debt_minutes",
+        "uncertainty",
+        "reassurance",
+        "discontent",
+        "positive_affect",
+        "negative_affect",
+        "hygiene_need",
+    }
     for agent_id, record in state["agents"].items():
         if not isinstance(record, dict) or set(record) != fields:
             raise ValueError(f"body_state_v1 record for {agent_id!r} is invalid")
@@ -289,8 +318,19 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
             or pair[0] == pair[1]
             or json.dumps(pair, separators=(",", ":")) != key
             or not isinstance(record, dict)
-            or set(record) != {"contact_count", "trust", "contact_minutes", "last_contact_minute", "last_interaction", "topic_ids"}
-            or any(type(record[name]) is not int or record[name] < 0 for name in ("contact_count", "contact_minutes"))
+            or set(record)
+            != {
+                "contact_count",
+                "trust",
+                "contact_minutes",
+                "last_contact_minute",
+                "last_interaction",
+                "topic_ids",
+            }
+            or any(
+                type(record[name]) is not int or record[name] < 0
+                for name in ("contact_count", "contact_minutes")
+            )
             or not isinstance(record["topic_ids"], list)
             or len(record["topic_ids"]) > 32
             or any(not isinstance(item, str) or len(item) > 64 for item in record["topic_ids"])
@@ -298,7 +338,9 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
             raise ValueError("body_state_v1 relationship record is invalid")
         trust = record["trust"]
         minute = record["last_contact_minute"]
-        if trust is not None and (not isinstance(trust, (int, float)) or isinstance(trust, bool) or not 0 <= trust <= 1):
+        if trust is not None and (
+            not isinstance(trust, (int, float)) or isinstance(trust, bool) or not 0 <= trust <= 1
+        ):
             raise ValueError("body_state_v1 trust must be within 0..1")
         if minute is not None and (type(minute) is not int or minute < 0):
             raise ValueError("body_state_v1 contact minute is invalid")
@@ -400,13 +442,18 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
             before = dict(target)
             rate = state["config"]["affect_transfer_rate"]
             from sheltersim.policies.registry import create_affect
+
             policy = create_affect(world.model_configs)
             contribution = policy.contact(
-                source, target, rate=rate,
+                source,
+                target,
+                rate=rate,
                 relationship_trust=_relationship_trust(state, recipient, sender),
             )
             _apply_affect_contribution(target, contribution)
-            transfers.append((recipient, sender, "information_contact", _body_deltas(before, target)))
+            transfers.append(
+                (recipient, sender, "information_contact", _body_deltas(before, target))
+            )
             _record_relationship(
                 state,
                 recipient,
@@ -427,6 +474,7 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
         if interaction == "cooperation" and actor in world.agents and participant in world.agents:
             config = state["config"]
             from sheltersim.policies.registry import create_affect
+
             policy = create_affect(world.model_configs)
             for agent_id in (actor, participant):
                 record = state["agents"][agent_id]
@@ -441,7 +489,8 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
                     record["positive_affect"] + config["cooperation_positive_gain"] * trust_scale
                 )
                 record["negative_affect"] = _unit(
-                    record["negative_affect"] - config["cooperation_negative_reduction"] * trust_scale
+                    record["negative_affect"]
+                    - config["cooperation_negative_reduction"] * trust_scale
                 )
                 record["reassurance"] = _unit(
                     record["reassurance"] + config["cooperation_reassurance_gain"] * trust_scale
@@ -452,20 +501,36 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
                 transfers.append((actor, agent_id, "cooperation", _body_deltas(before, record)))
             duration = payload.get("interaction_duration_minutes", 1)
             _record_relationship(
-                state, actor, participant, minute, "cooperation", payload.get("topic_id"), duration,
+                state,
+                actor,
+                participant,
+                minute,
+                "cooperation",
+                payload.get("topic_id"),
+                duration,
                 distance_m=_recorded_contact_distance(world, actor, participant),
                 event_id=event.event_id,
                 causation_id=event.causation_id,
                 model_configs=world.model_configs,
             )
             _record_relationship(
-                state, participant, actor, minute, "cooperation", payload.get("topic_id"), duration,
+                state,
+                participant,
+                actor,
+                minute,
+                "cooperation",
+                payload.get("topic_id"),
+                duration,
                 distance_m=_recorded_contact_distance(world, participant, actor),
                 event_id=event.event_id,
                 causation_id=event.causation_id,
                 model_configs=world.model_configs,
             )
-        elif interaction in {"reassurance_exchange", "family_care", "voluntary_support"} and actor in world.agents and participant in world.agents:
+        elif (
+            interaction in {"reassurance_exchange", "family_care", "voluntary_support"}
+            and actor in world.agents
+            and participant in world.agents
+        ):
             actor_record = state["agents"][actor]
             target_record = state["agents"][participant]
             before = dict(target_record)
@@ -473,13 +538,16 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
             if actor_record["positive_affect"] < actor_record["negative_affect"]:
                 signal = -_unit(actor_record["negative_affect"] - actor_record["positive_affect"])
             from sheltersim.policies.registry import create_affect
+
             policy = create_affect(world.model_configs)
             contribution = policy.social_action(
-                signal, rate=state["config"]["social_action_affect_transfer"],
+                signal,
+                rate=state["config"]["social_action_affect_transfer"],
                 relationship_trust=_relationship_trust(state, participant, actor),
             )
             _apply_affect_contribution(
-                target_record, contribution,
+                target_record,
+                contribution,
                 include_uncertainty=interaction == "reassurance_exchange",
             )
             transfers.append((actor, participant, interaction, _body_deltas(before, target_record)))
@@ -511,6 +579,7 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
     elif event.event_type == "information_correction":
         zone_id = payload.get("zone_id")
         from sheltersim.contracts.policies import selected_models
+
         evidence_aware = (
             selected_models(world.model_configs)["information"] == "evidence-aware-rumor-v1"
         )
@@ -541,9 +610,7 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
         distance = _recorded_contact_distance(world, actor, other) if actor != other else None
         if distance is not None:
             deltas["contact_distance_m"] = distance
-        duration = payload.get(
-            "interaction_duration_minutes", payload.get("contact_minutes")
-        )
+        duration = payload.get("interaction_duration_minutes", payload.get("contact_minutes"))
         if (
             isinstance(duration, (int, float))
             and not isinstance(duration, bool)
@@ -552,21 +619,23 @@ def record_social_event(world: WorldState, event: Any, minute: int) -> None:
         ):
             deltas["contact_duration_minutes"] = float(duration)
         history = state["history"]
-        history.append({
-            "event_id": event.event_id,
-            "minute": minute,
-            "kind": kind,
-            "actor_ids": sorted({actor, other}),
-            "topic_id": (
-                payload.get("message_id")
-                if isinstance(payload.get("message_id"), str)
-                else payload.get("topic_id")
-                if isinstance(payload.get("topic_id"), str)
-                else None
-            ),
-            "causation_id": event.causation_id,
-            "deltas": deltas,
-        })
+        history.append(
+            {
+                "event_id": event.event_id,
+                "minute": minute,
+                "kind": kind,
+                "actor_ids": sorted({actor, other}),
+                "topic_id": (
+                    payload.get("message_id")
+                    if isinstance(payload.get("message_id"), str)
+                    else payload.get("topic_id")
+                    if isinstance(payload.get("topic_id"), str)
+                    else None
+                ),
+                "causation_id": event.causation_id,
+                "deltas": deltas,
+            }
+        )
         if len(history) > MAX_SOCIAL_HISTORY:
             del history[: len(history) - MAX_SOCIAL_HISTORY]
 
@@ -592,12 +661,17 @@ def _recorded_contact_distance(world: WorldState, first_id: str, second_id: str)
     if (
         not isinstance(first, dict)
         or not isinstance(second, dict)
-        or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (*first.values(), *second.values()))
+        or not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in (*first.values(), *second.values())
+        )
         or set(first) != {"x", "y"}
         or set(second) != {"x", "y"}
     ):
         return None
-    return math.hypot(float(second["x"]) - float(first["x"]), float(second["y"]) - float(first["y"]))
+    return math.hypot(
+        float(second["x"]) - float(first["x"]), float(second["y"]) - float(first["y"])
+    )
 
 
 def _relationship_trust(state: dict[str, Any], recipient: str, sender: str) -> float:
@@ -689,15 +763,17 @@ def _record_relationship(
         }
         if distance_m is not None and math.isfinite(distance_m) and distance_m >= 0:
             deltas["contact_distance_m"] = distance_m
-        history.append({
-            "event_id": event_id,
-            "minute": minute,
-            "kind": "relationship_update",
-            "actor_ids": sorted({recipient, sender}),
-            "topic_id": topic if isinstance(topic, str) else None,
-            "causation_id": causation_id,
-            "deltas": deltas,
-        })
+        history.append(
+            {
+                "event_id": event_id,
+                "minute": minute,
+                "kind": "relationship_update",
+                "actor_ids": sorted({recipient, sender}),
+                "topic_id": topic if isinstance(topic, str) else None,
+                "causation_id": causation_id,
+                "deltas": deltas,
+            }
+        )
         if len(history) > MAX_SOCIAL_HISTORY:
             del history[: len(history) - MAX_SOCIAL_HISTORY]
 
@@ -718,4 +794,3 @@ def _body_config_for_world(world: WorldState) -> tuple[dict[str, Any], bool]:
     if selected is not None:
         config["affect_policy"] = selected
     return config, selected is not None
-

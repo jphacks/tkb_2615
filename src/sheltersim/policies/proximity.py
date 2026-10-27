@@ -73,7 +73,11 @@ class DistanceSampledProximityPolicy:
             zone_id = position["zone_id"]
             normalized = {"x": float(point["x"]), "y": float(point["y"])}
             points[agent_id] = (zone_id, normalized)
-            cell = (zone_id, math.floor(normalized["x"] / radius), math.floor(normalized["y"] / radius))
+            cell = (
+                zone_id,
+                math.floor(normalized["x"] / radius),
+                math.floor(normalized["y"] / radius),
+            )
             cells.setdefault(cell, []).append(agent_id)
 
         candidates: list[ProximityPair] = []
@@ -100,15 +104,23 @@ class DistanceSampledProximityPolicy:
                             second_point["y"] - points[first_id][1]["y"],
                         )
                         if distance <= radius:
-                            candidates.append(ProximityPair(
-                                distance, first_id, second_id, zone_id,
-                                points[first_id][1], second_point,
-                            ))
+                            candidates.append(
+                                ProximityPair(
+                                    distance,
+                                    first_id,
+                                    second_id,
+                                    zone_id,
+                                    points[first_id][1],
+                                    second_point,
+                                )
+                            )
         candidates.sort(key=lambda row: (row.distance_m, row.first_agent_id, row.second_agent_id))
         return candidates[: self.config["max_pairs_per_sample"]]
 
 
-def create_proximity_policy(model_id: str, configs: dict[str, Any]) -> DisabledProximityPolicy | DistanceSampledProximityPolicy:
+def create_proximity_policy(
+    model_id: str, configs: dict[str, Any]
+) -> DisabledProximityPolicy | DistanceSampledProximityPolicy:
     if model_id == DISABLED_PROXIMITY_POLICY_ID:
         return DisabledProximityPolicy()
     if model_id != DISTANCE_PROXIMITY_POLICY_ID:

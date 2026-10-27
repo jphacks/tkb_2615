@@ -192,8 +192,10 @@ class ReviewEvidence:
                 "Observed metric direction must match the supplied values exactly.",
                 "Event classifications must match their recorded type and outcome.",
                 "Hypotheses must be labeled as hypotheses and include evidence references.",
-                "Return at most 8 observed KPIs, 8 event observations, 3 hypotheses, and 3 recommendations.",
-                "Prefer the most decision-relevant recorded evidence; do not repeat a metric or event.",
+                "Return at most 8 observed KPIs, 8 event observations, 3 hypotheses, and 3 "
+                "recommendations.",
+                "Prefer the most decision-relevant recorded evidence; do not repeat a metric "
+                "or event.",
                 "Return only the required JSON object. Do not include prose or numbers.",
             ],
             "final_metrics": self.metrics,

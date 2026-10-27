@@ -191,20 +191,22 @@ class AgentPsychologyTrace:
                     "assumption_ids": list(self.zone_environment_assumption_ids),
                 }
             )
-        components = dict(self.component_contributions) if self.component_contributions else {
-            "unmet_need_pressure": self.need_pressure_stress,
-            "facility_queue_wait": self.queue_wait_stress,
-            "staff_support_wait": self.support_wait_stress,
-            "experimental_environmental_stress": self.environmental_stress,
-            "recovery": self.recovery_stress,
-            "natural_recovery": self.natural_recovery_stress,
-        }
+        components = (
+            dict(self.component_contributions)
+            if self.component_contributions
+            else {
+                "unmet_need_pressure": self.need_pressure_stress,
+                "facility_queue_wait": self.queue_wait_stress,
+                "staff_support_wait": self.support_wait_stress,
+                "experimental_environmental_stress": self.environmental_stress,
+                "recovery": self.recovery_stress,
+                "natural_recovery": self.natural_recovery_stress,
+            }
+        )
         if self.life_state_feedback_stress:
             components["life_state_feedback"] = self.life_state_feedback_stress
         if self.information_uncertainty_stress:
-            components["information_belief_via_uncertainty"] = (
-                self.information_uncertainty_stress
-            )
+            components["information_belief_via_uncertainty"] = self.information_uncertainty_stress
         if self.environmental_stress > 0.0:
             components["experimental_environmental_stress"] = self.environmental_stress
         references = {
@@ -341,9 +343,7 @@ class PsychologyUpdateResult:
             "facility_queue_wait": math.fsum(item.queue_wait_stress for item in self.traces),
             "staff_support_wait": math.fsum(item.support_wait_stress for item in self.traces),
             "recovery": math.fsum(item.recovery_stress for item in self.traces),
-            "natural_recovery": math.fsum(
-                item.natural_recovery_stress for item in self.traces
-            ),
+            "natural_recovery": math.fsum(item.natural_recovery_stress for item in self.traces),
             "applied_stress_delta": math.fsum(
                 item.stress_after - item.stress_before for item in self.traces
             ),
@@ -503,12 +503,8 @@ class SimplePsychologyPolicy:
         deltas: list[AgentStateDelta] = []
         traces: list[AgentPsychologyTrace] = []
         for agent in view.agents.values():
-            toilet_growth = params.toilet_growth_by_agent.get(
-                agent.id, params.toilet_growth
-            )
-            hunger_growth = params.hunger_growth_by_agent.get(
-                agent.id, params.hunger_growth
-            )
+            toilet_growth = params.toilet_growth_by_agent.get(agent.id, params.toilet_growth)
+            hunger_growth = params.hunger_growth_by_agent.get(agent.id, params.hunger_growth)
             if agent.activity is Activity.SLEEPING:
                 fatigue_delta = -params.sleeping_fatigue_recovery * agent.rest_efficiency_multiplier
                 stress_recovery = (
@@ -669,9 +665,7 @@ class MeanRevertingDistressPolicy(SimplePsychologyPolicy):
             kappa = self.parameters.natural_recovery_rate_by_agent.get(
                 delta.agent_id, self.parameters.natural_recovery_rate_per_minute
             )
-            personal_baseline = self.parameters.baseline_distress_by_agent.get(
-                delta.agent_id, 0.0
-            )
+            personal_baseline = self.parameters.baseline_distress_by_agent.get(delta.agent_id, 0.0)
             natural_delta, forcing_multiplier = _mean_reverting_terms(
                 trace.stress_before, personal_baseline, kappa, 1.0
             )
@@ -696,7 +690,8 @@ class MeanRevertingDistressPolicy(SimplePsychologyPolicy):
                     stress_after=stress,
                     natural_recovery_stress=natural_delta,
                     component_contributions=(
-                        ("natural_recovery", natural_delta), *effective_components
+                        ("natural_recovery", natural_delta),
+                        *effective_components,
                     ),
                     raw_stress_delta=raw_delta,
                     stress_candidate_before_clip=candidate,
@@ -772,8 +767,7 @@ class LifeStatePsychologyPolicy:
             family_separated = bool(
                 household_peers
                 and any(
-                    peer_id != agent.id
-                    and view.agents[peer_id].zone_id != agent.zone_id
+                    peer_id != agent.id and view.agents[peer_id].zone_id != agent.zone_id
                     for peer_id in household_peers
                 )
             )
@@ -806,22 +800,27 @@ class LifeStatePsychologyPolicy:
                 max(
                     0.0,
                     agent.uncertainty
-                    + (
-                        agent.information_query_pressure
-                        + agent.misinformation_belief_pressure
-                    ) * config["uncertainty_drift_per_minute"]
+                    + (agent.information_query_pressure + agent.misinformation_belief_pressure)
+                    * config["uncertainty_drift_per_minute"]
                     - config["uncertainty_decay_per_minute"]
                     - reassurance * config["uncertainty_decay_per_minute"],
                 ),
             )
-            queue_pressure = config["discontent_queue_rate"] if agent.activity is Activity.QUEUED else 0.0
+            queue_pressure = (
+                config["discontent_queue_rate"] if agent.activity is Activity.QUEUED else 0.0
+            )
             need_pressure = max(
                 agent.needs.toilet_urgency,
                 agent.needs.hunger,
                 agent.needs.fatigue,
                 agent.needs.hydration_need,
             )
-            support_relief = config["discontent_relief_per_minute"] if agent.activity in (Activity.RESTING, Activity.SLEEPING) and agent.support_request_status not in ("pending", "assigned") else 0.0
+            support_relief = (
+                config["discontent_relief_per_minute"]
+                if agent.activity in (Activity.RESTING, Activity.SLEEPING)
+                and agent.support_request_status not in ("pending", "assigned")
+                else 0.0
+            )
             stress_feedback_reference = (
                 agent.stress if self.use_tick_start_stress_for_feedback else delta.stress
             )
@@ -951,9 +950,7 @@ class LifeStatePsychologyPolicy:
         traces = tuple(
             replace(
                 trace,
-                stress_after=stress_after_by_agent.get(
-                    trace.agent_id, trace.stress_after
-                ),
+                stress_after=stress_after_by_agent.get(trace.agent_id, trace.stress_after),
                 life_state_feedback_stress=(
                     feedback_by_agent.get(trace.agent_id, 0.0)
                     - information_feedback_by_agent.get(trace.agent_id, 0.0)
@@ -1045,9 +1042,7 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
             kappa = self.parameters.natural_recovery_rate_by_agent.get(
                 trace.agent_id, self.parameters.natural_recovery_rate_per_minute
             )
-            baseline = self.parameters.baseline_distress_by_agent.get(
-                trace.agent_id, 0.0
-            )
+            baseline = self.parameters.baseline_distress_by_agent.get(trace.agent_id, 0.0)
             natural_delta, forcing_multiplier = _mean_reverting_terms(
                 trace.stress_before, baseline, kappa, 1.0
             )
@@ -1073,7 +1068,8 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
                     recovery_stress=0.0,
                     natural_recovery_stress=natural_delta,
                     component_contributions=(
-                        ("natural_recovery", natural_delta), *effective_components
+                        ("natural_recovery", natural_delta),
+                        *effective_components,
                     ),
                     raw_stress_delta=raw_delta,
                     stress_candidate_before_clip=candidate,
@@ -1141,8 +1137,7 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
         )
         body_state = world.model_state.get("body_state_v1")
         if supplied_body and (
-            not isinstance(body_state, dict)
-            or delta.agent_id not in body_state.get("agents", {})
+            not isinstance(body_state, dict) or delta.agent_id not in body_state.get("agents", {})
         ):
             raise StateInvariantError("body-state deltas require initialized body_state_v1")
         seen.add(delta.agent_id)
@@ -1199,11 +1194,7 @@ def sleep_debt_step(
         ("sleep_recovery_rate", sleep_recovery_rate),
         ("sleep_efficiency", sleep_efficiency),
     ):
-        if (
-            type(value) not in (int, float)
-            or not math.isfinite(value)
-            or value < 0.0
-        ):
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0.0:
             raise ValueError(f"{name} must be finite and non-negative")
     if debt_minutes > 1440.0:
         raise ValueError("debt_minutes cannot exceed 1440")
@@ -1212,8 +1203,7 @@ def sleep_debt_step(
     if not isinstance(activity, Activity):
         raise ValueError("activity must be an Activity")
     if required_sleep_minutes is not None and (
-        type(required_sleep_minutes) is not int
-        or not 0 <= required_sleep_minutes <= 1440
+        type(required_sleep_minutes) is not int or not 0 <= required_sleep_minutes <= 1440
     ):
         raise ValueError("required_sleep_minutes must be an integer within 0..1440")
     if required_sleep_minutes is None:
@@ -1280,6 +1270,5 @@ def _mean_reverting_terms(
         return natural_delta, delta_minutes
     return (
         natural_delta,
-        -math.expm1(-recovery_rate_per_minute * delta_minutes)
-        / recovery_rate_per_minute,
+        -math.expm1(-recovery_rate_per_minute * delta_minutes) / recovery_rate_per_minute,
     )
