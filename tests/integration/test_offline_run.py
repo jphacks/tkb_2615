@@ -1,4 +1,6 @@
-"""Offline deterministic scenario and artifact integration tests."""
+"""Offline deterministic Runs: a seven-day scenario, repeatable traces, a midpoint
+Checkpoint, and the pinned small replay contract.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 FAILURE_SCENARIO = ROOT / "fixtures" / "scenarios" / "failure_day3.json"
 H00_SMALL_REPLAY = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 REGRESSION_CONTRACT = ROOT / "fixtures" / "regression-contract.json"

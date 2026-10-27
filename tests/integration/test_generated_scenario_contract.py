@@ -1,4 +1,7 @@
-"""The shared generated Scenario comes from the UI preview and its run is pinned."""
+"""A Run of the shared generated Scenario matches fixtures/regression-contract.json.
+
+The fixture itself is checked in tests/unit/repo/test_generated_scenario_fixture.py.
+"""
 
 from __future__ import annotations
 
@@ -8,41 +11,13 @@ from pathlib import Path
 
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
-from sheltersim.storage.projects import digest
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 REGRESSION_CONTRACT = ROOT / "fixtures" / "regression-contract.json"
 
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def test_generated_scenario_has_the_floor_plan_and_awareness_of_a_ui_scenario(
-    generated_scenario_preview, generated_scenario
-) -> None:
-    configs = generated_scenario.model_configs
-
-    assert generated_scenario_preview["can_start"] is True
-    assert generated_scenario_preview["approval_blockers"] == []
-    assert generated_scenario_preview["approved_hash"] == digest(
-        json.loads(generated_scenario.canonical_json())
-    )
-    assert generated_scenario.provenance["scenario_input"]["extraction_source"] == (
-        "structured_form"
-    )
-    assert configs["facility_geometry"]["facility_points"]
-    assert configs["agent_dynamics"]["policy_version"]
-    # Lets an operator approve a temporary space (#80).
-    assert configs["simulator_extensions"] == {"enabled": True}
-    assert len(generated_scenario.profiles) == 20
-    assert generated_scenario.duration_minutes == 360
-
-
-def test_generated_scenario_is_a_fresh_copy(generated_scenario_preview, generated_scenario) -> None:
-    generated_scenario.model_configs.pop("agent_dynamics")
-
-    assert "agent_dynamics" in generated_scenario_preview["scenario"]["model_configs"]
 
 
 def test_generated_scenario_run_matches_the_pinned_contract(

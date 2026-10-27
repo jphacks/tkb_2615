@@ -1,4 +1,4 @@
-"""Exact minute/fork acceptance checks for final integrated QA; not yet executed."""
+"""Seeking a minute between saved Checkpoints, and a no-op fork there, are exact."""
 
 import json
 

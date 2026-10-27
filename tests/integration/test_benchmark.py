@@ -1,4 +1,7 @@
-"""Fast tests for benchmark scaling metadata and measurement output."""
+"""Scaled benchmark Runs are reproducible and record their measurements.
+
+The seed summary is checked in tests/unit/experiments/test_benchmark.py.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from sheltersim.experiments.benchmark import (
 )
 from sheltersim.experiments.scenario import ScenarioSpec
 
-BASE_SCENARIO = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
+BASE_SCENARIO = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path: Path) -> None:
@@ -70,28 +73,3 @@ def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path
     assert "single-seed result is descriptive only" in markdown
 
 
-def test_benchmark_seed_summary_reports_spread_only_with_multiple_seeds() -> None:
-    runs = [
-        {
-            "agent_count": 30,
-            "wall_seconds": wall,
-            "cpu_seconds": wall,
-            "peak_rss_mib": None,
-            "events_per_tick": 0.25,
-            "artifact_bytes": 1200,
-            "trace_bytes": 400,
-        }
-        for wall in (1.0, 3.0)
-    ]
-    summary = benchmark_document(
-        scenario_source="fixture.json",
-        duration_minutes=10080,
-        trace_level=TraceLevel.SUMMARY,
-        runs=runs,
-    )["summaries"][0]
-
-    assert summary["seed_count"] == 2
-    assert summary["wall_seconds_mean"] == 2.0
-    assert summary["wall_seconds_stdev"] > 0
-    assert summary["peak_rss_mib_mean"] is None
-    assert summary["trace_bytes_mean"] == 400

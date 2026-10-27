@@ -1,4 +1,9 @@
-"""H05 frozen 100-Agent operational scenarios and paired evidence reports."""
+"""H05 operational scenarios: a seven-day combined Run keeps its invariants, and
+paired comparisons extract event windows and refuse changed profiles or models.
+
+That the six scenario files stay frozen is checked in
+tests/unit/repo/test_scenario_fixtures.py.
+"""
 
 from __future__ import annotations
 
@@ -17,16 +22,8 @@ from sheltersim.experiments.comparison import (
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 SCENARIO_DIR = ROOT / "fixtures" / "scenarios"
-SCENARIO_NAMES = (
-    "baseline_multi_operational",
-    "multi_operational",
-    "water_outage",
-    "water_intervention",
-    "delivery_delay",
-    "delivery_intervention",
-)
 
 
 def _load(name: str) -> ScenarioSpec:
@@ -49,33 +46,6 @@ def _short_scenario(name: str, *, initial_food: int | None = None) -> ScenarioSp
         elif event["event_type"] == "water_restored":
             event["due_minute"] = 80
     return ScenarioSpec.model_validate(document)
-
-
-def test_h05_scenarios_freeze_profiles_seed_capacity_and_provenance() -> None:
-    scenarios = [_load(name) for name in SCENARIO_NAMES]
-    reference_profiles = [profile.model_dump(mode="json") for profile in scenarios[0].profiles]
-    reference_facilities = [
-        facility.model_dump(mode="json") for facility in scenarios[0].facilities
-    ]
-
-    assert all(len(scenario.profiles) == 100 for scenario in scenarios)
-    assert all(scenario.seed == 2026 for scenario in scenarios)
-    assert all(scenario.duration_minutes == 7 * 24 * 60 for scenario in scenarios)
-    assert all(
-        [profile.model_dump(mode="json") for profile in scenario.profiles] == reference_profiles
-        for scenario in scenarios
-    )
-    assert all(
-        [facility.model_dump(mode="json") for facility in scenario.facilities]
-        == reference_facilities
-        for scenario in scenarios
-    )
-    assert all(scenario.initial_stock is not None for scenario in scenarios)
-    assert all("resource_service" in scenario.model_configs for scenario in scenarios)
-    assert all(
-        "ASM-H05-OPERATIONAL-CAPACITY-V1" in scenario.provenance["model_assumption_ids"]
-        for scenario in scenarios
-    )
 
 
 @pytest.mark.long_simulation
