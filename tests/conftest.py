@@ -1073,7 +1073,7 @@ def small_benchmark_scenario() -> Callable[..., Any]:
     return _small_benchmark_scenario
 
 
-def _saved_timeline(tmp_path: Path) -> tuple[Any, Any]:
+def _saved_timeline(tmp_path: Path, scenario: Any = None) -> tuple[Any, Any]:
     from sheltersim.core.world import WorldState
     from sheltersim.experiments.branch import BranchRuntime
     from sheltersim.experiments.scenario import ScenarioSpec
@@ -1082,7 +1082,8 @@ def _saved_timeline(tmp_path: Path) -> tuple[Any, Any]:
 
     store = ProjectStore(tmp_path)
     store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    if scenario is None:
+        scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
     store.create_run("p", "r", scenario.id, 1)
     timeline = TimelineStore(store, "p", "r")
@@ -1091,9 +1092,12 @@ def _saved_timeline(tmp_path: Path) -> tuple[Any, Any]:
 
 
 @pytest.fixture
-def saved_timeline() -> Callable[[Path], tuple[Any, Any]]:
-    """Open a store at a folder with project p, Run r of scenario_100_agents and its
-    first Checkpoint recorded; return the store and the Run's TimelineStore.
+def saved_timeline() -> Callable[..., tuple[Any, Any]]:
+    """Open a store at a folder with project p, Run r and its first Checkpoint recorded;
+    return the store and the Run's TimelineStore.
+
+    The Run is of scenario_100_agents unless a ScenarioSpec is passed, for example
+    saved_timeline(tmp_path, generated_scenario) for a Run with a floor plan.
     """
     return _saved_timeline
 
