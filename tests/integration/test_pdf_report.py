@@ -20,10 +20,7 @@ import pypdfium2
 import pytest
 from pypdf import PdfReader
 
-from sheltersim.core.world import WorldState
-from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.accounting import usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.pdf_analysis import generate_analysis, validate_analysis
@@ -35,13 +32,8 @@ from sheltersim.web.pdf_report import analysis_facts, collect_report, problem_wi
 from sheltersim.web.projects import ProjectAPI
 
 
-@pytest.fixture
-def saved_run(report_saved_run: ProjectAPI) -> ProjectAPI:
-    return report_saved_run
-
-
-def test_scope_deltas_interventions_and_read_only_checkpoints(saved_run):
-    api = saved_run
+def test_scope_deltas_interventions_and_read_only_checkpoints(report_saved_run):
+    api = report_saved_run
     before = {
         key: api.store.load_branch("p", "r", key)[1].to_json()
         for key in ("main", "noop", "capacity")
@@ -87,8 +79,8 @@ def test_scope_deltas_interventions_and_read_only_checkpoints(saved_run):
         "operator_absence",
     ],
 )
-def test_ungrounded_prose_is_rejected(saved_run, kind, prose_document):
-    facts = analysis_facts(collect_report(saved_run, "p", "r", ["main"], 40))
+def test_ungrounded_prose_is_rejected(report_saved_run, kind, prose_document):
+    facts = analysis_facts(collect_report(report_saved_run, "p", "r", ["main"], 40))
     document = prose_document()
     if kind == "reference":
         document["executive"][0]["refs"] = ["unknown"]
@@ -117,9 +109,9 @@ def test_ungrounded_prose_is_rejected(saved_run, kind, prose_document):
 
 
 def test_only_aggregate_allowlisted_evidence_goes_to_opus(
-    saved_run, report_provider, report_router
+    report_saved_run, report_provider, report_router
 ):
-    data = collect_report(saved_run, "p", "r", ["main", "capacity"], 40)
+    data = collect_report(report_saved_run, "p", "r", ["main", "capacity"], 40)
     provider = report_provider()
     result = generate_analysis(analysis_facts(data), report_router(provider))
     assert result["model_id"].startswith("claude-opus-")
@@ -132,9 +124,9 @@ def test_only_aggregate_allowlisted_evidence_goes_to_opus(
 
 
 def test_cache_duplicate_clicks_restart_and_changed_scope(
-    saved_run, monkeypatch, prose_document, report_provider, install_report_router
+    report_saved_run, monkeypatch, prose_document, report_provider, install_report_router
 ):
-    api = saved_run
+    api = report_saved_run
     provider = report_provider()
     router = install_report_router(api, monkeypatch, provider)
     body = {"branch_ids": ["main", "capacity"], "minute": 40}
@@ -176,21 +168,23 @@ def test_cache_duplicate_clicks_restart_and_changed_scope(
         {"branch_ids": [], "minute": 40},
     ],
 )
-def test_uncomputed_missing_and_invalid_scopes_fail_before_provider(saved_run, monkeypatch, body):
+def test_uncomputed_missing_and_invalid_scopes_fail_before_provider(
+    report_saved_run, monkeypatch, body
+):
     monkeypatch.setattr(
-        saved_run.workspace,
+        report_saved_run.workspace,
         "analysis_router",
         lambda *_a, **_k: pytest.fail("invalid scope must not call Opus"),
     )
     with pytest.raises(ValueError):
-        saved_run.pdf_reports.export("p", "r", body)
+        report_saved_run.pdf_reports.export("p", "r", body)
 
 
 @pytest.mark.parametrize("failure", ["offline", "api", "budget", "calls", "sonnet"])
 def test_errors_never_export_fallback_json_or_pdf(
-    saved_run, monkeypatch, failure, report_provider, report_router
+    report_saved_run, monkeypatch, failure, report_provider, report_router
 ):
-    api = saved_run
+    api = report_saved_run
     if failure == "offline":
         router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
     elif failure == "sonnet":
@@ -207,11 +201,11 @@ def test_errors_never_export_fallback_json_or_pdf(
 
 
 def test_render_retry_reuses_successful_opus_response(
-    saved_run, monkeypatch, report_provider, install_report_router
+    report_saved_run, monkeypatch, report_provider, install_report_router
 ):
     import sheltersim.web.pdf_render as renderer
 
-    api = saved_run
+    api = report_saved_run
     provider = report_provider()
     install_report_router(api, monkeypatch, provider)
     original = renderer.render_pdf
@@ -225,12 +219,12 @@ def test_render_retry_reuses_successful_opus_response(
 
 
 def test_durable_accounting_api_retry_and_saved_response_tape(
-    saved_run, monkeypatch, report_provider
+    report_saved_run, monkeypatch, report_provider
 ):
     """Use the real shared ledger and tape; replace only the external SDK boundary."""
     import sheltersim.llm.provider as providers
 
-    api = saved_run
+    api = report_saved_run
     provider = report_provider(error=True)
     monkeypatch.setattr(providers, "AnthropicProvider", lambda _key: provider)
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "record")
@@ -255,7 +249,7 @@ def test_durable_accounting_api_retry_and_saved_response_tape(
 
 
 def test_durable_shared_budget_exhaustion_blocks_new_pdf_scope(
-    saved_run, monkeypatch, report_provider
+    report_saved_run, monkeypatch, report_provider
 ):
     import sheltersim.llm.provider as providers
 
@@ -264,18 +258,18 @@ def test_durable_shared_budget_exhaustion_blocks_new_pdf_scope(
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "record")
     monkeypatch.setenv("SHELTERSIM_LLM_MAX_API_CALLS", "1")
     body = {"branch_ids": ["main"], "minute": 40}
-    saved_run.pdf_reports.export("p", "r", body)
+    report_saved_run.pdf_reports.export("p", "r", body)
     with pytest.raises(StorageError, match="pdf_analysis"):
-        saved_run.pdf_reports.export("p", "r", {"branch_ids": ["main"], "minute": 20})
+        report_saved_run.pdf_reports.export("p", "r", {"branch_ids": ["main"], "minute": 20})
     assert provider.calls == 1
-    assert saved_run.pdf_reports.export("p", "r", body).startswith(b"%PDF-")
+    assert report_saved_run.pdf_reports.export("p", "r", body).startswith(b"%PDF-")
 
 
 @pytest.mark.parametrize("ids", [["main"], ["main", "noop"], ["main", "capacity"]])
 def test_pdf_a4_searchable_japanese_fonts_pages_and_rendering(
-    saved_run, ids, tmp_path, report_router
+    report_saved_run, ids, tmp_path, report_router
 ):
-    data = collect_report(saved_run, "p", "r", ids, 40)
+    data = collect_report(report_saved_run, "p", "r", ids, 40)
     facts = analysis_facts(data)
     analysis = generate_analysis(facts, report_router())
     pdf = render_pdf(data, analysis, facts)
@@ -313,8 +307,8 @@ def test_pdf_a4_searchable_japanese_fonts_pages_and_rendering(
         image.save(tmp_path / f"report-{index + 1}.png")
 
 
-def test_missing_metrics_and_sparse_history_are_explicit(saved_run, report_router):
-    data = collect_report(saved_run, "p", "r", ["main"], 20)
+def test_missing_metrics_and_sparse_history_are_explicit(report_saved_run, report_router):
+    data = collect_report(report_saved_run, "p", "r", ["main"], 20)
     data["branches"][0]["final"]["stress_mean"] = None
     data["branches"][0]["series"] = []
     data["branches"][0]["problems"] = {
@@ -334,7 +328,7 @@ ADDED_TOILETS = 2
 
 
 @pytest.fixture(scope="module")
-def generated_saved_run(tmp_path_factory, generated_previews, add_toilets_program):
+def generated_saved_run(tmp_path_factory, generated_previews, add_toilets_program, saved_timeline):
     """A ProjectAPI over Run r of the generated Scenario with a Branch that adds toilets.
 
     Shared by the module: reports only read the Run, which the first test checks.
@@ -343,14 +337,9 @@ def generated_saved_run(tmp_path_factory, generated_previews, add_toilets_progra
     scenario = ScenarioSpec.model_validate(copy.deepcopy(preview["scenario"]))
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-        store = ProjectStore(tmp_path_factory.mktemp("generated-report") / "projects")
-        store.create_project("p")
-        store.save_scenario(
-            "p", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+        store, timeline = saved_timeline(
+            tmp_path_factory.mktemp("generated-report") / "projects", scenario
         )
-        store.create_run("p", "r", scenario.id, 1)
-        timeline = TimelineStore(store, "p", "r")
-        timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
         timeline.advance("main", GENERATED_END, checkpoint_interval=10)
         program = add_toilets_program(ADDED_TOILETS, start_minute=FORK_MINUTE)
         timeline.fork(

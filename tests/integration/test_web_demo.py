@@ -19,29 +19,25 @@ from sheltersim.web.inspector import InspectorService
 from sheltersim.web.server import _handler_for
 
 
-@pytest.fixture
-def demo(day3_demo: DemoService) -> DemoService:
-    return day3_demo
-
-
-def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoService) -> None:
-    started = demo.dispatch("start")
+def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(day3_demo: DemoService) -> None:
+    started = day3_demo.dispatch("start")
     assert started["offline"] is True
     assert started["branches"][0]["branch_id"] == "baseline"
     assert started["branches"][0]["status"] == "running"
 
-    demo.dispatch("advance", {"branch_id": "baseline", "steps": 2})
-    paused = demo.dispatch("pause", {"branch_id": "baseline"})
+    day3_demo.dispatch("advance", {"branch_id": "baseline", "steps": 2})
+    paused = day3_demo.dispatch("pause", {"branch_id": "baseline"})
     baseline = paused["branches"][0]
     assert baseline["minute"] == 2
     assert baseline["latest_checkpoint_id"]
     pending_event_ids = {
-        event.event_id for event in demo.branches["baseline"].runtime.world.event_queue.pending()
+        event.event_id
+        for event in day3_demo.branches["baseline"].runtime.world.event_queue.pending()
     }
     assert {"day3-toilet3-outage", "day3-toilet4-outage"} <= pending_event_ids
 
-    demo.dispatch("checkpoint", {"branch_id": "baseline"})
-    forked = demo.dispatch("fork", {"branch_id": "baseline", "new_branch_id": "staff-plus"})
+    day3_demo.dispatch("checkpoint", {"branch_id": "baseline"})
+    forked = day3_demo.dispatch("fork", {"branch_id": "baseline", "new_branch_id": "staff-plus"})
     child = next(item for item in forked["branches"] if item["branch_id"] == "staff-plus")
     assert child["parent_branch_id"] == "baseline"
     assert child["minute"] == 2
@@ -53,14 +49,14 @@ def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoSer
         "zone_id": "sleeping",
         "skills": ["support"],
     }
-    changed = demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
+    changed = day3_demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
     changed_child = next(item for item in changed["branches"] if item["branch_id"] == "staff-plus")
     hash_before_rejection = changed_child["state_hash"]
 
     # A batch is applied to an isolated candidate and cannot partially commit.
     batch_before = hash_before_rejection
     with pytest.raises(DemoError, match="unknown staff zone"):
-        demo.dispatch(
+        day3_demo.dispatch(
             "commands",
             {
                 "branch_id": "staff-plus",
@@ -80,33 +76,35 @@ def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoSer
                 ],
             },
         )
-    child_runtime = demo.branches["staff-plus"].runtime
+    child_runtime = day3_demo.branches["staff-plus"].runtime
     assert "batch-temp" not in child_runtime.world.staff
     assert child_runtime.world.canonical_json()
-    assert demo.state()["operations"][-1]["state_hash_before"] == batch_before
-    assert demo.state()["operations"][-1]["state_hash_after"] == batch_before
+    assert day3_demo.state()["operations"][-1]["state_hash_before"] == batch_before
+    assert day3_demo.state()["operations"][-1]["state_hash_after"] == batch_before
 
     with pytest.raises(DemoError, match="already exists"):
-        demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
-    rejected = demo.state()["operations"][-1]
+        day3_demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
+    rejected = day3_demo.state()["operations"][-1]
     assert rejected["accepted"] is False
     assert rejected["state_hash_before"] == rejected["state_hash_after"] == hash_before_rejection
 
     # The intervention checkpoint can be rewound to the original fork image.
-    demo.dispatch("checkpoint", {"branch_id": "staff-plus"})
-    demo.dispatch("rewind", {"branch_id": "staff-plus", "checkpoint_id": "staff-plus-cp-0000"})
-    rewound = next(item for item in demo.state()["branches"] if item["branch_id"] == "staff-plus")
+    day3_demo.dispatch("checkpoint", {"branch_id": "staff-plus"})
+    day3_demo.dispatch("rewind", {"branch_id": "staff-plus", "checkpoint_id": "staff-plus-cp-0000"})
+    rewound = next(
+        item for item in day3_demo.state()["branches"] if item["branch_id"] == "staff-plus"
+    )
     assert rewound["staff_count"] == baseline["staff_count"]
-    demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
+    day3_demo.dispatch("command", {"branch_id": "staff-plus", "command": command})
 
     for branch_id in ("baseline", "staff-plus"):
-        demo.dispatch("resume", {"branch_id": branch_id})
-        completed = demo.dispatch("advance", {"branch_id": branch_id, "steps": 8})
+        day3_demo.dispatch("resume", {"branch_id": branch_id})
+        completed = day3_demo.dispatch("advance", {"branch_id": branch_id, "steps": 8})
         branch = next(item for item in completed["branches"] if item["branch_id"] == branch_id)
         assert branch["status"] == "completed"
         assert branch["minute"] == 8
 
-    comparison = demo.dispatch(
+    comparison = day3_demo.dispatch(
         "compare", {"baseline_branch_id": "baseline", "candidate_branch_id": "staff-plus"}
     )
     assert comparison["baseline_branch_id"] == "baseline"

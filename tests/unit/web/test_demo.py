@@ -20,9 +20,9 @@ from sheltersim.web.demo import DemoError, DemoService
 
 
 def test_invalid_alternative_rejects_entire_group_without_source_or_branch_changes(
-    paused_small_replay_demo, multi_plan_draft, apply_multi_plan
+    small_replay_demo, multi_plan_draft, apply_multi_plan
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     plan_data = multi_plan_draft(demo).model_dump(mode="json")
     plan_data["branches"][1]["plan"]["effects"][0]["target_selector"]["target_id"] = "missing-zone"
     invalid = MultiPlanDraft.model_validate(plan_data)
@@ -41,9 +41,9 @@ def test_invalid_alternative_rejects_entire_group_without_source_or_branch_chang
 
 
 def test_unresolved_time_ambiguity_cannot_be_validated_or_approved(
-    paused_small_replay_demo, multi_plan_draft
+    small_replay_demo, multi_plan_draft
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     plan_data = multi_plan_draft(demo, variants=2).model_dump(mode="json")
     for alternative in plan_data["branches"]:
         alternative["plan"]["support_mode"] = "clarification_required"
@@ -65,7 +65,7 @@ def test_unresolved_time_ambiguity_cannot_be_validated_or_approved(
         MultiPlanApproval.from_explicit_confirmation(ambiguous)
 
 
-def test_relative_and_multiple_event_times_require_clarification(paused_small_replay_demo) -> None:
+def test_relative_and_multiple_event_times_require_clarification(small_replay_demo) -> None:
     from sheltersim.llm.natural_language import (
         compile_natural_language,
         scenario_summary_from_world,
@@ -73,7 +73,7 @@ def test_relative_and_multiple_event_times_require_clarification(paused_small_re
     from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
     from sheltersim.llm.schemas import ParseRequest
 
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     world = demo.branches["baseline"].runtime.world
     scenario_summary = scenario_summary_from_world(world)
     router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
@@ -97,9 +97,9 @@ def test_relative_and_multiple_event_times_require_clarification(paused_small_re
 
 
 def test_duplicate_effects_are_rejected_even_when_effect_ids_differ(
-    paused_small_replay_demo, multi_plan_draft
+    small_replay_demo, multi_plan_draft
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     data = multi_plan_draft(demo, variants=2).model_dump(mode="json")
     duplicate_effect = dict(data["branches"][0]["plan"]["effects"][0])
     duplicate_effect["effect_id"] = "different-display-id"
@@ -116,21 +116,16 @@ def test_duplicate_effects_are_rejected_even_when_effect_ids_differ(
         MultiPlanApproval.from_explicit_confirmation(plan)
 
 
-@pytest.fixture
-def demo(day3_demo: DemoService) -> DemoService:
-    return day3_demo
-
-
-def test_demo_command_schema_and_state_transitions_are_strict(demo: DemoService) -> None:
+def test_demo_command_schema_and_state_transitions_are_strict(day3_demo: DemoService) -> None:
     with pytest.raises(DemoError, match="start the demo"):
-        demo.dispatch("pause", {"branch_id": "baseline"})
-    demo.dispatch("start")
+        day3_demo.dispatch("pause", {"branch_id": "baseline"})
+    day3_demo.dispatch("start")
     with pytest.raises(DemoError, match="unsupported"):
-        demo.dispatch("advance", {"branch_id": "baseline", "steps": 1, "unexpected": True})
+        day3_demo.dispatch("advance", {"branch_id": "baseline", "steps": 1, "unexpected": True})
     with pytest.raises(DemoError, match="integer"):
-        demo.dispatch("advance", {"branch_id": "baseline", "steps": True})
+        day3_demo.dispatch("advance", {"branch_id": "baseline", "steps": True})
     with pytest.raises(DemoError, match="must be paused"):
-        demo.dispatch("command", {"branch_id": "baseline", "command": {}})
+        day3_demo.dispatch("command", {"branch_id": "baseline", "command": {}})
 
 
 def test_packaged_demo_scenario_is_the_offline_day3_fixture() -> None:

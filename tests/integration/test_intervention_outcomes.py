@@ -9,7 +9,6 @@ events, so the change has to come from the domain mechanism, not from a KPI.
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -29,12 +28,12 @@ from sheltersim.events.effects import (
     TimedAction,
 )
 from sheltersim.events.models import EventLogRecord, EventStatus
-from sheltersim.experiments.branch import BranchError, BranchRuntime
+from sheltersim.experiments.branch import BranchError
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.operational_kpis import operational_kpi_values
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import StorageError, digest
 
 FORK_MINUTE = 60
 OUTAGE_END_MINUTE = 300
@@ -78,16 +77,6 @@ def _program(*effects: TimedAction, assumptions: tuple[PlanAssumption, ...] = ()
     )
 
 
-def _timeline(tmp_path, scenario: ScenarioSpec) -> TimelineStore:
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    return timeline
-
-
 def _advance(timeline: TimelineStore, branch_id: str, minute: int) -> WorldState:
     # Checkpoint cadence changes only what is saved, not the simulation; saving
     # every 30 minutes would double the run time of these tests.
@@ -107,10 +96,18 @@ def _fork(
 
 
 def _main_and_child(
-    tmp_path, scenario: ScenarioSpec, program: EffectProgram, *, until: int = COMPARE_MINUTE
+    saved_timeline,
+    tmp_path,
+    scenario: ScenarioSpec,
+    program: EffectProgram,
+    *,
+    until: int = COMPARE_MINUTE,
 ) -> tuple[WorldState, WorldState]:
-    """Run the main line and an intervention Branch forked from it to the same minute."""
-    timeline = _timeline(tmp_path, scenario)
+    """Run the main line and an intervention Branch forked from it to the same minute.
+
+    saved_timeline is the fixture of the same name, passed on by the calling test.
+    """
+    _, timeline = saved_timeline(tmp_path, scenario)
     _advance(timeline, "main", program.simulation_start_minute)
     _fork(timeline, "main", program.simulation_start_minute, "child", program)
     child = _advance(timeline, "child", until)
@@ -119,10 +116,10 @@ def _main_and_child(
 
 
 @pytest.fixture(scope="module")
-def main_line(tmp_path_factory, generated_scenario_preview) -> TimelineStore:
+def main_line(tmp_path_factory, generated_scenario_preview, saved_timeline) -> TimelineStore:
     """The shared generated Scenario's main line, run once; tests fork their own Branches."""
     scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
-    timeline = _timeline(tmp_path_factory.mktemp("main-line"), scenario)
+    _, timeline = saved_timeline(tmp_path_factory.mktemp("main-line"), scenario)
     # Hourly checkpoints keep forking at any minute cheap.
     timeline.advance("main", COMPARE_MINUTE, checkpoint_interval=FORK_MINUTE)
     return timeline
@@ -267,7 +264,7 @@ def test_a_water_outage_stops_water_service_and_leaves_people_thirsty(
 
 
 def test_a_water_delivery_relieves_thirst_once_stock_has_run_out(
-    tmp_path, generated_scenario_with
+    tmp_path, generated_scenario_with, saved_timeline
 ) -> None:
     # The operator entered 1 litre of water, so the stock runs out within hours.
     scenario = generated_scenario_with(
@@ -290,7 +287,7 @@ def test_a_water_delivery_relieves_thirst_once_stock_has_run_out(
         )
     )
 
-    main, child = _main_and_child(tmp_path, scenario, program)
+    main, child = _main_and_child(saved_timeline, tmp_path, scenario, program)
 
     assert _applied(child, "resource_delivery", resource_id="water_ml", quantity=100_000)
     assert _kpis(main)["water_ml_remaining"] == 0
@@ -344,7 +341,7 @@ REPORTED_TOILET_OUTAGE = {
 
 
 def test_repairing_a_reported_broken_toilet_shortens_toilet_waits(
-    tmp_path, generated_scenario_with
+    tmp_path, generated_scenario_with, saved_timeline
 ) -> None:
     scenario = generated_scenario_with(**REPORTED_TOILET_OUTAGE)
     program = _program(
@@ -362,7 +359,7 @@ def test_repairing_a_reported_broken_toilet_shortens_toilet_waits(
         )
     )
 
-    main, child = _main_and_child(tmp_path, scenario, program)
+    main, child = _main_and_child(saved_timeline, tmp_path, scenario, program)
 
     assert _applied(child, "effect_program_structure")
     before_recovery = {"first": FORK_MINUTE, "last": OUTAGE_END_MINUTE, "facility_id": "toilet_01"}
@@ -373,7 +370,7 @@ def test_repairing_a_reported_broken_toilet_shortens_toilet_waits(
 
 
 def test_added_toilets_shorten_toilet_waits_while_a_toilet_is_broken(
-    tmp_path, generated_scenario_with
+    tmp_path, generated_scenario_with, saved_timeline
 ) -> None:
     # With every toilet working, 20 people rarely queue, so the shortage shows
     # what an operator adds toilets for.
@@ -388,7 +385,7 @@ def test_added_toilets_shorten_toilet_waits_while_a_toilet_is_broken(
         )
     )
 
-    main, child = _main_and_child(tmp_path, scenario, program)
+    main, child = _main_and_child(saved_timeline, tmp_path, scenario, program)
 
     added = set(child.facilities) - set(main.facilities)
     assert len(added) == 2
@@ -574,7 +571,7 @@ def test_handing_off_a_patrol_frees_the_original_worker_sooner(
 
 
 def test_delaying_a_water_delivery_keeps_people_thirsty_longer(
-    tmp_path, generated_scenario_with
+    tmp_path, generated_scenario_with, saved_timeline
 ) -> None:
     # The operator entered 1 litre of water and a 100 L delivery at minute 120.
     scenario = generated_scenario_with(
@@ -608,7 +605,7 @@ def test_delaying_a_water_delivery_keeps_people_thirsty_longer(
         )
     )
 
-    main, child = _main_and_child(tmp_path, scenario, program)
+    main, child = _main_and_child(saved_timeline, tmp_path, scenario, program)
 
     assert [record.realized_minute for record in _applied(main, "resource_delivery")] == [120]
     assert [record.realized_minute for record in _applied(child, "resource_delivery")] == [

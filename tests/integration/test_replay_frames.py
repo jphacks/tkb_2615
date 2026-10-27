@@ -6,16 +6,13 @@ minutes of h00_small_replay, which has neither a floor plan nor facility awarene
 """
 
 import copy
-import json
 from types import SimpleNamespace
 
 import pytest
 
-from sheltersim.core.world import WorldState
-from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import StorageError
 from sheltersim.web.replay import replay_frames
 from sheltersim.web.workspace import ProjectWorkspace
 
@@ -25,18 +22,13 @@ COMPUTED = 30
 
 
 @pytest.fixture(scope="module")
-def replay(tmp_path_factory, generated_scenario_preview):
+def replay(tmp_path_factory, generated_scenario_preview, saved_timeline):
     """A main line and a child forked at FORK, both computed to COMPUTED.
 
     Shared by the module: replay_frames only reads, and the first test checks that.
     """
     scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
-    store = ProjectStore(tmp_path_factory.mktemp("replay"))
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    store, timeline = saved_timeline(tmp_path_factory.mktemp("replay"), scenario)
     timeline.advance("main", COMPUTED)
     timeline.fork("main", FORK, "child")
     timeline.advance("child", COMPUTED)

@@ -15,9 +15,9 @@ from sheltersim.llm.schemas import (
 
 
 def test_multi_plan_http_validate_and_apply_create_sibling_branches(
-    tmp_path: Path, paused_small_replay_demo, multi_plan_draft, post_demo_json
+    tmp_path: Path, small_replay_demo, multi_plan_draft, post_demo_json
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     source_hash = demo.branches["baseline"].runtime.world.canonical_json()
     before_branch_ids = set(demo.branches)
     plan = multi_plan_draft(demo)

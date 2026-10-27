@@ -33,10 +33,12 @@ def test_report_and_conversations_check_only_the_branch_pointer(
 
 
 def test_resume_range_is_still_checked_without_loading_history(
-    tmp_path, monkeypatch, saved_run_with_scenario
+    tmp_path, monkeypatch, saved_timeline
 ):
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, scenario = saved_run_with_scenario(tmp_path)
+    store, _ = saved_timeline(tmp_path)
+    run = store.run("p", "r")
+    scenario = store.scenario("p", run["scenario_id"], run["scenario_version"])
     api = ProjectAPI(store)
     status = store.run("p", "r")["status"]
     try:
@@ -50,11 +52,9 @@ def test_resume_range_is_still_checked_without_loading_history(
         api.close()
 
 
-def test_corrupt_head_still_fails_closed_in_the_worker(
-    tmp_path, monkeypatch, saved_run_with_scenario
-):
+def test_corrupt_head_still_fails_closed_in_the_worker(tmp_path, monkeypatch, saved_timeline):
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, _ = saved_run_with_scenario(tmp_path)
+    store, _ = saved_timeline(tmp_path)
     head = store.branch_reference("p", "r", "main").checkpoint_hash
     for chunk in (store._path("p", "runs", "r", "checkpoints") / "chunks").iterdir():
         chunk.write_bytes(b"corrupt")

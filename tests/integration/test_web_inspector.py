@@ -14,23 +14,18 @@ import pytest
 from sheltersim.web.inspector import InspectorService, WebQueryError
 
 
-@pytest.fixture
-def inspector(full_trace_inspector: InspectorService) -> InspectorService:
-    return full_trace_inspector
-
-
 def test_saved_run_supports_profiles_agent_events_kpis_and_synthetic_map(
-    inspector: InspectorService,
+    full_trace_inspector: InspectorService,
 ) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
-    overview = inspector.overview(run_id)
-    profiles = inspector.profiles(run_id, limit=100)
+    run_id = full_trace_inspector.list_runs()["runs"][0]["id"]
+    overview = full_trace_inspector.overview(run_id)
+    profiles = full_trace_inspector.profiles(run_id, limit=100)
     agent_id = profiles["items"][0]["id"]
-    agent = inspector.agent(run_id, agent_id, at_minute=2)
-    timeline = inspector.timeline(run_id, limit=20)
-    planned = inspector.events(run_id, status="planned")
-    realized = inspector.events(run_id, status="realized")
-    map_document = inspector.zone_map(run_id, at_minute=2, selected_agent_id=agent_id)
+    agent = full_trace_inspector.agent(run_id, agent_id, at_minute=2)
+    timeline = full_trace_inspector.timeline(run_id, limit=20)
+    planned = full_trace_inspector.events(run_id, status="planned")
+    realized = full_trace_inspector.events(run_id, status="realized")
+    map_document = full_trace_inspector.zone_map(run_id, at_minute=2, selected_agent_id=agent_id)
 
     assert overview["profile_count"] == 100
     assert len(profiles["items"]) == 100
@@ -49,21 +44,21 @@ def test_saved_run_supports_profiles_agent_events_kpis_and_synthetic_map(
     assert map_document["synthetic_layout"] is True
     assert map_document["selected_agent"]["id"] == agent_id
     assert all(zone["occupancy"] >= 0 for zone in map_document["zones"])
-    audit = inspector.audit(run_id)
+    audit = full_trace_inspector.audit(run_id)
     assert audit["llm_calls"] == []
     assert "input_text" not in json.dumps(audit)
 
 
 def test_query_filters_are_bounded_and_run_ids_cannot_escape_root(
-    inspector: InspectorService,
+    full_trace_inspector: InspectorService,
 ) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
-    assert inspector.profiles(run_id, query="A001", limit=100)["total"] == 1
+    run_id = full_trace_inspector.list_runs()["runs"][0]["id"]
+    assert full_trace_inspector.profiles(run_id, query="A001", limit=100)["total"] == 1
     with pytest.raises(WebQueryError, match="limit"):
-        inspector.profiles(run_id, limit=101)
+        full_trace_inspector.profiles(run_id, limit=101)
     with pytest.raises(WebQueryError, match="characters"):
-        inspector.overview("../outside")
+        full_trace_inspector.overview("../outside")
     with pytest.raises(WebQueryError, match="does not exist"):
-        inspector.agent(run_id, "unknown-agent")
+        full_trace_inspector.agent(run_id, "unknown-agent")
     with pytest.raises(WebQueryError, match="duration"):
-        inspector.zone_map(run_id, at_minute=99)
+        full_trace_inspector.zone_map(run_id, at_minute=99)

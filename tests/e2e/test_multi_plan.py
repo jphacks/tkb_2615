@@ -27,9 +27,9 @@ def _complete(demo: DemoService, branch_id: str) -> None:
 
 
 def test_three_branch_set_compares_only_compatible_siblings(
-    tmp_path: Path, paused_small_replay_demo, multi_plan_draft, post_demo_json, apply_multi_plan
+    tmp_path: Path, small_replay_demo, multi_plan_draft, post_demo_json, apply_multi_plan
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     result = apply_multi_plan(demo, multi_plan_draft(demo), "multi-compare-001")
     branch_ids = [item["branch_id"] for item in result["branches"]]
     for branch_id in ["baseline", *branch_ids]:
@@ -59,9 +59,9 @@ def test_three_branch_set_compares_only_compatible_siblings(
 
 
 def test_multi_plan_apply_rejects_stale_source_after_validation(
-    tmp_path: Path, paused_small_replay_demo, multi_plan_draft, post_demo_json
+    tmp_path: Path, small_replay_demo, multi_plan_draft, post_demo_json
 ) -> None:
-    demo = paused_small_replay_demo()
+    demo = small_replay_demo(12, paused=True)
     plan = multi_plan_draft(demo, variants=2)
     validation = demo.validate_multi_plan_preview(
         {"source_branch_id": "baseline", "multi_plan": plan.model_dump(mode="json")}

@@ -11,15 +11,15 @@ import pytest
 
 
 @pytest.fixture
-def report_saved_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+def report_saved_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved_timeline: Callable[..., Any]
+) -> Iterator[Any]:
     """A ProjectAPI over Run r of 12 people for 40 minutes, checkpointed every 10 minutes,
     with a no-op fork and a fork at minute 10 that adds a toilet of capacity 3.
     """
-    from sheltersim.core.world import WorldState
-    from sheltersim.experiments.branch import AddToiletCommand, BranchRuntime
+    from sheltersim.experiments.branch import AddToiletCommand
     from sheltersim.experiments.scenario import ScenarioSpec
-    from sheltersim.experiments.timeline import TimelineStore
-    from sheltersim.storage.projects import ProjectStore, digest
+    from sheltersim.storage.projects import digest
     from sheltersim.web.projects import ProjectAPI
 
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
@@ -29,12 +29,7 @@ def report_saved_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     source["scheduled_events"] = []
     source["model_configs"]["toilet_service"] = {}
     scenario = ScenarioSpec.model_validate(source)
-    store = ProjectStore(tmp_path / "projects")
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    store, timeline = saved_timeline(tmp_path / "projects", scenario)
     timeline.advance("main", 40, checkpoint_interval=10)
     timeline.fork("main", 10, "noop")
     timeline.advance("noop", 40)

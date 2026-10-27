@@ -9,7 +9,6 @@ plan is refused without changing the source.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -229,18 +228,13 @@ def _approved(plan: DraftPlan) -> dict[str, Any]:
     return ApprovedPlan.from_explicit_confirmation(plan).model_dump(mode="json")
 
 
-def _world_hash(demo: DemoService, branch_id: str = "baseline") -> str:
-    canonical = demo.branches[branch_id].runtime.world.canonical_json()
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def test_invalid_approved_program_is_atomic_and_tampered_approval_is_rejected(
-    small_replay_demo, day4_plan
+    small_replay_demo, day4_plan, demo_world_hash
 ) -> None:
     demo = small_replay_demo(duration_minutes=20)
     demo.dispatch("start")
     demo.dispatch("pause", {"branch_id": "baseline"})
-    source_hash = _world_hash(demo)
+    source_hash = demo_world_hash(demo)
     source_command_log = list(demo.branches["baseline"].runtime.command_log)
 
     invalid_plan = day4_plan(fork_minute=0)
@@ -260,7 +254,7 @@ def test_invalid_approved_program_is_atomic_and_tampered_approval_is_rejected(
             },
         )
     assert set(demo.branches) == {"baseline"}
-    assert _world_hash(demo) == source_hash
+    assert demo_world_hash(demo) == source_hash
     assert demo.branches["baseline"].runtime.command_log == source_command_log
     assert demo.operations[-1]["accepted"] is False
 
@@ -276,4 +270,4 @@ def test_invalid_approved_program_is_atomic_and_tampered_approval_is_rejected(
             },
         )
     assert set(demo.branches) == {"baseline"}
-    assert _world_hash(demo) == source_hash
+    assert demo_world_hash(demo) == source_hash

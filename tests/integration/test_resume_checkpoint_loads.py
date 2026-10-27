@@ -10,9 +10,9 @@ from sheltersim.storage.projects import ProjectStore
 from sheltersim.web.projects import ProjectAPI
 
 
-def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_run_with_scenario):
+def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_timeline):
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, _ = saved_run_with_scenario(tmp_path)
+    store, _ = saved_timeline(tmp_path)
     head = store.branch_reference("p", "r", "main").checkpoint_hash
     loads, validations = [], []
     load, validate = ProjectStore.load_checkpoint, Checkpoint._validate

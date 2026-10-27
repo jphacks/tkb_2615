@@ -6,11 +6,8 @@ Runs that surface these outcomes are checked in tests/integration/test_llm_outco
 
 from __future__ import annotations
 
-from sheltersim.llm.cache import ResponseTape
-from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import ProviderResponse
 from sheltersim.llm.outcomes import fallback_warning, summarize_call_outcomes
-from sheltersim.llm.provider import LLMRouter
 
 
 class TruncatedProvider:
@@ -25,13 +22,6 @@ class TruncatedProvider:
             output_tokens=5,
             elapsed_ms=0.0,
         )
-
-
-def _router(provider, *, max_api_calls: int = 1_000) -> LLMRouter:
-    settings = LLMSettings(
-        mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=max_api_calls, budget_usd=1.0
-    )
-    return LLMRouter(settings, provider=provider, tape=ResponseTape())
 
 
 def _record(
@@ -104,11 +94,11 @@ def test_summary_counts_caps_and_validation_failures_as_fallbacks() -> None:
     assert fallback_warning(clean) is None
 
 
-def test_scenario_text_parse_warns_on_rule_fallback() -> None:
+def test_scenario_text_parse_warns_on_rule_fallback(recording_router) -> None:
     from sheltersim.llm.region_prepare import parse_scenario_text
 
     parsed = parse_scenario_text(
-        "横浜市で地震が発生。避難者30人、期間は1日。", router=_router(TruncatedProvider())
+        "横浜市で地震が発生。避難者30人、期間は1日。", router=recording_router(TruncatedProvider())
     )
 
     assert parsed.source == "rules_fallback"
