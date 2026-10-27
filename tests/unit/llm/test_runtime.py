@@ -31,7 +31,7 @@ from sheltersim.llm.contracts import ProviderResponse
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.runtime import EventTriggeredSocialPolicy, SocialRuntimeLimits
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 class TypedProvider:
