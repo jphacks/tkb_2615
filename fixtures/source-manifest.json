@@ -390,7 +390,7 @@
     {
       "id": "ASM-H01-TEST-INITIAL-STOCK-V1",
       "source_type": "assumption",
-      "target": "tests/test_resources.py:initial_stock",
+      "target": "tests/conftest.py:scenario_with_stock initial_stock",
       "values": {
         "units": {
           "water_ml": "integer milliliters",
@@ -411,7 +411,7 @@
     {
       "id": "ASM-H01-TEST-RESOURCE-OPERATION-V1",
       "source_type": "assumption",
-      "target": "tests/test_resources.py:scheduled_events",
+      "target": "tests/unit/domain/test_resources.py:scheduled_events",
       "values": {
         "operations": [
           "delivery",
@@ -439,7 +439,7 @@
     {
       "id": "ASM-H01-TEST-RESOURCE-ALLOCATION-V1",
       "source_type": "assumption",
-      "target": "tests/test_resources.py:resource_reserve",
+      "target": "tests/e2e/test_resource_ledger_inspection.py:resource_reserve",
       "values": {
         "reservation_order": "scheduled event sequence then stable event ID",
         "ownership": "reservation is bound to one stable Agent ID"
@@ -451,7 +451,7 @@
     {
       "id": "ASM-H01-TEST-RESOURCE-SERVICE-V1",
       "source_type": "assumption",
-      "target": "tests/test_resources.py:resource_consume",
+      "target": "tests/e2e/test_resource_ledger_inspection.py:resource_consume",
       "values": {
         "consumption": "serving consumes reserved integer units"
       },
@@ -870,7 +870,7 @@
     {
       "id": "ASM-H02-RESOURCE-SERVICE-V1",
       "source_type": "assumption",
-      "target": "tests/test_resource_service.py:ScenarioSpec v3 model_configs.resource_service",
+      "target": "tests/conftest.py:resource_service_scenario ScenarioSpec v3 model_configs.resource_service",
       "model_version": "resource-service-v1",
       "values": {
         "service_minutes": 2,
@@ -902,7 +902,7 @@
     {
       "id": "ASM-H02-TEST-INITIAL-STOCK-V1",
       "source_type": "assumption",
-      "target": "tests/test_resource_service.py:initial_stock",
+      "target": "tests/conftest.py:resource_service_scenario initial_stock",
       "values": {
         "warehouse_id": "warehouse-h02",
         "zone_id": "toilet",
@@ -921,7 +921,7 @@
     {
       "id": "ASM-H02-QUEUE-STALLS-V1",
       "source_type": "assumption",
-      "target": "tests/test_resource_service.py:queue stall and retry cases",
+      "target": "tests/unit/domain/test_resource_service.py:queue stall and retry cases",
       "model_version": "resource-service-v1",
       "values": {
         "stall_reasons": [
@@ -940,7 +940,7 @@
     {
       "id": "ASM-H03-OPERATIONAL-EVENTS-V1",
       "source_type": "assumption",
-      "target": "operational_events_v1 and tests/test_operational_events.py",
+      "target": "operational_events_v1 and tests/unit/domain/test_operational.py",
       "model_version": "operational-events-v1",
       "values": {
         "payloads": "strict exact field sets",
@@ -960,7 +960,7 @@
     {
       "id": "ASM-H03-TEST-STOCK-V1",
       "source_type": "assumption",
-      "target": "tests/test_operational_events.py:initial_stock",
+      "target": "tests/unit/domain/test_operational.py:initial_stock",
       "values": {
         "warehouse_id": "warehouse-h03-test",
         "zone_id": "toilet",
@@ -977,7 +977,7 @@
     {
       "id": "ASM-H03-TEST-EVENT-TIMING-V1",
       "source_type": "assumption",
-      "target": "tests/test_operational_events.py:scheduled_events",
+      "target": "tests/unit/domain/test_operational.py:scheduled_events",
       "values": {
         "duration_minutes": 45,
         "shipment_delay_minutes": [

@@ -8,7 +8,7 @@
 
 施設の物理的な存在とAgentが施設を知っているかは別の状態です。`model_configs.facility_awareness` を明示したScenarioでは、`initial_known_facility_ids` に列挙された施設を入所時の案内で知っているものとし、既にいるzone内の施設も認知します。知っている施設への実際の到着時に `discover_co_located_facilities_on_arrival=true` なら、そのzoneの施設を追加で学習します。行動選択・経路探索・待ち行列・稼働unit・サービス完了の検査は従来どおり続きます。認知設定を空にすると初期案内による発見を止められますが、同zone到着による発見は独立して切り替えられます。
 
-生成Scenarioの `agent_dynamics` v3（`need-led-autonomy-memory-v3`）は、受付での共用施設の案内（v2）に加えて、Run中に設置された共用施設（トイレ・給水・配食・救護・受付・静養）をその時点の在所者全員へ即時に知らせます（ASM-INSTALLED-FACILITY-ANNOUNCEMENT-V1）。施設認知に情報伝播の経路はなく、v2では介入で追加したトイレを既存の在所者が誰も知らず、選ばれませんでした。告知の到達率と遅れに実測根拠はありません。図面のあるScenarioでは、追加トイレに図面上の座標がないとZoneに着いても並べないため、`geometry_overlay` schema_version 4で生成器と同じ格子規則の空き位置に置きます（ASM-INSTALLED-FACILITY-PLACEMENT-V1。最小間隔0.6 m、占有範囲なし）。配置は合成図面上の仮定で、実際の設置位置ではありません。`tests/test_installed_facility_announcement.py` は、追加トイレの配置・認知・利用、既存施設の位置が変わらないこと、v2履歴の動作維持、空き位置がない場合と版4未満の場合の適用不可、実行時の配置失敗、Branchコマンドでの追加を確認します。
+生成Scenarioの `agent_dynamics` v3（`need-led-autonomy-memory-v3`）は、受付での共用施設の案内（v2）に加えて、Run中に設置された共用施設（トイレ・給水・配食・救護・受付・静養）をその時点の在所者全員へ即時に知らせます（ASM-INSTALLED-FACILITY-ANNOUNCEMENT-V1）。施設認知に情報伝播の経路はなく、v2では介入で追加したトイレを既存の在所者が誰も知らず、選ばれませんでした。告知の到達率と遅れに実測根拠はありません。図面のあるScenarioでは、追加トイレに図面上の座標がないとZoneに着いても並べないため、`geometry_overlay` schema_version 4で生成器と同じ格子規則の空き位置に置きます（ASM-INSTALLED-FACILITY-PLACEMENT-V1。最小間隔0.6 m、占有範囲なし）。配置は合成図面上の仮定で、実際の設置位置ではありません。`tests/integration/test_installed_facility_announcement.py` は、追加トイレの配置・認知・利用、既存施設の位置が変わらないこと、v2履歴の動作維持、実行時の配置失敗を確認します。空き位置がない場合と版4未満の場合の適用不可、Branchコマンドでの追加は `tests/unit/domain/test_geometry_overlay.py` が確認します。
 
 施設認知は心理Policyから独立したScenario設定です。`facility_awareness` のない旧Scenarioでは、旧データの意味を変えない互換動作として全施設を候補にします。認知を記録するために心理Policyを選んだだけで、zone限定の認知ゲートが暗黙に有効になることはありません。案内対象、情報獲得確率、施設マップの利用率について実測根拠はなく、これらは明示的な未校正仮定です。
 
@@ -59,8 +59,8 @@ FIFO位置、待ち開始、サービス中、完了をイベントで記録し�
 
 ## 内部検証と限界
 
-既存 `tests/test_facility_queues.py`, `test_resource_service.py`, `test_resources.py` 等はFIFO、capacity、予約/在庫保存、失敗/取消、状態不変条件を検査します。新しい診断は稼働unitと初期/長期目安の計算を検査します。外部の到着率・便器利用時間・必要在庫の実測データはありません。
+既存の `tests/unit/domain/test_facility_queues.py`・`tests/integration/test_facility_queues.py`、`tests/unit/domain/test_resource_service.py`・`tests/integration/test_resource_service.py`、`tests/unit/domain/test_resources.py` 等はFIFO、capacity、予約/在庫保存、失敗/取消、状態不変条件を検査します。新しい診断は稼働unitと初期/長期目安の計算を検査します。外部の到着率・便器利用時間・必要在庫の実測データはありません。
 
-`tests/test_facility_awareness.py` は初期案内からのトイレ選択、移動、到着時の同zone施設発見、待ち、完了による排泄欲求の減少をScenarioで確認します。心理Policyを変えても同じ認知条件が維持されること、認知なしの挙動、Checkpoint復元、未知の施設IDの拒否も確認します。
+`tests/integration/test_facility_awareness.py` は初期案内からのトイレ選択、移動、到着時の同zone施設発見、待ち、完了による排泄欲求の減少をScenarioで確認します。心理Policyを変えても同じ認知条件が維持されること、認知なしの挙動、Checkpoint復元、未知の施設IDの拒否は `tests/unit/domain/test_agent_dynamics.py` が確認します。
 
 通常運営と不足条件の統合Scenarioは `fixtures/scenarios/research_operational_100_7d.json` と `research_shortage_100_7d.json` です。両者はseed 2026・合成Agent 100人・10,080分・同じ初期profile、5人のstaff、同じ行動/資源サービス/心理設定を使います。両方とも初期案内で全施設を知り、同じrouteを使います。通常運営は稼働トイレ4基、初期水5,000,000 ml・食事120単位、分1440以降は毎日水2,000,000 ml・食事1,000単位を配送します。不足条件は稼働トイレ2基、初期水100,000 ml・食事20単位、同じ時点から毎日水200,000 ml・食事100単位を配送します。資源サービスは1回5分、配水250 ml、配食1単位です。トイレ所要時間は両方とも未校正の4–8分離散一様です。社会伝播はScenario設定で無効、情報伝播は `InformationSpreadConfig` の既定 `enabled=false` です。数量と配送時刻はサービス・不足経路を検査する合成介入で、実際の避難所需要・供給計画ではありません。根拠IDは `fixtures/source-manifest.json` の各Scenario仮定を参照してください。
