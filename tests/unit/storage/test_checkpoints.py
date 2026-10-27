@@ -1,4 +1,6 @@
-"""A page of a Checkpoint section reads only the chunks it returns."""
+"""A compressed Checkpoint keeps its hash and reuses its chunks, and a page of a Checkpoint
+section reads only the chunks it returns.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from sheltersim.core.checkpoint import Checkpoint
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.storage.checkpoints import CheckpointArchive
 
 
 def test_checkpoint_section_reads_only_selected_chunks(
@@ -34,3 +41,14 @@ def test_checkpoint_section_reads_only_selected_chunks(
     assert result["total_items"] == 5000
     assert len(reads) <= 2
     assert result["full_checkpoint_verified_by_this_read"] is False
+
+
+def test_compressed_checkpoint_retains_hash_and_reuses_chunks(tmp_path):
+    checkpoint = Checkpoint.capture(WorldState.from_scenario(ScenarioSpec.load("fixtures/scenario_100_agents.json")))
+    archive = CheckpointArchive(tmp_path)
+    manifest = archive.encode(checkpoint)
+    first = sorted(tmp_path.rglob("*.json.gz"))
+    assert archive.decode(manifest).to_json() == checkpoint.to_json()
+    assert archive.encode(checkpoint) == manifest
+    assert sorted(tmp_path.rglob("*.json.gz")) == first
+
