@@ -1,4 +1,8 @@
-"""Offline smoke tests for the package and initial CLI."""
+"""The command line entry: help without a command, --version through python -m, and the
+profile preview command.
+
+The package version itself is checked in tests/unit/cli/test_main.py.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import sheltersim
 from sheltersim.__main__ import main
 
-INITIAL_PROFILES = Path(__file__).parents[1] / "fixtures" / "agents_initial.json"
-
-
-def test_package_has_version() -> None:
-    assert sheltersim.__version__ == "0.1.0"
+INITIAL_PROFILES = Path(__file__).parents[2] / "fixtures" / "agents_initial.json"
 
 
 def test_cli_without_command_displays_help(capsys) -> None:
