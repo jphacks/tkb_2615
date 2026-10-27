@@ -1,10 +1,12 @@
-"""Opt-in ResourceLedger accounting, reservation, replay and artifact contracts."""
+"""Opt-in ResourceLedger accounting, reservation, replay and checks.
+
+That a Run saves the ledger the same at every trace level and serves it to the
+inspector is checked in tests/e2e/test_resource_ledger_inspection.py.
+"""
 
 from __future__ import annotations
 
-import csv
 import json
-import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -12,7 +14,6 @@ import pytest
 from pydantic import ValidationError
 
 from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.resources import RESOURCE_LEDGER_KEY
 from sheltersim.events.handlers import (
@@ -21,47 +22,10 @@ from sheltersim.events.handlers import (
 )
 from sheltersim.events.models import EventApplicationError, EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.metrics import MetricsRecorder
-from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.query import RunInspector
-from sheltersim.web.inspector import InspectorService
-from sheltersim.web.server import _dispatch_api
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 SCENARIO_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
-
-
-def scenario_with_stock(
-    *,
-    water_ml: int = 0,
-    food_meal_units: int = 0,
-    source_ids: list[str] | None = None,
-    scheduled_events: list[dict[str, object]] | None = None,
-    duration_minutes: int = 5,
-) -> ScenarioSpec:
-    document = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
-    document["schema_version"] = 3
-    document["duration_minutes"] = duration_minutes
-    document["scheduled_events"] = scheduled_events or []
-    for scheduled in document["scheduled_events"]:
-        if scheduled.get("event_type", "").startswith("resource_"):
-            scheduled["payload"] = {
-                "warehouse_id": "warehouse-main",
-                **scheduled.get("payload", {}),
-            }
-    document["initial_stock"] = {
-        "schema_version": 1,
-        "warehouse_id": "warehouse-main",
-        "zone_id": "sleeping",
-        "water_ml": water_ml,
-        "food_meal_units": food_meal_units,
-        "source_ids": (
-            source_ids
-            if source_ids is not None
-            else (["ASM-H01-TEST-INITIAL-STOCK-V1"] if water_ml or food_meal_units else [])
-        ),
-    }
-    return ScenarioSpec.model_validate(document)
 
 
 def event(
@@ -94,7 +58,9 @@ def resource_dispatcher() -> EventDispatcher:
     )
 
 
-def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips() -> None:
+def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
+    scenario_with_stock
+) -> None:
     old_fixture = ScenarioSpec.load(SCENARIO_FIXTURE)
     assert old_fixture.schema_version == 3
     baseline_world = WorldState.from_scenario(old_fixture)
@@ -138,7 +104,9 @@ def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips() -> N
     }
 
 
-def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis() -> None:
+def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis(
+    scenario_with_stock
+) -> None:
     original = WorldState.from_scenario(scenario_with_stock(food_meal_units=2))
     original.schedule_event(
         event(
@@ -188,7 +156,7 @@ def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis() -> No
     assert final_account["reserved"] == 0
 
 
-def test_resource_scenario_v2_migration_and_v3_stock_rejections() -> None:
+def test_resource_scenario_v2_migration_and_v3_stock_rejections(scenario_with_stock) -> None:
     source = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
     assert source["schema_version"] == 2
     migrated = ScenarioSpec.from_json(json.dumps(source))
@@ -211,7 +179,9 @@ def test_resource_scenario_v2_migration_and_v3_stock_rejections() -> None:
         scenario_with_stock(food_meal_units=-1)
 
 
-def test_resource_operations_balance_inventory_and_preserve_audit_sources() -> None:
+def test_resource_operations_balance_inventory_and_preserve_audit_sources(
+    scenario_with_stock
+) -> None:
     world = WorldState.from_scenario(
         scenario_with_stock(
             water_ml=1000,
@@ -293,7 +263,7 @@ def test_resource_operations_balance_inventory_and_preserve_audit_sources() -> N
     world.validate()
 
 
-def test_invalid_and_cross_agent_resource_actions_are_atomic() -> None:
+def test_invalid_and_cross_agent_resource_actions_are_atomic(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     handler = ResourceLedgerHandler("reserve")
     before = world.canonical_json()
@@ -397,7 +367,7 @@ def test_invalid_and_cross_agent_resource_actions_are_atomic() -> None:
     assert world.canonical_json() == consumed
 
 
-def test_one_last_meal_reservation_is_stable_by_event_sequence() -> None:
+def test_one_last_meal_reservation_is_stable_by_event_sequence(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     world.schedule_event(
         event(
@@ -437,88 +407,7 @@ def test_one_last_meal_reservation_is_stable_by_event_sequence() -> None:
     world.validate()
 
 
-def test_resource_metrics_logs_and_state_are_trace_level_independent(tmp_path: Path) -> None:
-    events: list[dict[str, object]] = [
-        {
-            "id": "resource-reserve",
-            "due_minute": 0,
-            "sequence": 0,
-            "event_type": "resource_reserve",
-            "source_id": "ASM-H01-TEST-RESOURCE-ALLOCATION-V1",
-            "payload": {
-                "warehouse_id": "warehouse-main",
-                "resource_id": "food_meal_units",
-                "reservation_id": "meal-A001",
-                "agent_id": "A001",
-                "quantity": 1,
-            },
-        },
-        {
-            "id": "resource-consume",
-            "due_minute": 0,
-            "sequence": 1,
-            "event_type": "resource_consume",
-            "source_id": "ASM-H01-TEST-RESOURCE-SERVICE-V1",
-            "payload": {
-                "warehouse_id": "warehouse-main",
-                "resource_id": "food_meal_units",
-                "reservation_id": "meal-A001",
-                "agent_id": "A001",
-                "quantity": 1,
-            },
-        },
-    ]
-    scenario = scenario_with_stock(
-        water_ml=900,
-        food_meal_units=2,
-        scheduled_events=events,
-        duration_minutes=3,
-    )
-    off_directory = tmp_path / "trace-off"
-    summary_directory = tmp_path / "trace-summary"
-    off_world = run_scenario(scenario, off_directory, trace_level=TraceLevel.OFF)
-    summary_world = run_scenario(scenario, summary_directory, trace_level=TraceLevel.SUMMARY)
-
-    assert off_world.canonical_json() == summary_world.canonical_json()
-    assert (off_directory / "events_realized.jsonl").read_bytes() == (
-        summary_directory / "events_realized.jsonl"
-    ).read_bytes()
-    assert (off_directory / "metrics.csv").read_bytes() == (
-        summary_directory / "metrics.csv"
-    ).read_bytes()
-    with (off_directory / "metrics.csv").open(encoding="utf-8", newline="") as stream:
-        metric_rows = list(csv.DictReader(stream))
-    assert metric_rows[0]["food_meal_units_initial"] == "2"
-    assert metric_rows[0]["food_meal_units_served"] == "1"
-    assert metric_rows[0]["food_meal_units_remaining"] == "1"
-    off_manifest = json.loads((off_directory / "manifest.json").read_text(encoding="utf-8"))
-    summary_manifest = json.loads((summary_directory / "manifest.json").read_text(encoding="utf-8"))
-    assert off_manifest["resource_ledger_summary"] == summary_manifest["resource_ledger_summary"]
-    assert off_manifest["resource_ledger_summary"]["audit_entry_count"] == 4
-    assert off_manifest["initial_stock"]["source_ids"] == ["ASM-H01-TEST-INITIAL-STOCK-V1"]
-    assert (off_directory / "resource_ledger.json").is_file()
-    ledger = json.loads((off_directory / "resource_ledger.json").read_text(encoding="utf-8"))
-    assert ledger == off_world.model_state[RESOURCE_LEDGER_KEY]
-    assert ledger["warehouse_id"] == "warehouse-main"
-    query = RunInspector(off_directory).resource_ledger()
-    assert query == ledger
-    run_id = off_manifest["run_id"]
-    runs_directory = tmp_path / "runs"
-    runs_directory.mkdir()
-    shutil.copytree(off_directory, runs_directory / run_id)
-    web_inspector = InspectorService(runs_directory)
-    assert web_inspector.resource_ledger(run_id) == {"enabled": True, "ledger": ledger}
-    assert _dispatch_api(web_inspector, f"/api/v1/runs/{run_id}/resource-ledger", {}) == {
-        "enabled": True,
-        "ledger": ledger,
-    }
-    assert (
-        web_inspector.overview(run_id)["manifest"]["resource_ledger_summary"]["zone_id"]
-        == "sleeping"
-    )
-
-
-def test_world_rejects_resource_accounting_or_reservation_corruption() -> None:
+def test_world_rejects_resource_accounting_or_reservation_corruption(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["food_meal_units"]["remaining"] = 2
 
@@ -526,7 +415,9 @@ def test_world_rejects_resource_accounting_or_reservation_corruption() -> None:
         world.validate()
 
 
-def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tampering() -> None:
+def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tampering(
+    scenario_with_stock
+) -> None:
     with pytest.raises(ValidationError, match="references unknown zone"):
         scenario = scenario_with_stock(food_meal_units=1).model_dump(mode="json")
         scenario["initial_stock"]["zone_id"] = "unknown-zone"

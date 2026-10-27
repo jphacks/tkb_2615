@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 
+SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
+
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
 # Small enough that running the whole Scenario takes seconds.
@@ -304,6 +306,51 @@ def place_three_at_facility() -> Callable[[Any, str], None]:
             )
 
     return place
+
+
+def _scenario_with_stock(
+    *,
+    water_ml: int = 0,
+    food_meal_units: int = 0,
+    source_ids: list[str] | None = None,
+    scheduled_events: list[dict[str, object]] | None = None,
+    duration_minutes: int = 5,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = scheduled_events or []
+    for scheduled in document["scheduled_events"]:
+        if scheduled.get("event_type", "").startswith("resource_"):
+            scheduled["payload"] = {
+                "warehouse_id": "warehouse-main",
+                **scheduled.get("payload", {}),
+            }
+    document["initial_stock"] = {
+        "schema_version": 1,
+        "warehouse_id": "warehouse-main",
+        "zone_id": "sleeping",
+        "water_ml": water_ml,
+        "food_meal_units": food_meal_units,
+        "source_ids": (
+            source_ids
+            if source_ids is not None
+            else (["ASM-H01-TEST-INITIAL-STOCK-V1"] if water_ml or food_meal_units else [])
+        ),
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def scenario_with_stock() -> Callable[..., Any]:
+    """Build h00_small_replay with an initial stock in warehouse-main and resource events.
+
+    Resource events get warehouse-main in their payload, and a stock other than zero
+    gets a test source ID unless source_ids is given.
+    """
+    return _scenario_with_stock
 
 
 def _make_event(
