@@ -8,7 +8,6 @@ import hmac
 import json
 import os
 import secrets
-from typing import Any
 
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical
 

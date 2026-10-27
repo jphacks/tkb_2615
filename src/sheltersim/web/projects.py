@@ -16,7 +16,6 @@ from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.experiments.validation import evidence_context
 from sheltersim.llm.accounting import accounted_router, usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
-from sheltersim.llm.provider import LLMRouter
 from sheltersim.storage.projects import ProjectStore, StorageError, digest
 from sheltersim.storage.telemetry import RunTelemetryStore
 from sheltersim.storage.usage import UsageLedger

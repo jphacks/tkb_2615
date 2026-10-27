@@ -240,7 +240,7 @@ def _download_json(url: str, allowed_hosts: tuple[str, ...]) -> JsonSnapshot:
         failure: RegionProviderError = RegionProviderError(
             f"public-data endpoint returned HTTP {exc.code}"
         )
-    except (URLError, TimeoutError, socket.timeout, OSError) as exc:
+    except (URLError, TimeoutError, socket.timeout, OSError):
         failure = RegionProviderError("public-data endpoint could not be reached")
     else:
         if len(body) > _MAX_JSON_BYTES:
@@ -248,7 +248,7 @@ def _download_json(url: str, allowed_hosts: tuple[str, ...]) -> JsonSnapshot:
         else:
             try:
                 document = json.loads(body.decode("utf-8-sig"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 failure = RegionDatasetError("public-data endpoint returned invalid JSON")
             else:
                 snapshot = JsonSnapshot(

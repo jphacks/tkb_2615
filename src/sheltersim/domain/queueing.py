@@ -175,7 +175,6 @@ def _abandon_and_retry(
     if movement_state is not None and "facility_geometry" in world.model_configs:
         from sheltersim.contracts.extensions import Point2D
         from sheltersim.domain.movement import (
-            MOVEMENT_STATE_KEY,
             _geometry,
             _zone_center,
             in_room_travel_minutes,
@@ -278,7 +277,7 @@ def _abandon_and_retry(
         )
     )
     if route is not None and route.travel_minutes > 0:
-        from sheltersim.domain.movement import MOVEMENT_STATE_KEY, start_movement
+        from sheltersim.domain.movement import start_movement
 
         sequence = world.allocate_event_sequence()
         task_id = f"queue-abandon-travel-{sequence}"

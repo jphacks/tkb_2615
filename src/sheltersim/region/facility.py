@@ -1260,7 +1260,6 @@ def validate_editable_routes(
     if physical_zones:
         _validate_physical_zone_polygons(physical_zones)
     openings = {item.opening_id: item for item in geometry.openings}
-    walls = {item.wall_id: item for item in geometry.walls}
     route_openings: dict[str, set[str]] = {}
     route_ids = {item.edge_id for item in routes}
     for item in geometry.route_openings:
