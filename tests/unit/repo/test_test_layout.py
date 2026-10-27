@@ -90,7 +90,6 @@ UNSORTED = frozenset(
         "test_staff_operation_relief.py",
         "test_startable_generated_scenarios.py",
         "test_story_report.py",
-        "test_structured_social_history.py",
         "test_support_priority_runtime.py",
         "test_timed_branch_plan.py",
         "test_timeline_frame_cache.py",
