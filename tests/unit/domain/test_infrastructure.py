@@ -30,7 +30,7 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import PsychologyParameters, SimplePsychologyPolicy
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 SMALL_SCENARIO = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 SOURCE_ID = "SCN-A03-TEST"
 
