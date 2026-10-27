@@ -1,21 +1,20 @@
-"""Agent state, immutable policy views, and reproducible behavior tests."""
+"""Immutable policy views and reproducible behavior proposals.
+
+Checkpoint replay of a behavior policy variant is checked in
+tests/integration/test_behavior_policy.py.
+"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
-from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.rng import CounterRNG, KeyedRandom
-from sheltersim.core.world import StateInvariantError, WorldState
-from sheltersim.domain.models import Activity, AgentState
-from sheltersim.experiments.branch import BranchRuntime
-from sheltersim.experiments.runner import OfflineSimulationController
+from sheltersim.core.world import WorldState
+from sheltersim.domain.models import Activity
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.behavior import (
     ActionCandidate,
     ActionKind,
@@ -28,56 +27,12 @@ from sheltersim.policies.behavior import (
     behavior_policy_catalog,
     create_behavior_policy,
 )
-from sheltersim.policies.psychology import (
-    AgentStateDelta,
-    SimplePsychologyPolicy,
-    apply_state_deltas,
-)
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def make_world() -> WorldState:
     return WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
-
-
-def test_world_state_v5_serializes_bounded_psychology_and_decision_time() -> None:
-    world = make_world()
-    agent = world.agents["A001"]
-    agent.stress = 0.35
-    agent.trust = 0.72
-    agent.next_decision_at = 23
-
-    serialized = world.canonical_json()
-
-    assert world.schema_version == 5
-    assert '"schema_version":5' in serialized
-    assert '"stress":0.35' in serialized
-    assert '"trust":0.72' in serialized
-    assert '"next_decision_at":23' in serialized
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("stress", -0.1), ("stress", 1.1), ("trust", float("nan"))],
-)
-def test_world_rejects_psychology_values_outside_zero_to_one(field: str, value: float) -> None:
-    world = make_world()
-    setattr(world.agents["A001"], field, value)
-
-    with pytest.raises(StateInvariantError, match=f"invalid {field}"):
-        world.validate()
-
-
-def test_agent_rejects_invalid_next_decision_time() -> None:
-    agent = make_world().agents["A001"]
-
-    with pytest.raises(ValueError, match="next_decision_at"):
-        AgentState(
-            profile=agent.profile,
-            zone_id=agent.zone_id,
-            next_decision_at=-1,
-        )
 
 
 def test_world_view_is_detached_read_only_and_canonical() -> None:
@@ -247,34 +202,6 @@ def test_sleep_aware_behavior_normalizes_debt_by_daily_sleep_need() -> None:
     assert high_sleep.probability > low_sleep.probability
 
 
-def test_priority_policy_checkpoint_noop_fork_replays_with_same_variant(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(FIXTURE).with_behavior_policy_variant("priority-rule-v1")
-    root = BranchRuntime.from_world(WorldState.from_scenario(scenario), branch_id="source")
-    checkpoint = root.checkpoint()
-    uninterrupted = BranchRuntime.from_checkpoint(checkpoint, branch_id="continued")
-    forked = BranchRuntime.from_checkpoint(checkpoint, branch_id="forked")
-    outputs = []
-
-    for index, branch in enumerate((uninterrupted, forked)):
-        writer = RunArtifactWriter(
-            scenario,
-            tmp_path / f"branch-{index}",
-            trace_level=TraceLevel.FULL,
-        )
-        writer.write_initial(branch.world, execution_mode="offline")
-        controller = OfflineSimulationController(branch.world, writer)
-        TickEngine(branch.world, phase_handler=controller).run(steps=75)
-        writer.finalize(branch.world)
-        outputs.append((branch, writer))
-
-    assert outputs[0][0].world.canonical_json() == outputs[1][0].world.canonical_json()
-    assert outputs[0][0].world.event_log.records == outputs[1][0].world.event_log.records
-    assert outputs[0][1].metrics.to_dict() == outputs[1][1].metrics.to_dict()
-    trace = json.loads((tmp_path / "branch-0" / "decisions.jsonl").read_text().splitlines()[0])
-    assert trace["policy_version"] == "priority-rule-v1"
-    assert trace["source_id"] == "ASM-PRIORITY-RULE-BEHAVIOR-V1"
-
-
 def test_behavior_runner_only_proposes_due_agents_in_stable_id_order() -> None:
     world = make_world()
     for agent in world.agents.values():
@@ -292,63 +219,3 @@ def test_behavior_runner_only_proposes_due_agents_in_stable_id_order() -> None:
     assert [proposal.agent_id for proposal in proposals] == ["A001", "A002"]
 
 
-def test_psychology_update_is_pure_bounded_and_keeps_trust_until_outcome_exists() -> None:
-    world = make_world()
-    agent = world.agents["A001"]
-    agent.activity = Activity.RESTING
-    agent.needs.toilet_urgency = 0.9995
-    agent.needs.hunger = 0.3
-    agent.needs.fatigue = 0.001
-    agent.stress = 0.999
-    agent.trust = 0.2
-    view = WorldView.from_world(world)
-    state_before = world.canonical_json()
-    policy = SimplePsychologyPolicy()
-
-    deltas = policy.update(view, minute=0)
-    first_delta = next(delta for delta in deltas if delta.agent_id == "A001")
-
-    assert world.canonical_json() == state_before
-    assert deltas == policy.update(view, minute=0)
-    assert 0.0 <= first_delta.toilet_urgency <= 1.0
-    assert 0.0 <= first_delta.hunger <= 1.0
-    assert 0.0 <= first_delta.fatigue <= 1.0
-    assert 0.0 <= first_delta.stress <= 1.0
-    assert first_delta.fatigue < agent.needs.fatigue
-    assert first_delta.trust == agent.trust
-
-    apply_state_deltas(world, deltas)
-    world.validate()
-    assert world.agents["A001"].needs.fatigue < 0.001
-    assert world.agents["A001"].trust == 0.2
-
-
-def test_psychology_application_rejects_stale_or_duplicate_updates_atomically() -> None:
-    world = make_world()
-    update = AgentStateDelta(
-        agent_id="A001",
-        minute_index=0,
-        toilet_urgency=0.1,
-        hunger=0.2,
-        fatigue=0.3,
-        stress=0.4,
-        trust=0.5,
-    )
-    stale_update = AgentStateDelta(
-        agent_id="A002",
-        minute_index=1,
-        toilet_urgency=0.1,
-        hunger=0.2,
-        fatigue=0.3,
-        stress=0.4,
-        trust=0.5,
-    )
-    initial = world.canonical_json()
-
-    with pytest.raises(StateInvariantError, match="different minute"):
-        apply_state_deltas(world, (update, stale_update))
-    assert world.canonical_json() == initial
-
-    with pytest.raises(StateInvariantError, match="duplicate psychology update"):
-        apply_state_deltas(world, (update, update))
-    assert world.canonical_json() == initial

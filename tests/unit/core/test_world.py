@@ -281,3 +281,31 @@ def test_world_state_schema_two_serializes_pending_queue_and_realized_log_separa
     assert [record["event"]["event_id"] for record in serialized["event_log"]] == ["realized"]
     assert serialized["event_log"][0]["status"] == "applied"
     world.validate()
+
+
+def test_world_state_v5_serializes_bounded_psychology_and_decision_time() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    agent = world.agents["A001"]
+    agent.stress = 0.35
+    agent.trust = 0.72
+    agent.next_decision_at = 23
+
+    serialized = world.canonical_json()
+
+    assert world.schema_version == 5
+    assert '"schema_version":5' in serialized
+    assert '"stress":0.35' in serialized
+    assert '"trust":0.72' in serialized
+    assert '"next_decision_at":23' in serialized
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("stress", -0.1), ("stress", 1.1), ("trust", float("nan"))],
+)
+def test_world_rejects_psychology_values_outside_zero_to_one(field: str, value: float) -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    setattr(world.agents["A001"], field, value)
+
+    with pytest.raises(StateInvariantError, match=f"invalid {field}"):
+        world.validate()

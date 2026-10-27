@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from sheltersim.core.world import WorldState
+from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.models import (
     Activity,
@@ -28,8 +28,11 @@ from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import (
+    AgentStateDelta,
     IntegratedDistressLifeStatePolicy,
     MeanRevertingDistressPolicy,
+    SimplePsychologyPolicy,
+    apply_state_deltas,
     mean_reverting_step,
     sleep_debt_step,
 )
@@ -344,3 +347,65 @@ def test_psychology_trace_delta_fields_reconstruct_applied_stress_delta(
     assert (
         serialized["raw_delta"] + serialized["clip_delta"] + serialized["social_delta"]
     ) == pytest.approx(serialized["applied_delta"])
+
+
+def test_psychology_update_is_pure_bounded_and_keeps_trust_until_outcome_exists() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    agent = world.agents["A001"]
+    agent.activity = Activity.RESTING
+    agent.needs.toilet_urgency = 0.9995
+    agent.needs.hunger = 0.3
+    agent.needs.fatigue = 0.001
+    agent.stress = 0.999
+    agent.trust = 0.2
+    view = WorldView.from_world(world)
+    state_before = world.canonical_json()
+    policy = SimplePsychologyPolicy()
+
+    deltas = policy.update(view, minute=0)
+    first_delta = next(delta for delta in deltas if delta.agent_id == "A001")
+
+    assert world.canonical_json() == state_before
+    assert deltas == policy.update(view, minute=0)
+    assert 0.0 <= first_delta.toilet_urgency <= 1.0
+    assert 0.0 <= first_delta.hunger <= 1.0
+    assert 0.0 <= first_delta.fatigue <= 1.0
+    assert 0.0 <= first_delta.stress <= 1.0
+    assert first_delta.fatigue < agent.needs.fatigue
+    assert first_delta.trust == agent.trust
+
+    apply_state_deltas(world, deltas)
+    world.validate()
+    assert world.agents["A001"].needs.fatigue < 0.001
+    assert world.agents["A001"].trust == 0.2
+
+
+def test_psychology_application_rejects_stale_or_duplicate_updates_atomically() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    update = AgentStateDelta(
+        agent_id="A001",
+        minute_index=0,
+        toilet_urgency=0.1,
+        hunger=0.2,
+        fatigue=0.3,
+        stress=0.4,
+        trust=0.5,
+    )
+    stale_update = AgentStateDelta(
+        agent_id="A002",
+        minute_index=1,
+        toilet_urgency=0.1,
+        hunger=0.2,
+        fatigue=0.3,
+        stress=0.4,
+        trust=0.5,
+    )
+    initial = world.canonical_json()
+
+    with pytest.raises(StateInvariantError, match="different minute"):
+        apply_state_deltas(world, (update, stale_update))
+    assert world.canonical_json() == initial
+
+    with pytest.raises(StateInvariantError, match="duplicate psychology update"):
+        apply_state_deltas(world, (update, update))
+    assert world.canonical_json() == initial
