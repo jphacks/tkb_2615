@@ -49,7 +49,6 @@ UNSORTED = frozenset(
         "test_distress_monitor.py",
         "test_e2e.py",
         "test_effect_explanation_ui.py",
-        "test_effect_program.py",
         "test_engine.py",
         "test_events.py",
         "test_exact_timeline.py",
