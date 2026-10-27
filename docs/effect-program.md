@@ -17,6 +17,7 @@ EffectProgramの版付き契約とoffline interpreterはsheltersim.events.effect
 | add_staff | zone 1件、staff_member。countは1–100 | 決定的IDで通常支援staffを追加します。総staff数は100人以下です。一回限りの構造変更です。 |
 | add_toilet | zone 1件、toilet_stall。countは1–20 | 1ユニット設備を追加します。設備総数は200以下です。一回限りの構造変更です。agent_dynamics v3のScenarioでは、追加したトイレを在所者全員へ知らせます（v2以前では既存の在所者は知りません）。図面のあるScenarioでは`geometry_overlay` schema_version 4が必要で、生成器と同じ格子規則で空き位置に置きます。置けない場合や版4未満の場合は適用不可です。 |
 | add_temporary_space | zone 1件、person_capacity。people_capacityは1–1000、sleeping_capacityは0–1000でpeople_capacity以下 | `simulator_extensions.enabled`で作られるtemporary_spaces_v1が必要です。新しく生成するScenarioは有効にします（#80。それ以前に保存したScenarioは対象外）。end_minuteまでZoneの定員を増やし、到着者の受け入れ判定に使います。図面上の部屋は作りません（部屋は`temporary_room_geometry`）。Zoneごとの一時定員は予定中の分を含めて1000人までです。 |
+| staff_task_order | 待機中のstaff 1人、staff_task_order | 清掃・保守・情報提供・受付・巡回のどれかを、いまの時刻に1件指示します。職員は経路を歩いて作業し、完了を記録します。技能のない職員への指示は承認前に却下し、理由を日本語で返します。誰も技能を持たなければ`no_qualified_staff`（担当変更`set_staff_role`、保守なら修理の手配`facility_repair`を案内）、ほかの職員が持っていれば`staff_lacks_task_skill`（その職員を挙げる）です。生成Scenarioには清掃・保守の技能を持つ職員がいません（#75）。 |
 | transfer_equipment | 図面上の位置を持つ待機中の設備1台、metre_2d | geometry_overlay_v1が必要です。つながった別のZoneへ設備とその提供地点を恒久的に移します。給水所と配食所は、同じZoneにいる担当技能（`resource_service`の`water_staff_skill`・`meal_staff_skill`）の職員だけが受け持つので、移設先にその職員がいなければ承認前に却下します（#83）。職員は設備と一緒には移りません。 |
 
 zone_environment_v1は任意設定で、既存Zoneに限定されます。編集係数は仮定のsource IDを持ち、範囲を制限します。設定を省けばoperatorはcompiler previewから外れ、追加runtime stateも作りません。実測音、臨床的睡眠障害、群集移動、照明、温度、情報伝播、施設固有需要、任意のmodel config変更は表現しません。対応Policyが追加されるまでは未対応です。

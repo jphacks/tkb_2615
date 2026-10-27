@@ -1,4 +1,9 @@
-"""Typed EffectProgram orders enter the routed staff task lifecycle."""
+"""Typed EffectProgram orders enter the routed staff task lifecycle.
+
+The lifecycle runs on the small fixture with one cleaner. On the shared generated
+Scenario, an order no worker can take is refused before approval with a reason
+the operator can act on (#75).
+"""
 
 from __future__ import annotations
 
@@ -30,7 +35,7 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
@@ -66,12 +71,12 @@ def _dispatcher() -> EventDispatcher:
 
 
 def _task_program(
-    *, task_kind: str, target_zone_id: str, target_id: str | None = None
+    *, task_kind: str, target_zone_id: str, target_id: str | None = None, staff_id: str = "S01"
 ) -> EffectProgram:
     effect = TimedAction.model_validate({
         "effect_id": f"order-{task_kind}",
         "op": "staff_task_order",
-        "target_selector": {"kind": "staff", "target_id": "S01"},
+        "target_selector": {"kind": "staff", "target_id": staff_id},
         "start_minute": 0,
         "parameters": {
             "task_kind": task_kind,
@@ -86,7 +91,7 @@ def _task_program(
     return EffectProgram.model_validate({
         "program_id": f"operator-{task_kind}-order",
         "narrative": f"Order one worker to perform {task_kind}.",
-        "source_text": f"Assign staff S01 to perform {task_kind}.",
+        "source_text": f"Assign staff {staff_id} to perform {task_kind}.",
         "simulation_start_minute": 0,
         "effects": [effect.model_dump(mode="json")],
         "support_mode": SupportMode.NATIVE,
@@ -187,7 +192,7 @@ def test_staff_task_order_routes_and_completes_with_checkpointed_history(tmp_pat
         "effects": [unqualified_effect],
     })
     assert any(
-        "lacks the registered task skill" in issue
+        "no_qualified_staff" in issue
         for issue in validate_effect_program(_world(), unqualified_program)
     )
     late_effect = effect.model_copy(update={"start_minute": 1})
@@ -315,3 +320,41 @@ def test_all_other_registered_staff_task_kinds_complete(
     if task_kind == "intake":
         assert not world.model_state["population_dynamics_v1"]["pending_arrivals"]
     world.validate()
+
+
+@pytest.mark.parametrize(
+    ("task_kind", "target_zone_id", "target_id", "advice"),
+    [
+        ("cleaning", "sleeping", None, "担当変更（set_staff_role）"),
+        ("maintenance", "toilet", "toilet_01", "修理の手配（facility_repair）"),
+    ],
+)
+def test_generated_staff_orders_for_cleaning_or_maintenance_say_no_one_can_do_them(
+    generated_scenario, task_kind, target_zone_id, target_id, advice
+) -> None:
+    # In a shelter this work falls to evacuee rotas, the facility manager or
+    # contractors, so generated Scenarios staff no one for it (#75).
+    world = WorldState.from_scenario(generated_scenario)
+    program = _task_program(
+        task_kind=task_kind,
+        target_zone_id=target_zone_id,
+        target_id=target_id,
+        staff_id="staff_001",
+    )
+
+    [issue] = validate_effect_program(world, program)
+
+    assert "no_qualified_staff:" in issue
+    assert "を持つ職員がいません" in issue
+    assert advice in issue
+
+
+def test_an_order_to_an_unqualified_worker_names_who_could_take_it(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    # staff_002 runs a water or meal station; only staff_001 patrols.
+    program = _task_program(task_kind="patrol", target_zone_id="sleeping", staff_id="staff_002")
+
+    [issue] = validate_effect_program(world, program)
+
+    assert "staff_lacks_task_skill: staff_002は巡回の技能" in issue
+    assert "技能を持つ職員（staff_001）に指示してください" in issue

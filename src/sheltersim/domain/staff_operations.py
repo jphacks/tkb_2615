@@ -575,6 +575,43 @@ def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter)
     return tuple(assigned)
 
 
+_TASK_NAMES = {
+    "cleaning": "清掃",
+    "maintenance": "保守",
+    "information_outreach": "情報提供",
+    "intake": "受付",
+    "patrol": "巡回",
+}
+
+
+def _missing_task_skill_message(world: WorldState, staff_id: str, task_kind: str) -> str:
+    """Tell the operator, before approval, who could take an order this worker cannot (#75).
+
+    Generated Scenarios staff no one for cleaning or maintenance: in a shelter that
+    work falls to evacuee rotas, the facility manager or contractors, not to staff.
+    """
+    skills = _TASK_SKILLS[task_kind]
+    name = _TASK_NAMES[task_kind]
+    skill_list = "・".join(sorted(skills))
+    qualified = sorted(
+        other_id for other_id, other in world.staff.items() if skills.intersection(other.skills)
+    )
+    if qualified:
+        return (
+            f"staff_lacks_task_skill: {staff_id}は{name}の技能（{skill_list}）を持ちません。"
+            f"技能を持つ職員（{'、'.join(qualified)}）に指示してください。"
+        )
+    advice = "担当変更（set_staff_role）で職員に技能を与えてから指示してください。"
+    if task_kind == "maintenance":
+        advice = (
+            "設備の修理は修理の手配（facility_repair）で指示するか、"
+            "担当変更（set_staff_role）で職員に技能を与えてから指示してください。"
+        )
+    return (
+        f"no_qualified_staff: {name}の技能（{skill_list}）を持つ職員がいません。{advice}"
+    )
+
+
 def validate_staff_operation_order(
     world: WorldState,
     *,
@@ -604,8 +641,10 @@ def validate_staff_operation_order(
         or not staff_dynamics_is_available(world, staff_id, minute)
     ):
         raise EventApplicationError("staff task order requires an idle, available, on-shift worker")
-    if task_kind not in _TASK_SKILLS or not _TASK_SKILLS[task_kind].intersection(staff.skills):
-        raise EventApplicationError("staff task order worker lacks the registered task skill")
+    if task_kind not in _TASK_SKILLS:
+        raise EventApplicationError("staff task order uses an unregistered task kind")
+    if not _TASK_SKILLS[task_kind].intersection(staff.skills):
+        raise EventApplicationError(_missing_task_skill_message(world, staff_id, task_kind))
     if target_zone_id not in world.zones:
         raise EventApplicationError("staff task order references an unknown target zone")
     if task_kind == "maintenance":
