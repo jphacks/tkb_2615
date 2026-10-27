@@ -80,7 +80,6 @@ UNSORTED = frozenset(
         "test_pdf_report.py",
         "test_per_tick_history_validation.py",
         "test_performance_smoke.py",
-        "test_physical_queue_overflow.py",
         "test_pointer_only_reads.py",
         "test_policy_parameter_overrides.py",
         "test_policy_registry_full.py",
