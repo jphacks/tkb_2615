@@ -88,7 +88,7 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 - `<担当>`は、AGENTS.mdのモジュール（`core`、`domain`、`events`、`policies`、`experiments`、`region`、`llm`、`storage`、`web`）と`cli`、それにリポジトリ自体（テストの配置、文書、fixture、出典台帳）を確かめる`repo`です。
 - 名前に、不具合名（例：`resource_loss_without_operational_state`）、開発の回の名前（例：`round2_common_services`）、`regressions`を使いません。不具合の再発防止テストはその機能のファイルに足し、守るべき振る舞いを関数名に書き、Issue番号をdocstringかコメントに書きます。
 - ブラウザー用の静的ファイル（JavaScript、HTML）を確かめる単体は、Pythonのモジュール名がないので`tests/unit/web/test_static_<ファイル名>.py`にします。例：`demo-v2.js`なら`test_static_demo_v2.py`。
-- 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/support/`の題材ごとのモジュールにfixtureとして置きます（下の「共有する準備の置き場所」）。テストファイルはfixtureとして受け取り、`tests/support/`のモジュールを直接importしません（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
+- 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/support/`の題材ごとのモジュールにfixtureとして置きます（下の「共有する準備の置き場所」）。テストファイルはfixtureとして受け取り、`tests/support/`のモジュールを直接importしません。例外は`tests/support/paths.py`の定数で、`fixtures/`のファイルのパス（`SCENARIO_100_AGENTS`、`SMALL_REPLAY`など）は`from support.paths import …`で使い、テストファイルの中で`Path(__file__).parents[N]`から組み立てません（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
 - 背景で動くjob（`DemoJobManager`、`ProjectAPI`）の終わりは、実時間の短い期限で状態を読み続けて待ちません。CPUが混むと期限を超えて失敗するためです（#143）。どちらもworkerが1つなので、`wait_for_job`のfixture（`DemoJobManager`）か、`api._pool.submit(lambda: None).result(timeout=120)`（`ProjectAPI`）で、それまでのjobが終わるのを待ってから状態を確かめます。`timeout`は止まったときにテストを終わらせるためだけのものです。
 - 何を確かめるか（結果・契約・画面）は、ディレクトリにも印にもしません。実行の選び分けに使わない印は、付け忘れても気づけず、すぐ実態とずれるためです。確かめる振る舞いを関数名に書き、全体は地図の「目的」欄で把握します。
 
@@ -107,7 +107,7 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 | `support/reports.py` | PDFレポートの保存済みRun、根拠つきの文章、偽のOpus | `report_saved_run`、`prose_document`、`report_router`、`install_report_router` |
 | `support/world.py` | WorldState・イベント・検証の部品 | `make_event`、`record_handler`、`stress_delta`、`count_validations`、`live_checkpoint_world` |
 
-`support/paths.py`（fixtureのScenarioのパス）と`support/isolation.py`（隔離の処理）は、ほかのモジュールと`tests/conftest.py`が使う部品で、fixtureを持ちません。
+`support/paths.py`（`fixtures/`のファイルのパス。テストファイルからもimportします）と`support/isolation.py`（隔離の処理）は、fixtureを持たない部品です。ほかのテストで使う`fixtures/`のファイルが増えたら、`support/paths.py`に定数を足します。
 
 関数を返すfixtureは、呼ぶたびに新しいものを作るだけで状態を持ちません。そのうち`saved_timeline`、`add_toilets_program`、`demo_world_hash`、`recording_router`はsession単位にして、module単位のfixtureからも使えるようにしています。テストファイルの中のhelperがこれらを使うときは、テストが受け取ったfixtureを引数で渡します（例：`integration/test_intervention_outcomes.py`の`_main_and_child`）。
 
