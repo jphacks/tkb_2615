@@ -33,7 +33,6 @@ UNSORTED = frozenset(
         "test_admin_audit.py",
         "test_agents.py",
         "test_branch.py",
-        "test_cascading_infrastructure.py",
         "test_causal_stress.py",
         "test_checkpoint_save_regressions.py",
         "test_comparison.py",
