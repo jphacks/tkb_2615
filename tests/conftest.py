@@ -197,3 +197,45 @@ def ui_project_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 def generated_request() -> Callable[..., dict[str, Any]]:
     """The structured form of GENERATED_SCENARIO_REQUEST with some fields changed."""
     return _generated_request
+
+
+@pytest.fixture
+def generated_scenario_with_split_queues(generated_scenario):
+    """The generated Scenario with two service points, each its own queue, at two facilities.
+
+    The generator gives every facility one service point. toilet_01 and
+    water_station_main get a left and a right point here instead, one metre either
+    side of the facility, so each serves two people at once, and each point needs a
+    worker with the right skill; a toilet worker is added to the toilet area for that.
+    """
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = generated_scenario.model_dump(mode="json")
+    geometry = document["model_configs"]["facility_geometry"]
+    zones = {facility["id"]: facility["zone_id"] for facility in document["facilities"]}
+    facilities = {facility["id"]: facility for facility in document["facilities"]}
+    for facility_id, skill in (
+        ("toilet_01", "toilet_service"),
+        ("water_station_main", "water_service"),
+    ):
+        facilities[facility_id]["capacity"] = facilities[facility_id]["working_units"] = 2
+        point = geometry["facility_points"][facility_id]
+        geometry["service_points"] = [
+            row for row in geometry["service_points"] if row["facility_id"] != facility_id
+        ]
+        for side, offset in (("left", -1.0), ("right", 1.0)):
+            geometry["service_points"].append(
+                {
+                    "schema_version": 1,
+                    "id": f"{facility_id}-{side}",
+                    "facility_id": facility_id,
+                    "point_m": {"x": point["x"], "y": point["y"] + offset},
+                    "service_capacity": 1,
+                    "queue_id": f"{facility_id}-{side}-fifo",
+                    "access": {"accessibility": "accessible", "required_staff_skills": [skill]},
+                }
+            )
+    document["staff"].append(
+        {"id": "toilet_staff_01", "zone_id": zones["toilet_01"], "skills": ["toilet_service"]}
+    )
+    return ScenarioSpec.model_validate(document)
