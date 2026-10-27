@@ -447,11 +447,6 @@ def test_a_staff_absence_stops_support_and_lets_requests_time_out(staff_absence)
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#74: waiting for an absent worker is counted under no wait reason",
-)
 def test_a_staff_absence_shows_in_the_support_wait_reasons(staff_absence) -> None:
     main, child = staff_absence
     reasons = (

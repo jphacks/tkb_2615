@@ -10,7 +10,7 @@ EffectProgramの版付き契約とoffline interpreterはsheltersim.events.effect
 | facility_outage | 施設1件、facility_unit。unitsは1–1000 | 互換用形式で、上限付き稼働単位数を減らします。同じ可逆modifier stackを使います。 |
 | deliver_resource | 資源ID1件、そのIDで定義された単位 | resource_ledger_v1が必要です。正の数量を既存の台帳handlerで一度適用します。 |
 | modify_supply_schedule | 既知のshipment 1件、minute | operational_events_v1が必要です。既存handlerで未到着shipmentを遅らせる一回操作です。 |
-| set_staff_availability | staff 1人、staff_member | operational_events_v1が必要です。既知staffをend_minuteまで勤務不可にし、期限時に復帰します。 |
+| set_staff_availability | staff 1人、staff_member | operational_events_v1が必要です。既知staffをend_minuteまで勤務不可にし、期限時に復帰します。不在の資格者を待つ支援依頼は、KPI「勤務していない資格者がいる支援待ち依頼分数（時間外・不在）」（`support_wait_staff_off_shift_request_minutes`）に数えます。このKPIは、#74で勤務時間外だけから不在にも広げました。 |
 | water_outage | water station 1台、または設備があるZone。water_supply | operational event stateとWorldState v6のresource_service_v1が必要です。既存の停止・復旧handlerを使います。 |
 | set_ambient_noise | zone 1件、normalized_noise_0_1。levelは0–1 | 任意導入のzone_environment_v1 policyが必要です。既存心理Policyによる休息・睡眠中の疲労回復を変えます。stressやKPIへ直接書きません。 |
 | modify_demand_rate | zone 1件、relative_action_rate。確率とrest/sleep決定間隔の倍率は0.5–2 | 任意導入のzone_environment_v1 policyが必要です。Zone内の1 actionに対するsoftmax選択重みを変えます。rest/sleepの決定間隔は設定範囲に制限します。water/meal actionにはresource_service_v1も必要です。 |

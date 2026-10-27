@@ -35,7 +35,9 @@ _FIELD_LABELS = {
     "support_no_qualified_worker_request_minutes": "資格を満たすスタッフがいない依頼分数",
     "support_fairness_promoted_assignment_count": "公平性ルールで優先された支援依頼数",
     "support_wait_staff_busy_request_minutes": "対応中の資格者がいる支援待ち依頼分数",
-    "support_wait_staff_off_shift_request_minutes": "勤務時間外の資格者がいる支援待ち依頼分数",
+    "support_wait_staff_off_shift_request_minutes": (
+        "勤務していない資格者がいる支援待ち依頼分数（時間外・不在）"
+    ),
     "hunger_need_mean": "平均空腹ニーズ",
     "hydration_need_mean": "平均水分ニーズ",
     "water_queue_length": "給水待ち人数",
