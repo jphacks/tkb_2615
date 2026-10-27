@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import statistics
 
+import pytest
+
 from sheltersim.contracts.extensions import Point2D
 from sheltersim.core.world import WorldState
 from sheltersim.domain.movement import (
@@ -115,6 +117,7 @@ def test_a_walk_ends_where_it_was_sent_even_if_the_slot_moved() -> None:
     assert not agent_is_at_queue_trip_destination(world, queue[1], {})
 
 
+@pytest.mark.long_simulation
 def test_one_meal_station_keeps_up_with_one_hundred_people(tmp_path) -> None:
     # Before the fix the meal queue grew to 72 people: 1,371 of about 1,500 service
     # attempts were held back by someone else moving up, and 65 meals were served.

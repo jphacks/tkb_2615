@@ -52,7 +52,7 @@ testpaths = ["tests"]
 addopts = "-ra --import-mode=importlib --dist worksteal"
 markers = [
     "live_api: paid live API tests in tests/live requiring an explicit dev-environment gate",
-    "long_simulation: full-duration seven-day simulation regressions run in the long CI lane",
+    "long_simulation: seven-day simulations and tests taking 30 seconds or more each; run in the long CI lane",
 ]
 
 [tool.ruff]

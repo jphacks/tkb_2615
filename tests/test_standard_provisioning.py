@@ -231,6 +231,7 @@ def test_a_pending_region_delivery_does_not_stop_the_run(tmp_path) -> None:
     assert delivery["payload"]["shipment_id"].startswith("region-shipment-")
 
 
+@pytest.mark.long_simulation
 def test_default_generated_scenario_serves_water_and_meals(tmp_path) -> None:
     world = run_scenario(_draft(30).scenario, tmp_path)
     events = [
