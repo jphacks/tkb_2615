@@ -9,7 +9,7 @@ from typing import Any
 
 from sheltersim.web.inspector import InspectorService
 
-LAYOUT = Path(__file__).parents[1] / "fixtures" / "layouts" / "gym_synthetic.json"
+LAYOUT = Path(__file__).parents[3] / "fixtures" / "layouts" / "gym_synthetic.json"
 
 
 def _write_json(path: Path, value: Any) -> None:
