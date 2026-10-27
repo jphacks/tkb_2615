@@ -234,6 +234,74 @@ def counting_provider() -> _CountingProvider:
     return _CountingProvider()
 
 
+_LIVE_ACK_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+
+
+def _live_model_check(settings: Any, cache_path: Path, provider: Any = None) -> tuple:
+    from dataclasses import replace
+
+    from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, usage_limits
+    from sheltersim.llm.contracts import LLMStage, LLMTask
+    from sheltersim.llm.provider import LLMRouter
+    from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
+
+    # Opus and Sonnet always think, so each non-runtime call reserves thinking headroom
+    # (about $0.09 for Opus before the call); actual spend stays far below this cap.
+    settings = replace(
+        settings.for_live_integration_tests(),
+        max_api_calls=3,
+        live_test_max_calls=3,
+        live_test_budget_usd=0.15,
+        budget_usd=0.15,
+        intervention_model_family="sonnet",
+        cache_path=cache_path,
+    )
+    store = runtime_usage_store()
+    store.create_project("runtime-accounts", _internal=True)
+    ledger = UsageLedger(store, "runtime-accounts", "live-task-qa")
+    ledger.create(usage_limits(settings))
+    router = LLMRouter(settings)
+    router.provider = AccountedProvider(
+        provider or router.provider,
+        ledger,
+        settings,
+        "live_api_qa",
+        branch_id=None,
+        campaign_ledger=task_campaign_ledger(store),
+    )
+    # A runtime call must leave calls for the later analysis (ANALYSIS_RESERVED_CALLS), so
+    # on a 3-call account it fits only before the other two (#148).
+    tasks = [
+        LLMTask(
+            stage=stage,
+            input_text='Reply with exactly {"ok":true}.',
+            state_hash=f"live-test-{stage.value}",
+            prompt_version="live-integration-ack-v1",
+            output_schema=_LIVE_ACK_SCHEMA,
+            fallback_text='{"ok":false}',
+            max_output_tokens=32,
+        )
+        for stage in (LLMStage.RUNTIME, LLMStage.PREPARE, LLMStage.INTERVENTION)
+    ]
+    return settings, router, tasks, store
+
+
+@pytest.fixture
+def live_model_check() -> Callable[..., tuple]:
+    """Build the live model check: its capped settings, an accounted router and its tasks.
+
+    Call it with LLMSettings, the tape path and, offline, a fake provider. It returns
+    (settings, router, tasks, usage store). tests/live/test_live_api.py runs it against the
+    real API; tests/unit/llm/test_accounting.py checks offline that it fits the ledgers.
+    """
+    return _live_model_check
+
+
 @pytest.fixture
 def generated_request() -> Callable[..., dict[str, Any]]:
     """The structured form of GENERATED_SCENARIO_REQUEST with some fields changed."""
