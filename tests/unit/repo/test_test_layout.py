@@ -50,7 +50,6 @@ UNSORTED = frozenset(
         "test_web_demo.py",
         "test_web_inspector.py",
         "test_web_routes.py",
-        "test_windows_storage_compat.py",
     }
 )
 

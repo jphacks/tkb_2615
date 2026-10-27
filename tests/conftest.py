@@ -961,6 +961,36 @@ def saved_timeline() -> Callable[[Path], tuple[Any, Any]]:
     return _saved_timeline
 
 
+def _fake_msvcrt() -> Any:
+    import fcntl
+    import struct
+    import types
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        kind = fcntl.F_UNLCK if mode == 0 else fcntl.F_WRLCK
+        try:
+            lock = struct.pack("hh4xqqi4x", kind, os.SEEK_CUR, 0, size, 0)
+            fcntl.fcntl(fd, fcntl.F_OFD_SETLK, lock)
+        except OSError as exc:
+            raise PermissionError(13, "locked") from exc
+
+    return types.SimpleNamespace(LK_LOCK=1, LK_NBLCK=2, LK_UNLCK=0, locking=locking)
+
+
+@pytest.fixture
+def windows_like(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make project storage see Windows: no fcntl, msvcrt locks, and no os.O_NOFOLLOW.
+
+    The msvcrt locks are Linux open-file-description locks, so a test using this needs
+    them (fcntl.F_OFD_SETLK).
+    """
+    import sheltersim.storage.projects as projects_module
+
+    monkeypatch.setattr(projects_module, "fcntl", None)
+    monkeypatch.setattr(projects_module, "msvcrt", _fake_msvcrt(), raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW")
+
+
 def _make_event(
     event_id: str,
     *,

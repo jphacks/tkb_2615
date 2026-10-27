@@ -24,6 +24,18 @@ from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe
 
 SMALL_REPLAY = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
+# Windows has no fcntl and no os.O_NOFOLLOW; msvcrt.locking locks a byte range per file
+# handle. Linux open-file-description locks give the same per-handle behaviour, so the
+# windows_like fixture (tests/conftest.py) simulates Windows with them.
+needs_ofd_locks = pytest.mark.skipif(
+    not hasattr(fcntl, "F_OFD_SETLK"), reason="needs Linux open-file-description locks"
+)
+
 
 def test_saved_scalar_proofs_and_scope_survive_project_reload(
     project_store_at, tmp_path: Path
@@ -246,3 +258,32 @@ def test_edit_creates_new_revision_without_changing_prior_run(tmp_path):
     assert store.run("p", "run")["scenario_version"] == 1
     assert store.load_branch("p", "run", "main")[1].state_hash == checkpoint.state_hash
 
+
+def _store_with_run(root: Path) -> ProjectStore:
+    import json
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.storage.projects import digest
+
+    store = ProjectStore(root)
+    store.create_project("project")
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/scenarios/h00_small_replay.json"
+    scenario = ScenarioSpec.load(fixture)
+    approved = digest(json.loads(scenario.canonical_json()))
+    saved = store.save_scenario("project", scenario, approved_hash=approved)
+    store.create_run("project", "run", scenario.id, saved["scenario_version"])
+    return store
+
+
+@needs_ofd_locks
+def test_run_writer_lease_works_without_fcntl_or_nofollow(
+    tmp_path: Path, windows_like: None
+) -> None:
+    store = _store_with_run(tmp_path)
+    lease = store.claim_run("project", "run")
+    try:
+        with pytest.raises(StorageError, match="run_worker_busy"):
+            ProjectStore(tmp_path).claim_run("project", "run")
+    finally:
+        store.release_run(lease)
+    ProjectStore(tmp_path).release_run(ProjectStore(tmp_path).claim_run("project", "run"))
