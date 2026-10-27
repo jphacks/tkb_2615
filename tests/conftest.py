@@ -936,6 +936,31 @@ def small_benchmark_scenario() -> Callable[..., Any]:
     return _small_benchmark_scenario
 
 
+def _saved_timeline(tmp_path: Path) -> tuple[Any, Any]:
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+
+    store = ProjectStore(tmp_path)
+    store.create_project("p")
+    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("p", "r", scenario.id, 1)
+    timeline = TimelineStore(store, "p", "r")
+    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    return store, timeline
+
+
+@pytest.fixture
+def saved_timeline() -> Callable[[Path], tuple[Any, Any]]:
+    """Open a store at a folder with project p, Run r of scenario_100_agents and its
+    first Checkpoint recorded; return the store and the Run's TimelineStore.
+    """
+    return _saved_timeline
+
+
 def _make_event(
     event_id: str,
     *,

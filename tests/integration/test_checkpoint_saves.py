@@ -1,49 +1,25 @@
-"""Real saved-run regressions for duplicate save work, restart and recovery."""
+"""Saved Runs: each changed boundary is saved once, cancel and restart keep the Run,
+and a failed publish or an interrupted archive recovers.
+
+Saving one Checkpoint (validation, privacy checks) is tested in
+tests/unit/storage/test_projects.py.
+"""
+
+from __future__ import annotations
 
 import json
 
 import pytest
 
-from sheltersim.contracts.api import BranchReference
-from sheltersim.core.checkpoint import Checkpoint, CheckpointError
-from sheltersim.core.world import WorldState
-from sheltersim.experiments.branch import BranchRuntime
-from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.checkpoints import CheckpointArchive
-from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
-
-
-def saved_timeline(tmp_path):
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    return store, timeline
-
-
-def test_save_validates_and_detaches_checkpoint_only_once(tmp_path, monkeypatch):
-    store, _ = saved_timeline(tmp_path)
-    reference, checkpoint = store.load_branch("p", "r", "main")
-    calls = []
-    original = Checkpoint.to_dict
-
-    def capture(self):
-        calls.append(self.checkpoint_hash)
-        return original(self)
-
-    monkeypatch.setattr(Checkpoint, "to_dict", capture)
-    store.save_branch(
-        "p", reference, checkpoint, expected_checkpoint_hash=checkpoint.checkpoint_hash
-    )
-    assert calls == [checkpoint.checkpoint_hash]
+from sheltersim.storage.projects import ProjectStore
 
 
 @pytest.mark.parametrize(("target", "expected"), [(30, [30]), (31, [30, 31])])
-def test_advance_records_each_changed_boundary_once(tmp_path, monkeypatch, target, expected):
+def test_advance_records_each_changed_boundary_once(
+    tmp_path, monkeypatch, target, expected, saved_timeline
+):
     _, timeline = saved_timeline(tmp_path)
     minutes = []
     original = timeline.record
@@ -58,7 +34,9 @@ def test_advance_records_each_changed_boundary_once(tmp_path, monkeypatch, targe
 
 
 @pytest.mark.parametrize("cancel_at", [0, 5, 30, 31])
-def test_cancel_restart_and_noop_fork_keep_world_metrics_and_events(tmp_path, cancel_at):
+def test_cancel_restart_and_noop_fork_keep_world_metrics_and_events(
+    tmp_path, cancel_at, saved_timeline
+):
     store, timeline = saved_timeline(tmp_path)
     checks = 0
 
@@ -88,7 +66,7 @@ def test_cancel_restart_and_noop_fork_keep_world_metrics_and_events(tmp_path, ca
     )
 
 
-def test_failed_pointer_publish_keeps_previous_durable_head(tmp_path, monkeypatch):
+def test_failed_pointer_publish_keeps_previous_durable_head(tmp_path, monkeypatch, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
     prior = store.load_branch("p", "r", "main")[1].to_json()
     original = store._write
@@ -110,7 +88,9 @@ def test_failed_pointer_publish_keeps_previous_durable_head(tmp_path, monkeypatc
     )
 
 
-def test_interrupted_archive_recovers_orphan_chunk_accounting(tmp_path, monkeypatch):
+def test_interrupted_archive_recovers_orphan_chunk_accounting(
+    tmp_path, monkeypatch, saved_timeline
+):
     store, timeline = saved_timeline(tmp_path)
     prior = store.load_branch("p", "r", "main")[1].to_json()
     write_chunk = CheckpointArchive._write_chunk
@@ -135,67 +115,7 @@ def test_interrupted_archive_recovers_orphan_chunk_accounting(tmp_path, monkeypa
     )
 
 
-def test_save_still_rejects_mutation_and_sensitive_runtime_data(tmp_path):
-    store, _ = saved_timeline(tmp_path)
-    reference, checkpoint = store.load_branch("p", "r", "main")
-    checkpoint.world_state["seed"] += 1
-    with pytest.raises(CheckpointError):
-        store.save_branch(
-            "p", reference, checkpoint, expected_checkpoint_hash=reference.checkpoint_hash
-        )
-    _, valid = store.load_branch("p", "r", "main")
-    sensitive = Checkpoint.capture(valid.restore_world(), runtime_state={"secret": "test-value"})
-    new = BranchReference(run_id="r", branch_id="sensitive", fork_minute=0, computed_until=0)
-    with pytest.raises(StorageError, match="sensitive"):
-        store.save_branch("p", new, sensitive)
-
-
-def files(store):
-    return sorted((str(p), p.read_bytes()) for p in store.root.rglob("*") if p.is_file())
-
-
-def test_recorded_checkpoint_is_validated_only_by_capture(tmp_path, monkeypatch):
-    store, timeline = saved_timeline(tmp_path)
-    _, head = store.load_branch("p", "r", "main")
-    runtime = BranchRuntime.from_checkpoint(head, branch_id="main")
-    calls = []
-    original = Checkpoint._validate
-
-    def validate(self, **kwargs):
-        calls.append(self.checkpoint_hash)
-        return original(self, **kwargs)
-
-    monkeypatch.setattr(Checkpoint, "_validate", validate)
-    recorded = timeline.record(runtime)
-    assert calls == [recorded.checkpoint_hash]
-
-
-@pytest.mark.parametrize("method", ["save_branch", "save_captured_branch"])
-def test_sensitive_checkpoint_is_rejected_before_anything_is_written(tmp_path, method):
-    store, _ = saved_timeline(tmp_path)
-    _, valid = store.load_branch("p", "r", "main")
-    sensitive = Checkpoint.capture(
-        valid.restore_world(), runtime_state={"note": "sk-ant-abcdefghijklmnop"}
-    )
-    new = BranchReference(run_id="r", branch_id="sensitive", fork_minute=0, computed_until=0)
-    before = files(store)
-    with pytest.raises(StorageError, match="sensitive"):
-        getattr(store, method)("p", new, sensitive)
-    assert files(store) == before
-
-
-def test_split_object_field_names_are_privacy_checked(tmp_path):
-    from sheltersim.storage.projects import _reject_sensitive_checkpoint_content
-
-    archive = CheckpointArchive(tmp_path, content_check=_reject_sensitive_checkpoint_content)
-    with pytest.raises(StorageError, match="sensitive"):
-        archive._prepare_validated_document(
-            {"model_state": {"phone_number": "x" * 70_000}}, checkpoint_hash="0" * 64
-        )
-    assert not any(tmp_path.rglob("*.gz"))
-
-
-def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch):
+def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch, saved_timeline):
     import sheltersim.storage.projects as projects
 
     store, timeline = saved_timeline(tmp_path)
@@ -215,7 +135,7 @@ def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch):
     assert checked
 
 
-def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path):
+def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 31)
     _, head = store.load_branch("p", "r", "main")
@@ -225,14 +145,3 @@ def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path):
     assert CheckpointArchive(other).encode(head) == manifest
     for chunk in (other / "chunks").iterdir():
         assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()
-
-
-@pytest.mark.parametrize("value", [None, True, False, 0, -1, 0.0, -0.0, 0.12345678901234567])
-def test_privacy_scalar_fast_path_keeps_exact_json_values(value):
-    assert json.dumps(safe_document(value), allow_nan=False) == json.dumps(value, allow_nan=False)
-
-
-@pytest.mark.parametrize("value", [float("inf"), -float("inf"), float("nan")])
-def test_privacy_scalar_fast_path_still_rejects_nonfinite_numbers(value):
-    with pytest.raises(ValueError):
-        safe_document({"values": [value]})
