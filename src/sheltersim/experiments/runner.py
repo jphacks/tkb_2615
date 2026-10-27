@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -493,7 +494,7 @@ class OfflineSimulationController:
                     outcome.status is EventStatus.APPLIED
                     and event.event_type == "effect_program_geometry"
                     and event.payload.get("op") == "set_route_access"
-                    and isinstance(parameters, dict)
+                    and isinstance(parameters, Mapping)
                     and parameters.get("accessible") is False
                 ):
                     interrupt_staff_trips_on_closed_routes(world, event)

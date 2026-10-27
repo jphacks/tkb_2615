@@ -7,6 +7,7 @@ geometry operator; zone-only capacity never pretends to be a surveyed room.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator, Literal
@@ -1215,7 +1216,7 @@ def apply_geometry_change(world: Any, event: Any, *, expire: bool = False) -> No
         validate_geometry_change(world, op, target, payload["parameters"], payload["end_minute"])
     marker = event.provenance.get("effect_program_v1", {})
     parameter_sources = payload.get("parameters", {}).get("source_ids", ())
-    assumption_sources = marker.get("assumption_ids", ()) if isinstance(marker, dict) else ()
+    assumption_sources = marker.get("assumption_ids", ()) if isinstance(marker, Mapping) else ()
     source_ids = {
         source_id
         for source_id in (event.source_id, *parameter_sources, *assumption_sources)

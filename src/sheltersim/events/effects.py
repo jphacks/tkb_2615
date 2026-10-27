@@ -827,7 +827,8 @@ def validate_effect_program(
         if pending.event_type != "effect_program_geometry":
             continue
         parameters = pending.payload.get("parameters")
-        if pending.payload.get("op") == "temporary_room_geometry" and isinstance(parameters, dict):
+        is_room = pending.payload.get("op") == "temporary_room_geometry"
+        if is_room and isinstance(parameters, Mapping):
             room_id = parameters.get("room_id")
             if isinstance(room_id, str):
                 temporary_room_ids.add(room_id)
@@ -843,7 +844,7 @@ def validate_effect_program(
         if pending.event_type == "effect_program_temporary_space":
             pending_zone = pending.payload.get("zone_id")
             pending_params = pending.payload.get("parameters")
-            if isinstance(pending_zone, str) and isinstance(pending_params, dict):
+            if isinstance(pending_zone, str) and isinstance(pending_params, Mapping):
                 try:
                     capacity = _TemporarySpaceParameters.model_validate(pending_params).people_capacity
                 except ValueError:
