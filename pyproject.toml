@@ -50,7 +50,8 @@ testpaths = ["tests"]
 # With -n, worksteal lets idle workers take queued tests, so a few long ones do not
 # stretch the run; without -n it has no effect.
 addopts = "-ra --import-mode=importlib --dist worksteal"
-# tests/ holds results_log.py, the plugin tests/conftest.py loads to keep each run's results.
+# tests/ holds the plugins tests/conftest.py loads: results_log.py, which keeps each run's
+# results, and the shared fixtures in tests/support/.
 pythonpath = ["tests"]
 markers = [
     "live_api: paid live API tests in tests/live requiring an explicit dev-environment gate",
