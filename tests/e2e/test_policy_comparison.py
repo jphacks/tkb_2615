@@ -1,9 +1,15 @@
 """Two Runs that differ only in the registered behavior policy can be compared, and the
 CLI reports the variants; any other change is refused.
+
+The first test runs h00_small_replay, which selects its models one by one. A
+generated Scenario selects them as a model suite, and the comparison refuses every
+variant pair of it (#157); the second test expects what it should report. Keep the
+first until the second passes (#137).
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -85,3 +91,58 @@ def test_policy_comparison_requires_only_the_registered_variant_to_change(
             candidate_output,
             allow_behavior_policy_change=True,
         )
+
+
+# Two hours: enough decisions for the two policies' action counts to differ.
+POLICY_DURATION_DAYS = 1 / 12
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="#157: a generated Scenario's model suite makes every variant pair differ",
+)
+def test_policy_comparison_of_a_generated_scenario_reports_both_variants(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], generated_previews
+) -> None:
+    preview = generated_previews(duration_days=POLICY_DURATION_DAYS)
+    baseline = ScenarioSpec.model_validate(copy.deepcopy(preview["scenario"]))
+    candidate = baseline.with_behavior_policy_variant("priority-rule-v1")
+    baseline_output = tmp_path / "sleep-aware"
+    candidate_output = tmp_path / "priority"
+    run_scenario(baseline, baseline_output, trace_level=TraceLevel.FULL)
+    run_scenario(candidate, candidate_output, trace_level=TraceLevel.FULL)
+
+    with pytest.raises(ValueError, match="same frozen scenario family"):
+        compare_run_artifacts(baseline_output, candidate_output)
+    report = compare_run_artifacts(
+        baseline_output,
+        candidate_output,
+        allow_behavior_policy_change=True,
+    )
+
+    comparison = report["behavior_policy_comparison"]
+    assert comparison["baseline_variant"] == "sleep-aware-utility-softmax-v2"
+    assert comparison["candidate_variant"] == "priority-rule-v1"
+    assert (
+        report["action_counts"]["baseline"]["by_action"]
+        != report["action_counts"]["candidate"]["by_action"]
+    )
+    assert report["final_metric_differences"]["stress_mean"]["delta"] != 0
+    for cohort in report["need_cohort_comparison"]["cohorts"].values():
+        assert cohort["population"] > 0
+        assert cohort["baseline"]["agents_with_recorded_needs"] > 0
+        assert "hunger" in cohort["delta_candidate_minus_baseline"]
+
+    comparison_exit = main(
+        [
+            "compare",
+            "--baseline",
+            str(baseline_output),
+            "--candidate",
+            str(candidate_output),
+            "--behavior-policy-comparison",
+        ]
+    )
+    assert comparison_exit == 0
+    assert "need_cohort_comparison" in capsys.readouterr().out
