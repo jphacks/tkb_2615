@@ -340,6 +340,15 @@ class WorldState:
             }
             request_history = service_state["request_history"]
             stall_history = service_state["queue_stall_history"]
+            # People away on a temporary exit or transfer keep their place in the
+            # population lifecycle archive; their past service records stay valid (#79).
+            lifecycle = self.model_state.get("population_lifecycle_v1")
+            retained_ids = (
+                set(lifecycle.get("people", {}))
+                if isinstance(lifecycle, dict) and isinstance(lifecycle.get("people"), dict)
+                else set()
+            )
+            known_agent_ids = set(self.agents) | retained_ids
             if not validate_event_history:
                 request_history = records_since_previous_tick(request_history, self.minute_index)
                 stall_history = records_since_previous_tick(stall_history, self.minute_index)
@@ -360,7 +369,7 @@ class WorldState:
                     or not isinstance(record["minute"], int)
                     or isinstance(record["minute"], bool)
                     or not 0 <= record["minute"] <= self.minute_index
-                    or record["agent_id"] not in self.agents
+                    or record["agent_id"] not in known_agent_ids
                     or record["action"] not in valid_actions
                     or record["outcome"] not in valid_outcomes
                     or record["reason"] not in valid_request_reasons
@@ -405,7 +414,7 @@ class WorldState:
                     or not isinstance(record["facility_id"], str)
                     or record["facility_id"] not in self.facilities
                     or not isinstance(record["agent_id"], str)
-                    or record["agent_id"] not in self.agents
+                    or record["agent_id"] not in known_agent_ids
                     or record["reason"] not in known_reasons
                 ):
                     raise StateInvariantError("resource queue stall history is invalid")

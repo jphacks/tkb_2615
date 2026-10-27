@@ -698,18 +698,42 @@ def test_a_temporary_exit_takes_the_person_out_of_the_shelter(main_line) -> None
     ], "the person still acted in the shelter while away"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#79: the request history still names the person, so the exit fails validation",
-)
-def test_a_temporary_exit_works_for_someone_who_has_used_water_or_meals(main_line) -> None:
-    agent_id = min(_service_users(main_line.seek("main", FORK_MINUTE).world))
+def test_someone_who_has_used_water_or_meals_can_go_out_and_come_back(main_line) -> None:
+    # Before #79 was fixed their service history made the exit fail validation.
+    at_fork = main_line.seek("main", FORK_MINUTE).world
+    agent_id = min(_service_users(at_fork))
+    used = [
+        row
+        for row in at_fork.model_state["resource_service_v1"]["request_history"]
+        if row["agent_id"] == agent_id
+    ]
+    return_minute = 200
+    back = _program(
+        _action(
+            "population_presence",
+            TargetSelector(kind="person", target_id=agent_id),
+            {"action": "return"},
+            units="population_transition",
+            policy_dependencies=["population_lifecycle_v1"],
+            start_minute=return_minute,
+        )
+    ).model_copy(update={"program_id": "program-return"})
 
-    main, child = _fork_main(main_line, "temporary-exit-user", _temporary_exit(agent_id))
+    _fork_main(main_line, "temporary-exit-user", _temporary_exit(agent_id))
+    away = main_line.seek("temporary-exit-user", return_minute).world
+    _fork(main_line, "temporary-exit-user", return_minute, "returned-user", back)
+    returned = _advance(main_line, "returned-user", COMPARE_MINUTE)
 
-    assert _applied(child, "effect_program_population")
-    assert agent_id not in child.agents
+    assert agent_id not in away.agents
+    assert agent_id in returned.agents
+    assert [
+        record.realized_minute for record in _applied(returned, "effect_program_population")
+    ] == [
+        FORK_MINUTE,
+        return_minute,
+    ]
+    history = returned.model_state["resource_service_v1"]["request_history"]
+    assert all(row in history for row in used), "the earlier water and meal records were lost"
 
 
 @pytest.mark.xfail(
