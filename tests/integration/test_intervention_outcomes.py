@@ -29,12 +29,12 @@ from sheltersim.events.effects import (
     TimedAction,
 )
 from sheltersim.events.models import EventLogRecord, EventStatus
-from sheltersim.experiments.branch import BranchRuntime
+from sheltersim.experiments.branch import BranchError, BranchRuntime
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.operational_kpis import operational_kpi_values
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, digest
+from sheltersim.storage.projects import ProjectStore, StorageError, digest
 
 FORK_MINUTE = 60
 OUTAGE_END_MINUTE = 300
@@ -973,14 +973,9 @@ def test_bringing_a_toilet_into_the_sleeping_area_shortens_the_walk_to_it(main_l
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#83: the water staff stay in the old area, so nobody serves the moved station",
-)
-def test_bringing_the_water_station_into_the_sleeping_area_keeps_water_served(
-    main_line, generated_scenario
-) -> None:
+def test_moving_the_water_station_away_from_its_staff_is_refused(main_line) -> None:
+    # Water is served only by staff in the station's own area, and the water
+    # staff stay in the food area, so the move would stop water for good (#83).
     start = _first_minute(
         main_line, "main", FORK_MINUTE, COMPARE_MINUTE, _facility_idle("water_station_main")
     )
@@ -999,17 +994,11 @@ def test_bringing_the_water_station_into_the_sleeping_area_keeps_water_served(
         )
     )
 
-    main, child = _fork_main(main_line, "transfer-water", program)
+    with pytest.raises(BranchError, match="staff_unavailable: no staff with water_service"):
+        _fork(main_line, "main", start, "transfer-water", program)
 
-    assert _applied(child, "effect_program_geometry", op="transfer_equipment")
-    assert _completed_between(
-        child,
-        "resource_service_complete",
-        start,
-        COMPARE_MINUTE,
-        facility_id="water_station_main",
-    )
-    assert _kpis(child)["hydration_need_mean"] <= _kpis(main)["hydration_need_mean"]
+    with pytest.raises(StorageError, match="missing"):
+        main_line.store.branch_reference("p", "r", "transfer-water")
 
 
 def _walks_through(

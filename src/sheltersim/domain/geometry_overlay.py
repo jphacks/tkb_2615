@@ -949,6 +949,7 @@ def validate_geometry_change(world: Any, op: str, target: str, parameters: dict[
         )
         if not _zones_are_connected(world, data.from_zone_id, data.to_zone_id):
             raise ValueError("route_unavailable: equipment zones have no open directed route")
+        _require_service_staff_in_zone(world, facility, data.to_zone_id, geometry)
         from sheltersim.domain.movement import _point_segment_distance, plan_in_room_route
 
         if any(
@@ -1286,6 +1287,41 @@ def apply_geometry_change(world: Any, event: Any, *, expire: bool = False) -> No
     state["history"].append({"transition_id": event.event_id, "op": op, "target_id": history_target,
         "status": "expired" if expire else "applied", "causation_id": event.causation_id, **common})
     del state["history"][:-20000]
+
+
+def _require_service_staff_in_zone(
+    world: Any, facility: Any, zone_id: str, geometry: FacilityGeometry
+) -> None:
+    """Refuse moving a staffed water or meal station away from its workers (#83).
+
+    Resource service gives a station only to staff in the station's own zone, and
+    nothing moves them with it, so without one there the station is never served.
+    """
+    from sheltersim.domain.resource_service import ResourceServiceManager
+
+    resource_id = ResourceServiceManager.resource_for_facility(facility.kind)
+    config = world.model_configs.get("resource_service")
+    if (
+        resource_id is None
+        or not isinstance(config, Mapping)
+        or "resource_service_v1" not in world.model_state
+    ):
+        return
+    skill = config.get("water_staff_skill" if resource_id == "water_ml" else "meal_staff_skill")
+    if not isinstance(skill, str):
+        return
+    required = {skill}
+    for point in geometry.service_points:
+        if point.facility_id == facility.id:
+            required.update(point.access.required_staff_skills)
+    if not any(
+        staff.zone_id == zone_id and required <= set(staff.skills)
+        for staff in world.staff.values()
+    ):
+        raise ValueError(
+            f"staff_unavailable: no staff with {', '.join(sorted(required))} works in "
+            f"{zone_id!r}, so the moved station would not be served"
+        )
 
 
 def _zones_are_connected(world: Any, source_zone_id: str, destination_zone_id: str) -> bool:
