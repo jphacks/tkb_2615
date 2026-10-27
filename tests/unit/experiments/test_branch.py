@@ -3,16 +3,20 @@ reproducible and leave the source Branch unchanged.
 
 Most of these send the commands through the demo service's layout-branch action.
 Typed interventions, their validation and the Branch lineage saved in a Checkpoint
-are checked on the 100-person baseline.
+are checked on the 100-person baseline. A Branch from an invalid or tampered approved
+plan is refused without changing the source.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from sheltersim.core.world import WorldState
+from sheltersim.events.effects import GuardExpression
 from sheltersim.experiments.branch import (
     AddStaffCommand,
     AddToiletCommand,
@@ -24,6 +28,7 @@ from sheltersim.experiments.branch import (
     command_from_dict,
 )
 from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.llm.schemas import ApprovedPlan, DraftPlan
 from sheltersim.web.demo import DemoError, DemoService
 
 BASELINE_100_7D = Path(__file__).parents[3] / "fixtures" / "scenarios" / "baseline_100_7d.json"
@@ -218,3 +223,57 @@ def test_branch_checkpoint_restores_lineage_and_interventions() -> None:
     assert restored.pairing_key == child.pairing_key
     assert restored.world.canonical_json() == child.world.canonical_json()
     assert restored.command_log == child.command_log
+
+
+def _approved(plan: DraftPlan) -> dict[str, Any]:
+    return ApprovedPlan.from_explicit_confirmation(plan).model_dump(mode="json")
+
+
+def _world_hash(demo: DemoService, branch_id: str = "baseline") -> str:
+    canonical = demo.branches[branch_id].runtime.world.canonical_json()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def test_invalid_approved_program_is_atomic_and_tampered_approval_is_rejected(
+    small_replay_demo, day4_plan
+) -> None:
+    demo = small_replay_demo(duration_minutes=20)
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    source_hash = _world_hash(demo)
+    source_command_log = list(demo.branches["baseline"].runtime.command_log)
+
+    invalid_plan = day4_plan(fork_minute=0)
+    invalid_last_action = invalid_plan.effects[2].model_copy(
+        update={"guard": GuardExpression(operator="gte", field="target.working_units", value=0)}
+    )
+    invalid_plan = invalid_plan.model_copy(
+        update={"effects": [*invalid_plan.effects[:2], invalid_last_action]}
+    )
+    with pytest.raises(DemoError, match="guard field"):
+        demo.dispatch(
+            "branch-plan",
+            {
+                "source_branch_id": "baseline",
+                "approved_plan": _approved(invalid_plan),
+                "idempotency_key": "invalid-composite-01",
+            },
+        )
+    assert set(demo.branches) == {"baseline"}
+    assert _world_hash(demo) == source_hash
+    assert demo.branches["baseline"].runtime.command_log == source_command_log
+    assert demo.operations[-1]["accepted"] is False
+
+    tampered = _approved(day4_plan(fork_minute=0))
+    tampered["approval_hash"] = "0" * 64
+    with pytest.raises(DemoError, match="approval hash does not match"):
+        demo.dispatch(
+            "branch-plan",
+            {
+                "source_branch_id": "baseline",
+                "approved_plan": tampered,
+                "idempotency_key": "tampered-approval-01",
+            },
+        )
+    assert set(demo.branches) == {"baseline"}
+    assert _world_hash(demo) == source_hash

@@ -791,6 +791,129 @@ def route_edit_command() -> Callable[..., dict[str, object]]:
     return _route_edit_command
 
 
+def _small_replay_demo(duration_minutes: int = 5200) -> Any:
+    from typing import get_args
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    # The ScenarioSpec schema evolves independently from this compact regression fixture.
+    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    return DemoService(ScenarioSpec.model_validate(document))
+
+
+@pytest.fixture
+def small_replay_demo() -> Callable[..., Any]:
+    """Build a DemoService over h00_small_replay without events, 5200 minutes long by default."""
+    return _small_replay_demo
+
+
+# Day 4, 14:00: where the timed-plan tests fork.
+DAY4_1400 = 3 * 1440 + 14 * 60
+
+
+def _day4_timed_action(
+    *,
+    effect_id: str,
+    op: str,
+    target_kind: str,
+    target_id: str,
+    parameters: dict[str, Any],
+    units: str,
+    policy_dependencies: list[str],
+    start_minute: int = DAY4_1400,
+    end_minute: int | None = None,
+    guard: Any = None,
+    reversible: bool = True,
+) -> Any:
+    from sheltersim.events.effects import TargetSelector, TimedAction
+
+    return TimedAction(
+        effect_id=effect_id,
+        op=op,
+        target_selector=TargetSelector(kind=target_kind, target_id=target_id),
+        start_minute=start_minute,
+        end_minute=end_minute,
+        guard=guard,
+        parameters=parameters,
+        units=units,
+        source_id="H08-TEST-PLAN",
+        assumption_ids=[],
+        policy_dependencies=policy_dependencies,
+        reversible=reversible,
+    )
+
+
+def _day4_plan(*, narrative: str = "Approved Day 4 plan", fork_minute: int = DAY4_1400) -> Any:
+    from sheltersim.events.effects import GuardExpression, SupportMode
+    from sheltersim.llm.schemas import DraftPlan
+
+    actions = [
+        _day4_timed_action(
+            effect_id="temporary-toilet-outage",
+            op="set_facility_availability",
+            target_kind="facility",
+            target_id="toilet_1",
+            parameters={"working_units": 0},
+            units="facility_unit",
+            policy_dependencies=["facility_capacity"],
+            start_minute=fork_minute,
+            end_minute=fork_minute + 2,
+            guard=GuardExpression(operator="gte", field="target.working_units", value=1),
+        ),
+        _day4_timed_action(
+            effect_id="add-temporary-toilet",
+            op="add_toilet",
+            target_kind="zone",
+            target_id="toilet",
+            parameters={"count": 1},
+            units="toilet_stall",
+            policy_dependencies=["facility_capacity"],
+            start_minute=fork_minute,
+            reversible=False,
+        ),
+        _day4_timed_action(
+            effect_id="add-support-staff",
+            op="add_staff",
+            target_kind="zone",
+            target_id="information_desk",
+            parameters={"count": 1},
+            units="staff_member",
+            policy_dependencies=["staff_operations"],
+            start_minute=fork_minute,
+            reversible=False,
+        ),
+    ]
+    return DraftPlan(
+        program_id="h08-approved-plan",
+        narrative=narrative,
+        source_text="Synthetic test preview; add one toilet and staff member.",
+        simulation_start_minute=fork_minute,
+        effects=actions,
+        assumptions=[],
+        support_mode=SupportMode.COMPOSED,
+        compiler_provenance={
+            "compiler_kind": "offline_rule",
+            "compiler_version": "h08-test-v1",
+        },
+        branch_id="baseline",
+        fork_at_minute=fork_minute,
+        ambiguities=[],
+        requires_confirmation=True,
+    )
+
+
+@pytest.fixture
+def day4_plan() -> Callable[..., Any]:
+    """Build a DraftPlan for the baseline Branch: a two-minute toilet outage, one added
+    toilet and one added support worker, forking at Day 4 14:00 by default.
+    """
+    return _day4_plan
+
+
 def _make_event(
     event_id: str,
     *,
