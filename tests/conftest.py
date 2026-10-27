@@ -1473,6 +1473,58 @@ def day3_demo() -> Any:
     return DemoService(ScenarioSpec.model_validate(document))
 
 
+def _paused_offline_compiler_demo(duration_minutes: int = 20) -> Any:
+    from typing import get_args
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    demo.compiler_router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    return demo
+
+
+@pytest.fixture
+def paused_offline_compiler_demo() -> Callable[..., Any]:
+    """Build a DemoService over h00_small_replay without events, 20 minutes long by default,
+    with an offline Event Compiler, started and paused on the baseline Branch.
+    """
+    return _paused_offline_compiler_demo
+
+
+def _nl_interpret_preview(demo: Any, tmp_path: Path, selected_minute: int = 5) -> dict[str, Any]:
+    status, response = _post_demo_json(
+        demo,
+        tmp_path,
+        "/api/v1/nl/interpret",
+        {
+            "text": "toilet_1 outage",
+            "branch_id": "baseline",
+            "selected_minute": selected_minute,
+        },
+    )
+    assert status == 200
+    assert response["result"]["status"] == "compiled"
+    assert response["result"]["fallback_used"] is True
+    assert response["validation"]["valid"] is True
+    return response
+
+
+@pytest.fixture
+def nl_interpret_preview() -> Callable[..., dict[str, Any]]:
+    """Post "toilet_1 outage" to the natural-language interpret route for the baseline and
+    check that the offline rule compiled a valid plan.
+    """
+    return _nl_interpret_preview
+
+
 def _make_event(
     event_id: str,
     *,
