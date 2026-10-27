@@ -1,5 +1,6 @@
-"""Running a frozen Scenario from the CLI: the LLM status is printed, a rule fallback is
-warned about, an offline run is not, and each run opens its own usage account.
+"""Running a frozen Scenario from the CLI: it runs offline and writes its artifacts, the
+LLM status is printed, a rule fallback is warned about, an offline run is not, and each
+run opens its own usage account.
 """
 
 from __future__ import annotations
@@ -10,10 +11,13 @@ from pathlib import Path
 import pytest
 
 from sheltersim import cli
+from sheltersim.__main__ import main
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import LLMAllowanceError
 from sheltersim.llm.provider import LLMRouter
+
+SCENARIO_100_AGENTS = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 class DeniedAllowanceProvider:
@@ -99,3 +103,53 @@ def test_each_cli_run_opens_its_own_usage_account(
 
     assert all(account.startswith("cli-run-") for account in accounts)
     assert accounts[0] != accounts[1]
+
+
+def test_run_executes_a_scenario_offline_and_writes_artifacts(tmp_path: Path, capsys) -> None:
+    scenario_document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    scenario_document["id"] = "cli-short-run"
+    scenario_document["duration_minutes"] = 20
+    scenario_document["profiles"] = scenario_document["profiles"][:5]
+    scenario_document["scheduled_events"] = []
+    scenario_path = tmp_path / "scenario.json"
+    scenario_path.write_text(json.dumps(scenario_document), encoding="utf-8")
+    frozen_path = tmp_path / "frozen-scenario.json"
+    assert (
+        main(
+            [
+                "prepare",
+                "--scenario",
+                str(scenario_path),
+                "--freeze",
+                "--output",
+                str(frozen_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    output = tmp_path / "run"
+
+    assert (
+        main(
+            [
+                "run",
+                "--offline",
+                "--scenario",
+                str(frozen_path),
+                "--output",
+                str(output),
+                "--trace-level",
+                "off",
+            ]
+        )
+        == 0
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert result["final_minute"] == 20
+    assert result["final_state_hash"] == manifest["final_state_hash"]
+    assert manifest["execution_mode"] == "offline"
+    assert manifest["run_status"] == "completed"
+    assert len(json.loads((output / "agents_initial.json").read_text())["profiles"]) == 5
