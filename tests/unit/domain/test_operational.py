@@ -57,7 +57,7 @@ from sheltersim.policies.psychology import (
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 SMALL_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 H03_SOURCE = "ASM-H03-OPERATIONAL-EVENTS-V1"
 
