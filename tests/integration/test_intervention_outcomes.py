@@ -323,23 +323,27 @@ def test_capping_a_toilet_at_zero_units_leaves_toilet_needs_unmet(
     assert _kpis(child)["toilet_urgency_mean"] > _kpis(main)["toilet_urgency_mean"]
 
 
+# The operator reported toilet_01 out of order until minute 300, so only the
+# accessible toilet works and toilet waits grow.
+REPORTED_TOILET_OUTAGE = {
+    "operational_conditions": {
+        "scheduled": [
+            {
+                "kind": "facility_outage",
+                "facility_id": "toilet_01",
+                "start_minute": 0,
+                "end_minute": OUTAGE_END_MINUTE,
+                "units_out": 1,
+            }
+        ]
+    }
+}
+
+
 def test_repairing_a_reported_broken_toilet_shortens_toilet_waits(
     tmp_path, generated_scenario_with
 ) -> None:
-    # The operator reported toilet_01 out of order until minute 300.
-    scenario = generated_scenario_with(
-        operational_conditions={
-            "scheduled": [
-                {
-                    "kind": "facility_outage",
-                    "facility_id": "toilet_01",
-                    "start_minute": 0,
-                    "end_minute": OUTAGE_END_MINUTE,
-                    "units_out": 1,
-                }
-            ]
-        }
-    )
+    scenario = generated_scenario_with(**REPORTED_TOILET_OUTAGE)
     program = _program(
         _action(
             "facility_repair",
@@ -363,6 +367,38 @@ def test_repairing_a_reported_broken_toilet_shortens_toilet_waits(
     assert _completed_between(child, "toilet_service_complete", **before_recovery)
     assert child.facilities["toilet_01"].working_units == child.facilities["toilet_01"].capacity
     assert _kpis(child)["toilet_wait_total_minutes"] < _kpis(main)["toilet_wait_total_minutes"]
+
+
+def test_added_toilets_shorten_toilet_waits_while_a_toilet_is_broken(
+    tmp_path, generated_scenario_with
+) -> None:
+    # With every toilet working, 20 people rarely queue, so the shortage shows
+    # what an operator adds toilets for.
+    scenario = generated_scenario_with(**REPORTED_TOILET_OUTAGE)
+    program = _program(
+        _action(
+            "add_toilet",
+            TargetSelector(kind="zone", target_id="toilet"),
+            {"count": 2},
+            units="toilet_stall",
+            policy_dependencies=["facility_capacity"],
+        )
+    )
+
+    main, child = _main_and_child(tmp_path, scenario, program)
+
+    added = set(child.facilities) - set(main.facilities)
+    assert len(added) == 2
+    assert _applied(child, "effect_program_structure")
+    assert any(
+        record.event.payload["facility_id"] in added
+        for record in _applied(child, "toilet_service_complete")
+    ), "nobody used an added toilet"
+    assert len(_applied(child, "toilet_service_complete")) > len(
+        _applied(main, "toilet_service_complete")
+    )
+    assert _kpis(child)["toilet_wait_mean_minutes"] < _kpis(main)["toilet_wait_mean_minutes"]
+    assert _kpis(child)["toilet_urgency_mean"] < _kpis(main)["toilet_urgency_mean"]
 
 
 @pytest.fixture(scope="module")
