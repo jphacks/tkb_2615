@@ -253,7 +253,9 @@ def test_edit_creates_new_revision_without_changing_prior_run(tmp_path):
     document = scenario.model_dump(mode="json")
     document["seed"] += 1
     edited = ScenarioSpec.model_validate(document)
-    revision = store.save_scenario("p", edited, approved_hash=digest(json.loads(edited.canonical_json())))
+    revision = store.save_scenario(
+        "p", edited, approved_hash=digest(json.loads(edited.canonical_json()))
+    )
     assert revision["scenario_version"] == 2
     assert store.run("p", "run")["scenario_version"] == 1
     assert store.load_branch("p", "run", "main")[1].state_hash == checkpoint.state_hash

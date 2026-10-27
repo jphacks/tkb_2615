@@ -42,9 +42,22 @@ _CACHE_MAX_ENTRIES = 64
 _JMA_HOST = "www.jma.go.jp"
 _JMA_SOURCE_PREFIX = "SRC-JMA-FORECAST-"
 _CREDENTIAL_QUERY_KEYS = {
-    "key", "api_key", "apikey", "x_api_key", "access_key", "appid", "token",
-    "access_token", "auth", "authorization", "password", "secret", "client_secret",
-    "signature", "sig", "subscription_key",
+    "key",
+    "api_key",
+    "apikey",
+    "x_api_key",
+    "access_key",
+    "appid",
+    "token",
+    "access_token",
+    "auth",
+    "authorization",
+    "password",
+    "secret",
+    "client_secret",
+    "signature",
+    "sig",
+    "subscription_key",
 }
 _JSON_CACHE: OrderedDict[str, tuple[float, "JsonSnapshot"]] = OrderedDict()
 _JSON_CACHE_LOCK = RLock()
@@ -80,7 +93,9 @@ class ConfiguredRegionalSource(RegionModel):
         _validate_public_host(host)
         allowed = {item.casefold().rstrip(".") for item in self.allowed_hosts}
         if host not in allowed:
-            raise ValueError("configured regional source host must appear in its exact host allowlist")
+            raise ValueError(
+                "configured regional source host must appear in its exact host allowlist"
+            )
         if (
             parsed.scheme != "https"
             or parsed.username
@@ -95,9 +110,13 @@ class ConfiguredRegionalSource(RegionModel):
         if self.data_kind == "hazard":
             required.add("hazard")
         if not required <= set(self.fields):
-            raise ValueError("configured regional source fields are missing canonical observation columns")
+            raise ValueError(
+                "configured regional source fields are missing canonical observation columns"
+            )
         if any(not path or len(path) > 120 for path in (*self.records_path, *self.fields.values())):
-            raise ValueError("configured source record selectors must be bounded non-empty field names")
+            raise ValueError(
+                "configured source record selectors must be bounded non-empty field names"
+            )
         for optional_field in (
             self.municipality_code_field,
             self.municipality_name_field,
@@ -135,7 +154,9 @@ class _SingleHostRedirect(HTTPRedirectHandler):
         super().__init__()
         self.hostname = hostname
 
-    def redirect_request(self, request: Request, response: Any, code: int, message: str, headers: Any, url: str) -> Request | None:
+    def redirect_request(
+        self, request: Request, response: Any, code: int, message: str, headers: Any, url: str
+    ) -> Request | None:
         original = urlsplit(request.full_url)
         target = urlsplit(url)
         if (
@@ -205,14 +226,20 @@ def _download_json(url: str, allowed_hosts: tuple[str, ...]) -> JsonSnapshot:
             if content_length:
                 try:
                     if int(content_length) > _MAX_JSON_BYTES:
-                        raise RegionProviderError("public-data response exceeded the 2 MB safety limit")
+                        raise RegionProviderError(
+                            "public-data response exceeded the 2 MB safety limit"
+                        )
                 except ValueError as exc:
-                    raise RegionProviderError("public-data endpoint returned an invalid content length") from exc
+                    raise RegionProviderError(
+                        "public-data endpoint returned an invalid content length"
+                    ) from exc
             body = response.read(_MAX_JSON_BYTES + 1)
             etag = response.headers.get("ETag")
             last_modified = response.headers.get("Last-Modified")
     except HTTPError as exc:
-        failure: RegionProviderError = RegionProviderError(f"public-data endpoint returned HTTP {exc.code}")
+        failure: RegionProviderError = RegionProviderError(
+            f"public-data endpoint returned HTTP {exc.code}"
+        )
     except (URLError, TimeoutError, socket.timeout, OSError) as exc:
         failure = RegionProviderError("public-data endpoint could not be reached")
     else:
@@ -237,7 +264,10 @@ def _download_json(url: str, allowed_hosts: tuple[str, ...]) -> JsonSnapshot:
                     while len(_JSON_CACHE) > _CACHE_MAX_ENTRIES:
                         _JSON_CACHE.popitem(last=False)
                 return snapshot
-    if stale is not None and (datetime.now(UTC) - stale.retrieved_at).total_seconds() <= _MAX_STALE_SECONDS:
+    if (
+        stale is not None
+        and (datetime.now(UTC) - stale.retrieved_at).total_seconds() <= _MAX_STALE_SECONDS
+    ):
         return replace(stale, stale_cache_fallback=True)
     raise failure
 
@@ -246,7 +276,9 @@ def _records(document: Any, path: tuple[str, ...]) -> tuple[dict[str, Any], ...]
     node = document
     for part in path:
         if not isinstance(node, dict) or part not in node:
-            raise RegionDatasetError("configured regional JSON did not contain the selected records path")
+            raise RegionDatasetError(
+                "configured regional JSON did not contain the selected records path"
+            )
         node = node[part]
     if not isinstance(node, list) or len(node) > _MAX_SOURCE_RECORDS:
         raise RegionDatasetError("configured regional JSON records were not a bounded array")
@@ -300,7 +332,9 @@ class ConfiguredRegionalDataProvider:
             item.source_id.startswith(("SRC-GSI", "SRC-ESTAT", "SRC-MLIT", _JMA_SOURCE_PREFIX))
             for item in sources
         ):
-            raise ValueError("configured regional sources cannot reuse reserved built-in provider IDs")
+            raise ValueError(
+                "configured regional sources cannot reuse reserved built-in provider IDs"
+            )
         self.sources = tuple(sources)
 
     @classmethod
@@ -315,7 +349,9 @@ class ConfiguredRegionalDataProvider:
         except json.JSONDecodeError as exc:
             raise ValueError("regional source configuration must be valid JSON") from exc
         if not isinstance(document, list) or len(document) > 32:
-            raise ValueError("regional source configuration must be a list of at most 32 source entries")
+            raise ValueError(
+                "regional source configuration must be a list of at most 32 source entries"
+            )
         return cls(tuple(ConfiguredRegionalSource.model_validate(item) for item in document))
 
     def acquire(self, request: RegionResearchRequest) -> ConfiguredRegionalProviderResult:
@@ -337,7 +373,8 @@ class ConfiguredRegionalDataProvider:
                     )
                 )
                 unknowns.append(
-                    "自治体の地域防災計画Providerが未構成です。" if kind == "municipal_plan"
+                    "自治体の地域防災計画Providerが未構成です。"
+                    if kind == "municipal_plan"
                     else "数値ハザードデータProviderが未構成です。"
                 )
         for config in self.sources:
@@ -397,17 +434,36 @@ class ConfiguredRegionalDataProvider:
                 name = _text(_value(record, config.municipality_name_field))
                 if request.municipality_code and code and code != request.municipality_code:
                     continue
-                if request.municipality_code and not code and name and _normalize(name) != _normalize(requested_name):
+                if (
+                    request.municipality_code
+                    and not code
+                    and name
+                    and _normalize(name) != _normalize(requested_name)
+                ):
                     continue
-                if not request.municipality_code and name and _normalize(name) != _normalize(requested_name):
+                if (
+                    not request.municipality_code
+                    and name
+                    and _normalize(name) != _normalize(requested_name)
+                ):
                     continue
-                if name is None and code is None and _normalize(config.geographic_scope) != _normalize(requested_name):
+                if (
+                    name is None
+                    and code is None
+                    and _normalize(config.geographic_scope) != _normalize(requested_name)
+                ):
                     continue
                 disaster_value = _text(_value(record, config.disaster_field))
-                if disaster_value and _normalize(disaster_value) not in _normalize(request.disaster):
+                if disaster_value and _normalize(disaster_value) not in _normalize(
+                    request.disaster
+                ):
                     continue
                 season_value = _text(_value(record, config.season_field))
-                if request.season and season_value and _normalize(season_value) != _normalize(request.season):
+                if (
+                    request.season
+                    and season_value
+                    and _normalize(season_value) != _normalize(request.season)
+                ):
                     continue
                 valid_from = _as_date(_value(record, config.valid_from_field))
                 valid_through = _as_date(_value(record, config.valid_through_field))
@@ -426,7 +482,9 @@ class ConfiguredRegionalDataProvider:
                     applicability_bits.append("municipality=configuration_scope_only")
                 if request.season:
                     applicability_bits.append(
-                        "season=matched" if config.season_field and season_value else "season=unknown"
+                        "season=matched"
+                        if config.season_field and season_value
+                        else "season=unknown"
                     )
                 date_verified = False
                 if request.target_date:
@@ -455,19 +513,39 @@ class ConfiguredRegionalDataProvider:
                 if snapshot.stale_cache_fallback:
                     status = "unknown"
                     applicability_bits.append("retrieval=stale_cache")
-                elif config.published_on and (datetime.now(UTC).date() - config.published_on).days > config.max_age_days:
+                elif (
+                    config.published_on
+                    and (datetime.now(UTC).date() - config.published_on).days > config.max_age_days
+                ):
                     status = "historical"
                     applicability_bits.append("publication=max_age_exceeded")
                 elif status != "historical" and (
-                    municipality_verified and disaster_verified and season_verified and date_verified
+                    municipality_verified
+                    and disaster_verified
+                    and season_verified
+                    and date_verified
                 ):
                     status = "observed"
                 selected_rows.append(
-                    (row_number, record, status, valid_from, valid_through, "; ".join(applicability_bits))
+                    (
+                        row_number,
+                        record,
+                        status,
+                        valid_from,
+                        valid_through,
+                        "; ".join(applicability_bits),
+                    )
                 )
 
             local_count = 0
-            for row_number, record, status, valid_from, valid_through, row_applicability in selected_rows:
+            for (
+                row_number,
+                record,
+                status,
+                valid_from,
+                valid_through,
+                row_applicability,
+            ) in selected_rows:
                 mapped: dict[str, Any] = {}
                 for canonical, field in config.fields.items():
                     mapped[canonical] = record.get(field)
@@ -478,7 +556,9 @@ class ConfiguredRegionalDataProvider:
                 geographic_scope = _text(mapped.get("geographic_scope"))
                 value = _as_number(mapped.get("value"))
                 if not metric or not unit or not period or not geographic_scope or value is None:
-                    warnings.append(f"{config.title}の{row_number}行目は必須の数値項目・単位・適用範囲を満たしません。")
+                    warnings.append(
+                        f"{config.title}の{row_number}行目は必須の数値項目・単位・適用範囲を満たしません。"
+                    )
                     continue
                 effective_status = status
                 try:
@@ -497,13 +577,19 @@ class ConfiguredRegionalDataProvider:
                             status=effective_status,
                             valid_from=valid_from,
                             valid_through=valid_through,
-                            disaster_tags=(_text(_value(record, config.disaster_field)),) if _text(_value(record, config.disaster_field)) else (),
-                            season_tags=(_text(_value(record, config.season_field)),) if _text(_value(record, config.season_field)) else (),
+                            disaster_tags=(_text(_value(record, config.disaster_field)),)
+                            if _text(_value(record, config.disaster_field))
+                            else (),
+                            season_tags=(_text(_value(record, config.season_field)),)
+                            if _text(_value(record, config.season_field))
+                            else (),
                         )
                     else:
                         hazard = _text(mapped.get("hazard"))
                         if not hazard:
-                            warnings.append(f"{config.title}の{row_number}行目に災害分類がありません。")
+                            warnings.append(
+                                f"{config.title}の{row_number}行目に災害分類がありません。"
+                            )
                             continue
                         observation = HazardObservation(
                             hazard=hazard,
@@ -531,8 +617,10 @@ class ConfiguredRegionalDataProvider:
                     hazards.append(observation)
                 local_count += 1
             result_status = (
-                "stale" if snapshot.stale_cache_fallback
-                else "available" if local_count
+                "stale"
+                if snapshot.stale_cache_fallback
+                else "available"
+                if local_count
                 else "out_of_scope"
             )
             statuses.append(
@@ -546,16 +634,22 @@ class ConfiguredRegionalDataProvider:
                         f"season={request.season or 'not specified'}; target_date={request.target_date or 'not specified'}"
                     ),
                     message=(
-                        "古いキャッシュのため観測値は適用不可です。" if snapshot.stale_cache_fallback
-                        else "構成Providerから一致する数値レコードを取得しました。適用条件はレコードごとに確認してください。" if local_count
+                        "古いキャッシュのため観測値は適用不可です。"
+                        if snapshot.stale_cache_fallback
+                        else "構成Providerから一致する数値レコードを取得しました。適用条件はレコードごとに確認してください。"
+                        if local_count
                         else "取得はできましたが、自治体・災害・期間に一致する行がありません。"
                     ),
                 )
             )
             if snapshot.stale_cache_fallback:
-                warnings.append(f"{config.title}の再取得に失敗し、24時間以内の古いキャッシュを返しました。")
+                warnings.append(
+                    f"{config.title}の再取得に失敗し、24時間以内の古いキャッシュを返しました。"
+                )
             elif not local_count:
-                unknowns.append(f"{config.title}には入力地域・災害・期間に適用できるレコードがありません。")
+                unknowns.append(
+                    f"{config.title}には入力地域・災害・期間に適用できるレコードがありません。"
+                )
 
         plans = list(_mark_conflicts(plans))
         hazards = list(_mark_conflicts(hazards))
@@ -620,14 +714,20 @@ def _mark_conflicts(items: list[Any]) -> tuple[Any, ...]:
 class JmaForecastProvider:
     """Read dated seven-day JMA forecasts only when an operator selected a forecast area."""
 
-    def fetch(self, request: RegionResearchRequest) -> tuple[DataSource | None, tuple[WeatherObservation, ...], RegionalProviderStatus]:
+    def fetch(
+        self, request: RegionResearchRequest
+    ) -> tuple[DataSource | None, tuple[WeatherObservation, ...], RegionalProviderStatus]:
         area_code = request.weather_area_code
         if not area_code:
-            return None, (), RegionalProviderStatus(
-                data_kind="weather",
-                status="not_configured",
-                applicability="A six-digit JMA forecast area was not selected for this municipality.",
-                message="気象庁予報区域コードが選択されていないため、予報を地域条件へ結び付けていません。",
+            return (
+                None,
+                (),
+                RegionalProviderStatus(
+                    data_kind="weather",
+                    status="not_configured",
+                    applicability="A six-digit JMA forecast area was not selected for this municipality.",
+                    message="気象庁予報区域コードが選択されていないため、予報を地域条件へ結び付けていません。",
+                ),
             )
         url = f"https://{_JMA_HOST}/bosai/forecast/data/forecast/{area_code}.json"
         source_id = _JMA_SOURCE_PREFIX + area_code
@@ -692,7 +792,11 @@ class JmaForecastProvider:
                                     parsed_value = _text(value)
                                     if parsed_value is None:
                                         continue
-                                stale = snapshot.stale_cache_fallback or not publication_times or now - max(publication_times) > timedelta(hours=24)
+                                stale = (
+                                    snapshot.stale_cache_fallback
+                                    or not publication_times
+                                    or now - max(publication_times) > timedelta(hours=24)
+                                )
                                 observations.append(
                                     WeatherObservation(
                                         area_code=area_code,
@@ -703,7 +807,9 @@ class JmaForecastProvider:
                                         value=parsed_value,
                                         unit=unit,
                                         valid_at=valid_at,
-                                        published_at=max(publication_times) if publication_times else now,
+                                        published_at=max(publication_times)
+                                        if publication_times
+                                        else now,
                                         source_id=source_id,
                                         content_sha256=snapshot.content_sha256,
                                         status="stale_forecast" if stale else "forecast",
@@ -711,7 +817,9 @@ class JmaForecastProvider:
                                     )
                                 )
             if not publication_times:
-                raise RegionDatasetError("JMA forecast JSON did not include a publication timestamp")
+                raise RegionDatasetError(
+                    "JMA forecast JSON did not include a publication timestamp"
+                )
             source = DataSource(
                 id=source_id,
                 title="Japan Meteorological Agency area forecast",
@@ -728,32 +836,43 @@ class JmaForecastProvider:
                 last_modified=snapshot.last_modified,
             )
             if request.target_date and request.target_date not in valid_dates:
-                return source, (), RegionalProviderStatus(
-                    data_kind="weather",
-                    status="out_of_scope",
-                    source_id=source_id,
-                    applicability=f"JMA forecast valid dates: {', '.join(sorted(item.isoformat() for item in valid_dates)) or 'none'}",
-                    message="指定日の気象庁予報は提供範囲外です。長期の気象条件は不明として扱います。",
+                return (
+                    source,
+                    (),
+                    RegionalProviderStatus(
+                        data_kind="weather",
+                        status="out_of_scope",
+                        source_id=source_id,
+                        applicability=f"JMA forecast valid dates: {', '.join(sorted(item.isoformat() for item in valid_dates)) or 'none'}",
+                        message="指定日の気象庁予報は提供範囲外です。長期の気象条件は不明として扱います。",
+                    ),
                 )
             status = (
                 "stale"
-                if snapshot.stale_cache_fallback or any(item.status == "stale_forecast" for item in observations)
-                else "available" if observations
+                if snapshot.stale_cache_fallback
+                or any(item.status == "stale_forecast" for item in observations)
+                else "available"
+                if observations
                 else "out_of_scope"
             )
-            return source, tuple(observations), RegionalProviderStatus(
-                data_kind="weather",
-                status=status,
-                source_id=source_id,
-                record_count=len(observations),
-                applicability=(
-                    f"JMA forecast-file area={area_code}; nested forecast areas are returned with their own codes; "
-                    f"target_date={request.target_date or 'not selected'}; "
-                    f"valid_dates={', '.join(sorted(item.isoformat() for item in valid_dates))}"
-                ),
-                message=(
-                    "気象庁予報を候補として取得しました。自治体と細分区域を結ぶ選択・対応が未確定のため全観測をunknownのまま返します。予報期間外・屋内条件・将来の災害影響には適用しません。"
-                    if observations else "気象庁予報区域に一致する日時別値がありません。"
+            return (
+                source,
+                tuple(observations),
+                RegionalProviderStatus(
+                    data_kind="weather",
+                    status=status,
+                    source_id=source_id,
+                    record_count=len(observations),
+                    applicability=(
+                        f"JMA forecast-file area={area_code}; nested forecast areas are returned with their own codes; "
+                        f"target_date={request.target_date or 'not selected'}; "
+                        f"valid_dates={', '.join(sorted(item.isoformat() for item in valid_dates))}"
+                    ),
+                    message=(
+                        "気象庁予報を候補として取得しました。自治体と細分区域を結ぶ選択・対応が未確定のため全観測をunknownのまま返します。予報期間外・屋内条件・将来の災害影響には適用しません。"
+                        if observations
+                        else "気象庁予報区域に一致する日時別値がありません。"
+                    ),
                 ),
             )
         except (RegionProviderError, RegionDatasetError, ValueError) as exc:
@@ -768,12 +887,16 @@ class JmaForecastProvider:
                 license_note="Configured public endpoint; an unavailable response is not evidence of zero weather risk.",
                 freshness="unknown",
             )
-            return source, (), RegionalProviderStatus(
-                data_kind="weather",
-                status="unavailable",
-                source_id=source_id,
-                applicability=f"JMA area={area_code}; target_date={request.target_date or 'not selected'}",
-                message=str(exc)[:1_000],
+            return (
+                source,
+                (),
+                RegionalProviderStatus(
+                    data_kind="weather",
+                    status="unavailable",
+                    source_id=source_id,
+                    applicability=f"JMA area={area_code}; target_date={request.target_date or 'not selected'}",
+                    message=str(exc)[:1_000],
+                ),
             )
 
 

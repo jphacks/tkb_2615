@@ -222,7 +222,7 @@ def test_behavior_runner_only_proposes_due_agents_in_stable_id_order() -> None:
 
 
 def test_support_candidates_are_suppressed_for_open_request_and_cooldown(
-    causal_stress_scenario
+    causal_stress_scenario,
 ) -> None:
     scenario = causal_stress_scenario(agent_count=1)
     world = WorldState.from_scenario(scenario)

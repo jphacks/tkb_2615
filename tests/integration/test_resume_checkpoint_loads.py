@@ -3,8 +3,6 @@
 The range check and a corrupt head are checked in tests/unit/web/test_projects.py.
 """
 
-
-
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.storage.projects import ProjectStore
 from sheltersim.web.projects import ProjectAPI

@@ -146,8 +146,11 @@ def main() -> None:
         (_IndexedMetricSink, "capture_metric"),
         (TimelineStore, "record"),
         (ProjectStore, "save_branch"),
-        *(((ProjectStore, "save_captured_branch"),)
-          if hasattr(ProjectStore, "save_captured_branch") else ()),
+        *(
+            ((ProjectStore, "save_captured_branch"),)
+            if hasattr(ProjectStore, "save_captured_branch")
+            else ()
+        ),
         (ProjectStore, "usage"),
         (
             CheckpointArchive,

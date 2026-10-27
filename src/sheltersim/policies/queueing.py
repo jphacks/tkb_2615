@@ -12,9 +12,13 @@ class FacilityQueuePolicy(Protocol):
     source_id: str
     formula: str
 
-    def priority(self, world: WorldState, agent_id: str, service: str, wait_minutes: int) -> float: ...
+    def priority(
+        self, world: WorldState, agent_id: str, service: str, wait_minutes: int
+    ) -> float: ...
 
-    def should_abandon(self, world: WorldState, agent_id: str, service: str, wait_minutes: int) -> bool: ...
+    def should_abandon(
+        self, world: WorldState, agent_id: str, service: str, wait_minutes: int
+    ) -> bool: ...
 
     def retry_delay_minutes(self) -> int: ...
 
@@ -29,8 +33,10 @@ class NeedWeightedPhysicalQueuePolicy:
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         config = {} if config is None else config
         if not isinstance(config, dict) or set(config) - {
-            "schema_version", "queue_capacity_by_facility",
-            "abandon_after_minutes_by_service", "retry_delay_minutes",
+            "schema_version",
+            "queue_capacity_by_facility",
+            "abandon_after_minutes_by_service",
+            "retry_delay_minutes",
             "persistence_urgency_threshold",
         }:
             raise ValueError("facility_queues config must be an object")
@@ -58,9 +64,13 @@ class NeedWeightedPhysicalQueuePolicy:
             raise ValueError("queue persistence threshold must be normalized to 0..1")
 
     def priority(self, world: WorldState, agent_id: str, service: str, wait_minutes: int) -> float:
-        return _service_need(world, agent_id, service) + 0.1 * min(1.0, max(0, wait_minutes) / 1440.0)
+        return _service_need(world, agent_id, service) + 0.1 * min(
+            1.0, max(0, wait_minutes) / 1440.0
+        )
 
-    def should_abandon(self, world: WorldState, agent_id: str, service: str, wait_minutes: int) -> bool:
+    def should_abandon(
+        self, world: WorldState, agent_id: str, service: str, wait_minutes: int
+    ) -> bool:
         return (
             wait_minutes >= self._wait_limits[service]
             and _service_need(world, agent_id, service) < self._persistence_threshold
@@ -85,7 +95,9 @@ class StrictFIFOQueuePolicy:
         del world, agent_id, service, wait_minutes
         return 0.0
 
-    def should_abandon(self, world: WorldState, agent_id: str, service: str, wait_minutes: int) -> bool:
+    def should_abandon(
+        self, world: WorldState, agent_id: str, service: str, wait_minutes: int
+    ) -> bool:
         del world, agent_id, service, wait_minutes
         return False
 

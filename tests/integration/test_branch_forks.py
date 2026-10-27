@@ -44,5 +44,3 @@ def test_noop_checkpoint_forks_are_independent_and_replay_identically() -> None:
     assert left.world.canonical_json() == right.world.canonical_json()
     assert left.world.event_log.records == right.world.event_log.records
     assert left.metrics.to_dict() == right.metrics.to_dict()
-
-

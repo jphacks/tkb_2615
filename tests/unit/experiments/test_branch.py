@@ -84,7 +84,7 @@ def test_invalid_route_edit_set_creates_no_partial_branch(
 
 
 def test_route_edit_that_disconnects_a_facility_is_rejected_atomically(
-    small_replay_scenario
+    small_replay_scenario,
 ) -> None:
     demo = DemoService(small_replay_scenario())
     demo.dispatch("start")
@@ -139,7 +139,7 @@ def test_facility_relocation_is_a_typed_branch_intervention(small_replay_scenari
 
 
 def test_facility_relocation_rejects_unknown_zone_without_partial_change(
-    small_replay_scenario
+    small_replay_scenario,
 ) -> None:
     demo = DemoService(small_replay_scenario())
     demo.dispatch("start")

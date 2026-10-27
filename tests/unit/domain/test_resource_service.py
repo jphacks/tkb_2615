@@ -57,7 +57,7 @@ def queue_and_start(
 
 
 def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_version(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     baseline = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
     baseline_json = baseline.canonical_json()
@@ -147,7 +147,7 @@ def test_resource_service_config_is_strict_and_opt_in_only() -> None:
 
 
 def test_v6_world_and_checkpoint_reject_noncanonical_service_config(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     state_document = world.to_dict()
@@ -173,7 +173,7 @@ def test_v6_world_and_checkpoint_reject_noncanonical_service_config(
 
 
 def test_resource_request_requires_arrival_and_world_rejects_legacy_resource_slots(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     manager = ResourceServiceManager(world)
@@ -220,7 +220,7 @@ def test_h02_test_inputs_match_assumption_manifest(resource_service_scenario) ->
 
 
 def test_completion_schedule_collision_is_rejected_before_start_mutation(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     manager = ResourceServiceManager(world)
@@ -249,7 +249,7 @@ def test_completion_schedule_collision_is_rejected_before_start_mutation(
 
 
 def test_h01_reservation_id_collision_does_not_partially_start_service(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     facility = world.facilities["water_station_1"]
@@ -285,7 +285,7 @@ def test_h01_reservation_id_collision_does_not_partially_start_service(
 
 
 def test_h01_external_reservation_survives_v6_checkpoint_and_release(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     reserve = ScheduledEvent(
@@ -453,7 +453,7 @@ def test_h01_handlers_cannot_mutate_service_owned_reservation(
 
 
 def test_water_service_completes_ledger_need_and_event_log_after_checkpoint_restore(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     world.model_configs["resource_service"]["hydration_relief"] = 0.2
@@ -491,7 +491,7 @@ def test_water_service_completes_ledger_need_and_event_log_after_checkpoint_rest
 
 
 def test_partial_or_wrong_agent_completion_payload_fails_before_any_mutation(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     manager, completion = queue_and_start(world)
@@ -506,7 +506,7 @@ def test_partial_or_wrong_agent_completion_payload_fails_before_any_mutation(
 
 
 def test_typed_cancellation_releases_once_and_stale_completion_is_suppressed(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(resource_service_scenario())
     manager, completion = queue_and_start(world)
@@ -568,7 +568,7 @@ def test_unavailable_capacity_staff_stock_or_run_end_keeps_fifo_head(
 
 
 def test_fifo_and_one_staff_one_service_allow_one_last_meal_to_one_agent(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(
         resource_service_scenario(food_units=1, meal_capacity=2, service_minutes=2)
@@ -591,7 +591,7 @@ def test_fifo_and_one_staff_one_service_allow_one_last_meal_to_one_agent(
 
 
 def test_capacity_n_starts_at_most_n_services_with_one_staff_each(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     world = WorldState.from_scenario(
         resource_service_scenario(water_capacity=2, water_staff_count=2, service_minutes=2)
@@ -668,7 +668,7 @@ def test_arrival_admission_rejection_is_saved_with_origin_and_detail(
 
 
 def test_behavior_view_exposes_resource_actions_only_for_opted_in_v6(
-    resource_service_scenario
+    resource_service_scenario,
 ) -> None:
     from sheltersim.core.rng import CounterRNG
     from sheltersim.policies.behavior import ActionKind, UtilityBehaviorPolicy, WorldView

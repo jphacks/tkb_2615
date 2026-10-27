@@ -86,5 +86,7 @@ class TimelineFrame(ExtensionModel):
     sanitation: dict[str, Any] = Field(default_factory=dict)
     recorded_history: dict[str, Any] = Field(default_factory=dict)
     pending_arrivals: int = Field(default=0, ge=0)
-    kpi_time_semantics: Literal["state at boundary before this tick"] = "state at boundary before this tick"
+    kpi_time_semantics: Literal["state at boundary before this tick"] = (
+        "state at boundary before this tick"
+    )
     position_limitations: tuple[str, ...] = ()

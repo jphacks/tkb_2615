@@ -71,9 +71,7 @@ class BodyDynamicsFormula:
             agent_id, config["negative_affect_stress_rate"]
         )
         discontent_rates = config.get("discontent_stress_rate_by_agent", {})
-        discontent_rate = discontent_rates.get(
-            agent_id, config["discontent_stress_rate"]
-        )
+        discontent_rate = discontent_rates.get(agent_id, config["discontent_stress_rate"])
         return (
             debt_component
             + uncertainty * negative_affect_rate
@@ -107,6 +105,7 @@ class CareOutcomeFormula:
         """Return bounded state deltas only for the selected typed-care formula."""
         if self.model_id != "typed-care-support-response-v1":
             return {}
+
         def configured_value(name: str, default: float) -> float:
             per_agent = self.config.get(f"{name}_by_agent", {})
             if agent_id is not None and isinstance(per_agent, dict) and agent_id in per_agent:
@@ -222,9 +221,7 @@ class ZoneEnvironmentFormula:
             return max(0.1, 1.0 - max(noise_loss, lighting_loss))
         return max(0.1, (1.0 - noise_loss) * (1.0 - lighting_loss))
 
-    def ventilation_hygiene_growth(
-        self, ventilation: float, config: dict[str, Any]
-    ) -> float:
+    def ventilation_hygiene_growth(self, ventilation: float, config: dict[str, Any]) -> float:
         deficit = 1.0 - ventilation
         if self.model_id == "zone-hygiene-quadratic-v1":
             deficit *= deficit
@@ -349,9 +346,16 @@ def register_policy(model_id: str, definition: dict[str, Any], factory: Callable
 
     from sheltersim.contracts.extensions import Identifier
     from sheltersim.contracts.policies import PolicyModelDefinition
+
     TypeAdapter(Identifier).validate_python(model_id)
-    required = {"domain", "reference", "formula", "assumption_source_id",
-                "implementation_version", "state_schema_version"}
+    required = {
+        "domain",
+        "reference",
+        "formula",
+        "assumption_source_id",
+        "implementation_version",
+        "state_schema_version",
+    }
     if not required <= set(definition) or not callable(factory) or model_id in MODEL_DEFINITIONS:
         raise ValueError("incomplete or duplicate installed policy")
     if definition.get("external_validation") not in (None, False):
@@ -359,43 +363,76 @@ def register_policy(model_id: str, definition: dict[str, Any], factory: Callable
     TypeAdapter(Identifier).validate_python(definition["domain"])
     TypeAdapter(Identifier).validate_python(definition["implementation_version"])
     TypeAdapter(Identifier).validate_python(definition["assumption_source_id"])
-    if any(not isinstance(definition[name], str) or not definition[name]
-           for name in ("reference", "formula")):
+    if any(
+        not isinstance(definition[name], str) or not definition[name]
+        for name in ("reference", "formula")
+    ):
         raise ValueError("installed policies require model reference and formula metadata")
     import json
+
     json.dumps(definition, allow_nan=False)
     for path, metadata in definition.get("parameters", {}).items():
         if "." not in path or not isinstance(metadata.get("unit"), str) or not metadata["unit"]:
             raise ValueError("installed parameter metadata requires a config path and unit")
-    if type(definition["state_schema_version"]) is not int or definition["state_schema_version"] < 1:
+    if (
+        type(definition["state_schema_version"]) is not int
+        or definition["state_schema_version"] < 1
+    ):
         raise ValueError("installed policy requires a positive state schema version")
     # Registration validates versioned formula/parameter/source metadata before a
     # model is selectable; metadata alone still does not install executable code.
     PolicyModelDefinition.model_validate(definition)
-    requirements=definition.get("required_state_contracts",{})
+    requirements = definition.get("required_state_contracts", {})
     if not isinstance(requirements, dict):
         raise ValueError("model state requirements must be an object")
-    for namespace,signature in requirements.items():
+    for namespace, signature in requirements.items():
         TypeAdapter(Identifier).validate_python(namespace)
-        if (not isinstance(signature,dict) or set(signature)!={"implementation_id","implementation_version","schema_version"}
-                or type(signature["schema_version"]) is not int or signature["schema_version"]<1):
+        if (
+            not isinstance(signature, dict)
+            or set(signature) != {"implementation_id", "implementation_version", "schema_version"}
+            or type(signature["schema_version"]) is not int
+            or signature["schema_version"] < 1
+        ):
             raise ValueError("invalid installed model state requirement")
         TypeAdapter(Identifier).validate_python(signature["implementation_id"])
         TypeAdapter(Identifier).validate_python(signature["implementation_version"])
     from copy import deepcopy
+
     MODEL_DEFINITIONS[model_id] = deepcopy(definition)
     _INSTALLED_FACTORIES[(definition["domain"], model_id)] = factory
 
 
-_BUILTIN_FACTORIES={"behavior":frozenset({"utility-softmax-v1","sleep-aware-utility-softmax-v2","priority-rule-v1"}),
-    "psychology":frozenset({"causal-stress-v1","bounded-stress-v1","life-state-feedback-v1","mean-reverting-distress-v1",INTEGRATED_PSYCHOLOGY_POLICY_VERSION}),
-    "social":frozenset({"sparse-family-zone-contact-v1","degroot-contact-v1","expressiveness-channel-openness-v1"}),
-    "information":frozenset({"sparse-information-contact-v1","hazard-information-v1","evidence-aware-rumor-v1"})}
+_BUILTIN_FACTORIES = {
+    "behavior": frozenset(
+        {"utility-softmax-v1", "sleep-aware-utility-softmax-v2", "priority-rule-v1"}
+    ),
+    "psychology": frozenset(
+        {
+            "causal-stress-v1",
+            "bounded-stress-v1",
+            "life-state-feedback-v1",
+            "mean-reverting-distress-v1",
+            INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
+        }
+    ),
+    "social": frozenset(
+        {
+            "sparse-family-zone-contact-v1",
+            "degroot-contact-v1",
+            "expressiveness-channel-openness-v1",
+        }
+    ),
+    "information": frozenset(
+        {"sparse-information-contact-v1", "hazard-information-v1", "evidence-aware-rumor-v1"}
+    ),
+}
 
 
 def has_installed_factory(domain: str, model_id: str) -> bool:
     """Metadata alone cannot authorize a nonexistent numerical operator."""
-    return model_id in _BUILTIN_FACTORIES.get(domain,()) or (domain,model_id) in _INSTALLED_FACTORIES
+    return (
+        model_id in _BUILTIN_FACTORIES.get(domain, ()) or (domain, model_id) in _INSTALLED_FACTORIES
+    )
 
 
 def create_installed_model(domain: str, configs: dict[str, dict[str, Any]], **kwargs: Any) -> Any:
@@ -426,9 +463,7 @@ def create_staff_operations_formula(
     configs: dict[str, dict[str, Any]],
 ) -> StaffOperationsFormula:
     """Create the selected routed staff-task ranking rule."""
-    selected = configs.get("policy_registry", {}).get(
-        "staff_operations", "staff-urgency-first-v1"
-    )
+    selected = configs.get("policy_registry", {}).get("staff_operations", "staff-urgency-first-v1")
     return _INSTALLED_FACTORIES[("staff_operations", selected)](configs=configs)
 
 
@@ -436,9 +471,7 @@ def create_staff_fatigue_formula(
     configs: dict[str, dict[str, Any]],
 ) -> StaffFatigueFormula:
     """Create the selected staff duty-fatigue equation."""
-    selected = configs.get("policy_registry", {}).get(
-        "staff_fatigue", "staff-fatigue-linear-v1"
-    )
+    selected = configs.get("policy_registry", {}).get("staff_fatigue", "staff-fatigue-linear-v1")
     return _INSTALLED_FACTORIES[("staff_fatigue", selected)](configs=configs)
 
 
@@ -453,23 +486,17 @@ def create_zone_environment_formula(
 
 
 def create_zone_rest_formula(configs: dict[str, dict[str, Any]]) -> ZoneEnvironmentFormula:
-    selected = configs.get("policy_registry", {}).get(
-        "zone_rest", "zone-rest-multiplicative-v1"
-    )
+    selected = configs.get("policy_registry", {}).get("zone_rest", "zone-rest-multiplicative-v1")
     return _INSTALLED_FACTORIES[("zone_rest", selected)](configs=configs)
 
 
 def create_zone_hygiene_formula(configs: dict[str, dict[str, Any]]) -> ZoneEnvironmentFormula:
-    selected = configs.get("policy_registry", {}).get(
-        "zone_hygiene", "zone-hygiene-linear-v1"
-    )
+    selected = configs.get("policy_registry", {}).get("zone_hygiene", "zone-hygiene-linear-v1")
     return _INSTALLED_FACTORIES[("zone_hygiene", selected)](configs=configs)
 
 
 def create_zone_privacy_formula(configs: dict[str, dict[str, Any]]) -> ZoneEnvironmentFormula:
-    selected = configs.get("policy_registry", {}).get(
-        "zone_privacy", "zone-privacy-threshold-v1"
-    )
+    selected = configs.get("policy_registry", {}).get("zone_privacy", "zone-privacy-threshold-v1")
     return _INSTALLED_FACTORIES[("zone_privacy", selected)](configs=configs)
 
 
@@ -479,14 +506,20 @@ def create_behavior(configs: dict[str, dict[str, Any]], **parameters: Any) -> Be
     return create_behavior_policy(selected_models(configs)["behavior"], **parameters)
 
 
-def create_psychology(configs: dict[str, dict[str, Any]], *, resource_service_enabled: bool = False) -> PsychologyPolicy:
+def create_psychology(
+    configs: dict[str, dict[str, Any]], *, resource_service_enabled: bool = False
+) -> PsychologyPolicy:
     selected = selected_models(configs)["psychology"]
     if ("psychology", selected) in _INSTALLED_FACTORIES:
-        return create_installed_model("psychology", configs, resource_service_enabled=resource_service_enabled)
+        return create_installed_model(
+            "psychology", configs, resource_service_enabled=resource_service_enabled
+        )
     config = PsychologyModelConfig.model_validate(configs.get("psychology", {}))
     values = config.coefficient_values()
     if resource_service_enabled:
-        values["hydration_growth"] = configs["resource_service"].get("hydration_growth_per_minute", 0.0)
+        values["hydration_growth"] = configs["resource_service"].get(
+            "hydration_growth_per_minute", 0.0
+        )
     parameters = PsychologyParameters(**values)
     if selected == "mean-reverting-distress-v1":
         return MeanRevertingDistressPolicy(parameters)
@@ -502,8 +535,14 @@ def create_psychology(configs: dict[str, dict[str, Any]], *, resource_service_en
             body_config=configs.get("body_dynamics"),
             body_formula=create_body_dynamics_formula(configs),
         )
-    factory = {"causal-stress-v1": SimplePsychologyPolicy, "bounded-stress-v1": BoundedStressPolicy}[selected]
-    return factory(parameters, source_id=config.source_id if selected == "causal-stress-v1" else "ASM-BOUNDED-STRESS-V1")
+    factory = {
+        "causal-stress-v1": SimplePsychologyPolicy,
+        "bounded-stress-v1": BoundedStressPolicy,
+    }[selected]
+    return factory(
+        parameters,
+        source_id=config.source_id if selected == "causal-stress-v1" else "ASM-BOUNDED-STRESS-V1",
+    )
 
 
 def create_social(configs: dict[str, dict[str, Any]]) -> StressPropagationPolicy:
@@ -579,8 +618,18 @@ def register_agents_social_policies() -> None:
 
     for model_id, metadata in affect_policy_catalog().items():
         parameters = {
-            "body_dynamics.affect_transfer_rate": {"unit": "fraction_per_recorded_contact", "lower": 0.0, "upper": 1.0, "default": 0.05},
-            "body_dynamics.social_action_affect_transfer": {"unit": "normalized_affect_per_social_event", "lower": 0.0, "upper": 1.0, "default": 0.02},
+            "body_dynamics.affect_transfer_rate": {
+                "unit": "fraction_per_recorded_contact",
+                "lower": 0.0,
+                "upper": 1.0,
+                "default": 0.05,
+            },
+            "body_dynamics.social_action_affect_transfer": {
+                "unit": "normalized_affect_per_social_event",
+                "lower": 0.0,
+                "upper": 1.0,
+                "default": 0.02,
+            },
         }
         definition = {
             "domain": "affect",
@@ -593,12 +642,16 @@ def register_agents_social_policies() -> None:
             "external_validation": False,
         }
 
-        def factory(*, configs: dict[str, dict[str, Any]], _model_id: str = model_id, **kwargs: Any) -> Any:
+        def factory(
+            *, configs: dict[str, dict[str, Any]], _model_id: str = model_id, **kwargs: Any
+        ) -> Any:
             del configs, kwargs
             return create_affect_policy(_model_id)
 
         if model_id in MODEL_DEFINITIONS:
-            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory("affect", model_id):
+            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory(
+                "affect", model_id
+            ):
                 raise ValueError("bundled affect model already registered differently")
         else:
             register_policy(model_id, definition, factory)
@@ -630,20 +683,22 @@ def register_agents_social_policies() -> None:
             },
         }
         if model_id == DistanceDurationRepeatTrustPolicy.model_id:
-            parameters.update({
-                "body_dynamics.relationship_distance_scale_m": {
-                    "unit": "metre",
-                    "default": 2.0,
-                    "lower": 0.1,
-                    "upper": 100.0,
-                },
-                "body_dynamics.relationship_repeat_contact_bonus": {
-                    "unit": "relative_trust_gain_per_prior_contact",
-                    "default": 0.05,
-                    "lower": 0.0,
-                    "upper": 1.0,
-                },
-            })
+            parameters.update(
+                {
+                    "body_dynamics.relationship_distance_scale_m": {
+                        "unit": "metre",
+                        "default": 2.0,
+                        "lower": 0.1,
+                        "upper": 100.0,
+                    },
+                    "body_dynamics.relationship_repeat_contact_bonus": {
+                        "unit": "relative_trust_gain_per_prior_contact",
+                        "default": 0.05,
+                        "lower": 0.0,
+                        "upper": 1.0,
+                    },
+                }
+            )
         definition = {
             "domain": "relationship",
             "reference": "Assumption; no shelter contact-distance or trust calibration supplied",
@@ -663,12 +718,16 @@ def register_agents_social_policies() -> None:
                 body_config = configs.get("body_dynamics", {})
                 return _policy_type(
                     distance_scale_m=float(body_config.get("relationship_distance_scale_m", 2.0)),
-                    repeat_contact_bonus=float(body_config.get("relationship_repeat_contact_bonus", 0.05)),
+                    repeat_contact_bonus=float(
+                        body_config.get("relationship_repeat_contact_bonus", 0.05)
+                    ),
                 )
             return _policy_type()
 
         if model_id in MODEL_DEFINITIONS:
-            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory("relationship", model_id):
+            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory(
+                "relationship", model_id
+            ):
                 raise ValueError("bundled relationship model already registered differently")
         else:
             register_policy(model_id, definition, relationship_factory)
@@ -728,7 +787,9 @@ def register_agents_social_policies() -> None:
             return _policy_type(configs.get("facility_queues", {}))
 
         if model_id in MODEL_DEFINITIONS:
-            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory("queue", model_id):
+            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory(
+                "queue", model_id
+            ):
                 raise ValueError("bundled queue model already registered differently")
         else:
             register_policy(model_id, definition, factory)
@@ -800,7 +861,9 @@ def register_agents_social_policies() -> None:
             return create_proximity_policy(_model_id, configs)
 
         if model_id in MODEL_DEFINITIONS:
-            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory("social_proximity", model_id):
+            if MODEL_DEFINITIONS[model_id] != definition or not has_installed_factory(
+                "social_proximity", model_id
+            ):
                 raise ValueError("bundled social proximity model already registered differently")
         else:
             register_policy(model_id, definition, proximity_factory)

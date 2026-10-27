@@ -28,24 +28,29 @@ class DraftInput(ExtensionModel):
 class AssetBegin(ExtensionModel):
     schema_version: Literal[1] = 1
     media_type: Literal[
-        "application/pdf", "image/png", "image/jpeg", "image/webp",
-        "application/json", "application/geo+json",
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "application/json",
+        "application/geo+json",
     ]
     byte_count: int = Field(strict=True, gt=0, le=15 * 1024 * 1024)
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     permission_confirmed: Literal[True]
     sensitive_building: bool = True
     license_note: str = Field(default="Operator-provided; local project use only", max_length=500)
-    file_name: str | None = Field(default=None,min_length=1,max_length=240)
-    source_kind: Literal["operator_upload","public_reference","synthetic"] = "operator_upload"
-    coordinate_system: Literal["unknown","raster_pixel","local_metre","geographic"] = "unknown"
+    file_name: str | None = Field(default=None, min_length=1, max_length=240)
+    source_kind: Literal["operator_upload", "public_reference", "synthetic"] = "operator_upload"
+    coordinate_system: Literal["unknown", "raster_pixel", "local_metre", "geographic"] = "unknown"
 
     @model_validator(mode="after")
     def display_name_only(self) -> AssetBegin:
-        if self.file_name is not None and any(char in self.file_name for char in ("/","\\","\x00")):
+        if self.file_name is not None and any(
+            char in self.file_name for char in ("/", "\\", "\x00")
+        ):
             raise ValueError("asset display name must not contain path separators or NUL")
         return self
-
 
 
 class AssetChunk(ExtensionModel):
@@ -55,7 +60,21 @@ class AssetChunk(ExtensionModel):
 
 class HistoryQuery(ExtensionModel):
     schema_version: Literal[1] = 1
-    kind: Literal["people", "households", "events", "causal", "kpis", "conversations", "social", "staff", "actions", "transitions", "dialogue", "care", "operations"]
+    kind: Literal[
+        "people",
+        "households",
+        "events",
+        "causal",
+        "kpis",
+        "conversations",
+        "social",
+        "staff",
+        "actions",
+        "transitions",
+        "dialogue",
+        "care",
+        "operations",
+    ]
     start: int = Field(default=0, strict=True, ge=0)
     end: int = Field(strict=True, ge=0)
     step: int = Field(default=1, strict=True, ge=1)
@@ -75,14 +94,45 @@ class HistoryQuery(ExtensionModel):
 
     @model_validator(mode="after")
     def bounded_query(self) -> HistoryQuery:
-        for selector, allowed in (("agent_id", {"people", "events", "causal", "social", "actions", "transitions", "dialogue", "care"}),
-                                  ("household_id", {"households", "events", "actions", "transitions", "dialogue", "care"}),
-                                  ("staff_id", {"staff", "actions", "dialogue", "operations"}),
-                                  ("conversation_id", {"conversations"}),
-                                  ("event_id", {"causal", "events", "social", "staff", "actions", "transitions", "dialogue", "care", "operations"})):
+        for selector, allowed in (
+            (
+                "agent_id",
+                {
+                    "people",
+                    "events",
+                    "causal",
+                    "social",
+                    "actions",
+                    "transitions",
+                    "dialogue",
+                    "care",
+                },
+            ),
+            (
+                "household_id",
+                {"households", "events", "actions", "transitions", "dialogue", "care"},
+            ),
+            ("staff_id", {"staff", "actions", "dialogue", "operations"}),
+            ("conversation_id", {"conversations"}),
+            (
+                "event_id",
+                {
+                    "causal",
+                    "events",
+                    "social",
+                    "staff",
+                    "actions",
+                    "transitions",
+                    "dialogue",
+                    "care",
+                    "operations",
+                },
+            ),
+        ):
             if getattr(self, selector) is not None and self.kind not in allowed:
                 raise ValueError(f"{selector} is not supported for {self.kind} history")
-        if self.include_related and self.kind!="causal":raise ValueError("include_related applies only to causal history")
+        if self.include_related and self.kind != "causal":
+            raise ValueError("include_related applies only to causal history")
         if self.start > self.end:
             raise ValueError("history start must not exceed end")
         if self.kind == "people" and self.agent_id is None:
@@ -106,8 +156,8 @@ class ComparisonQuery(ExtensionModel):
 
 
 class ComparisonDifferenceQuery(ComparisonQuery):
-    limit: int = Field(default=25,strict=True,ge=1,le=100)
-    cursor: str | None = Field(default=None,max_length=4096)
+    limit: int = Field(default=25, strict=True, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=4096)
 
 
 class StateDescriptor(ExtensionModel):
@@ -145,30 +195,42 @@ class DatasetInput(ExtensionModel):
             raise ValueError("dataset lower bound exceeds upper bound")
         from urllib.parse import urlsplit, parse_qsl
         import re
+
         url = urlsplit(self.url)
-        if (not url.netloc or url.username is not None or url.password is not None
-                or any(re.search(r"key|token|secret|password|appid", key, re.I)
-                       for key, _ in parse_qsl(url.query))):
+        if (
+            not url.netloc
+            or url.username is not None
+            or url.password is not None
+            or any(
+                re.search(r"key|token|secret|password|appid", key, re.I)
+                for key, _ in parse_qsl(url.query)
+            )
+        ):
             raise ValueError("dataset requires a public source URL without credentials")
         return self
 
 
 class DivergenceQuery(ExtensionModel):
     schema_version: Literal[1] = 1
-    targets: tuple[ComparisonTarget,...] = Field(min_length=2,max_length=8)
-    start: int = Field(default=0,strict=True,ge=0)
-    end: int = Field(strict=True,ge=0)
-    mode: Literal["kpis","world","person"] = "kpis"
+    targets: tuple[ComparisonTarget, ...] = Field(min_length=2, max_length=8)
+    start: int = Field(default=0, strict=True, ge=0)
+    end: int = Field(strict=True, ge=0)
+    mode: Literal["kpis", "world", "person"] = "kpis"
     agent_id: Identifier | None = None
-    metrics: tuple[Identifier,...] = Field(default=(),max_length=20)
-    scan_limit: int = Field(default=20,strict=True,ge=1,le=100)
-    cursor: str | None = Field(default=None,max_length=2048)
+    metrics: tuple[Identifier, ...] = Field(default=(), max_length=20)
+    scan_limit: int = Field(default=20, strict=True, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=2048)
 
     @model_validator(mode="after")
     def coherent_window(self) -> DivergenceQuery:
-        if self.start>self.end:raise ValueError("divergence start exceeds end")
-        if self.mode=="person" and self.agent_id is None:raise ValueError("person divergence requires agent_id")
-        if self.mode!="person" and self.agent_id is not None:raise ValueError("agent_id applies only to person divergence")
-        if self.mode!="kpis" and self.metrics:raise ValueError("metrics apply only to KPI divergence")
-        if len({(t.run_id,t.branch_id) for t in self.targets})!=len(self.targets):raise ValueError("divergence targets must differ")
+        if self.start > self.end:
+            raise ValueError("divergence start exceeds end")
+        if self.mode == "person" and self.agent_id is None:
+            raise ValueError("person divergence requires agent_id")
+        if self.mode != "person" and self.agent_id is not None:
+            raise ValueError("agent_id applies only to person divergence")
+        if self.mode != "kpis" and self.metrics:
+            raise ValueError("metrics apply only to KPI divergence")
+        if len({(t.run_id, t.branch_id) for t in self.targets}) != len(self.targets):
+            raise ValueError("divergence targets must differ")
         return self

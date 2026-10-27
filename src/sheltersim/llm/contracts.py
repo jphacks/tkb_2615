@@ -86,13 +86,20 @@ class LLMTask:
             or self.max_output_tokens <= 0
         ):
             raise ValueError("max_output_tokens must be positive")
-        if (not isinstance(self.max_web_searches, int) or isinstance(self.max_web_searches, bool)
-                or not 0 <= self.max_web_searches <= 3):
+        if (
+            not isinstance(self.max_web_searches, int)
+            or isinstance(self.max_web_searches, bool)
+            or not 0 <= self.max_web_searches <= 3
+        ):
             raise ValueError("max_web_searches must be between zero and three")
-        if (len(self.web_search_allowed_domains) > 12
-                or any(not isinstance(domain, str) or not domain or len(domain) > 120
-                       or "/" in domain or ":" in domain
-                       for domain in self.web_search_allowed_domains)):
+        if len(self.web_search_allowed_domains) > 12 or any(
+            not isinstance(domain, str)
+            or not domain
+            or len(domain) > 120
+            or "/" in domain
+            or ":" in domain
+            for domain in self.web_search_allowed_domains
+        ):
             raise ValueError("web search domains must be bounded bare host names")
         if bool(self.web_search_allowed_domains) != bool(self.max_web_searches):
             raise ValueError("web search requires both an allowlist and a positive use limit")
@@ -341,7 +348,7 @@ def _validate_value(
 def _resolve_ref(reference: Any, root: dict[str, Any], path: str) -> dict[str, Any]:
     for prefix, container in (("#/$defs/", "$defs"), ("#/definitions/", "definitions")):
         if isinstance(reference, str) and reference.startswith(prefix):
-            target = root.get(container, {}).get(reference[len(prefix):])
+            target = root.get(container, {}).get(reference[len(prefix) :])
             if isinstance(target, dict):
                 return target
     raise LLMContractError(f"{path} references an unknown schema definition")

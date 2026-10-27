@@ -123,10 +123,9 @@ class LLMSettings:
         """Read all routing policy from environment variables without exposing the key."""
         pytest_case = os.getenv("PYTEST_CURRENT_TEST", "")
         under_pytest = bool(pytest_case)
-        opted_in_live_test = (
-            os.getenv("SHELTERSIM_ALLOW_LIVE_API_TESTS") == "1"
-            and "tests/live/test_live_api.py::test_live_" in pytest_case.replace("\\", "/")
-        )
+        opted_in_live_test = os.getenv(
+            "SHELTERSIM_ALLOW_LIVE_API_TESTS"
+        ) == "1" and "tests/live/test_live_api.py::test_live_" in pytest_case.replace("\\", "/")
         api_key = os.getenv("ANTHROPIC_API_KEY", "").strip() or None
         if under_pytest and not opted_in_live_test:
             api_key = None
@@ -137,7 +136,9 @@ class LLMSettings:
             sonnet_model=os.getenv("SHELTERSIM_SONNET_MODEL_ID", "claude-sonnet-5-5"),
             haiku_model=os.getenv("SHELTERSIM_HAIKU_MODEL_ID", "claude-haiku-5-5"),
             prepare_model_family=os.getenv("SHELTERSIM_PREPARE_MODEL_FAMILY", "opus").casefold(),
-            intervention_model_family=os.getenv("SHELTERSIM_INTERVENTION_MODEL_FAMILY", "opus").casefold(),
+            intervention_model_family=os.getenv(
+                "SHELTERSIM_INTERVENTION_MODEL_FAMILY", "opus"
+            ).casefold(),
             review_model_family=os.getenv("SHELTERSIM_REVIEW_MODEL_FAMILY", "opus").casefold(),
             max_api_calls=_env_int("SHELTERSIM_LLM_MAX_API_CALLS", 10),
             max_input_tokens=_env_int("SHELTERSIM_LLM_MAX_INPUT_TOKENS", 16_384),
@@ -197,8 +198,10 @@ class LLMSettings:
         floor = _OFFICIAL_MODEL_PRICE_FLOORS.get(model_id)
         if floor is None:
             raise ValueError("no official price floor is available for this Claude model ID")
-        return ModelPrice(max(configured.input_usd_per_million, floor.input_usd_per_million),
-                          max(configured.output_usd_per_million, floor.output_usd_per_million))
+        return ModelPrice(
+            max(configured.input_usd_per_million, floor.input_usd_per_million),
+            max(configured.output_usd_per_million, floor.output_usd_per_million),
+        )
 
     def for_live_integration_tests(self) -> LLMSettings:
         """Apply the dedicated low-cost test ceiling while retaining approved model IDs."""

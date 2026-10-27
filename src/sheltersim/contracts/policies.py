@@ -21,7 +21,12 @@ from sheltersim.domain.psychological_state import (
 MODEL_DEFINITIONS: dict[str, dict[str, Any]] = json.loads(
     files("sheltersim.contracts").joinpath("model-catalog.json").read_text(encoding="utf-8")
 )["models"]
-DEFAULT_MODELS = {"behavior": "utility-softmax-v1", "psychology": "causal-stress-v1", "social": "sparse-family-zone-contact-v1", "information": "sparse-information-contact-v1"}
+DEFAULT_MODELS = {
+    "behavior": "utility-softmax-v1",
+    "psychology": "causal-stress-v1",
+    "social": "sparse-family-zone-contact-v1",
+    "information": "sparse-information-contact-v1",
+}
 
 # Historical Scenarios without a suite selector keep DEFAULT_MODELS so a saved
 # Scenario can still be replayed as authored. New Scenario entry points opt into
@@ -81,20 +86,32 @@ class ModelCoefficientDefinition(ExtensionModel):
     upper: Any = None
     source_id: Identifier | None = None
     evidence_grade: str = Field(default="C", min_length=1, max_length=16)
-    applicability: str = Field(default="Uncalibrated installed model assumption.", min_length=1, max_length=500)
+    applicability: str = Field(
+        default="Uncalibrated installed model assumption.", min_length=1, max_length=500
+    )
     lower_exclusive: bool = False
-    scope: Literal[
-        "per_staff_id", "per_staff_shift_windows", "per_service", "per_zone_id",
-        "per_agent_id", "per_task_kind"
-    ] | None = None
+    scope: (
+        Literal[
+            "per_staff_id",
+            "per_staff_shift_windows",
+            "per_service",
+            "per_zone_id",
+            "per_agent_id",
+            "per_task_kind",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def ordered_numeric_bounds(self) -> ModelCoefficientDefinition:
         for value in (self.default, self.lower, self.upper):
             if type(value) in (int, float) and not math.isfinite(value):
                 raise ValueError("model coefficient metadata must be finite")
-        if (type(self.lower) in (int, float) and type(self.upper) in (int, float)
-                and self.lower > self.upper):
+        if (
+            type(self.lower) in (int, float)
+            and type(self.upper) in (int, float)
+            and self.lower > self.upper
+        ):
             raise ValueError("model coefficient lower bound exceeds upper bound")
         if type(self.default) in (int, float):
             if type(self.lower) in (int, float) and (
@@ -132,14 +149,23 @@ class PolicyModelDefinition(ExtensionModel):
 def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     """Opt-in selectors are separate from legacy coefficient schema versions."""
     from sheltersim.contracts.bootstrap import ensure_builtin_contracts
+
     ensure_builtin_contracts()
-    if not isinstance(configs, dict) or any(not isinstance(value, dict) for value in configs.values()):
+    if not isinstance(configs, dict) or any(
+        not isinstance(value, dict) for value in configs.values()
+    ):
         raise ValueError("model configs must map names to configuration objects")
     behavior = configs.get("behavior", {})
     if set(behavior) - {
-        "mode", "source_type", "source_id", "policy", "temperature",
-        "decision_interval_minutes", "decision_interval_minutes_by_agent",
-        "temperature_by_agent", "sleep_debt_utility_weight",
+        "mode",
+        "source_type",
+        "source_id",
+        "policy",
+        "temperature",
+        "decision_interval_minutes",
+        "decision_interval_minutes_by_agent",
+        "temperature_by_agent",
+        "sleep_debt_utility_weight",
     }:
         raise ValueError("unknown behavior coefficient; explicit registry support required")
     interval = behavior.get("decision_interval_minutes", 15)
@@ -181,7 +207,11 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         if domain in selection:
             models[domain] = selection[domain]
         model_id = models[domain]
-        if not isinstance(model_id, str) or model_id not in MODEL_DEFINITIONS or MODEL_DEFINITIONS[model_id]["domain"] != domain:
+        if (
+            not isinstance(model_id, str)
+            or model_id not in MODEL_DEFINITIONS
+            or MODEL_DEFINITIONS[model_id]["domain"] != domain
+        ):
             raise ValueError(f"unsupported installed {domain} model: {model_id!r}")
     if models["behavior"] != configs.get("behavior", {}).get("policy", "utility-softmax-v1"):
         raise ValueError("behavior selector must agree with model_configs.behavior.policy")
@@ -196,8 +226,10 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         if type(value) not in (int, float) or not math.isfinite(value):
             raise ValueError("behavior.sleep_debt_utility_weight must be finite")
         if (
-            metadata.get("lower") is not None and value < metadata["lower"]
-            or metadata.get("upper") is not None and value > metadata["upper"]
+            metadata.get("lower") is not None
+            and value < metadata["lower"]
+            or metadata.get("upper") is not None
+            and value > metadata["upper"]
         ):
             raise ValueError(
                 "behavior.sleep_debt_utility_weight is outside its Model Catalog bounds"
@@ -220,12 +252,15 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
             if expected_unit == "minute" and (type(value) is not int or value < 1):
                 raise ValueError("behavior decision intervals must be positive integer minutes")
             if metadata is None:
-                raise ValueError(f"behavior.{field} is not supported by selected {models['behavior']}")
+                raise ValueError(
+                    f"behavior.{field} is not supported by selected {models['behavior']}"
+                )
             lower, upper = metadata.get("lower"), metadata.get("upper")
             if (
                 lower is not None
                 and (value < lower or metadata.get("lower_exclusive") and value == lower)
-                or upper is not None and value > upper
+                or upper is not None
+                and value > upper
             ):
                 raise ValueError(f"behavior.{field} value is outside its Model Catalog bounds")
     if "affect" in models and models["psychology"] not in LIFE_STATE_PSYCHOLOGY_POLICIES:
@@ -276,16 +311,22 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
             "replaceable formula factories require policy_registry schema_version 2 or 3"
         )
     from sheltersim.policies.registry import has_installed_factory
-    if any(not has_installed_factory(domain,model_id) for domain,model_id in models.items()):
+
+    if any(not has_installed_factory(domain, model_id) for domain, model_id in models.items()):
         raise ValueError("selected model metadata has no installed Policy factory")
     proximity_model = models.get("social_proximity")
     if proximity_model is not None:
         from sheltersim.domain.social_network import canonical_proximity_contact_config
+
         proximity_config = canonical_proximity_contact_config(configs.get("social_proximity"))
         if proximity_model == "distance-sampled-proximity-v1" and proximity_config is None:
-            raise ValueError("distance-sampled-proximity-v1 requires an enabled social_proximity config")
+            raise ValueError(
+                "distance-sampled-proximity-v1 requires an enabled social_proximity config"
+            )
         if proximity_model == "disabled-proximity-v1" and proximity_config is not None:
-            raise ValueError("disabled-proximity-v1 conflicts with an enabled social_proximity config")
+            raise ValueError(
+                "disabled-proximity-v1 conflicts with an enabled social_proximity config"
+            )
     installed = None
     for model_id in models.values():
         required = MODEL_DEFINITIONS[model_id].get("required_state_contracts", {})
@@ -293,23 +334,38 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
             raise ValueError("invalid installed model state requirements")
         if required:
             from sheltersim.contracts.runtime import state_catalog
-            installed = installed or {row["namespace"]:row for row in state_catalog()}
+
+            installed = installed or {row["namespace"]: row for row in state_catalog()}
             declared = configs.get("state_contracts", {}).get("namespaces", {})
             for namespace, signature in required.items():
                 descriptor = installed.get(namespace)
-                actual = {key:descriptor[key] for key in ("implementation_id","implementation_version","schema_version")} if descriptor else None
+                actual = (
+                    {
+                        key: descriptor[key]
+                        for key in ("implementation_id", "implementation_version", "schema_version")
+                    }
+                    if descriptor
+                    else None
+                )
                 if declared.get(namespace) != signature or actual != signature:
-                    raise ValueError("selected model requires an installed, explicitly versioned state contract; migration required")
+                    raise ValueError(
+                        "selected model requires an installed, explicitly versioned state contract; migration required"
+                    )
     return models
 
 
 def model_catalog() -> dict[str, dict[str, Any]]:
     from sheltersim.contracts.bootstrap import ensure_builtin_contracts
+
     ensure_builtin_contracts()
     catalog: dict[str, dict[str, Any]] = {}
     for key, value in sorted(MODEL_DEFINITIONS.items()):
-        raw = {"implementation_version": "1", "state_schema_version": 1,
-               "external_validation": False, **deepcopy(value)}
+        raw = {
+            "implementation_version": "1",
+            "state_schema_version": 1,
+            "external_validation": False,
+            **deepcopy(value),
+        }
         checked = PolicyModelDefinition.model_validate(raw).model_dump(
             mode="json", exclude_none=True
         )
@@ -317,12 +373,20 @@ def model_catalog() -> dict[str, dict[str, Any]]:
             if coefficient.get("source_id") is None:
                 coefficient["source_id"] = checked["assumption_source_id"]
             coefficient["evidence_grade"] = coefficient.get("evidence_grade") or "C"
-            coefficient["applicability"] = coefficient.get("applicability") or "Uncalibrated installed model assumption."
-        catalog[key] = {"evidence_grade": "C", "coefficient_status": "synthetic assumptions", **checked}
+            coefficient["applicability"] = (
+                coefficient.get("applicability") or "Uncalibrated installed model assumption."
+            )
+        catalog[key] = {
+            "evidence_grade": "C",
+            "coefficient_status": "synthetic assumptions",
+            **checked,
+        }
     return catalog
 
 
-def _model_parameter_config(configs: dict[str, dict[str, Any]], definition: dict[str, Any]) -> dict[str, Any]:
+def _model_parameter_config(
+    configs: dict[str, dict[str, Any]], definition: dict[str, Any]
+) -> dict[str, Any]:
     """Fingerprint every installed config namespace declared by the model manifest."""
     sections = sorted({path.split(".", 1)[0] for path in definition.get("parameters", {})})
     return {section: deepcopy(configs.get(section, {})) for section in sections}
@@ -331,6 +395,7 @@ def _model_parameter_config(configs: dict[str, dict[str, Any]], definition: dict
 def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     from sheltersim.contracts.runtime import state_signatures
     from sheltersim.domain.simulator_state import simulator_signatures
+
     catalog = model_catalog()
     registry_version = configs.get("policy_registry", {}).get("schema_version", 1)
     suite_id = configs.get("policy_registry", {}).get("suite_id")
@@ -358,11 +423,17 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                     assumption = signature_definition["assumption_source_id"]
                     legacy_defaults = {
                         "facility_queues.abandon_after_minutes_by_service.*": (
-                            "minute", {"toilet": 120, "water": 240, "meal": 360}, 1, 10080
+                            "minute",
+                            {"toilet": 120, "water": 240, "meal": 360},
+                            1,
+                            10080,
                         ),
                         "facility_queues.retry_delay_minutes": ("minute", 15, 1, 1440),
                         "facility_queues.persistence_urgency_threshold": (
-                            "normalized_0_1", 0.8, 0.0, 1.0
+                            "normalized_0_1",
+                            0.8,
+                            0.0,
+                            1.0,
                         ),
                     }
                     signature_definition["parameters"] = {
@@ -386,9 +457,7 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                 # baseline_by_zone values) was already fingerprinted. Hide this
                 # metadata-only catalog addition to preserve legacy signatures;
                 # the actual configured baseline remains covered by config_hash.
-                signature_definition["parameters"].pop(
-                    "zone_environment.baseline_by_zone.*", None
-                )
+                signature_definition["parameters"].pop("zone_environment.baseline_by_zone.*", None)
             if domain == "body_dynamics":
                 body_config = configs.get("body_dynamics", {})
                 # Per-Agent coefficient metadata is additive. Preserve default
@@ -400,9 +469,7 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                     "complaint_reassurance_gain_by_agent",
                 ):
                     if not body_config.get(field):
-                        signature_definition["parameters"].pop(
-                            f"body_dynamics.{field}.*", None
-                        )
+                        signature_definition["parameters"].pop(f"body_dynamics.{field}.*", None)
             if domain == "psychology":
                 psychology_config = configs.get("psychology", {})
                 # The resident-specific need rates are additive metadata. Empty
@@ -413,9 +480,7 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                     "awake_fatigue_growth_by_agent",
                 ):
                     if not psychology_config.get(field):
-                        signature_definition["parameters"].pop(
-                            f"psychology.{field}.*", None
-                        )
+                        signature_definition["parameters"].pop(f"psychology.{field}.*", None)
                         if isinstance(signature_inputs.get("psychology"), dict):
                             signature_inputs["psychology"].pop(field, None)
             if domain == "behavior":
@@ -427,9 +492,7 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                     "temperature_by_agent",
                 ):
                     if not behavior_config.get(field):
-                        signature_definition["parameters"].pop(
-                            f"behavior.{field}.*", None
-                        )
+                        signature_definition["parameters"].pop(f"behavior.{field}.*", None)
                         if isinstance(signature_inputs.get("behavior"), dict):
                             signature_inputs["behavior"].pop(field, None)
             if domain == "care_outcome" and not configs.get("body_dynamics", {}).get(
@@ -473,24 +536,26 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                         "staff_operations.thresholds_by_zone.*", None
                     )
                     if isinstance(signature_inputs.get("staff_operations"), dict):
-                        signature_inputs["staff_operations"].pop(
-                            "thresholds_by_zone", None
-                        )
+                        signature_inputs["staff_operations"].pop("thresholds_by_zone", None)
                 if not effects:
                     signature_definition["parameters"].pop(
                         "staff_operations.effects_by_zone.*", None
                     )
                     if isinstance(signature_inputs.get("staff_operations"), dict):
-                        signature_inputs["staff_operations"].pop(
-                            "effects_by_zone", None
-                        )
-            metadata_hash = hashlib.sha256(json.dumps(
-                signature_definition, sort_keys=True, separators=(",", ":"), allow_nan=False
-            ).encode()).hexdigest()
-            config_hash = hashlib.sha256(json.dumps(
-                signature_inputs, sort_keys=True,
-                separators=(",", ":"), allow_nan=False,
-            ).encode()).hexdigest()
+                        signature_inputs["staff_operations"].pop("effects_by_zone", None)
+            metadata_hash = hashlib.sha256(
+                json.dumps(
+                    signature_definition, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ).encode()
+            ).hexdigest()
+            config_hash = hashlib.sha256(
+                json.dumps(
+                    signature_inputs,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
             base += f":manifest={metadata_hash}:inputs={config_hash}"
         policies[f"policy:{domain}"] = base
     signatures = {
@@ -504,4 +569,6 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
 
 
 def configuration_hash(configs: dict[str, dict[str, Any]]) -> str:
-    return hashlib.sha256(json.dumps(configs, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(configs, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()

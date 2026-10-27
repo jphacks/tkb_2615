@@ -342,4 +342,3 @@ def test_empty_comparison_has_stable_no_op_card() -> None:
     assert first.mode == "offline"
     assert first.observed_facts == ("表示できるイベント記録またはKPI差はありません。",)
     assert first.hypotheses == ()
-

@@ -73,9 +73,9 @@ class InitialScenarioRequest(RegionModel):
     ] = "evidence-aware-rumor-v1"
     social_propagation_enabled: bool = True
     information_spread_enabled: bool = True
-    queue_policy_id: Literal[
-        "need-weighted-physical-queue-v1", "strict-fifo-queue-v1"
-    ] = "need-weighted-physical-queue-v1"
+    queue_policy_id: Literal["need-weighted-physical-queue-v1", "strict-fifo-queue-v1"] = (
+        "need-weighted-physical-queue-v1"
+    )
     relationship_policy_id: Literal[
         "distance-duration-repeat-trust-v1", "duration-contact-trust-v1"
     ] = "distance-duration-repeat-trust-v1"
@@ -85,24 +85,24 @@ class InitialScenarioRequest(RegionModel):
     body_dynamics_policy_id: Literal[
         "body-feedback-complete-v1", "body-feedback-complete-v2", "body-feedback-sleep-debt-v1"
     ] = "body-feedback-complete-v2"
-    staff_operations_policy_id: Literal[
-        "staff-urgency-first-v1", "staff-travel-first-v1"
-    ] = "staff-urgency-first-v1"
-    staff_fatigue_policy_id: Literal[
-        "staff-fatigue-linear-v1", "staff-fatigue-saturating-v1"
-    ] = "staff-fatigue-linear-v1"
+    staff_operations_policy_id: Literal["staff-urgency-first-v1", "staff-travel-first-v1"] = (
+        "staff-urgency-first-v1"
+    )
+    staff_fatigue_policy_id: Literal["staff-fatigue-linear-v1", "staff-fatigue-saturating-v1"] = (
+        "staff-fatigue-linear-v1"
+    )
     zone_temperature_policy_id: Literal[
         "zone-temperature-comfort-band-v1", "zone-temperature-midpoint-v1"
     ] = "zone-temperature-comfort-band-v1"
-    zone_rest_policy_id: Literal[
-        "zone-rest-multiplicative-v1", "zone-rest-limiting-v1"
-    ] = "zone-rest-multiplicative-v1"
-    zone_hygiene_policy_id: Literal[
-        "zone-hygiene-linear-v1", "zone-hygiene-quadratic-v1"
-    ] = "zone-hygiene-linear-v1"
-    zone_privacy_policy_id: Literal[
-        "zone-privacy-threshold-v1", "zone-privacy-proportional-v1"
-    ] = "zone-privacy-threshold-v1"
+    zone_rest_policy_id: Literal["zone-rest-multiplicative-v1", "zone-rest-limiting-v1"] = (
+        "zone-rest-multiplicative-v1"
+    )
+    zone_hygiene_policy_id: Literal["zone-hygiene-linear-v1", "zone-hygiene-quadratic-v1"] = (
+        "zone-hygiene-linear-v1"
+    )
+    zone_privacy_policy_id: Literal["zone-privacy-threshold-v1", "zone-privacy-proportional-v1"] = (
+        "zone-privacy-threshold-v1"
+    )
     care_outcome_policy_id: Literal[
         "hygiene-support-fixed-relief-v1",
         "hygiene-support-proportional-relief-v1",
@@ -123,8 +123,12 @@ class InitialScenarioRequest(RegionModel):
     zone_area_shares: dict[str, float] = Field(default_factory=dict)
     operational_conditions: OperationalConditions = Field(default_factory=OperationalConditions)
     evacuation_selection: EvacuationSelection = Field(default_factory=EvacuationSelection)
-    population_conditions: PopulationConditionInput = Field(default_factory=PopulationConditionInput)
-    field_origins: dict[str, Literal["user", "llm_extracted", "default"]] = Field(default_factory=dict)
+    population_conditions: PopulationConditionInput = Field(
+        default_factory=PopulationConditionInput
+    )
+    field_origins: dict[str, Literal["user", "llm_extracted", "default"]] = Field(
+        default_factory=dict
+    )
 
     @field_validator("model_parameter_overrides", mode="before")
     @classmethod
@@ -132,11 +136,15 @@ class InitialScenarioRequest(RegionModel):
         if raw is None:
             return {}
         if not isinstance(raw, dict) or len(raw) > 64:
-            raise ValueError("model parameter overrides must contain at most 64 finite JSON numbers or bounded entity maps")
+            raise ValueError(
+                "model parameter overrides must contain at most 64 finite JSON numbers or bounded entity maps"
+            )
         try:
             encoded = json.dumps(raw, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError) as exc:
-            raise ValueError("model parameter overrides must contain finite JSON numbers or bounded entity maps") from exc
+            raise ValueError(
+                "model parameter overrides must contain finite JSON numbers or bounded entity maps"
+            ) from exc
         if len(encoded.encode("utf-8")) > 16_384:
             raise ValueError("model parameter overrides exceed the 16 KiB request limit")
         shift_path = "staff_dynamics.shift_windows_by_staff.*"
@@ -168,7 +176,9 @@ class InitialScenarioRequest(RegionModel):
                 )
             ):
                 continue
-            raise ValueError("model parameter overrides must contain finite JSON numbers or bounded entity maps")
+            raise ValueError(
+                "model parameter overrides must contain finite JSON numbers or bounded entity maps"
+            )
         if shift_path in raw:
             from sheltersim.domain.staff_dynamics import validate_staff_shift_windows_override
 
@@ -180,16 +190,39 @@ class InitialScenarioRequest(RegionModel):
         if round(self.duration_days * 1440) < 1:
             raise ValueError("duration must be at least one minute")
         allowed = {
-            "municipality", "municipality_code", "disaster", "evacuees", "duration_days", "gross_area_m2",
-            "accessible_toilet_count", "staff_count", "default_supply_start_day", "season",
-            "facility_conditions", "seed",
-            "behavior_policy_id", "social_policy_id", "information_policy_id",
-            "social_propagation_enabled", "information_spread_enabled",
-            "facility_zones", "zone_area_shares", "operational_conditions", "evacuation_selection", "population_conditions",
-            "target_date", "weather_area_code", "queue_policy_id", "relationship_policy_id",
-            "social_proximity_policy_id", "body_dynamics_policy_id",
-            "staff_operations_policy_id", "staff_fatigue_policy_id",
-            "zone_temperature_policy_id", "zone_rest_policy_id", "zone_hygiene_policy_id",
+            "municipality",
+            "municipality_code",
+            "disaster",
+            "evacuees",
+            "duration_days",
+            "gross_area_m2",
+            "accessible_toilet_count",
+            "staff_count",
+            "default_supply_start_day",
+            "season",
+            "facility_conditions",
+            "seed",
+            "behavior_policy_id",
+            "social_policy_id",
+            "information_policy_id",
+            "social_propagation_enabled",
+            "information_spread_enabled",
+            "facility_zones",
+            "zone_area_shares",
+            "operational_conditions",
+            "evacuation_selection",
+            "population_conditions",
+            "target_date",
+            "weather_area_code",
+            "queue_policy_id",
+            "relationship_policy_id",
+            "social_proximity_policy_id",
+            "body_dynamics_policy_id",
+            "staff_operations_policy_id",
+            "staff_fatigue_policy_id",
+            "zone_temperature_policy_id",
+            "zone_rest_policy_id",
+            "zone_hygiene_policy_id",
             "zone_privacy_policy_id",
             "care_outcome_policy_id",
             "model_parameter_overrides",
@@ -200,7 +233,9 @@ class InitialScenarioRequest(RegionModel):
             not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*|\.\*)+", path)
             for path in self.model_parameter_overrides
         ):
-            raise ValueError("policy parameter overrides require namespaced catalog paths, including a declared wildcard segment where applicable")
+            raise ValueError(
+                "policy parameter overrides require namespaced catalog paths, including a declared wildcard segment where applicable"
+            )
         return self
 
 
@@ -247,8 +282,12 @@ class InitialScenarioBuilder:
         ):
             raise ValueError("regional research query does not match the scenario municipality")
         if research is not None and research.request.municipality_code != request.municipality_code:
-            raise ValueError("regional research municipality code does not match the scenario request")
-        if research is not None and _disaster_families(research.request.disaster) != _disaster_families(request.disaster):
+            raise ValueError(
+                "regional research municipality code does not match the scenario request"
+            )
+        if research is not None and _disaster_families(
+            research.request.disaster
+        ) != _disaster_families(request.disaster):
             raise ValueError("regional research disaster does not match the scenario disaster")
         if research is not None and research.request.estat_area_code:
             wrong_areas = {
@@ -257,7 +296,9 @@ class InitialScenarioBuilder:
                 if item.area_code != research.request.estat_area_code
             }
             if wrong_areas:
-                raise ValueError("population observations include an area code different from the selected e-Stat area")
+                raise ValueError(
+                    "population observations include an area code different from the selected e-Stat area"
+                )
         selected_shelter: ShelterCandidate | None = None
         if selected_shelter_id is not None:
             if research is None:
@@ -266,7 +307,9 @@ class InitialScenarioBuilder:
                 (item for item in research.shelters if item.id == selected_shelter_id), None
             )
             if selected_shelter is None:
-                raise ValueError("selected shelter ID is not present in the sourced research result")
+                raise ValueError(
+                    "selected shelter ID is not present in the sourced research result"
+                )
             if selected_shelter.designation_type == "emergency_site":
                 raise ValueError(
                     "a designated emergency site cannot be selected as an overnight shelter"
@@ -299,8 +342,12 @@ class InitialScenarioBuilder:
                 capacity_source_ids=capacity_source_ids,
             )
         )
-        if standard_design is not None and (plan_override is not None or design.requested_population != request.evacuees):
-            raise ValueError("standard correction must preserve requested population and cannot replace an uploaded plan")
+        if standard_design is not None and (
+            plan_override is not None or design.requested_population != request.evacuees
+        ):
+            raise ValueError(
+                "standard correction must preserve requested population and cannot replace an uploaded plan"
+            )
         zones = design.zones
         edges = design.zone_edges
         facilities = design.facilities
@@ -320,8 +367,7 @@ class InitialScenarioBuilder:
                 raise ValueError("an imported plan must contain a scenario zone named 'sleeping'")
             staff_zone_id = "staff" if "staff" in zone_ids else "sleeping"
             staff = tuple(
-                member.model_copy(update={"zone_id": staff_zone_id})
-                for member in design.staff
+                member.model_copy(update={"zone_id": staff_zone_id}) for member in design.staff
             )
             design_warnings.append(
                 "施設図面Geometryを使用しています。ゾーン名・避難者容量・経路の実測性と対応は現場担当者が確認してください。"
@@ -341,9 +387,10 @@ class InitialScenarioBuilder:
         # compatibility adapter until the simulator adds per-point reservations.
         if not geometry.service_points:
             from sheltersim.contracts.spatial import legacy_service_points
-            geometry = geometry.model_copy(update={
-                "service_points": legacy_service_points(geometry, facilities)
-            })
+
+            geometry = geometry.model_copy(
+                update={"service_points": legacy_service_points(geometry, facilities)}
+            )
             design = design.model_copy(update={"geometry": geometry})
         if selected_shelter is not None:
             design_warnings.append(
@@ -367,9 +414,7 @@ class InitialScenarioBuilder:
         plan_capacity_assumptions: list[dict[str, object]] = []
         if plan_override is not None:
             sleeping_zone = next(zone for zone in zones if zone.id == "sleeping")
-            sleeping_geometry = next(
-                zone for zone in geometry.zones if zone.zone_id == "sleeping"
-            )
+            sleeping_geometry = next(zone for zone in geometry.zones if zone.zone_id == "sleeping")
             area_capacity = math.floor(sleeping_geometry.usable_area_m2 / 3.5)
             capacity_limits = [area_capacity]
             if sleeping_zone.capacity is not None:
@@ -382,9 +427,7 @@ class InitialScenarioBuilder:
                     "図面の避難スペース面積、図面入力容量、施設公開容量に差があります。シナリオでは確認できる数値のうち最も小さい容量を使っています。"
                 )
             if reconciled_capacity < request.evacuees:
-                blocker = (
-                    f"入力人数{request.evacuees}人が図面から見積もった避難スペース容量{reconciled_capacity}人を超えています。人数または図面を確認してください。"
-                )
+                blocker = f"入力人数{request.evacuees}人が図面から見積もった避難スペース容量{reconciled_capacity}人を超えています。人数または図面を確認してください。"
                 design_warnings.append(blocker)
                 approval_blockers.append(blocker)
             plan_capacity_assumptions.append(
@@ -395,7 +438,9 @@ class InitialScenarioBuilder:
                         "capacity_used": reconciled_capacity,
                         "input_zone_capacity": sleeping_zone.capacity,
                         "area_based_capacity": area_capacity,
-                        "published_capacity": selected_shelter.capacity if selected_shelter else None,
+                        "published_capacity": selected_shelter.capacity
+                        if selected_shelter
+                        else None,
                     },
                     "reason": "For imported geometry, the lower of the uploaded zone capacity, area-based 3.5 m²/person heuristic, and selected source capacity is retained for the draft.",
                     "source_id": "ASM-PLAN-CAPACITY-RECONCILIATION-V1",
@@ -412,9 +457,7 @@ class InitialScenarioBuilder:
         if "sleeping" not in zone_ids:
             raise ValueError("scenario must include a 'sleeping' starting zone")
         if plan_override is None and design.capacity_supported < request.evacuees:
-            blocker = (
-                f"入力人数{request.evacuees}人が標準モデルの避難スペース容量{design.capacity_supported}人を超えています。人数または面積を調整してください。"
-            )
+            blocker = f"入力人数{request.evacuees}人が標準モデルの避難スペース容量{design.capacity_supported}人を超えています。人数または面積を調整してください。"
             approval_blockers.append(blocker)
         population = self.population_generator.generate(
             count=request.evacuees,
@@ -427,7 +470,8 @@ class InitialScenarioBuilder:
             # Without entered household shapes, minors would have no linked adult
             # and every draft would stop at the guardian review blocker.
             household_composition=(
-                None if request.population_conditions.household_composition is not None
+                None
+                if request.population_conditions.household_composition is not None
                 else DEFAULT_SYNTHETIC_HOUSEHOLD_COMPOSITION
             ),
         )
@@ -453,8 +497,7 @@ class InitialScenarioBuilder:
                 geometry=geometry,
             )
             missing_accessible_toilet = not any(
-                facility.kind == "toilet"
-                and facility.id.startswith("accessible_toilet_")
+                facility.kind == "toilet" and facility.id.startswith("accessible_toilet_")
                 for facility in facilities
             )
             if inaccessible_zones or missing_accessible_toilet:
@@ -473,12 +516,12 @@ class InitialScenarioBuilder:
                 )
                 design_warnings.append(blocker)
                 approval_blockers.append(blocker)
-        research_source_by_id = {
-            source.id: source.model_dump(mode="json") for source in research.sources
-        } if research is not None else {}
-        extra_source_records = {
-            str(source["id"]): source for source in population.sources
-        }
+        research_source_by_id = (
+            {source.id: source.model_dump(mode="json") for source in research.sources}
+            if research is not None
+            else {}
+        )
+        extra_source_records = {str(source["id"]): source for source in population.sources}
         for condition in request.facility_zones:
             record = {
                 "id": condition.source_id,
@@ -542,14 +585,23 @@ class InitialScenarioBuilder:
             {
                 "id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
                 "subject": "staff_support_lifecycle",
-                "value": {"support_task_minutes": 10, "unresolved_after_minutes": 90, "support_cooldown_minutes": 30, "support_fairness_minutes": 30},
+                "value": {
+                    "support_task_minutes": 10,
+                    "unresolved_after_minutes": 90,
+                    "support_cooldown_minutes": 30,
+                    "support_fairness_minutes": 30,
+                },
                 "reason": "Generic support timing and fairness-aging delay used by the simulation model; not an operational staffing standard.",
                 "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
             },
             {
                 "id": "ASM-TOILET-SERVICE-DURATION-V1",
                 "subject": "toilet_service_duration",
-                "value": {"distribution": "discrete_uniform_inclusive", "minimum_minutes": 4, "maximum_minutes": 8},
+                "value": {
+                    "distribution": "discrete_uniform_inclusive",
+                    "minimum_minutes": 4,
+                    "maximum_minutes": 8,
+                },
                 "reason": "Generic toilet service timing used by the simulation model; not measured at the selected facility.",
                 "source_id": TOILET_SERVICE_SOURCE_ID,
             },
@@ -566,14 +618,19 @@ class InitialScenarioBuilder:
         # public-source records. Keep their references resolvable without promoting
         # them to verified statistics or replacing actual research citations.
         operator_population_sources = (
-            *request.evacuation_selection.source_ids, *request.population_conditions.source_ids,
+            *request.evacuation_selection.source_ids,
+            *request.population_conditions.source_ids,
         )
         for source_id in operator_population_sources:
-            source_records.setdefault(source_id, {
-                "id": source_id, "title": "Operator-declared population input reference",
-                "source_kind": "operator",
-                "description": "Identifier supplied with operator population/selection input; external citation and applicability have not been verified.",
-            })
+            source_records.setdefault(
+                source_id,
+                {
+                    "id": source_id,
+                    "title": "Operator-declared population input reference",
+                    "source_kind": "operator",
+                    "description": "Identifier supplied with operator population/selection input; external citation and applicability have not been verified.",
+                },
+            )
         if OPERATOR_POPULATION_SOURCE_ID in population.population.source_ids:
             source_records.setdefault(
                 OPERATOR_POPULATION_SOURCE_ID,
@@ -599,10 +656,9 @@ class InitialScenarioBuilder:
                 "人口・世帯入力の出典が調査結果に見つかりません。実データと仮定を確認してください: "
                 + ", ".join(sorted(missing_population_sources))
             )
-        missing_condition_sources = (
-            set(request.operational_conditions.referenced_source_ids())
-            - set(source_records)
-        )
+        missing_condition_sources = set(
+            request.operational_conditions.referenced_source_ids()
+        ) - set(source_records)
         if missing_condition_sources:
             approval_blockers.append(
                 "運営条件の出典IDが調査結果または入力者・仮定の出典記録にありません: "
@@ -642,13 +698,20 @@ class InitialScenarioBuilder:
                 "source_kind": "assumption",
                 "description": "The opt-in service model uses five-minute service duration, 250 ml water, and one meal unit per completed service; calibrate these assumptions before operational use.",
             }
-            model_assumptions = (*model_assumptions, {
-                "id": RESOURCE_SERVICE_ASSUMPTION_ID,
-                "subject": "resource_service_conversion",
-                "value": {"service_minutes": 5, "water_ml_per_service": 250, "food_meal_units_per_service": 1},
-                "reason": "Generic service conversion coefficients are assumptions, not measured staffing or consumption data.",
-                "source_id": RESOURCE_SERVICE_ASSUMPTION_ID,
-            })
+            model_assumptions = (
+                *model_assumptions,
+                {
+                    "id": RESOURCE_SERVICE_ASSUMPTION_ID,
+                    "subject": "resource_service_conversion",
+                    "value": {
+                        "service_minutes": 5,
+                        "water_ml_per_service": 250,
+                        "food_meal_units_per_service": 1,
+                    },
+                    "reason": "Generic service conversion coefficients are assumptions, not measured staffing or consumption data.",
+                    "source_id": RESOURCE_SERVICE_ASSUMPTION_ID,
+                },
+            )
         if "infrastructure" in operational_model_configs:
             infrastructure_config = operational_model_configs["infrastructure"]
             infrastructure_source_id = str(infrastructure_config["source_id"])
@@ -658,21 +721,27 @@ class InitialScenarioBuilder:
                 "source_kind": "assumption",
                 "description": "Infrastructure dependencies and environmental coefficients are explicitly configured assumptions, not measured facility engineering data.",
             }
-            model_assumptions = (*model_assumptions, {
-                "id": infrastructure_source_id,
-                "subject": "infrastructure_dependencies_and_coefficients",
-                "value": infrastructure_config,
-                "reason": "Configured dependency edges and stress coefficients are assumptions. Event timing and targets come from separate condition inputs.",
-                "source_id": infrastructure_source_id,
-            })
+            model_assumptions = (
+                *model_assumptions,
+                {
+                    "id": infrastructure_source_id,
+                    "subject": "infrastructure_dependencies_and_coefficients",
+                    "value": infrastructure_config,
+                    "reason": "Configured dependency edges and stress coefficients are assumptions. Event timing and targets come from separate condition inputs.",
+                    "source_id": infrastructure_source_id,
+                },
+            )
         for assumption in model_assumptions:
             if assumption["source_id"] not in {item["source_id"] for item in facility_assumptions}:
-                source_records.setdefault(str(assumption["source_id"]), {
-                    "id": assumption["source_id"],
-                    "title": str(assumption["subject"]),
-                    "source_kind": "assumption",
-                    "description": str(assumption["reason"]),
-                })
+                source_records.setdefault(
+                    str(assumption["source_id"]),
+                    {
+                        "id": assumption["source_id"],
+                        "title": str(assumption["subject"]),
+                        "source_kind": "assumption",
+                        "description": str(assumption["reason"]),
+                    },
+                )
         provenance: dict[str, Any] = {
             "generator": "region-initial-scenario-v1",
             "natural_language_input": request.model_dump(mode="json"),
@@ -683,13 +752,18 @@ class InitialScenarioBuilder:
                     [
                         {
                             "subject": "uploaded_sleeping_zone_capacity",
-                            "value": next(zone.capacity for zone in plan_override.zones if zone.id == "sleeping"),
+                            "value": next(
+                                zone.capacity
+                                for zone in plan_override.zones
+                                if zone.id == "sleeping"
+                            ),
                             "source_id": plan_override.asset.source_id,
                             "description": "Capacity supplied in the operator-uploaded scenario mapping; not independently verified.",
                         }
                     ]
                     if plan_override is not None
-                    and next(zone for zone in plan_override.zones if zone.id == "sleeping").capacity is not None
+                    and next(zone for zone in plan_override.zones if zone.id == "sleeping").capacity
+                    is not None
                     else []
                 ),
             ],
@@ -706,22 +780,37 @@ class InitialScenarioBuilder:
                 "age_bands": [band.model_dump(mode="json") for band in population.age_bands],
                 "household_mix": population.household_mix.model_dump(mode="json"),
                 "source_ids": population.population.source_ids,
-                "resident_distribution": [band.model_dump(mode="json") for band in population.age_bands],
+                "resident_distribution": [
+                    band.model_dump(mode="json") for band in population.age_bands
+                ],
                 "resident_age_distribution": population.resident_age_distribution,
                 "evacuee_age_distribution": population.evacuee_age_distribution,
                 "evacuation_selection": population.evacuation_selection.model_dump(mode="json"),
-                "household_construction": [item.model_dump(mode="json") for item in population.household_relationships],
-                "person_requirements_preview": [item.model_dump(mode="json") for item in population.person_requirements],
+                "household_construction": [
+                    item.model_dump(mode="json") for item in population.household_relationships
+                ],
+                "person_requirements_preview": [
+                    item.model_dump(mode="json") for item in population.person_requirements
+                ],
                 "unaccompanied_minor_ids": unaccompanied_minors,
                 "shared_population_contract_note": "Caregiver, pet, medical-support and information-access requirements are shown in the region preview. PopulationSpec v1 cannot persist all of them as engine traits; see the Round 2 result handoff for the coordinated v2 contract.",
             },
             "operational_conditions": request.operational_conditions.model_dump(mode="json"),
-            "editable_facility_geometry": editable_geometry.model_dump(mode="json") if editable_geometry else None,
+            "editable_facility_geometry": editable_geometry.model_dump(mode="json")
+            if editable_geometry
+            else None,
             "review_required": True,
             "approval_blockers": approval_blockers,
-            "unknown_initial_stock": request.operational_conditions.initial_resources.status == "unknown",
+            "unknown_initial_stock": request.operational_conditions.initial_resources.status
+            == "unknown",
             "notes": [
-                *(["No starting food or water inventory was entered; the standard provisioning assumption was applied."] if request.operational_conditions.initial_resources.status == "unknown" else []),
+                *(
+                    [
+                        "No starting food or water inventory was entered; the standard provisioning assumption was applied."
+                    ]
+                    if request.operational_conditions.initial_resources.status == "unknown"
+                    else []
+                ),
                 "Synthetic profiles do not represent identifiable real people.",
             ],
         }
@@ -806,13 +895,20 @@ class InitialScenarioBuilder:
             "facilities": [facility.model_dump(mode="json") for facility in facilities],
             "staff": [member.model_dump(mode="json") for member in staff],
             "population": population.population.model_dump(mode="json"),
-            "profiles": [profile.model_dump(mode="json") for profile in population.profile_set.profiles],
+            "profiles": [
+                profile.model_dump(mode="json") for profile in population.profile_set.profiles
+            ],
             "selected_shelter_id": selected_shelter_id,
-            "selected_shelter": selected_shelter.model_dump(mode="json") if selected_shelter else None,
+            "selected_shelter": selected_shelter.model_dump(mode="json")
+            if selected_shelter
+            else None,
         }
-        scenario_id = "region-" + hashlib.sha256(
-            json.dumps(scenario_identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()[:16]
+        scenario_id = (
+            "region-"
+            + hashlib.sha256(
+                json.dumps(scenario_identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:16]
+        )
         model_configs: dict[str, dict[str, Any]] = {
             "behavior": {
                 "decision_interval_minutes": 15,
@@ -868,6 +964,7 @@ class InitialScenarioBuilder:
             canonical_staff_operations_config,
         )
         from sheltersim.experiments.scenario_connections import connect_generated_context
+
         model_configs.update(connect_generated_context(population, editable_geometry, geometry))
         from dataclasses import asdict
 
@@ -876,14 +973,16 @@ class InitialScenarioBuilder:
 
         social_parameters = asdict(SocialPropagationParameters())
         social_parameters["enabled"] = request.social_propagation_enabled
-        social_parameters.update({
-            "source_type": "assumption",
-            "source_id": (
-                "ASM-BOSSE-AFFECT-CONTAGION-V1"
-                if request.social_policy_id == "expressiveness-channel-openness-v1"
-                else "ASM-SOCIAL-PROPAGATION-V1"
-            ),
-        })
+        social_parameters.update(
+            {
+                "source_type": "assumption",
+                "source_id": (
+                    "ASM-BOSSE-AFFECT-CONTAGION-V1"
+                    if request.social_policy_id == "expressiveness-channel-openness-v1"
+                    else "ASM-SOCIAL-PROPAGATION-V1"
+                ),
+            }
+        )
         information_config = InformationSpreadConfig().to_dict()
         information_config["enabled"] = request.information_spread_enabled
         from sheltersim.policies.psychology import (
@@ -936,6 +1035,7 @@ class InitialScenarioBuilder:
         }
         if request.social_proximity_policy_id == "distance-sampled-proximity-v1":
             from sheltersim.domain.social_network import PROXIMITY_CONTACT_POLICY_VERSION
+
             model_configs["social_proximity"] = {
                 "schema_version": 1,
                 "enabled": True,
@@ -945,16 +1045,24 @@ class InitialScenarioBuilder:
                 "max_pairs_per_sample": 500,
             }
         model_configs["policy_registry"]["affect"] = "linear-positive-negative-v1"
-        model_configs["state_contracts"] = {"schema_version": 1, "namespaces": {
-            "population_presence_v1": {"implementation_id": "population-presence-ledger-v1",
-                "implementation_version": "1", "schema_version": 1}}}
+        model_configs["state_contracts"] = {
+            "schema_version": 1,
+            "namespaces": {
+                "population_presence_v1": {
+                    "implementation_id": "population-presence-ledger-v1",
+                    "implementation_version": "1",
+                    "schema_version": 1,
+                }
+            },
+        }
         model_configs["body_dynamics"] = canonical_body_config(None)
         if core_suite_selected:
             model_configs["body_dynamics"]["awake_sleep_debt_minutes_per_minute"] = 0.5
             model_configs["body_dynamics"]["rest_sleep_debt_recovery_per_minute"] = 0.0
         model_configs["staff_operations"] = canonical_staff_operations_config(None)
         model_configs["shared_operations"] = {
-            "schema_version": 1, "policy_version": "shared-operations-v1",
+            "schema_version": 1,
+            "policy_version": "shared-operations-v1",
         }
         model_configs["movement_model"] = canonical_movement_config(None)
         from sheltersim.domain.geometry_overlay import (
@@ -973,19 +1081,36 @@ class InitialScenarioBuilder:
         # Scenario otherwise has only once a delivery is planned (day 4 on) (#65).
         model_configs["operational_events"] = {"enabled": True}
         from sheltersim.domain.temporary_spaces import TEMPORARY_SPACES_SOURCE_ID
-        for source_id, title in ((BODY_SOURCE_ID, "Experimental life-state feedback"),
-                                 (STAFF_OPERATIONS_SOURCE_ID, "Experimental staff operations"),
-                                 (MOVEMENT_SOURCE_ID, "Experimental spatial movement"),
-                                 (TEMPORARY_ROOM_BED_SOURCE_ID, "Exclusive temporary sleeping places"),
-                                 (TEMPORARY_ROOM_INTAKE_SOURCE_ID, "Physical temporary room intake"),
-                                 (INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
-                                  "Floor-plan placement of installed facilities"),
-                                 (TEMPORARY_SPACES_SOURCE_ID, "Zone-only temporary capacity")):
+
+        for source_id, title in (
+            (BODY_SOURCE_ID, "Experimental life-state feedback"),
+            (STAFF_OPERATIONS_SOURCE_ID, "Experimental staff operations"),
+            (MOVEMENT_SOURCE_ID, "Experimental spatial movement"),
+            (TEMPORARY_ROOM_BED_SOURCE_ID, "Exclusive temporary sleeping places"),
+            (TEMPORARY_ROOM_INTAKE_SOURCE_ID, "Physical temporary room intake"),
+            (
+                INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
+                "Floor-plan placement of installed facilities",
+            ),
+            (TEMPORARY_SPACES_SOURCE_ID, "Zone-only temporary capacity"),
+        ):
             if not any(source["id"] == source_id for source in provenance["sources"]):
-                provenance["sources"].append({"id": source_id, "title": title,
-                    "source_kind": "assumption", "description": "Installed synthetic coefficients; not empirically calibrated."})
-            provenance["assumptions"].append({"id": source_id, "subject": title,
-                "source_id": source_id, "reason": "New generated Scenario explicitly enables the installed experimental model."})
+                provenance["sources"].append(
+                    {
+                        "id": source_id,
+                        "title": title,
+                        "source_kind": "assumption",
+                        "description": "Installed synthetic coefficients; not empirically calibrated.",
+                    }
+                )
+            provenance["assumptions"].append(
+                {
+                    "id": source_id,
+                    "subject": title,
+                    "source_id": source_id,
+                    "reason": "New generated Scenario explicitly enables the installed experimental model.",
+                }
+            )
         from sheltersim.domain.agent_dynamics import (
             ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
             INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
@@ -1000,58 +1125,73 @@ class InitialScenarioBuilder:
         model_configs["agent_dynamics"] = canonical_agent_dynamics_config(
             {"policy_version": ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION}
         )
-        provenance["sources"].append({
-            "id": ORIENTATION_FACILITY_SOURCE_ID,
-            "title": "Intake orientation to shared shelter facilities",
-            "source_kind": "assumption",
-            "description": "Every Agent is assumed to be shown the shared service facilities at intake; not observed at a real shelter.",
-        })
-        provenance["assumptions"].append({
-            "id": ORIENTATION_FACILITY_SOURCE_ID,
-            "subject": "initial_facility_knowledge",
-            "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
-            "source_id": ORIENTATION_FACILITY_SOURCE_ID,
-            "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
-        })
-        provenance["sources"].append({
-            "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
-            "title": "Announcement of shared facilities installed during a Run",
-            "source_kind": "assumption",
-            "description": (
-                "Every present Agent is assumed to be told at once about a shared service "
-                "facility installed during the Run; not observed at a real shelter."
-            ),
-        })
-        provenance["assumptions"].append({
-            "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
-            "subject": "installed_facility_knowledge",
-            "value": {"announced_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS),
-                      "delay_minutes": 0, "reach": "all_present_agents"},
-            "source_id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
-            "reason": (
-                "There is no information-spread path for facility knowledge, so an installed "
-                "shared facility would otherwise stay unknown to everyone already admitted."
-            ),
-        })
-        provenance["sources"].append({
-            "id": IntegratedDistressLifeStatePolicy.source_id,
-            "title": "Mean-reverting acute distress with life-state feedback",
-            "source_kind": "assumption",
-            "description": (
-                "Literature-motivated mean-reversion structure (Kuppens et al. 2010) "
-                "with uncalibrated coefficients; not fitted to shelter data."
-            ),
-        })
-        provenance["assumptions"].append({
-            "id": IntegratedDistressLifeStatePolicy.source_id,
-            "subject": "psychology_model",
-            "value": {"policy_version": INTEGRATED_PSYCHOLOGY_POLICY_VERSION},
-            "source_id": IntegratedDistressLifeStatePolicy.source_id,
-            "reason": (
-                "New generated Scenarios select the research psychology model; legacy models "
-                "remain only for saved inputs and explicit comparisons."
-            ),
-        })
+        provenance["sources"].append(
+            {
+                "id": ORIENTATION_FACILITY_SOURCE_ID,
+                "title": "Intake orientation to shared shelter facilities",
+                "source_kind": "assumption",
+                "description": "Every Agent is assumed to be shown the shared service facilities at intake; not observed at a real shelter.",
+            }
+        )
+        provenance["assumptions"].append(
+            {
+                "id": ORIENTATION_FACILITY_SOURCE_ID,
+                "subject": "initial_facility_knowledge",
+                "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
+                "source_id": ORIENTATION_FACILITY_SOURCE_ID,
+                "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
+            }
+        )
+        provenance["sources"].append(
+            {
+                "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+                "title": "Announcement of shared facilities installed during a Run",
+                "source_kind": "assumption",
+                "description": (
+                    "Every present Agent is assumed to be told at once about a shared service "
+                    "facility installed during the Run; not observed at a real shelter."
+                ),
+            }
+        )
+        provenance["assumptions"].append(
+            {
+                "id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+                "subject": "installed_facility_knowledge",
+                "value": {
+                    "announced_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS),
+                    "delay_minutes": 0,
+                    "reach": "all_present_agents",
+                },
+                "source_id": INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+                "reason": (
+                    "There is no information-spread path for facility knowledge, so an installed "
+                    "shared facility would otherwise stay unknown to everyone already admitted."
+                ),
+            }
+        )
+        provenance["sources"].append(
+            {
+                "id": IntegratedDistressLifeStatePolicy.source_id,
+                "title": "Mean-reverting acute distress with life-state feedback",
+                "source_kind": "assumption",
+                "description": (
+                    "Literature-motivated mean-reversion structure (Kuppens et al. 2010) "
+                    "with uncalibrated coefficients; not fitted to shelter data."
+                ),
+            }
+        )
+        provenance["assumptions"].append(
+            {
+                "id": IntegratedDistressLifeStatePolicy.source_id,
+                "subject": "psychology_model",
+                "value": {"policy_version": INTEGRATED_PSYCHOLOGY_POLICY_VERSION},
+                "source_id": IntegratedDistressLifeStatePolicy.source_id,
+                "reason": (
+                    "New generated Scenarios select the research psychology model; legacy models "
+                    "remain only for saved inputs and explicit comparisons."
+                ),
+            }
+        )
         from sheltersim.policies.queueing import (
             NeedWeightedPhysicalQueuePolicy,
             StrictFIFOQueuePolicy,
@@ -1060,6 +1200,7 @@ class InitialScenarioBuilder:
             DistanceDurationRepeatTrustPolicy,
             DurationOnlyTrustPolicy,
         )
+
         selected_policy_sources = {
             "utility-softmax-v1": (
                 "ASM-UTILITY-BEHAVIOR-V1",
@@ -1203,30 +1344,48 @@ class InitialScenarioBuilder:
         ):
             source_id, title = selected_policy_sources[model_id]
             if not any(source["id"] == source_id for source in provenance["sources"]):
-                provenance["sources"].append({"id": source_id, "title": title,
-                    "source_kind": "assumption",
-                    "description": "Installed experimental operator; coefficients are not empirically calibrated."})
-            provenance["assumptions"].append({"id": source_id, "subject": title,
-                "source_id": source_id,
-                "reason": f"Scenario selected installed model {model_id}; coefficients remain experimental assumptions."})
+                provenance["sources"].append(
+                    {
+                        "id": source_id,
+                        "title": title,
+                        "source_kind": "assumption",
+                        "description": "Installed experimental operator; coefficients are not empirically calibrated.",
+                    }
+                )
+            provenance["assumptions"].append(
+                {
+                    "id": source_id,
+                    "subject": title,
+                    "source_id": source_id,
+                    "reason": f"Scenario selected installed model {model_id}; coefficients remain experimental assumptions.",
+                }
+            )
         if request.social_proximity_policy_id == "distance-sampled-proximity-v1":
             from sheltersim.domain.social_network import PROXIMITY_CONTACT_SOURCE_ID
-            if not any(source.get("id") == PROXIMITY_CONTACT_SOURCE_ID for source in provenance["sources"]):
-                provenance["sources"].append({
+
+            if not any(
+                source.get("id") == PROXIMITY_CONTACT_SOURCE_ID for source in provenance["sources"]
+            ):
+                provenance["sources"].append(
+                    {
+                        "id": PROXIMITY_CONTACT_SOURCE_ID,
+                        "title": "Distance-sampled physical proximity",
+                        "source_kind": "assumption",
+                        "description": "The configured physical distance and sampling frequency are experimental assumptions; proximity is not dialogue and is not calibrated to shelter observations.",
+                    }
+                )
+            provenance["assumptions"].append(
+                {
                     "id": PROXIMITY_CONTACT_SOURCE_ID,
-                    "title": "Distance-sampled physical proximity",
-                    "source_kind": "assumption",
-                    "description": "The configured physical distance and sampling frequency are experimental assumptions; proximity is not dialogue and is not calibrated to shelter observations.",
-                })
-            provenance["assumptions"].append({
-                "id": PROXIMITY_CONTACT_SOURCE_ID,
-                "subject": "Physical proximity sampling",
-                "source_id": PROXIMITY_CONTACT_SOURCE_ID,
-                "reason": "Scenario selected distance-sampled-proximity-v1 with a 15-minute interval, 1.5-metre threshold and 500-pair sample cap.",
-            })
+                    "subject": "Physical proximity sampling",
+                    "source_id": PROXIMITY_CONTACT_SOURCE_ID,
+                    "reason": "Scenario selected distance-sampled-proximity-v1 with a 15-minute interval, 1.5-metre threshold and 500-pair sample cap.",
+                }
+            )
         provenance["population_generation"]["shared_population_contract_note"] = (
             "Requirements persist in model_configs.population_context alongside PopulationSpec v1; "
-            "recorded requirements do not imply that every corresponding behavior is simulated.")
+            "recorded requirements do not imply that every corresponding behavior is simulated."
+        )
         model_configs.update(operational_model_configs)
         from sheltersim.domain.staff_dynamics import (
             SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
@@ -1238,18 +1397,25 @@ class InitialScenarioBuilder:
             for shift in request.operational_conditions.staff_shifts:
                 if shift.staff_id not in {member.id for member in staff}:
                     raise ValueError("unknown_staff_id")
-                windows.setdefault(shift.staff_id, []).append({"start_minute": shift.start_minute, "end_minute": shift.end_minute})
-            model_configs["staff_dynamics"] = canonical_staff_dynamics_config({"shift_windows_by_staff": windows})
+                windows.setdefault(shift.staff_id, []).append(
+                    {"start_minute": shift.start_minute, "end_minute": shift.end_minute}
+                )
+            model_configs["staff_dynamics"] = canonical_staff_dynamics_config(
+                {"shift_windows_by_staff": windows}
+            )
         else:
             model_configs["staff_dynamics"] = canonical_staff_dynamics_config(None)
         if "staff_dynamics.shift_windows_by_staff.*" in request.model_parameter_overrides:
-            model_configs["staff_dynamics"] = canonical_staff_dynamics_config({
-                "policy_version": SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
-                "shift_windows_by_staff": model_configs["staff_dynamics"].get(
-                    "shift_windows_by_staff", {}
-                ),
-            })
+            model_configs["staff_dynamics"] = canonical_staff_dynamics_config(
+                {
+                    "policy_version": SHIFT_STAFF_DYNAMICS_POLICY_VERSION,
+                    "shift_windows_by_staff": model_configs["staff_dynamics"].get(
+                        "shift_windows_by_staff", {}
+                    ),
+                }
+            )
         from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
+
         model_configs.setdefault(
             "zone_environment",
             ScenarioZoneEnvironmentConfig.model_validate(
@@ -1260,9 +1426,7 @@ class InitialScenarioBuilder:
             model_configs,
             request.model_parameter_overrides,
             entity_ids={
-                "per_agent_id": {
-                    profile.id for profile in population.profile_set.profiles
-                },
+                "per_agent_id": {profile.id for profile in population.profile_set.profiles},
                 "per_staff_id": {member.id for member in staff},
                 "per_zone_id": {zone.id for zone in zones},
             },
@@ -1270,16 +1434,17 @@ class InitialScenarioBuilder:
         for item in applied_overrides:
             source_id = item["source_id"]
             if not any(source.get("id") == source_id for source in provenance["sources"]):
-                provenance["sources"].append({
-                    "id": source_id,
-                    "source_kind": "assumption",
-                    "title": f"{item['model_id']} coefficient metadata",
-                    "description": "Installed experimental coefficient metadata; no empirical calibration claim.",
-                })
+                provenance["sources"].append(
+                    {
+                        "id": source_id,
+                        "source_kind": "assumption",
+                        "title": f"{item['model_id']} coefficient metadata",
+                        "description": "Installed experimental coefficient metadata; no empirical calibration claim.",
+                    }
+                )
             assumption_record = {
-                "id": "ASM-POLICY-OVERRIDE-" + hashlib.sha256(
-                    item["path"].encode("utf-8")
-                ).hexdigest()[:12].upper(),
+                "id": "ASM-POLICY-OVERRIDE-"
+                + hashlib.sha256(item["path"].encode("utf-8")).hexdigest()[:12].upper(),
                 "subject": item["path"],
                 "value": item["value"],
                 "unit": item["unit"],
@@ -1298,14 +1463,23 @@ class InitialScenarioBuilder:
             provenance["assumptions"].append(assumption_record)
         for key in ("zone_environment", "staff_dynamics"):
             config = model_configs.get(key, {})
-            if config.get("source_id") and not any(source["id"] == config["source_id"] for source in provenance["sources"]):
-                provenance["sources"].append({"id": config["source_id"], "source_kind": "assumption",
-                    "title": "Installed experimental " + key, "description": "Uncalibrated operator coefficients; no empirical validity claim."})
+            if config.get("source_id") and not any(
+                source["id"] == config["source_id"] for source in provenance["sources"]
+            ):
+                provenance["sources"].append(
+                    {
+                        "id": config["source_id"],
+                        "source_kind": "assumption",
+                        "title": "Installed experimental " + key,
+                        "description": "Uncalibrated operator coefficients; no empirical validity claim.",
+                    }
+                )
         if core_suite_selected:
             from sheltersim.experiments.model_suite import (
                 CORE_MODEL_SUITE_SOURCE_ID,
                 SLEEP_DEBT_BALANCE_SOURCE_ID,
             )
+
             for source_id, title, description in (
                 (
                     CORE_MODEL_SUITE_SOURCE_ID,
@@ -1325,21 +1499,31 @@ class InitialScenarioBuilder:
                 ),
             ):
                 if not any(source["id"] == source_id for source in provenance["sources"]):
-                    provenance["sources"].append({
-                        "id": source_id,
-                        "source_kind": "assumption",
-                        "title": title,
-                        "description": description,
-                    })
+                    provenance["sources"].append(
+                        {
+                            "id": source_id,
+                            "source_kind": "assumption",
+                            "title": title,
+                            "description": description,
+                        }
+                    )
                 if not any(item.get("id") == source_id for item in provenance["assumptions"]):
-                    provenance["assumptions"].append({
-                        "id": source_id,
-                        "subject": title,
-                        "source_id": source_id,
-                        "reason": description,
-                    })
-        provenance["sources"].append({"id": "ASM-AFFECT-TRANSFER-V1", "source_kind": "assumption",
-            "title": "Installed affect transfer", "description": "Synthetic contact transfer equation, not calibrated to measured shelter outcomes."})
+                    provenance["assumptions"].append(
+                        {
+                            "id": source_id,
+                            "subject": title,
+                            "source_id": source_id,
+                            "reason": description,
+                        }
+                    )
+        provenance["sources"].append(
+            {
+                "id": "ASM-AFFECT-TRANSFER-V1",
+                "source_kind": "assumption",
+                "title": "Installed affect transfer",
+                "description": "Synthetic contact transfer equation, not calibrated to measured shelter outcomes.",
+            }
+        )
         scenario = ScenarioSpec(
             schema_version=3,
             id=scenario_id,
@@ -1412,10 +1596,22 @@ def _apply_selected_policy_parameter_overrides(
     )
 
     formula_domains = {
-        "behavior", "psychology", "social", "information", "affect",
-        "relationship", "queue", "body_dynamics", "care_outcome", "staff_fatigue",
-        "staff_operations", "zone_environment", "zone_rest", "zone_hygiene",
-        "zone_privacy", "social_proximity",
+        "behavior",
+        "psychology",
+        "social",
+        "information",
+        "affect",
+        "relationship",
+        "queue",
+        "body_dynamics",
+        "care_outcome",
+        "staff_fatigue",
+        "staff_operations",
+        "zone_environment",
+        "zone_rest",
+        "zone_hygiene",
+        "zone_privacy",
+        "social_proximity",
     }
     selected = selected_models(model_configs)
     catalog = model_catalog()
@@ -1460,26 +1656,34 @@ def _apply_selected_policy_parameter_overrides(
                 type(catalog[model_id]["parameters"][path].get("default")) in (int, float)
                 or catalog[model_id]["parameters"][path].get("scope")
                 in {
-                    "per_staff_id", "per_service", "per_zone_id", "per_agent_id",
-                    "per_task_kind", "per_staff_shift_windows",
+                    "per_staff_id",
+                    "per_service",
+                    "per_zone_id",
+                    "per_agent_id",
+                    "per_task_kind",
+                    "per_staff_shift_windows",
                 }
             )
         ]
         section = path.split(".", 1)[0]
-        if not consumers and section in {
-            "movement_model", "resource_service", "toilet_service", "staff_dynamics", "staff"
-        } and section in model_configs:
+        if (
+            not consumers
+            and section
+            in {"movement_model", "resource_service", "toilet_service", "staff_dynamics", "staff"}
+            and section in model_configs
+        ):
             if operator_catalog is None:
                 from sheltersim.contracts.evidence import operator_evidence_catalog
 
                 operator_catalog = operator_evidence_catalog()
             for model_id in active_simulator_model_ids:
-                if model_id not in operator_catalog or path not in operator_catalog[model_id]["parameters"]:
+                if (
+                    model_id not in operator_catalog
+                    or path not in operator_catalog[model_id]["parameters"]
+                ):
                     continue
                 definition = dict(operator_catalog[model_id]["parameters"][path])
-                if section in {
-                    "resource_service", "toilet_service", "staff_dynamics", "staff"
-                }:
+                if section in {"resource_service", "toilet_service", "staff_dynamics", "staff"}:
                     definition["source_id"] = model_configs[section]["source_id"]
                 consumers.append((section, model_id, definition))
         owner_priority = (
@@ -1510,8 +1714,12 @@ def _apply_selected_policy_parameter_overrides(
         )
         path_parts = path.split(".")
         structured_scopes = {
-            "per_staff_id", "per_service", "per_zone_id", "per_agent_id",
-            "per_task_kind", "per_staff_shift_windows",
+            "per_staff_id",
+            "per_service",
+            "per_zone_id",
+            "per_agent_id",
+            "per_task_kind",
+            "per_staff_shift_windows",
         }
         if (
             len(path_parts) not in (2, 3)
@@ -1529,14 +1737,17 @@ def _apply_selected_policy_parameter_overrides(
             scalar_config = section_config
             for part in path_parts[1:-1]:
                 if not isinstance(scalar_config, dict):
-                    raise ValueError(f"selected policy parameter {path!r} has no object runtime config field")
+                    raise ValueError(
+                        f"selected policy parameter {path!r} has no object runtime config field"
+                    )
                 scalar_config = scalar_config.get(part)
         field = path_parts[1] if scope is not None or len(path_parts) == 2 else path_parts[-1]
         if not isinstance(section_config, dict) or (
-            scope is None and (
-                not isinstance(scalar_config, dict) or field not in scalar_config
-            )
-            or scope is not None and field not in section_config and scope not in structured_scopes
+            scope is None
+            and (not isinstance(scalar_config, dict) or field not in scalar_config)
+            or scope is not None
+            and field not in section_config
+            and scope not in structured_scopes
         ):
             raise ValueError(f"selected policy parameter {path!r} has no runtime config field")
         if scope in structured_scopes:
@@ -1547,9 +1758,7 @@ def _apply_selected_policy_parameter_overrides(
                 if scope in {"per_staff_id", "per_staff_shift_windows"}
                 else {"toilet", "water", "meal"}
                 if scope == "per_service"
-                else {
-                    "cleaning", "maintenance", "information_outreach", "intake", "patrol"
-                }
+                else {"cleaning", "maintenance", "information_outreach", "intake", "patrol"}
                 if scope == "per_task_kind"
                 else (entity_ids or {}).get("per_zone_id", set())
                 if scope == "per_zone_id"
@@ -1568,36 +1777,59 @@ def _apply_selected_policy_parameter_overrides(
                     else "unknown Agent IDs"
                 )
                 raise ValueError(f"policy parameter {path!r} references {reason}")
-            if scope in {
-                "per_service", "per_zone_id", "per_agent_id", "per_task_kind",
-                "per_staff_shift_windows",
-            } and not raw_value:
+            if (
+                scope
+                in {
+                    "per_service",
+                    "per_zone_id",
+                    "per_agent_id",
+                    "per_task_kind",
+                    "per_staff_shift_windows",
+                }
+                and not raw_value
+            ):
                 label = (
-                    "service" if scope == "per_service"
-                    else "task kind" if scope == "per_task_kind"
-                    else "staff shift schedule" if scope == "per_staff_shift_windows"
-                    else "zone" if scope == "per_zone_id"
+                    "service"
+                    if scope == "per_service"
+                    else "task kind"
+                    if scope == "per_task_kind"
+                    else "staff shift schedule"
+                    if scope == "per_staff_shift_windows"
+                    else "zone"
+                    if scope == "per_zone_id"
                     else "Agent"
                 )
                 raise ValueError(f"policy parameter {path!r} requires at least one {label} value")
             current = section_config.get(field, {})
             if not isinstance(current, dict):
-                raise ValueError(f"selected policy parameter {path!r} has no object runtime config field")
+                raise ValueError(
+                    f"selected policy parameter {path!r} has no object runtime config field"
+                )
             if scope == "per_zone_id":
                 field_units = definition.get("field_units")
                 field_bounds = definition.get("field_bounds")
                 if not isinstance(field_units, dict) or not isinstance(field_bounds, dict):
-                    raise ValueError(f"selected policy parameter {path!r} lacks typed per-zone metadata")
+                    raise ValueError(
+                        f"selected policy parameter {path!r} lacks typed per-zone metadata"
+                    )
                 normalized_value: dict[str, dict[str, float]] = {}
                 for zone_id, raw_fields in sorted(raw_value.items()):
                     if not isinstance(raw_fields, dict) or not raw_fields:
-                        raise ValueError(f"policy parameter {path!r} requires a non-empty field map for each zone")
+                        raise ValueError(
+                            f"policy parameter {path!r} requires a non-empty field map for each zone"
+                        )
                     if set(raw_fields) - set(field_units):
-                        raise ValueError(f"policy parameter {path!r} contains unsupported per-zone fields")
+                        raise ValueError(
+                            f"policy parameter {path!r} contains unsupported per-zone fields"
+                        )
                     normalized_fields: dict[str, float] = {}
                     for field_name, raw_field_value in sorted(raw_fields.items()):
-                        if type(raw_field_value) not in (int, float) or not math.isfinite(raw_field_value):
-                            raise ValueError(f"policy parameter {path!r} requires finite numeric zone fields")
+                        if type(raw_field_value) not in (int, float) or not math.isfinite(
+                            raw_field_value
+                        ):
+                            raise ValueError(
+                                f"policy parameter {path!r} requires finite numeric zone fields"
+                            )
                         field_value = float(raw_field_value)
                         bounds = field_bounds.get(field_name)
                         if (
@@ -1606,7 +1838,9 @@ def _apply_selected_policy_parameter_overrides(
                             or field_value < bounds[0]
                             or field_value > bounds[1]
                         ):
-                            raise ValueError(f"policy parameter {path!r} is outside its Model Catalog bounds")
+                            raise ValueError(
+                                f"policy parameter {path!r} is outside its Model Catalog bounds"
+                            )
                         normalized_fields[field_name] = field_value
                     zone_baseline = dict(current.get(zone_id, {}))
                     zone_baseline.update(normalized_fields)
@@ -1626,13 +1860,19 @@ def _apply_selected_policy_parameter_overrides(
                         raise ValueError(f"policy parameter {path!r} requires finite Agent rates")
                     rate = float(raw_rate)
                     if (
-                        definition.get("lower") is not None and rate < definition["lower"]
-                        or definition.get("upper") is not None and rate > definition["upper"]
+                        definition.get("lower") is not None
+                        and rate < definition["lower"]
+                        or definition.get("upper") is not None
+                        and rate > definition["upper"]
                     ):
-                        raise ValueError(f"policy parameter {path!r} is outside its Model Catalog bounds")
+                        raise ValueError(
+                            f"policy parameter {path!r} is outside its Model Catalog bounds"
+                        )
                     if definition.get("value_type") == "integer":
                         if not rate.is_integer():
-                            raise ValueError(f"policy parameter {path!r} requires integer Agent values")
+                            raise ValueError(
+                                f"policy parameter {path!r} requires integer Agent values"
+                            )
                         normalized_value[agent_id] = int(rate)
                     else:
                         normalized_value[agent_id] = rate
@@ -1641,24 +1881,36 @@ def _apply_selected_policy_parameter_overrides(
                 for entity_id, raw_minutes in sorted(raw_value.items()):
                     if type(raw_minutes) not in (int, float) or not math.isfinite(raw_minutes):
                         label = (
-                            "service" if scope == "per_service"
-                            else "task-kind" if scope == "per_task_kind"
+                            "service"
+                            if scope == "per_service"
+                            else "task-kind"
+                            if scope == "per_task_kind"
                             else "staff-specific"
                         )
-                        raise ValueError(f"policy parameter {path!r} requires finite {label} minutes")
+                        raise ValueError(
+                            f"policy parameter {path!r} requires finite {label} minutes"
+                        )
                     minutes = float(raw_minutes)
                     if (
-                        definition.get("lower") is not None and minutes < definition["lower"]
-                        or definition.get("upper") is not None and minutes > definition["upper"]
+                        definition.get("lower") is not None
+                        and minutes < definition["lower"]
+                        or definition.get("upper") is not None
+                        and minutes > definition["upper"]
                     ):
-                        raise ValueError(f"policy parameter {path!r} is outside its Model Catalog bounds")
+                        raise ValueError(
+                            f"policy parameter {path!r} is outside its Model Catalog bounds"
+                        )
                     if not minutes.is_integer():
                         label = (
-                            "service" if scope == "per_service"
-                            else "task-kind" if scope == "per_task_kind"
+                            "service"
+                            if scope == "per_service"
+                            else "task-kind"
+                            if scope == "per_task_kind"
                             else "staff-specific"
                         )
-                        raise ValueError(f"policy parameter {path!r} requires integer {label} minutes")
+                        raise ValueError(
+                            f"policy parameter {path!r} requires integer {label} minutes"
+                        )
                     normalized_value[entity_id] = int(minutes)
             if scope != "per_zone_id":
                 current.update(normalized_value)
@@ -1668,10 +1920,14 @@ def _apply_selected_policy_parameter_overrides(
                 raise ValueError(f"policy parameter {path!r} requires a finite numeric value")
             value = float(raw_value)
             outside_bounds = any(
-                (candidate.get("lower") is not None and (
-                    value < candidate["lower"]
-                    or candidate.get("lower_exclusive") and value == candidate["lower"]
-                ))
+                (
+                    candidate.get("lower") is not None
+                    and (
+                        value < candidate["lower"]
+                        or candidate.get("lower_exclusive")
+                        and value == candidate["lower"]
+                    )
+                )
                 or (candidate.get("upper") is not None and value > candidate["upper"])
                 for _, _, candidate in consumers
             )
@@ -1692,10 +1948,12 @@ def _apply_selected_policy_parameter_overrides(
             "source_id": definition["source_id"] or catalog[model_id]["assumption_source_id"],
             "model_id": model_id,
             "consumer_model_ids": [candidate_id for _, candidate_id, _ in consumers],
-            "consumer_source_ids": sorted({
-                candidate["source_id"] or catalog[candidate_id]["assumption_source_id"]
-                for _, candidate_id, candidate in consumers
-            }),
+            "consumer_source_ids": sorted(
+                {
+                    candidate["source_id"] or catalog[candidate_id]["assumption_source_id"]
+                    for _, candidate_id, candidate in consumers
+                }
+            ),
             "evidence_grade": definition["evidence_grade"],
             "applicability": definition["applicability"],
         }
@@ -1720,9 +1978,7 @@ def _apply_selected_policy_parameter_overrides(
             model_configs["staff_operations"]
         )
     if "movement_model" in touched_sections:
-        model_configs["movement_model"] = canonical_movement_config(
-            model_configs["movement_model"]
-        )
+        model_configs["movement_model"] = canonical_movement_config(model_configs["movement_model"])
     if "resource_service" in touched_sections:
         model_configs["resource_service"] = ResourceServiceConfig.model_validate(
             model_configs["resource_service"]
@@ -1777,16 +2033,12 @@ def _inaccessible_service_zones(
         if route.accessible and route.width_m >= ACCESSIBLE_ROUTE_MIN_WIDTH_M
     }
     open_accessible_edges = tuple(
-        edge
-        for edge in edges
-        if not edge.closed and edge.id in accessible_route_ids
+        edge for edge in edges if not edge.closed and edge.id in accessible_route_ids
     )
     reachable = {"sleeping"}
     while True:
         updated = reachable | {
-            edge.to_zone_id
-            for edge in open_accessible_edges
-            if edge.from_zone_id in reachable
+            edge.to_zone_id for edge in open_accessible_edges if edge.from_zone_id in reachable
         }
         if updated == reachable:
             break
@@ -1794,9 +2046,7 @@ def _inaccessible_service_zones(
     returnable = {"sleeping"}
     while True:
         updated = returnable | {
-            edge.from_zone_id
-            for edge in open_accessible_edges
-            if edge.to_zone_id in returnable
+            edge.from_zone_id for edge in open_accessible_edges if edge.to_zone_id in returnable
         }
         if updated == returnable:
             break
@@ -1822,10 +2072,5 @@ def _disaster_families(value: str) -> frozenset[str]:
         ("heavy_snow", ("heavy_snow", "heavy snow", "大雪", "豪雪")),
         ("heatwave", ("heatwave", "heat wave", "猛暑", "熱波")),
     )
-    matches = {
-        family
-        for family, terms in groups
-        if any(term in text for term in terms)
-    }
+    matches = {family for family, terms in groups if any(term in text for term in terms)}
     return frozenset(matches or {text.strip()})
-

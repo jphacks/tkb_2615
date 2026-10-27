@@ -163,13 +163,7 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
             )
             continue
         count = None if op == "water_outage" else _extract_count(text, op)
-        limit = (
-            _MAX_STAFF
-            if op == "add_staff"
-            else _MAX_TOILETS
-            if op == "add_toilet"
-            else 1000
-        )
+        limit = _MAX_STAFF if op == "add_staff" else _MAX_TOILETS if op == "add_toilet" else 1000
         if count is not None and (count <= 0 or count > limit):
             noun = (
                 "スタッフ"
@@ -248,9 +242,7 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
                 target_selector=target.selector,
                 start_minute=window.start_minute,
                 end_minute=(
-                    None
-                    if op in {"add_evacuees", "depart_evacuees"}
-                    else window.end_minute
+                    None if op in {"add_evacuees", "depart_evacuees"} else window.end_minute
                 ),
                 parameters=parameters,
                 units=units,
@@ -807,8 +799,10 @@ def scenario_summary_from_world(
         policies.add("operational_events_v1")
     if "population_dynamics_v1" in world.model_state:
         policies.add("population_dynamics_v1")
-    if ("population_lifecycle_v1" in world.model_state
-            and "population_presence_v1" in world.model_state):
+    if (
+        "population_lifecycle_v1" in world.model_state
+        and "population_presence_v1" in world.model_state
+    ):
         policies.add("population_lifecycle_v1")
         policies.add("population_presence_v1")
     if "geometry_overlay_v1" in world.model_state:
@@ -857,8 +851,15 @@ def scenario_summary_from_world(
         warehouse_id=warehouse_id,
         pending_shipments=shipments,
         available_policies=sorted(policies),
-        person_ids=sorted(set(world.agents) | set(world.model_state.get("population_lifecycle_v1", {}).get("people", {})))[:10000],
-        person_targets_truncated=len(set(world.agents) | set(world.model_state.get("population_lifecycle_v1", {}).get("people", {}))) > 10000,
+        person_ids=sorted(
+            set(world.agents)
+            | set(world.model_state.get("population_lifecycle_v1", {}).get("people", {}))
+        )[:10000],
+        person_targets_truncated=len(
+            set(world.agents)
+            | set(world.model_state.get("population_lifecycle_v1", {}).get("people", {}))
+        )
+        > 10000,
         route_ids=sorted(world.zone_edges)[:2000],
         zone_environment_settings=(
             world.model_configs["zone_environment"]
@@ -1095,7 +1096,11 @@ def _compiler_output_schema(
     for primitive in eligible:
         model_schema = primitive.parameters_model.model_json_schema()
         for key, property_schema in model_schema.get("properties", {}).items():
-            _merge_parameter_schema(parameter_properties, key, _inline_parameter_schema(property_schema, model_schema.get("$defs", {})))
+            _merge_parameter_schema(
+                parameter_properties,
+                key,
+                _inline_parameter_schema(property_schema, model_schema.get("$defs", {})),
+            )
 
     effect_schema = {
         "type": "object",
@@ -1103,7 +1108,12 @@ def _compiler_output_schema(
             "op": {"type": "string", "enum": operator_names},
             "target_kind": {"type": "string", "enum": target_kinds},
             "target_id": {"type": "string", "enum": valid_target_ids},
-            "candidate_ids": {"type": "array", "items": {"type": "string", "enum": valid_target_ids}, "minItems": 2, "maxItems": 100},
+            "candidate_ids": {
+                "type": "array",
+                "items": {"type": "string", "enum": valid_target_ids},
+                "minItems": 2,
+                "maxItems": 100,
+            },
             "start_minute": {"type": "integer", "minimum": 0, "maximum": maximum_minute},
             "end_minute": {
                 "type": "integer",
@@ -1201,10 +1211,20 @@ def _inline_parameter_schema(value: Any, definitions: dict[str, Any], depth: int
         return value
     if "$ref" in value:
         reference = value["$ref"]
-        if not isinstance(reference, str) or not reference.startswith("#/$defs/") or reference[8:] not in definitions:
+        if (
+            not isinstance(reference, str)
+            or not reference.startswith("#/$defs/")
+            or reference[8:] not in definitions
+        ):
             raise ValueError("primitive schema has an unsupported external reference")
-        return _inline_parameter_schema({**definitions[reference[8:]], **{k:v for k,v in value.items() if k != "$ref"}}, definitions, depth + 1)
-    return {key: _inline_parameter_schema(item, definitions, depth + 1) for key, item in value.items()}
+        return _inline_parameter_schema(
+            {**definitions[reference[8:]], **{k: v for k, v in value.items() if k != "$ref"}},
+            definitions,
+            depth + 1,
+        )
+    return {
+        key: _inline_parameter_schema(item, definitions, depth + 1) for key, item in value.items()
+    }
 
 
 def _merge_parameter_schema(
@@ -1374,11 +1394,20 @@ def _validate_model_effects(
         ):
             raise ValueError(f"effect {index} references an unknown or incompatible target")
         candidates = effect.get("candidate_ids", [])
-        if candidates and (op != "population_presence" or effect["parameters"].get("action") != "reunite"
-                or target_kind != "person" or target_id not in candidates or len(set(candidates)) != len(candidates)
-                or not set(candidates) <= set(summary.person_ids)):
+        if candidates and (
+            op != "population_presence"
+            or effect["parameters"].get("action") != "reunite"
+            or target_kind != "person"
+            or target_id not in candidates
+            or len(set(candidates)) != len(candidates)
+            or not set(candidates) <= set(summary.person_ids)
+        ):
             raise ValueError("candidate_ids are restricted to known people in a reunion")
-        if op == "population_presence" and effect["parameters"].get("action") == "reunite" and len(candidates) < 2:
+        if (
+            op == "population_presence"
+            and effect["parameters"].get("action") == "reunite"
+            and len(candidates) < 2
+        ):
             raise ValueError("reunion requires candidate_ids including its target_id anchor")
         if effect["start_minute"] >= (summary.duration_minutes or _MAX_COMPILER_MINUTE):
             raise ValueError(f"effect {index} starts outside the scenario")
@@ -1557,8 +1586,9 @@ def _compiler_result_from_output(
                 effect_id=effect_id,
                 op=item["op"],
                 target_selector=TargetSelector(
-                    kind=item["target_kind"], target_id=None if item.get("candidate_ids") else item["target_id"],
-                    candidate_ids=item.get("candidate_ids", [])
+                    kind=item["target_kind"],
+                    target_id=None if item.get("candidate_ids") else item["target_id"],
+                    candidate_ids=item.get("candidate_ids", []),
                 ),
                 start_minute=start_minute,
                 end_minute=item.get("end_minute"),

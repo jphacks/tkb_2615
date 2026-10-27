@@ -43,7 +43,9 @@ class _EnvironmentContract(BaseModel):
 class ZoneEnvironmentBaseline(_EnvironmentContract):
     """Initial experimental relative conditions for one zone."""
 
-    ventilation_effectiveness: float = Field(default=0.7, strict=True, ge=0.0, le=1.0, allow_inf_nan=False)
+    ventilation_effectiveness: float = Field(
+        default=0.7, strict=True, ge=0.0, le=1.0, allow_inf_nan=False
+    )
     lighting_level: float = Field(default=0.5, strict=True, ge=0.0, le=1.0, allow_inf_nan=False)
     privacy_level: float = Field(default=0.5, strict=True, ge=0.0, le=1.0, allow_inf_nan=False)
     temperature_c: float = Field(default=20.0, strict=True, ge=-40.0, le=60.0, allow_inf_nan=False)
@@ -73,12 +75,24 @@ class ScenarioZoneEnvironmentConfig(_EnvironmentContract):
         ge=1,
         le=MAX_ZONE_ENVIRONMENT_MODIFIERS,
     )
-    lighting_sleep_efficiency_loss: float = Field(default=0.2, strict=True, ge=0.0, le=0.9, allow_inf_nan=False)
-    ventilation_hygiene_growth_per_minute: float = Field(default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False)
-    privacy_discontent_per_minute: float = Field(default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False)
-    temperature_stress_per_degree_minute: float = Field(default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False)
-    comfortable_min_temperature_c: float = Field(default=18.0, strict=True, ge=-10.0, le=40.0, allow_inf_nan=False)
-    comfortable_max_temperature_c: float = Field(default=26.0, strict=True, ge=-10.0, le=50.0, allow_inf_nan=False)
+    lighting_sleep_efficiency_loss: float = Field(
+        default=0.2, strict=True, ge=0.0, le=0.9, allow_inf_nan=False
+    )
+    ventilation_hygiene_growth_per_minute: float = Field(
+        default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False
+    )
+    privacy_discontent_per_minute: float = Field(
+        default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False
+    )
+    temperature_stress_per_degree_minute: float = Field(
+        default=0.0001, strict=True, ge=0.0, le=0.01, allow_inf_nan=False
+    )
+    comfortable_min_temperature_c: float = Field(
+        default=18.0, strict=True, ge=-10.0, le=40.0, allow_inf_nan=False
+    )
+    comfortable_max_temperature_c: float = Field(
+        default=26.0, strict=True, ge=-10.0, le=50.0, allow_inf_nan=False
+    )
     baseline_by_zone: dict[_StableId, ZoneEnvironmentBaseline] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -235,29 +249,34 @@ def zone_environment_view(world: WorldState, zone_id: str) -> ZoneEnvironmentVie
     baseline = ZoneEnvironmentBaseline.model_validate(
         config_data.get("baseline_by_zone", {}).get(zone_id, {})
     )
+
     def last(op: str) -> dict[str, Any] | None:
         return by_op[op][-1][1] if by_op[op] else None
+
     ventilation_record = last("set_ventilation")
     lighting_record = last("set_lighting")
     privacy_record = last("set_privacy")
     temperature_record = last("set_temperature")
     ventilation = (
         ventilation_record["parameters"]["effectiveness"]
-        if ventilation_record else baseline.ventilation_effectiveness
+        if ventilation_record
+        else baseline.ventilation_effectiveness
     )
     lighting = (
         lighting_record["parameters"]["level"] if lighting_record else baseline.lighting_level
     )
-    privacy = (
-        privacy_record["parameters"]["level"] if privacy_record else baseline.privacy_level
-    )
+    privacy = privacy_record["parameters"]["level"] if privacy_record else baseline.privacy_level
     temperature = (
         temperature_record["parameters"]["temperature_c"]
-        if temperature_record else baseline.temperature_c
+        if temperature_record
+        else baseline.temperature_c
     )
     condition_records = [record for op in by_op.values() for _, record in op]
     condition_event_ids = tuple(sorted(record["start_event_id"] for record in condition_records))
-    condition_source_ids = {config.source_id, *(record["source_id"] for record in condition_records)}
+    condition_source_ids = {
+        config.source_id,
+        *(record["source_id"] for record in condition_records),
+    }
     from sheltersim.policies.registry import (
         create_zone_environment_formula,
         create_zone_hygiene_formula,
@@ -280,14 +299,10 @@ def zone_environment_view(world: WorldState, zone_id: str) -> ZoneEnvironmentVie
         if domain in policy_selection:
             condition_source_ids.add(formula.source_id)
     condition_sources = tuple(sorted(condition_source_ids))
-    degree_deviation = temperature_formula.temperature_deviation(
-        temperature, formula_config
-    )
+    degree_deviation = temperature_formula.temperature_deviation(temperature, formula_config)
     noise_entries = [item for item in entries if item[1]["op"] == "set_ambient_noise"]
     noise_level = max((record["parameters"]["level"] for _, record in noise_entries), default=0.0)
-    rest_efficiency = rest_formula.rest_efficiency(
-        noise_level, lighting, formula_config
-    )
+    rest_efficiency = rest_formula.rest_efficiency(noise_level, lighting, formula_config)
 
     by_action: dict[str, list[tuple[str, dict[str, object]]]] = defaultdict(list)
     for item in entries:
@@ -344,10 +359,10 @@ def zone_environment_view(world: WorldState, zone_id: str) -> ZoneEnvironmentVie
         ventilation_hygiene_growth_per_minute=hygiene_formula.ventilation_hygiene_growth(
             ventilation, formula_config
         ),
-        privacy_discontent_per_minute=privacy_formula.privacy_discontent(
-            privacy, formula_config
+        privacy_discontent_per_minute=privacy_formula.privacy_discontent(privacy, formula_config),
+        temperature_stress_per_minute=(
+            degree_deviation * config.temperature_stress_per_degree_minute
         ),
-        temperature_stress_per_minute=(degree_deviation * config.temperature_stress_per_degree_minute),
         condition_modifier_event_ids=condition_event_ids,
         condition_assumption_ids=(
             condition_sources
@@ -370,8 +385,7 @@ def validate_zone_environment_runtime_state(
             raise ValueError("zone environment state requires a zone_environment config")
         pending_events = world.event_queue.pending()
         if any(
-            event.event_type.startswith("effect_program_environment")
-            for event in pending_events
+            event.event_type.startswith("effect_program_environment") for event in pending_events
         ):
             raise ValueError("zone environment events require the zone_environment policy")
         if validate_event_history and any(
@@ -383,11 +397,17 @@ def validate_zone_environment_runtime_state(
     config = ScenarioZoneEnvironmentConfig.model_validate(config_data)
     canonical_config = config.model_dump(mode="json")
     legacy_config = {
-        key: value for key, value in canonical_config.items()
-        if key not in {
-            "lighting_sleep_efficiency_loss", "ventilation_hygiene_growth_per_minute",
-            "privacy_discontent_per_minute", "temperature_stress_per_degree_minute",
-            "comfortable_min_temperature_c", "comfortable_max_temperature_c", "baseline_by_zone",
+        key: value
+        for key, value in canonical_config.items()
+        if key
+        not in {
+            "lighting_sleep_efficiency_loss",
+            "ventilation_hygiene_growth_per_minute",
+            "privacy_discontent_per_minute",
+            "temperature_stress_per_degree_minute",
+            "comfortable_min_temperature_c",
+            "comfortable_max_temperature_c",
+            "baseline_by_zone",
         }
     }
     if config_data not in (canonical_config, legacy_config):
@@ -432,9 +452,14 @@ def validate_zone_environment_runtime_state(
             or not isinstance(record, dict)
             or set(record) != fields
             or record.get("modifier_id") != modifier_id
-            or record.get("op") not in {
-                "set_ambient_noise", "modify_demand_rate", "set_ventilation",
-                "set_lighting", "set_privacy", "set_temperature",
+            or record.get("op")
+            not in {
+                "set_ambient_noise",
+                "modify_demand_rate",
+                "set_ventilation",
+                "set_lighting",
+                "set_privacy",
+                "set_temperature",
             }
             or record.get("zone_id") not in world.zones
             or not isinstance(record.get("program_id"), str)
@@ -463,9 +488,10 @@ def validate_zone_environment_runtime_state(
             "set_temperature": TemperatureParameters,
         }[record["op"]]
         parameters = parameter_model.model_validate(record["parameters"])
-        if record["op"] in {
-            "set_ventilation", "set_lighting", "set_privacy", "set_temperature"
-        } and config.policy_version != "zone-environment-v2":
+        if (
+            record["op"] in {"set_ventilation", "set_lighting", "set_privacy", "set_temperature"}
+            and config.policy_version != "zone-environment-v2"
+        ):
             raise ValueError("condition modifiers require zone-environment-v2")
         if record["op"] == "modify_demand_rate":
             if (

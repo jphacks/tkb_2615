@@ -157,10 +157,12 @@ def make_staff_operation_record(
     """Create bounded applied evidence for a completed autonomous staff task."""
     if SHARED_OPERATIONS_KEY not in world.model_state:
         return None
-    all_changes = tuple(sorted(
-        state_changes,
-        key=lambda row: (row.entity_kind, row.entity_id, row.field_path),
-    ))
+    all_changes = tuple(
+        sorted(
+            state_changes,
+            key=lambda row: (row.entity_kind, row.entity_id, row.field_path),
+        )
+    )
     sampled_changes = all_changes[:256]
     source_ids = (STAFF_OPERATION_RECEIPT_SOURCE_ID,)
     sequence = world.allocate_event_sequence()
@@ -179,8 +181,10 @@ def make_staff_operation_record(
         arrival_minute=operation["arrival_minute"],
         travel_minutes=operation["travel_minutes"],
         outcome_observation=(
-            "observed_change" if all_changes
-            else "observed_no_change" if outcome_measured
+            "observed_change"
+            if all_changes
+            else "observed_no_change"
+            if outcome_measured
             else "not_measured"
         ),
         state_changes=sampled_changes,
@@ -351,9 +355,7 @@ def append_applied_care_transition(
     return receipt
 
 
-def ingest_applied_shared_operation_records(
-    world: WorldState, outcomes: tuple[Any, ...]
-) -> None:
+def ingest_applied_shared_operation_records(world: WorldState, outcomes: tuple[Any, ...]) -> None:
     """Project typed shared receipts only after EventLog APPLIED insertion."""
     if SHARED_OPERATIONS_KEY not in world.model_state:
         return
@@ -362,7 +364,8 @@ def ingest_applied_shared_operation_records(
         if (
             getattr(outcome, "status", None) is not EventStatus.APPLIED
             or event is None
-            or event.event_type not in {
+            or event.event_type
+            not in {
                 "care_support_transition",
                 "staff_support_continuity",
                 "facility_recovery_transition",
@@ -406,9 +409,7 @@ def care_history_for_agent(
     return care_history_by_agent(world, limit=limit).get(agent_id, [])
 
 
-def care_history_by_agent(
-    world: WorldState, *, limit: int = 20
-) -> dict[str, list[dict[str, Any]]]:
+def care_history_by_agent(world: WorldState, *, limit: int = 20) -> dict[str, list[dict[str, Any]]]:
     """Build bounded per-person views with one pass over the retained EventLog."""
     from sheltersim.contracts.operations import CareTransitionReceipt
 
@@ -418,7 +419,8 @@ def care_history_by_agent(
     for record in world.event_log.records:
         event = record.event
         if (
-            event.event_type not in {
+            event.event_type
+            not in {
                 "care_support_transition",
                 "staff_support_continuity",
             }
@@ -455,7 +457,8 @@ def care_history_by_agent(
             person_row = {
                 **row,
                 "person_role_in_record": (
-                    "request_person" if identity == receipt.agent_id
+                    "request_person"
+                    if identity == receipt.agent_id
                     else "explicit_related_state_change"
                 ),
             }

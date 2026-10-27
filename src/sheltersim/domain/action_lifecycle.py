@@ -3,6 +3,7 @@
 Lifecycle records are synthetic state-transition evidence. They contain no generated
 utterance and are separate from selected-policy proposals and completion events.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -46,8 +47,15 @@ def active_action_index(world: WorldState) -> dict[str, dict[str, Any]]:
             active[agent_id] = {
                 key: payload[key]
                 for key in (
-                    "action_id", "agent_id", "action", "target_id", "start_minute",
-                    "reason_code", "start_activity", "start_needs", "model_id",
+                    "action_id",
+                    "agent_id",
+                    "action",
+                    "target_id",
+                    "start_minute",
+                    "reason_code",
+                    "start_activity",
+                    "start_needs",
+                    "model_id",
                     "model_source_id",
                 )
             }
@@ -212,8 +220,7 @@ def record_applied_population_exit(
         agent_id = row.get("agent_id")
         if action in {"temporary_exit", "transferred"} and isinstance(agent_id, str):
             causes[agent_id] = (
-                "population_temporary_exit" if action == "temporary_exit"
-                else "population_transfer"
+                "population_temporary_exit" if action == "temporary_exit" else "population_transfer"
             )
 
     population = world.model_state.get("population_dynamics_v1")
@@ -273,7 +280,11 @@ def _completion_status(
 ) -> tuple[str, str | None]:
     action_name = action.get("action")
     if action_name == "wait":
-        return ("completed", None) if world.minute_index > action.get("start_minute", 0) else ("interrupted", None)
+        return (
+            ("completed", None)
+            if world.minute_index > action.get("start_minute", 0)
+            else ("interrupted", None)
+        )
     if action_name in {"rest", "sleep"}:
         current = _need_snapshot(agent, world)
         started = action.get("start_needs", {})
@@ -360,4 +371,3 @@ def _append_transition(
             detail=f"autonomous action {transition}",
         )
     )
-

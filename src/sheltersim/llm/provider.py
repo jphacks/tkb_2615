@@ -86,12 +86,14 @@ class AnthropicProvider:
                 # synthetic drafting so the answer, not the reasoning, uses the budget.
                 request["output_config"] = {"effort": "low"}
             if task.max_web_searches:
-                request["tools"] = [{
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": task.max_web_searches,
-                    "allowed_domains": list(task.web_search_allowed_domains),
-                }]
+                request["tools"] = [
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": task.max_web_searches,
+                        "allowed_domains": list(task.web_search_allowed_domains),
+                    }
+                ]
             messages = self._client.messages
             stream = getattr(messages, "stream", None)
             if callable(stream):
@@ -112,19 +114,21 @@ class AnthropicProvider:
             )
             if status is not None:
                 detail = f"{detail}; HTTP {status}"
-            raise LLMProviderError(
-                detail, status_code=status, failure_kind=failure_kind
-            ) from exc
-        content_blocks = [block for block in response.content
-                          if getattr(block, "type", None) == "text"]
+            raise LLMProviderError(detail, status_code=status, failure_kind=failure_kind) from exc
+        content_blocks = [
+            block for block in response.content if getattr(block, "type", None) == "text"
+        ]
         content = "".join(block.text for block in content_blocks)
         usage = response.usage
         cache_5m, cache_1h = _cache_creation_tokens(usage)
         server_usage = getattr(usage, "server_tool_use", None)
         search_requests = int(getattr(server_usage, "web_search_requests", 0) or 0)
         found = [
-            (getattr(citation, "url", ""), getattr(citation, "title", ""),
-             getattr(citation, "cited_text", "") or "")
+            (
+                getattr(citation, "url", ""),
+                getattr(citation, "title", ""),
+                getattr(citation, "cited_text", "") or "",
+            )
             for block in content_blocks
             for citation in getattr(block, "citations", ()) or ()
             if getattr(citation, "type", None) == "web_search_result_location"
@@ -304,8 +308,9 @@ class LLMRouter:
                 if "usage_runtime_share_exhausted" in str(exc)
                 else "shared_allowance_unavailable"
             )
-            return self._failure(task, model_id, outcome,
-                                 "durable usage allowance unavailable", api_calls=0)
+            return self._failure(
+                task, model_id, outcome, "durable usage allowance unavailable", api_calls=0
+            )
         except LLMContractError as exc:
             cost = _estimate_cost(response, price) if response is not None else reserve
             self.spent_usd += cost
@@ -354,9 +359,7 @@ class LLMRouter:
                     else None
                 ),
                 response=(
-                    provider_response
-                    if isinstance(provider_response, ProviderResponse)
-                    else None
+                    provider_response if isinstance(provider_response, ProviderResponse) else None
                 ),
             )
 
@@ -486,13 +489,15 @@ class LLMRouter:
             request_id=response.request_id if response is not None else None,
             error_kind=error_kind,
             cache_creation_input_tokens=(
-                response.cache_creation_5m_input_tokens
-                + response.cache_creation_1h_input_tokens if response is not None else 0
+                response.cache_creation_5m_input_tokens + response.cache_creation_1h_input_tokens
+                if response is not None
+                else 0
             ),
             cache_read_input_tokens=response.cache_read_input_tokens if response is not None else 0,
             web_search_requests=response.web_search_requests if response is not None else 0,
-            estimated_search_cost_usd=(response.web_search_requests * 0.01
-                                       if response is not None else 0.0),
+            estimated_search_cost_usd=(
+                response.web_search_requests * 0.01 if response is not None else 0.0
+            ),
         )
         self.records.append(record)
         if self.observer is not None:
@@ -575,12 +580,18 @@ def _contract_failure_kind(exc: LLMContractError) -> str:
     """Persist only a safe validation class, never model output or error payloads."""
     if str(exc) == "response contains no text content":
         return "empty_text_response"
-    return "invalid_json" if str(exc) == "response is not valid JSON" else "schema_validation_failed"
+    return (
+        "invalid_json" if str(exc) == "response is not valid JSON" else "schema_validation_failed"
+    )
 
 
 def _empty_content_failure_kind(content: object) -> str:
     """Map provider content block types to bounded diagnostics without body text."""
-    types = {getattr(block, "type", None) for block in content} if isinstance(content, (list, tuple)) else set()
+    types = (
+        {getattr(block, "type", None) for block in content}
+        if isinstance(content, (list, tuple))
+        else set()
+    )
     if "refusal" in types:
         return "provider_refusal"
     if "thinking" in types:

@@ -71,5 +71,3 @@ def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path
     assert "Trace (MiB)" in markdown
     assert "Trace volume is measured separately" in markdown
     assert "single-seed result is descriptive only" in markdown
-
-

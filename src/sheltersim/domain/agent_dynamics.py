@@ -16,14 +16,24 @@ ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v2"
 ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION = "need-led-autonomy-memory-v3"
 ORIENTATION_FACILITY_SOURCE_ID = "ASM-INTAKE-FACILITY-ORIENTATION-V1"
 INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID = "ASM-INSTALLED-FACILITY-ANNOUNCEMENT-V1"
-_ORIENTED_POLICY_VERSIONS = frozenset({
-    ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION, ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
-})
+_ORIENTED_POLICY_VERSIONS = frozenset(
+    {
+        ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
+        ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
+    }
+)
 # Shared services every evacuee is assumed to be shown at intake. Group-specific
 # spaces (pet, family, privacy) are still learned only on arrival.
-ORIENTATION_FACILITY_KINDS = frozenset({
-    "intake", "meal_distribution", "medical_support", "quiet_space", "toilet", "water_station",
-})
+ORIENTATION_FACILITY_KINDS = frozenset(
+    {
+        "intake",
+        "meal_distribution",
+        "medical_support",
+        "quiet_space",
+        "toilet",
+        "water_station",
+    }
+)
 
 
 def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
@@ -34,7 +44,8 @@ def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
         raise ValueError("agent_dynamics config has unsupported fields")
     policy_version = raw.get("policy_version", AGENT_DYNAMICS_POLICY_VERSION)
     if raw.get("schema_version", 1) != 1 or policy_version not in {
-        AGENT_DYNAMICS_POLICY_VERSION, *_ORIENTED_POLICY_VERSIONS,
+        AGENT_DYNAMICS_POLICY_VERSION,
+        *_ORIENTED_POLICY_VERSIONS,
     }:
         raise ValueError("agent_dynamics config has an unsupported version")
     if policy_version == AGENT_DYNAMICS_POLICY_VERSION:
@@ -51,12 +62,13 @@ def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
 
 
 def _initial_known_facility_ids(world: WorldState, zone_id: str) -> list[str]:
-    policy_version = canonical_agent_dynamics_config(
-        world.model_configs.get("agent_dynamics")
-    )["policy_version"]
+    policy_version = canonical_agent_dynamics_config(world.model_configs.get("agent_dynamics"))[
+        "policy_version"
+    ]
     oriented = policy_version in _ORIENTED_POLICY_VERSIONS
     return sorted(
-        facility.id for facility in world.facilities.values()
+        facility.id
+        for facility in world.facilities.values()
         if facility.zone_id == zone_id or (oriented and facility.kind in ORIENTATION_FACILITY_KINDS)
     )
 
@@ -84,9 +96,10 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
         not isinstance(state, dict)
         or set(state) != {"schema_version", "policy_version", "agents"}
         or state.get("schema_version") != 1
-        or state.get("policy_version") != canonical_agent_dynamics_config(
-            world.model_configs.get("agent_dynamics")
-        )["policy_version"]
+        or state.get("policy_version")
+        != canonical_agent_dynamics_config(world.model_configs.get("agent_dynamics"))[
+            "policy_version"
+        ]
         or not isinstance(state.get("agents"), dict)
         or set(state["agents"]) != set(world.agents)
     ):
@@ -111,15 +124,11 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
         ):
             raise ValueError(f"agent_dynamics_v1 record for {agent_id!r} is invalid")
         last = record["last_decision_minute"]
-        if last is not None and (
-            not isinstance(last, int) or isinstance(last, bool) or last < 0
-        ):
+        if last is not None and (not isinstance(last, int) or isinstance(last, bool) or last < 0):
             raise ValueError(f"agent_dynamics_v1 decision minute for {agent_id!r} is invalid")
 
 
-def record_proposal(
-    world: WorldState, proposal: ActionProposal, *, target_id: str | None
-) -> None:
+def record_proposal(world: WorldState, proposal: ActionProposal, *, target_id: str | None) -> None:
     """Persist the selected need-led intention while retaining full trace in artifacts."""
     state = _state(world)
     record = state["agents"].get(proposal.agent_id)
@@ -134,9 +143,7 @@ def record_proposal(
 
 def agent_knows_facility(world: WorldState, agent_id: str, facility_id: str) -> bool:
     """Apply explicit awareness only when the Scenario selected that model."""
-    if not {"facility_awareness", "agent_dynamics"}.intersection(
-        world.model_configs
-    ):
+    if not {"facility_awareness", "agent_dynamics"}.intersection(world.model_configs):
         # Older Scenarios had no knowledge gate. Keep their behavior independent
         # of whether a psychology policy happens to create autonomy memory.
         return True
@@ -167,9 +174,7 @@ def learn_facility(world: WorldState, agent_id: str, facility_id: str) -> None:
         discovered_ids.update(
             item.id for item in world.facilities.values() if item.zone_id == facility.zone_id
         )
-    record["known_facility_ids"] = sorted(
-        set(record["known_facility_ids"]) | discovered_ids
-    )
+    record["known_facility_ids"] = sorted(set(record["known_facility_ids"]) | discovered_ids)
 
 
 def announce_installed_facility(world: WorldState, facility_id: str) -> None:
@@ -185,7 +190,8 @@ def announce_installed_facility(world: WorldState, facility_id: str) -> None:
         or facility.kind not in ORIENTATION_FACILITY_KINDS
         or canonical_agent_dynamics_config(world.model_configs.get("agent_dynamics"))[
             "policy_version"
-        ] != ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
+        ]
+        != ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
     ):
         return
     for record in state["agents"].values():

@@ -136,24 +136,26 @@ def _override_request(**overrides: object) -> InitialScenarioRequest:
 def test_selected_formula_overrides_reach_runtime_config_and_checkpoint_signature() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(
-        behavior_policy_id="priority-rule-v1",
-        social_policy_id="degroot-contact-v1",
-        information_policy_id="hazard-information-v1",
-        social_propagation_enabled=True,
-        information_spread_enabled=True,
-        care_outcome_policy_id="hygiene-support-proportional-relief-v1",
-        model_parameter_overrides={
-            "behavior.temperature": 0.35,
-            "body_dynamics.sleep_debt_stress_rate": 0.004,
-            "facility_queues.retry_delay_minutes": 7,
-            "social_propagation.stress_spread_per_minute": 0.003,
-            "information_spread.base_transmission_probability": 0.35,
-            "staff_dynamics.max_continuous_work_minutes": 300,
-            "zone_environment.temperature_stress_per_degree_minute": 0.0003,
-            "body_dynamics.hygiene_support_relief": 0.3,
-        }
-    ))
+    customized = builder.build(
+        _override_request(
+            behavior_policy_id="priority-rule-v1",
+            social_policy_id="degroot-contact-v1",
+            information_policy_id="hazard-information-v1",
+            social_propagation_enabled=True,
+            information_spread_enabled=True,
+            care_outcome_policy_id="hygiene-support-proportional-relief-v1",
+            model_parameter_overrides={
+                "behavior.temperature": 0.35,
+                "body_dynamics.sleep_debt_stress_rate": 0.004,
+                "facility_queues.retry_delay_minutes": 7,
+                "social_propagation.stress_spread_per_minute": 0.003,
+                "information_spread.base_transmission_probability": 0.35,
+                "staff_dynamics.max_continuous_work_minutes": 300,
+                "zone_environment.temperature_stress_per_degree_minute": 0.0003,
+                "body_dynamics.hygiene_support_relief": 0.3,
+            },
+        )
+    )
     environment_config = dict(customized.scenario.model_configs["zone_environment"])
     environment_config["baseline_by_zone"] = {"sleeping": {"temperature_c": 30.0}}
     customized.scenario.model_configs["zone_environment"] = (
@@ -175,6 +177,7 @@ def test_selected_formula_overrides_reach_runtime_config_and_checkpoint_signatur
     assert create_queue_policy(config).retry_delay_minutes() == 7
     assert isinstance(create_social(config), DeGrootContactPolicy)
     assert isinstance(create_information(config), HazardInformationPolicy)
+
     class ArtifactSink:
         trace_level = TraceLevel.OFF
 
@@ -210,13 +213,11 @@ def test_selected_formula_overrides_reach_runtime_config_and_checkpoint_signatur
     base_output = baseline_formula.stress_feedback(
         **inputs, config=baseline.scenario.model_configs["body_dynamics"]
     )
-    changed_output = customized_formula.stress_feedback(
-        **inputs, config=config["body_dynamics"]
-    )
+    changed_output = customized_formula.stress_feedback(**inputs, config=config["body_dynamics"])
     assert changed_output == pytest.approx(base_output * 4)
-    baseline_fatigue = create_staff_fatigue_formula(
-        baseline.scenario.model_configs
-    ).fatigue(150, baseline.scenario.model_configs["staff_dynamics"]["max_continuous_work_minutes"])
+    baseline_fatigue = create_staff_fatigue_formula(baseline.scenario.model_configs).fatigue(
+        150, baseline.scenario.model_configs["staff_dynamics"]["max_continuous_work_minutes"]
+    )
     changed_fatigue = create_staff_fatigue_formula(config).fatigue(
         150, config["staff_dynamics"]["max_continuous_work_minutes"]
     )
@@ -226,21 +227,32 @@ def test_selected_formula_overrides_reach_runtime_config_and_checkpoint_signatur
     before = WorldState.from_scenario(baseline.scenario)
     after = WorldState.from_scenario(customized.scenario)
     assert zone_environment_view(before, "sleeping").temperature_stress_per_minute == 0
-    assert zone_environment_view(after, "sleeping").temperature_stress_per_minute == pytest.approx(0.0012)
+    assert zone_environment_view(after, "sleeping").temperature_stress_per_minute == pytest.approx(
+        0.0012
+    )
     baseline_checkpoint = Checkpoint.capture(before)
     customized_checkpoint = Checkpoint.capture(after)
     for policy in (
-        "behavior", "psychology", "body_dynamics", "queue", "social", "information",
-        "staff_fatigue", "zone_environment", "care_outcome",
+        "behavior",
+        "psychology",
+        "body_dynamics",
+        "queue",
+        "social",
+        "information",
+        "staff_fatigue",
+        "zone_environment",
+        "care_outcome",
     ):
-        assert baseline_checkpoint.model_versions[f"policy:{policy}"] != (
-            customized_checkpoint.model_versions[f"policy:{policy}"]
+        assert (
+            baseline_checkpoint.model_versions[f"policy:{policy}"]
+            != (customized_checkpoint.model_versions[f"policy:{policy}"])
         )
     restored = Checkpoint.from_json(customized_checkpoint.to_json()).restore_world()
     assert restored.canonical_json() == after.canonical_json()
 
     recorded = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("id", "").startswith("ASM-POLICY-OVERRIDE-")
     ]
     assert {row["subject"]: row["value"] for row in recorded} == config_override_values
@@ -260,39 +272,51 @@ config_override_values = {
 
 def test_parameter_overrides_reject_unselected_coefficients_and_catalog_bound_violations() -> None:
     with pytest.raises(ValueError, match="finite JSON numbers"):
-        _override_request(model_parameter_overrides={
-            "body_dynamics.sleep_debt_stress_rate": True,
-        })
+        _override_request(
+            model_parameter_overrides={
+                "body_dynamics.sleep_debt_stress_rate": True,
+            }
+        )
 
     with pytest.raises(ValueError, match="not consumed by a selected installed formula"):
-        InitialScenarioBuilder().build(_override_request(
-            model_parameter_overrides={
-                "body_dynamics.unregistered_stress_rate": 0.02,
-            },
-        ))
+        InitialScenarioBuilder().build(
+            _override_request(
+                model_parameter_overrides={
+                    "body_dynamics.unregistered_stress_rate": 0.02,
+                },
+            )
+        )
 
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        InitialScenarioBuilder().build(_override_request(
-            model_parameter_overrides={
-                "body_dynamics.sleep_debt_stress_rate": 2.0,
-            },
-        ))
+        InitialScenarioBuilder().build(
+            _override_request(
+                model_parameter_overrides={
+                    "body_dynamics.sleep_debt_stress_rate": 2.0,
+                },
+            )
+        )
 
     with pytest.raises(ValueError, match="requires an integer value"):
-        InitialScenarioBuilder().build(_override_request(
-            model_parameter_overrides={
-                "staff_dynamics.max_continuous_work_minutes": 300.5,
-            },
-        ))
+        InitialScenarioBuilder().build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_dynamics.max_continuous_work_minutes": 300.5,
+                },
+            )
+        )
 
 
 def test_per_staff_fatigue_parameter_is_typed_applied_and_checkpoint_signed() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
     staff_id = baseline.scenario.staff[0].id
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 120},
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 120},
+            }
+        )
+    )
     config = customized.scenario.model_configs
     assert config["staff_dynamics"]["max_continuous_work_minutes_by_staff"] == {staff_id: 120}
 
@@ -309,22 +333,28 @@ def test_per_staff_fatigue_parameter_is_typed_applied_and_checkpoint_signed() ->
     assert runtime_record["fatigue"] == pytest.approx(0.5)
 
     baseline_world = WorldState.from_scenario(baseline.scenario)
-    assert "max_continuous_work_minutes_by_staff" not in baseline_world.model_state[
-        STAFF_DYNAMICS_STATE_KEY
-    ]["config"]
+    assert (
+        "max_continuous_work_minutes_by_staff"
+        not in baseline_world.model_state[STAFF_DYNAMICS_STATE_KEY]["config"]
+    )
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(WorldState.from_scenario(customized.scenario))
-    assert before.model_versions["policy:staff_fatigue"] != after.model_versions["policy:staff_fatigue"]
+    assert (
+        before.model_versions["policy:staff_fatigue"]
+        != after.model_versions["policy:staff_fatigue"]
+    )
     legacy_configs = deepcopy(baseline.scenario.model_configs)
     legacy_configs["staff_dynamics"].pop("max_continuous_work_minutes_by_staff")
-    assert model_signatures(legacy_configs)["policy:staff_fatigue"] == (
-        before.model_versions["policy:staff_fatigue"]
+    assert (
+        model_signatures(legacy_configs)["policy:staff_fatigue"]
+        == (before.model_versions["policy:staff_fatigue"])
     )
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         WorldState.from_scenario(customized.scenario).canonical_json()
     )
     applied = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "staff_dynamics.max_continuous_work_minutes_by_staff.*"
     ]
     assert len(applied) == 1
@@ -332,17 +362,29 @@ def test_per_staff_fatigue_parameter_is_typed_applied_and_checkpoint_signed() ->
     assert applied[0]["applicability"].startswith("Optional experimental work-duration threshold")
 
     with pytest.raises(ValueError, match="unknown staff IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_dynamics.max_continuous_work_minutes_by_staff.*": {"unknown-staff": 120},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_dynamics.max_continuous_work_minutes_by_staff.*": {"unknown-staff": 120},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 1441},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 1441},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="integer staff-specific minutes"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 120.5},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_dynamics.max_continuous_work_minutes_by_staff.*": {staff_id: 120.5},
+                }
+            )
+        )
 
 
 def test_resident_specific_behavior_cadence_reaches_policy_and_checkpoint() -> None:
@@ -350,14 +392,18 @@ def test_resident_specific_behavior_cadence_reaches_policy_and_checkpoint() -> N
     baseline = builder.build(_override_request())
     agent_id = baseline.scenario.profiles[0].id
     path = "behavior.decision_interval_minutes_by_agent.*"
-    customized = builder.build(_override_request(model_parameter_overrides={
-        path: {agent_id: 30},
-        "behavior.temperature_by_agent.*": {agent_id: 0.35},
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                path: {agent_id: 30},
+                "behavior.temperature_by_agent.*": {agent_id: 0.35},
+            }
+        )
+    )
 
-    assert customized.scenario.model_configs["behavior"][
-        "decision_interval_minutes_by_agent"
-    ] == {agent_id: 30}
+    assert customized.scenario.model_configs["behavior"]["decision_interval_minutes_by_agent"] == {
+        agent_id: 30
+    }
     assert customized.scenario.model_configs["behavior"]["temperature_by_agent"] == {
         agent_id: 0.35,
     }
@@ -365,15 +411,17 @@ def test_resident_specific_behavior_cadence_reaches_policy_and_checkpoint() -> N
     customized_world = WorldState.from_scenario(customized.scenario)
     baseline_checkpoint = Checkpoint.capture(baseline_world)
     customized_checkpoint = Checkpoint.capture(customized_world)
-    assert baseline_checkpoint.model_versions["policy:behavior"] != (
-        customized_checkpoint.model_versions["policy:behavior"]
+    assert (
+        baseline_checkpoint.model_versions["policy:behavior"]
+        != (customized_checkpoint.model_versions["policy:behavior"])
     )
 
     legacy_configs = deepcopy(baseline.scenario.model_configs)
     legacy_configs["behavior"]["decision_interval_minutes_by_agent"] = {}
     legacy_configs["behavior"]["temperature_by_agent"] = {}
-    assert model_signatures(legacy_configs)["policy:behavior"] == (
-        baseline_checkpoint.model_versions["policy:behavior"]
+    assert (
+        model_signatures(legacy_configs)["policy:behavior"]
+        == (baseline_checkpoint.model_versions["policy:behavior"])
     )
 
     class ArtifactSink:
@@ -409,20 +457,30 @@ def test_resident_specific_behavior_cadence_reaches_policy_and_checkpoint() -> N
     assert restored.canonical_json() == customized_world_json
 
     with pytest.raises(ValueError, match="integer Agent values"):
-        builder.build(_override_request(model_parameter_overrides={
-            path: {agent_id: 30.5},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    path: {agent_id: 30.5},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="unknown Agent IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            path: {"unknown-agent": 30},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    path: {"unknown-agent": 30},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="not consumed by a selected installed formula"):
-        builder.build(_override_request(
-            behavior_policy_id="priority-rule-v1",
-            model_parameter_overrides={
-                "behavior.temperature_by_agent.*": {agent_id: 0.35},
-            },
-        ))
+        builder.build(
+            _override_request(
+                behavior_policy_id="priority-rule-v1",
+                model_parameter_overrides={
+                    "behavior.temperature_by_agent.*": {agent_id: 0.35},
+                },
+            )
+        )
 
 
 def test_mobility_speed_override_reaches_routes_provenance_and_checkpoint() -> None:
@@ -447,20 +505,23 @@ def test_mobility_speed_override_reaches_routes_provenance_and_checkpoint() -> N
     assert in_room_travel_minutes(customized_world, agent_id, route_points) > (
         in_room_travel_minutes(baseline_world, agent_id, route_points)
     )
-    assert customized_scenario.model_configs["movement_model"][
-        "speed_m_per_minute_by_mobility"
-    ]["assisted"] == 18.0
+    assert (
+        customized_scenario.model_configs["movement_model"]["speed_m_per_minute_by_mobility"][
+            "assisted"
+        ]
+        == 18.0
+    )
 
     baseline_checkpoint = Checkpoint.capture(baseline_world)
     customized_checkpoint = Checkpoint.capture(customized_world)
-    assert baseline_checkpoint.model_versions["movement_model"] != (
-        customized_checkpoint.model_versions["movement_model"]
+    assert (
+        baseline_checkpoint.model_versions["movement_model"]
+        != (customized_checkpoint.model_versions["movement_model"])
     )
     restored = Checkpoint.from_json(customized_checkpoint.to_json()).restore_world()
     assert restored.canonical_json() == customized_world.canonical_json()
     applied = next(
-        row for row in customized.scenario.provenance["assumptions"]
-        if row.get("subject") == path
+        row for row in customized.scenario.provenance["assumptions"] if row.get("subject") == path
     )
     assert applied["value"] == 18.0
     assert applied["unit"] == "metre_per_minute"
@@ -479,14 +540,16 @@ def test_resource_service_coefficients_reach_runtime_and_checkpoint() -> None:
     )
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request(operational_conditions=conditions))
-    customized = builder.build(_override_request(
-        operational_conditions=conditions,
-        model_parameter_overrides={
-            "resource_service.hydration_relief": 0.2,
-            "resource_service.service_minutes": 8,
-            "resource_service.water_utility_need_weight": 0.4,
-        },
-    ))
+    customized = builder.build(
+        _override_request(
+            operational_conditions=conditions,
+            model_parameter_overrides={
+                "resource_service.hydration_relief": 0.2,
+                "resource_service.service_minutes": 8,
+                "resource_service.water_utility_need_weight": 0.4,
+            },
+        )
+    )
     config = customized.scenario.model_configs["resource_service"]
     assert config["hydration_relief"] == 0.2
     assert config["service_minutes"] == 8
@@ -507,8 +570,9 @@ def test_resource_service_coefficients_reach_runtime_and_checkpoint() -> None:
 
     baseline_checkpoint = Checkpoint.capture(baseline_world)
     customized_checkpoint = Checkpoint.capture(customized_world)
-    assert baseline_checkpoint.model_versions["resource_service"] != (
-        customized_checkpoint.model_versions["resource_service"]
+    assert (
+        baseline_checkpoint.model_versions["resource_service"]
+        != (customized_checkpoint.model_versions["resource_service"])
     )
     restored = Checkpoint.from_json(customized_checkpoint.to_json()).restore_world()
     assert restored.canonical_json() == customized_world.canonical_json()
@@ -528,19 +592,25 @@ def test_resource_service_coefficients_reach_runtime_and_checkpoint() -> None:
     )
 
     with pytest.raises(ValueError, match="Model Catalog bounds"):
-        builder.build(_override_request(
-            operational_conditions=conditions,
-            model_parameter_overrides={"resource_service.hydration_relief": 0.0},
-        ))
+        builder.build(
+            _override_request(
+                operational_conditions=conditions,
+                model_parameter_overrides={"resource_service.hydration_relief": 0.0},
+            )
+        )
 
 
 def test_toilet_service_duration_overrides_reach_controller_and_checkpoint() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "toilet_service.minimum_minutes": 6,
-        "toilet_service.maximum_minutes": 6,
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "toilet_service.minimum_minutes": 6,
+                "toilet_service.maximum_minutes": 6,
+            }
+        )
+    )
     config = customized.scenario.model_configs["toilet_service"]
     assert config["minimum_minutes"] == config["maximum_minutes"] == 6
     entries = {row["path"]: row for row in parameter_catalog(customized.scenario)}
@@ -570,34 +640,44 @@ def test_toilet_service_duration_overrides_reach_controller_and_checkpoint() -> 
             _override_request(model_parameter_overrides={"toilet_service.minimum_minutes": 1441})
         )
     with pytest.raises(ValueError, match="maximum_minutes must be at least minimum_minutes"):
-        builder.build(_override_request(model_parameter_overrides={
-            "toilet_service.minimum_minutes": 9,
-            "toilet_service.maximum_minutes": 8,
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "toilet_service.minimum_minutes": 9,
+                    "toilet_service.maximum_minutes": 8,
+                }
+            )
+        )
 
 
 def test_shift_dynamics_overrides_require_v2_and_change_runtime_recovery() -> None:
     builder = InitialScenarioBuilder()
-    legacy_rest = builder.build(_override_request(model_parameter_overrides={
-        "staff_dynamics.rest_minutes": 45,
-    }))
+    legacy_rest = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff_dynamics.rest_minutes": 45,
+            }
+        )
+    )
     legacy_world = WorldState.from_scenario(legacy_rest.scenario)
     legacy_record = legacy_world.model_state[STAFF_DYNAMICS_STATE_KEY]["staff"]["staff_001"]
     legacy_record["consecutive_work_minutes"] = 240
     update_staff_dynamics(legacy_world, 0)
     assert legacy_record["rest_until_minute"] == 45
 
-    shifts = OperationalConditions(staff_shifts=(
-        StaffShiftInput(staff_id="staff_001", start_minute=60, end_minute=300),
-    ))
+    shifts = OperationalConditions(
+        staff_shifts=(StaffShiftInput(staff_id="staff_001", start_minute=60, end_minute=300),)
+    )
     baseline = builder.build(_override_request(operational_conditions=shifts))
-    customized = builder.build(_override_request(
-        operational_conditions=shifts,
-        model_parameter_overrides={
-            "staff_dynamics.rest_minutes": 45,
-            "staff_dynamics.off_shift_fatigue_recovery_per_minute": 0.01,
-        },
-    ))
+    customized = builder.build(
+        _override_request(
+            operational_conditions=shifts,
+            model_parameter_overrides={
+                "staff_dynamics.rest_minutes": 45,
+                "staff_dynamics.off_shift_fatigue_recovery_per_minute": 0.01,
+            },
+        )
+    )
     config = customized.scenario.model_configs["staff_dynamics"]
     assert config["policy_version"] == "continuous-duty-fatigue-v2"
     assert config["rest_minutes"] == 45
@@ -614,27 +694,36 @@ def test_shift_dynamics_overrides_require_v2_and_change_runtime_recovery() -> No
 
     base_checkpoint = Checkpoint.capture(WorldState.from_scenario(baseline.scenario))
     checkpoint = Checkpoint.capture(WorldState.from_scenario(customized.scenario))
-    assert base_checkpoint.model_versions["staff_dynamics"] != checkpoint.model_versions[
-        "staff_dynamics"
-    ]
+    assert (
+        base_checkpoint.model_versions["staff_dynamics"]
+        != checkpoint.model_versions["staff_dynamics"]
+    )
     assert Checkpoint.from_json(checkpoint.to_json()).restore_world().canonical_json() == (
         WorldState.from_scenario(customized.scenario).canonical_json()
     )
     with pytest.raises(ValueError, match="not consumed by a selected installed formula"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_dynamics.off_shift_fatigue_recovery_per_minute": 0.01
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_dynamics.off_shift_fatigue_recovery_per_minute": 0.01
+                }
+            )
+        )
 
 
 def test_staff_support_lifecycle_overrides_reach_controller_and_checkpoint() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "staff.support_task_minutes": 12,
-        "staff.unresolved_after_minutes": 120,
-        "staff.support_cooldown_minutes": 40,
-        "staff.support_fairness_minutes": 60,
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff.support_task_minutes": 12,
+                "staff.unresolved_after_minutes": 120,
+                "staff.support_cooldown_minutes": 40,
+                "staff.support_fairness_minutes": 60,
+            }
+        )
+    )
     config = customized.scenario.model_configs["staff"]
     assert config["support_task_minutes"] == 12
     assert config["unresolved_after_minutes"] == 120
@@ -667,18 +756,26 @@ def test_staff_support_lifecycle_overrides_reach_controller_and_checkpoint() -> 
         world.canonical_json()
     )
     with pytest.raises(ValueError, match="no greater than the unresolved timeout"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff.unresolved_after_minutes": 60,
-            "staff.support_fairness_minutes": 90,
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff.unresolved_after_minutes": 60,
+                    "staff.support_fairness_minutes": 90,
+                }
+            )
+        )
 
 
 def test_per_service_queue_wait_limit_override_changes_runtime_and_checkpoint_signature() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60},
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60},
+            }
+        )
+    )
     config = customized.scenario.model_configs
     assert config["facility_queues"]["abandon_after_minutes_by_service"] == {"toilet": 60}
     assert create_queue_policy(config).model_id == "need-weighted-physical-queue-v1"
@@ -697,13 +794,15 @@ def test_per_service_queue_wait_limit_override_changes_runtime_and_checkpoint_si
     baseline_world = WorldState.from_scenario(baseline.scenario)
     baseline_checkpoint = Checkpoint.capture(baseline_world)
     customized_checkpoint = Checkpoint.capture(world)
-    assert baseline_checkpoint.model_versions["policy:queue"] != (
-        customized_checkpoint.model_versions["policy:queue"]
+    assert (
+        baseline_checkpoint.model_versions["policy:queue"]
+        != (customized_checkpoint.model_versions["policy:queue"])
     )
     restored = Checkpoint.from_json(customized_checkpoint.to_json()).restore_world()
     assert restored.canonical_json() == world.canonical_json()
     applied = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "facility_queues.abandon_after_minutes_by_service.*"
     ]
     assert len(applied) == 1
@@ -713,44 +812,62 @@ def test_per_service_queue_wait_limit_override_changes_runtime_and_checkpoint_si
     ]
     assert catalog_entry["scope"] == "per_service"
     assert catalog_entry["unit"] == "minute"
-    assert "scope" not in model_catalog()["utility-softmax-v1"]["parameters"][
-        "behavior.temperature"
-    ]
+    assert (
+        "scope" not in model_catalog()["utility-softmax-v1"]["parameters"]["behavior.temperature"]
+    )
 
     with pytest.raises(ValueError, match="unsupported service names"):
-        builder.build(_override_request(model_parameter_overrides={
-            "facility_queues.abandon_after_minutes_by_service.*": {"electricity": 60},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "facility_queues.abandon_after_minutes_by_service.*": {"electricity": 60},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 10081},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 10081},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="integer service minutes"):
-        builder.build(_override_request(model_parameter_overrides={
-            "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60.5},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60.5},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="not consumed by a selected installed formula"):
-        builder.build(_override_request(
-            queue_policy_id="strict-fifo-queue-v1",
-            model_parameter_overrides={
-                "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60},
-            },
-        ))
+        builder.build(
+            _override_request(
+                queue_policy_id="strict-fifo-queue-v1",
+                model_parameter_overrides={
+                    "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60},
+                },
+            )
+        )
 
 
 def test_per_zone_environment_baseline_override_is_typed_runtime_and_checkpoint_signed() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "zone_environment.baseline_by_zone.*": {
-            "sleeping": {
-                "ventilation_effectiveness": 0.3,
-                "lighting_level": 0.8,
-                "privacy_level": 0.2,
-                "temperature_c": 30.0,
-            },
-        },
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "zone_environment.baseline_by_zone.*": {
+                    "sleeping": {
+                        "ventilation_effectiveness": 0.3,
+                        "lighting_level": 0.8,
+                        "privacy_level": 0.2,
+                        "temperature_c": 30.0,
+                    },
+                },
+            }
+        )
+    )
     config = customized.scenario.model_configs
     assert config["zone_environment"]["baseline_by_zone"]["sleeping"] == {
         "ventilation_effectiveness": 0.3,
@@ -767,21 +884,26 @@ def test_per_zone_environment_baseline_override_is_typed_runtime_and_checkpoint_
     assert view.temperature_c == 30.0
     assert view.temperature_stress_per_minute > 0
     assert view.rest_efficiency_multiplier < baseline_view.rest_efficiency_multiplier
-    assert view.ventilation_hygiene_growth_per_minute > baseline_view.ventilation_hygiene_growth_per_minute
+    assert (
+        view.ventilation_hygiene_growth_per_minute
+        > baseline_view.ventilation_hygiene_growth_per_minute
+    )
     assert view.privacy_discontent_per_minute > baseline_view.privacy_discontent_per_minute
 
     baseline_world = WorldState.from_scenario(baseline.scenario)
     customized_world = WorldState.from_scenario(customized.scenario)
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:zone_environment"] != (
-        after.model_versions["policy:zone_environment"]
+    assert (
+        before.model_versions["policy:zone_environment"]
+        != (after.model_versions["policy:zone_environment"])
     )
     restored = Checkpoint.from_json(after.to_json()).restore_world()
     assert restored.canonical_json() == customized_world.canonical_json()
 
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "zone_environment.baseline_by_zone.*"
     ]
     assert len(provenance) == 1
@@ -805,31 +927,47 @@ def test_per_zone_environment_baseline_override_is_typed_runtime_and_checkpoint_
     assert catalog_entry["field_units"]["temperature_c"] == "degree_celsius"
 
     with pytest.raises(ValueError, match="unknown zone IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "zone_environment.baseline_by_zone.*": {"unknown-zone": {"privacy_level": 0.8}},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "zone_environment.baseline_by_zone.*": {"unknown-zone": {"privacy_level": 0.8}},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="unsupported per-zone fields"):
-        builder.build(_override_request(model_parameter_overrides={
-            "zone_environment.baseline_by_zone.*": {"sleeping": {"elevation_m": 3.0}},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "zone_environment.baseline_by_zone.*": {"sleeping": {"elevation_m": 3.0}},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "zone_environment.baseline_by_zone.*": {"sleeping": {"lighting_level": 1.1}},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "zone_environment.baseline_by_zone.*": {"sleeping": {"lighting_level": 1.1}},
+                }
+            )
+        )
 
 
 def test_per_zone_staff_task_thresholds_are_provenanced_consumed_and_signed() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "staff_operations.thresholds_by_zone.*": {
-            "sleeping": {
-                "cleaning_sanitation_below": 0.72,
-                "outreach_uncertainty_at_least": 0.51,
-                "patrol_stress_at_least": 0.55,
-            },
-        },
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff_operations.thresholds_by_zone.*": {
+                    "sleeping": {
+                        "cleaning_sanitation_below": 0.72,
+                        "outreach_uncertainty_at_least": 0.51,
+                        "patrol_stress_at_least": 0.55,
+                    },
+                },
+            }
+        )
+    )
     base_config = baseline.scenario.model_configs
     config = customized.scenario.model_configs
     assert config["staff_operations"]["thresholds_by_zone"] == {
@@ -844,14 +982,13 @@ def test_per_zone_staff_task_thresholds_are_provenanced_consumed_and_signed() ->
     customized_world = WorldState.from_scenario(customized.scenario)
     legacy_configs = deepcopy(base_world.model_configs)
     legacy_configs["staff_operations"].pop("thresholds_by_zone")
-    assert model_signatures(legacy_configs)["policy:staff_operations"] == (
-        model_signatures(base_world.model_configs)["policy:staff_operations"]
+    assert (
+        model_signatures(legacy_configs)["policy:staff_operations"]
+        == (model_signatures(base_world.model_configs)["policy:staff_operations"])
     )
     legacy_world = WorldState.from_scenario(baseline.scenario)
     legacy_world.model_configs["staff_operations"].pop("thresholds_by_zone")
-    legacy_world.model_state[STAFF_OPERATIONS_STATE_KEY]["config"].pop(
-        "thresholds_by_zone"
-    )
+    legacy_world.model_state[STAFF_OPERATIONS_STATE_KEY]["config"].pop("thresholds_by_zone")
     legacy_world.validate()
     legacy_checkpoint = Checkpoint.capture(legacy_world)
     assert Checkpoint.from_json(legacy_checkpoint.to_json()).restore_world().canonical_json() == (
@@ -859,14 +996,16 @@ def test_per_zone_staff_task_thresholds_are_provenanced_consumed_and_signed() ->
     )
     before = Checkpoint.capture(base_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:staff_operations"] != (
-        after.model_versions["policy:staff_operations"]
+    assert (
+        before.model_versions["policy:staff_operations"]
+        != (after.model_versions["policy:staff_operations"])
     )
     restored = Checkpoint.from_json(after.to_json()).restore_world()
     assert restored.canonical_json() == customized_world.canonical_json()
 
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "staff_operations.thresholds_by_zone.*"
     ]
     assert len(provenance) == 1
@@ -881,28 +1020,40 @@ def test_per_zone_staff_task_thresholds_are_provenanced_consumed_and_signed() ->
 def test_per_zone_staff_task_thresholds_reject_unknown_zones_and_fields() -> None:
     builder = InitialScenarioBuilder()
     with pytest.raises(ValueError, match="unknown zone IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.thresholds_by_zone.*": {
-                "missing-zone": {"patrol_stress_at_least": 0.5},
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.thresholds_by_zone.*": {
+                        "missing-zone": {"patrol_stress_at_least": 0.5},
+                    },
+                }
+            )
+        )
     with pytest.raises(ValueError, match="unsupported per-zone fields"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.thresholds_by_zone.*": {
-                "sleeping": {"unknown_threshold": 0.5},
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.thresholds_by_zone.*": {
+                        "sleeping": {"unknown_threshold": 0.5},
+                    },
+                }
+            )
+        )
 
 
 def test_staff_task_kind_durations_are_provenanced_and_checkpointed() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "staff_operations.task_duration_minutes.*": {
-            "cleaning": 37,
-            "patrol": 45,
-        },
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff_operations.task_duration_minutes.*": {
+                    "cleaning": 37,
+                    "patrol": 45,
+                },
+            }
+        )
+    )
     baseline_config = baseline.scenario.model_configs["staff_operations"]
     config = customized.scenario.model_configs["staff_operations"]
     assert config["task_duration_minutes"] == {
@@ -915,14 +1066,16 @@ def test_staff_task_kind_durations_are_provenanced_and_checkpointed() -> None:
     customized_world = WorldState.from_scenario(customized.scenario)
     before = Checkpoint.capture(base_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:staff_operations"] != (
-        after.model_versions["policy:staff_operations"]
+    assert (
+        before.model_versions["policy:staff_operations"]
+        != (after.model_versions["policy:staff_operations"])
     )
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         customized_world.canonical_json()
     )
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "staff_operations.task_duration_minutes.*"
     ]
     assert len(provenance) == 1
@@ -936,30 +1089,46 @@ def test_staff_task_kind_durations_are_provenanced_and_checkpointed() -> None:
     assert catalog_entry["scope"] == "per_task_kind"
 
     with pytest.raises(ValueError, match="unknown task kind"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.task_duration_minutes.*": {"unknown_task": 10},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.task_duration_minutes.*": {"unknown_task": 10},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="integer task-kind minutes"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.task_duration_minutes.*": {"cleaning": 2.5},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.task_duration_minutes.*": {"cleaning": 2.5},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.task_duration_minutes.*": {"cleaning": 1441},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.task_duration_minutes.*": {"cleaning": 1441},
+                }
+            )
+        )
 
 
 def test_per_zone_staff_effect_coefficients_are_consumed_signed_and_provenanced() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "staff_operations.effects_by_zone.*": {
-            "sleeping": {
-                "cleaning_sanitation_recovery": 0.32,
-                "outreach_uncertainty_relief": 0.08,
-            },
-        },
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "staff_operations.effects_by_zone.*": {
+                    "sleeping": {
+                        "cleaning_sanitation_recovery": 0.32,
+                        "outreach_uncertainty_relief": 0.08,
+                    },
+                },
+            }
+        )
+    )
     config = customized.scenario.model_configs["staff_operations"]
     assert config["effects_by_zone"]["sleeping"] == {
         "cleaning_sanitation_recovery": 0.32,
@@ -970,14 +1139,16 @@ def test_per_zone_staff_effect_coefficients_are_consumed_signed_and_provenanced(
     customized_world = WorldState.from_scenario(customized.scenario)
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:staff_operations"] != (
-        after.model_versions["policy:staff_operations"]
+    assert (
+        before.model_versions["policy:staff_operations"]
+        != (after.model_versions["policy:staff_operations"])
     )
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         customized_world.canonical_json()
     )
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "staff_operations.effects_by_zone.*"
     ]
     assert len(provenance) == 1
@@ -988,32 +1159,48 @@ def test_per_zone_staff_effect_coefficients_are_consumed_signed_and_provenanced(
     )
 
     with pytest.raises(ValueError, match="unknown zone IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.effects_by_zone.*": {
-                "unknown-zone": {"cleaning_sanitation_recovery": 0.3},
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.effects_by_zone.*": {
+                        "unknown-zone": {"cleaning_sanitation_recovery": 0.3},
+                    },
+                }
+            )
+        )
     with pytest.raises(ValueError, match="unsupported per-zone fields"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.effects_by_zone.*": {
-                "sleeping": {"unsupported_effect": 0.3},
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.effects_by_zone.*": {
+                        "sleeping": {"unsupported_effect": 0.3},
+                    },
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "staff_operations.effects_by_zone.*": {
-                "sleeping": {"sanitation_use_per_person_minute": 0.02},
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "staff_operations.effects_by_zone.*": {
+                        "sleeping": {"sanitation_use_per_person_minute": 0.02},
+                    },
+                }
+            )
+        )
 
 
 def test_per_agent_sleep_debt_coefficient_changes_only_selected_agent_feedback() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
     agent_id = baseline.scenario.profiles[0].id
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "body_dynamics.sleep_debt_stress_rate_by_agent.*": {agent_id: 0.01},
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "body_dynamics.sleep_debt_stress_rate_by_agent.*": {agent_id: 0.01},
+            }
+        )
+    )
     assert customized.scenario.model_configs["body_dynamics"][
         "sleep_debt_stress_rate_by_agent"
     ] == {agent_id: 0.01}
@@ -1021,9 +1208,7 @@ def test_per_agent_sleep_debt_coefficient_changes_only_selected_agent_feedback()
     baseline_world = WorldState.from_scenario(baseline.scenario)
     customized_world = WorldState.from_scenario(customized.scenario)
     for world in (baseline_world, customized_world):
-        world.model_state["body_state_v1"]["agents"][agent_id][
-            "sleep_debt_minutes"
-        ] = 720.0
+        world.model_state["body_state_v1"]["agents"][agent_id]["sleep_debt_minutes"] = 720.0
 
     baseline_result = create_psychology(baseline_world.model_configs).explain_update(
         WorldView.from_world(baseline_world), 0
@@ -1042,14 +1227,16 @@ def test_per_agent_sleep_debt_coefficient_changes_only_selected_agent_feedback()
     assert before.model_versions["policy:body_dynamics"].startswith(
         "body-feedback-complete-v2@1:state1:"
     )
-    assert before.model_versions["policy:body_dynamics"] != (
-        after.model_versions["policy:body_dynamics"]
+    assert (
+        before.model_versions["policy:body_dynamics"]
+        != (after.model_versions["policy:body_dynamics"])
     )
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         customized_world.canonical_json()
     )
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == "body_dynamics.sleep_debt_stress_rate_by_agent.*"
     ]
     assert len(provenance) == 1
@@ -1057,13 +1244,21 @@ def test_per_agent_sleep_debt_coefficient_changes_only_selected_agent_feedback()
     assert provenance[0]["scope"] == "per_agent_id"
 
     with pytest.raises(ValueError, match="unknown Agent IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "body_dynamics.sleep_debt_stress_rate_by_agent.*": {"unknown-agent": 0.01},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "body_dynamics.sleep_debt_stress_rate_by_agent.*": {"unknown-agent": 0.01},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "body_dynamics.sleep_debt_stress_rate_by_agent.*": {agent_id: 1.1},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "body_dynamics.sleep_debt_stress_rate_by_agent.*": {agent_id: 1.1},
+                }
+            )
+        )
 
 
 def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None:
@@ -1078,11 +1273,14 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
     customized = builder.build(_override_request(model_parameter_overrides=overrides))
     baseline_config = baseline.scenario.model_configs["psychology"]
     config = customized.scenario.model_configs["psychology"]
-    assert not {
-        "toilet_growth_by_agent",
-        "hunger_growth_by_agent",
-        "awake_fatigue_growth_by_agent",
-    } & baseline_config.keys()
+    assert (
+        not {
+            "toilet_growth_by_agent",
+            "hunger_growth_by_agent",
+            "awake_fatigue_growth_by_agent",
+        }
+        & baseline_config.keys()
+    )
     assert config["toilet_growth_by_agent"] == {agent_id: 0.02}
     assert config["hunger_growth_by_agent"] == {agent_id: 0.02}
     assert config["awake_fatigue_growth_by_agent"] == {agent_id: 0.03}
@@ -1120,9 +1318,7 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
         assert changed_by_id[agent_id].toilet_urgency - base_by_id[agent_id].toilet_urgency == (
             pytest.approx(0.019)
         )
-        assert changed_by_id[agent_id].hunger - base_by_id[agent_id].hunger == pytest.approx(
-            0.0195
-        )
+        assert changed_by_id[agent_id].hunger - base_by_id[agent_id].hunger == pytest.approx(0.0195)
         assert changed_by_id[agent_id].fatigue - base_by_id[agent_id].fatigue == pytest.approx(
             0.0292
         )
@@ -1134,9 +1330,7 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
     assert before.model_versions["policy:psychology"].startswith(
         "mean-reverting-life-state-v1@1:state1:"
     )
-    assert before.model_versions["policy:psychology"] != after.model_versions[
-        "policy:psychology"
-    ]
+    assert before.model_versions["policy:psychology"] != after.model_versions["policy:psychology"]
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         customized_world.canonical_json()
     )
@@ -1154,13 +1348,21 @@ def test_per_agent_psychology_need_rates_change_only_selected_resident() -> None
     )
 
     with pytest.raises(ValueError, match="unknown Agent IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "psychology.toilet_growth_by_agent.*": {"unknown-agent": 0.02},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "psychology.toilet_growth_by_agent.*": {"unknown-agent": 0.02},
+                }
+            )
+        )
     with pytest.raises(ValueError, match="outside its Model Catalog bounds"):
-        builder.build(_override_request(model_parameter_overrides={
-            "psychology.hunger_growth_by_agent.*": {agent_id: 0.3},
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "psychology.hunger_growth_by_agent.*": {agent_id: 0.3},
+                }
+            )
+        )
     invalid_scenario = baseline.scenario.model_dump(mode="json")
     invalid_scenario["model_configs"]["psychology"]["toilet_growth_by_agent"] = {
         "unknown-agent": 0.02,
@@ -1182,13 +1384,15 @@ def test_per_agent_body_feedback_rates_change_only_selected_resident(
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
     agent_id = baseline.scenario.profiles[0].id
-    customized = builder.build(_override_request(model_parameter_overrides={
-        coefficient_path: {agent_id: 0.2},
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                coefficient_path: {agent_id: 0.2},
+            }
+        )
+    )
     config_field = coefficient_path.rsplit(".", 2)[1].removesuffix(".*")
-    assert customized.scenario.model_configs["body_dynamics"][config_field] == {
-        agent_id: 0.2
-    }
+    assert customized.scenario.model_configs["body_dynamics"][config_field] == {agent_id: 0.2}
 
     baseline_world = WorldState.from_scenario(baseline.scenario)
     customized_world = WorldState.from_scenario(customized.scenario)
@@ -1208,14 +1412,16 @@ def test_per_agent_body_feedback_rates_change_only_selected_resident(
 
     before = Checkpoint.capture(baseline_world)
     after = Checkpoint.capture(customized_world)
-    assert before.model_versions["policy:body_dynamics"] != (
-        after.model_versions["policy:body_dynamics"]
+    assert (
+        before.model_versions["policy:body_dynamics"]
+        != (after.model_versions["policy:body_dynamics"])
     )
     assert Checkpoint.from_json(after.to_json()).restore_world().canonical_json() == (
         customized_world.canonical_json()
     )
     provenance = [
-        row for row in customized.scenario.provenance["assumptions"]
+        row
+        for row in customized.scenario.provenance["assumptions"]
         if row.get("subject") == coefficient_path
     ]
     assert len(provenance) == 1
@@ -1224,72 +1430,81 @@ def test_per_agent_body_feedback_rates_change_only_selected_resident(
 
 def test_per_resident_care_response_overrides_are_signed_and_checkpointed() -> None:
     builder = InitialScenarioBuilder()
-    baseline = builder.build(_override_request(
-        care_outcome_policy_id="hygiene-support-proportional-relief-v1",
-    ))
+    baseline = builder.build(
+        _override_request(
+            care_outcome_policy_id="hygiene-support-proportional-relief-v1",
+        )
+    )
     agent_id = baseline.scenario.profiles[0].id
-    customized = builder.build(_override_request(
-        care_outcome_policy_id="hygiene-support-proportional-relief-v1",
-        model_parameter_overrides={
-            "body_dynamics.complaint_reassurance_gain_by_agent.*": {agent_id: 0.04},
-            "body_dynamics.hygiene_support_relief_by_agent.*": {agent_id: 0.3},
-        },
-    ))
+    customized = builder.build(
+        _override_request(
+            care_outcome_policy_id="hygiene-support-proportional-relief-v1",
+            model_parameter_overrides={
+                "body_dynamics.complaint_reassurance_gain_by_agent.*": {agent_id: 0.04},
+                "body_dynamics.hygiene_support_relief_by_agent.*": {agent_id: 0.3},
+            },
+        )
+    )
     config = customized.scenario.model_configs["body_dynamics"]
     assert config["complaint_reassurance_gain_by_agent"] == {agent_id: 0.04}
     assert config["hygiene_support_relief_by_agent"] == {agent_id: 0.3}
 
     baseline_signatures = model_signatures(baseline.scenario.model_configs)
     customized_signatures = model_signatures(customized.scenario.model_configs)
-    assert baseline_signatures["policy:body_dynamics"] != customized_signatures[
-        "policy:body_dynamics"
-    ]
-    assert baseline_signatures["policy:care_outcome"] != customized_signatures[
-        "policy:care_outcome"
-    ]
+    assert (
+        baseline_signatures["policy:body_dynamics"] != customized_signatures["policy:body_dynamics"]
+    )
+    assert (
+        baseline_signatures["policy:care_outcome"] != customized_signatures["policy:care_outcome"]
+    )
     world = WorldState.from_scenario(customized.scenario)
     checkpoint = Checkpoint.capture(world)
     assert Checkpoint.from_json(checkpoint.to_json()).restore_world().canonical_json() == (
         world.canonical_json()
     )
-    assumptions = {
-        row["subject"]: row for row in customized.scenario.provenance["assumptions"]
+    assumptions = {row["subject"]: row for row in customized.scenario.provenance["assumptions"]}
+    assert assumptions["body_dynamics.complaint_reassurance_gain_by_agent.*"]["value"] == {
+        agent_id: 0.04
     }
-    assert assumptions[
-        "body_dynamics.complaint_reassurance_gain_by_agent.*"
-    ]["value"] == {agent_id: 0.04}
-    assert assumptions[
-        "body_dynamics.hygiene_support_relief_by_agent.*"
-    ]["value"] == {agent_id: 0.3}
+    assert assumptions["body_dynamics.hygiene_support_relief_by_agent.*"]["value"] == {
+        agent_id: 0.3
+    }
 
     with pytest.raises(ValueError, match="unknown Agent IDs"):
-        builder.build(_override_request(
-            care_outcome_policy_id="hygiene-support-proportional-relief-v1",
-            model_parameter_overrides={
-                "body_dynamics.hygiene_support_relief_by_agent.*": {
-                    "unknown-agent": 0.3,
+        builder.build(
+            _override_request(
+                care_outcome_policy_id="hygiene-support-proportional-relief-v1",
+                model_parameter_overrides={
+                    "body_dynamics.hygiene_support_relief_by_agent.*": {
+                        "unknown-agent": 0.3,
+                    },
                 },
-            },
-        ))
+            )
+        )
 
 
 def test_typed_care_response_overrides_reach_formula_and_checkpoint() -> None:
     builder = InitialScenarioBuilder()
     baseline = builder.build(_override_request())
     agent_id = baseline.scenario.profiles[0].id
-    customized = builder.build(_override_request(model_parameter_overrides={
-        "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*": {
-            agent_id: 0.07,
-        },
-    }))
+    customized = builder.build(
+        _override_request(
+            model_parameter_overrides={
+                "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*": {
+                    agent_id: 0.07,
+                },
+            }
+        )
+    )
     config = customized.scenario.model_configs
     formula = create_care_outcome_formula(config)
     assert formula is not None
-    assert formula.support_state_deltas(
-        "privacy_accommodation", agent_id=agent_id
-    ) == {"body_state_v1.agents.discontent": -0.07}
-    assert model_signatures(baseline.scenario.model_configs)["policy:care_outcome"] != (
-        model_signatures(config)["policy:care_outcome"]
+    assert formula.support_state_deltas("privacy_accommodation", agent_id=agent_id) == {
+        "body_state_v1.agents.discontent": -0.07
+    }
+    assert (
+        model_signatures(baseline.scenario.model_configs)["policy:care_outcome"]
+        != (model_signatures(config)["policy:care_outcome"])
     )
     world = WorldState.from_scenario(customized.scenario)
     checkpoint = Checkpoint.capture(world)
@@ -1297,19 +1512,23 @@ def test_typed_care_response_overrides_reach_formula_and_checkpoint() -> None:
         world.canonical_json()
     )
     assumption = next(
-        item for item in customized.scenario.provenance["assumptions"]
-        if item.get("subject")
-        == "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*"
+        item
+        for item in customized.scenario.provenance["assumptions"]
+        if item.get("subject") == "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*"
     )
     assert assumption["value"] == {agent_id: 0.07}
     assert assumption["scope"] == "per_agent_id"
 
     with pytest.raises(ValueError, match="unknown Agent IDs"):
-        builder.build(_override_request(model_parameter_overrides={
-            "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*": {
-                "unknown-agent": 0.07,
-            },
-        }))
+        builder.build(
+            _override_request(
+                model_parameter_overrides={
+                    "body_dynamics.privacy_accommodation_discontent_relief_by_agent.*": {
+                        "unknown-agent": 0.07,
+                    },
+                }
+            )
+        )
 
 
 def test_strict_fifo_rejects_unused_queue_coefficients_without_invalidating_checkpoints() -> None:
@@ -1332,10 +1551,12 @@ def test_strict_fifo_rejects_unused_queue_coefficients_without_invalidating_chec
         ("facility_queues.persistence_urgency_threshold", 0.5),
     ):
         with pytest.raises(ValueError, match="not consumed by a selected installed formula"):
-            builder.build(_override_request(
-                queue_policy_id="strict-fifo-queue-v1",
-                model_parameter_overrides={path: value},
-            ))
+            builder.build(
+                _override_request(
+                    queue_policy_id="strict-fifo-queue-v1",
+                    model_parameter_overrides={path: value},
+                )
+            )
 
 
 def test_per_staff_shift_windows_flow_through_scenario_evaluation_and_checkpoint() -> None:
@@ -1345,21 +1566,25 @@ def test_per_staff_shift_windows_flow_through_scenario_evaluation_and_checkpoint
     staff_ids = [staff.id for staff in base.staff]
     assert len(staff_ids) == 2
 
-    scenario = builder.build(_override_request(
-        staff_count=2,
-        operational_conditions=OperationalConditions(staff_shifts=(
-            StaffShiftInput(
-                staff_id=staff_ids[0],
-                start_minute=60,
-                end_minute=300,
+    scenario = builder.build(
+        _override_request(
+            staff_count=2,
+            operational_conditions=OperationalConditions(
+                staff_shifts=(
+                    StaffShiftInput(
+                        staff_id=staff_ids[0],
+                        start_minute=60,
+                        end_minute=300,
+                    ),
+                )
             ),
-        )),
-        model_parameter_overrides={
-            path: {
-                staff_ids[1]: [{"start_minute": 480, "end_minute": 960}],
+            model_parameter_overrides={
+                path: {
+                    staff_ids[1]: [{"start_minute": 480, "end_minute": 960}],
+                },
             },
-        },
-    )).scenario
+        )
+    ).scenario
     config = scenario.model_configs["staff_dynamics"]
     assert config["policy_version"] == "continuous-duty-fatigue-v2"
     assert config["shift_windows_by_staff"][staff_ids[0]] == [
@@ -1375,17 +1600,17 @@ def test_per_staff_shift_windows_flow_through_scenario_evaluation_and_checkpoint
     }
     candidate = _variant_scenario(
         scenario,
-        EvaluationVariant.model_validate({
-            "id": "earlier-shift-rotation",
-            "parameters": {path: candidate_windows},
-        }),
+        EvaluationVariant.model_validate(
+            {
+                "id": "earlier-shift-rotation",
+                "parameters": {path: candidate_windows},
+            }
+        ),
         seed=8,
     )
     assert candidate.model_configs["staff_dynamics"]["shift_windows_by_staff"] == candidate_windows
     assert model_signatures(candidate.model_configs) != model_signatures(scenario.model_configs)
-    assumption = next(
-        row for row in candidate.provenance["assumptions"] if row.get("path") == path
-    )
+    assumption = next(row for row in candidate.provenance["assumptions"] if row.get("path") == path)
     assert assumption["value"] == candidate_windows
     assert assumption["scope"] == "per_staff_shift_windows"
 
@@ -1401,29 +1626,41 @@ def test_per_staff_shift_windows_flow_through_scenario_evaluation_and_checkpoint
     with pytest.raises(ValueError, match="unknown staff IDs"):
         _variant_scenario(
             scenario,
-            EvaluationVariant.model_validate({
-                "id": "unknown-shift-owner",
-                "parameters": {path: {"S-UNKNOWN": [{"start_minute": 0, "end_minute": 60}]}},
-            }),
+            EvaluationVariant.model_validate(
+                {
+                    "id": "unknown-shift-owner",
+                    "parameters": {path: {"S-UNKNOWN": [{"start_minute": 0, "end_minute": 60}]}},
+                }
+            ),
             seed=9,
         )
     with pytest.raises(ValueError, match="cannot overlap"):
-        EvaluationVariant.model_validate({
-            "id": "overlapping-shifts",
-            "parameters": {
-                path: {staff_ids[0]: [
-                    {"start_minute": 0, "end_minute": 60},
-                    {"start_minute": 50, "end_minute": 80},
-                ]},
-            },
-        })
+        EvaluationVariant.model_validate(
+            {
+                "id": "overlapping-shifts",
+                "parameters": {
+                    path: {
+                        staff_ids[0]: [
+                            {"start_minute": 0, "end_minute": 60},
+                            {"start_minute": 50, "end_minute": 80},
+                        ]
+                    },
+                },
+            }
+        )
 
 
 def _draft(evacuees: int, seed: int, **extra):
-    return InitialScenarioBuilder().build(InitialScenarioRequest(
-        municipality="Synthetic municipality", disaster="earthquake",
-        evacuees=evacuees, duration_days=1, seed=seed, **extra,
-    ))
+    return InitialScenarioBuilder().build(
+        InitialScenarioRequest(
+            municipality="Synthetic municipality",
+            disaster="earthquake",
+            evacuees=evacuees,
+            duration_days=1,
+            seed=seed,
+            **extra,
+        )
+    )
 
 
 @pytest.mark.parametrize("evacuees", [10, 30, 100])
@@ -1445,8 +1682,11 @@ def test_default_templates_link_every_minor_and_are_recorded_as_assumptions() ->
     assert SYNTHETIC_HOUSEHOLD_TEMPLATE_ID in scenario.model_configs["population"]["source_ids"]
     # Assumed templates are not operator input.
     assert OPERATOR_POPULATION_SOURCE_ID not in scenario.model_configs["population"]["source_ids"]
-    source = next(row for row in scenario.provenance["sources"]
-                  if row["id"] == SYNTHETIC_HOUSEHOLD_TEMPLATE_ID)
+    source = next(
+        row
+        for row in scenario.provenance["sources"]
+        if row["id"] == SYNTHETIC_HOUSEHOLD_TEMPLATE_ID
+    )
     assert source["source_kind"] == "assumption"
 
 
@@ -1468,10 +1708,14 @@ def test_entered_household_shapes_replace_the_default_templates() -> None:
 
 
 def test_adult_only_selection_drops_child_templates_instead_of_failing() -> None:
-    draft = _draft(30, 1, evacuation_selection={
-        "age_band_multipliers": {"child": 0.0, "adult": 1.0, "older_adult": 1.0},
-        "source_ids": ["SRC-TEST-ADULT-SELECTION"],
-    })
+    draft = _draft(
+        30,
+        1,
+        evacuation_selection={
+            "age_band_multipliers": {"child": 0.0, "adult": 1.0, "older_adult": 1.0},
+            "source_ids": ["SRC-TEST-ADULT-SELECTION"],
+        },
+    )
     people = draft.scenario.model_configs["population"]["people"]
     assert all(person["age_years"] >= 18 for person in people.values())
     assert draft.can_start

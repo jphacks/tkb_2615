@@ -360,9 +360,8 @@ def test_refused_correction_does_not_relieve_integrated_uncertainty(
         if item["kind"] == "information_correction"
     ]
     assert correction_history == []
-    assert (
-        outcomes["rumor-refused"][3]["stress"]["after"]
-        == pytest.approx(outcomes["rumor-only"][3]["stress"]["after"])
+    assert outcomes["rumor-refused"][3]["stress"]["after"] == pytest.approx(
+        outcomes["rumor-only"][3]["stress"]["after"]
     )
 
 
@@ -455,8 +454,7 @@ def test_cumulative_correction_acceptance_does_not_reapply_a_later_refused_event
 
     records = world.model_state[INFORMATION_SPREAD_STATE_KEY]["beliefs"]
     assert all(
-        records[agent_id]["claim-water-1"]["correction_accepted"]
-        for agent_id in ("A001", "A002")
+        records[agent_id]["claim-water-1"]["correction_accepted"] for agent_id in ("A001", "A002")
     )
     assert all(
         not records[agent_id]["claim-water-1"]["last_correction_accepted"]

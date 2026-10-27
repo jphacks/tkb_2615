@@ -41,7 +41,10 @@ def extract_plan_features_from_asset(
     pending review, carries the exact source asset hash, and is never a calibrated plan.
     """
     if asset.status != "manual_trace_required" or asset.media_type not in {
-        "application/pdf", "image/png", "image/jpeg", "image/webp"
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
     }:
         raise ValueError("candidate extraction requires a PDF or image plan asset")
     if not content or len(content) != asset.byte_count or len(content) > MAX_PLAN_BYTES:
@@ -51,7 +54,9 @@ def extract_plan_features_from_asset(
     if page_index < 0 or page_index > 10_000:
         raise ValueError("plan page index is outside the supported range")
     if not 64 <= max_dimension_px <= MAX_RENDER_DIMENSION_PX:
-        raise ValueError(f"render dimension must be between 64 and {MAX_RENDER_DIMENSION_PX} pixels")
+        raise ValueError(
+            f"render dimension must be between 64 and {MAX_RENDER_DIMENSION_PX} pixels"
+        )
 
     pixels, width, height = _render_page(asset.media_type, content, page_index, max_dimension_px)
     features = _candidate_features(pixels, width, height, asset.sha256, page_index)
@@ -78,17 +83,23 @@ def extract_plan_features_from_asset(
     )
 
 
-def _render_page(media_type: str, content: bytes, page_index: int, max_dimension_px: int) -> tuple[Any, int, int]:
+def _render_page(
+    media_type: str, content: bytes, page_index: int, max_dimension_px: int
+) -> tuple[Any, int, int]:
     try:
         from PIL import Image
     except ImportError as exc:
-        raise PlanExtractionUnavailable("install the 'plan-import' extra to inspect PDF/image plans") from exc
+        raise PlanExtractionUnavailable(
+            "install the 'plan-import' extra to inspect PDF/image plans"
+        ) from exc
 
     if media_type == "application/pdf":
         try:
             import pypdfium2 as pdfium
         except ImportError as exc:
-            raise PlanExtractionUnavailable("install the 'plan-import' extra to inspect PDF plans") from exc
+            raise PlanExtractionUnavailable(
+                "install the 'plan-import' extra to inspect PDF plans"
+            ) from exc
         document = pdfium.PdfDocument(content)
         try:
             page_count = len(document)
@@ -99,7 +110,10 @@ def _render_page(media_type: str, content: bytes, page_index: int, max_dimension
             page = document[page_index]
             try:
                 page_width, page_height = page.get_size()
-                if not all(math.isfinite(value) and 0 < value <= 100_000 for value in (page_width, page_height)):
+                if not all(
+                    math.isfinite(value) and 0 < value <= 100_000
+                    for value in (page_width, page_height)
+                ):
                     raise ValueError("PDF page dimensions are invalid or too large")
                 scale = min(max_dimension_px / page_width, max_dimension_px / page_height, 4.0)
                 rendered = page.render(scale=scale).to_pil()
@@ -138,8 +152,12 @@ def _candidate_features(
     data = pixels.load()
     min_line = max(24, round(min(width, height) * 0.035))
     max_runs = 180
-    horizontal = _long_runs(data, width, height, horizontal=True, min_line=min_line, max_runs=max_runs)
-    vertical = _long_runs(data, width, height, horizontal=False, min_line=min_line, max_runs=max_runs)
+    horizontal = _long_runs(
+        data, width, height, horizontal=True, min_line=min_line, max_runs=max_runs
+    )
+    vertical = _long_runs(
+        data, width, height, horizontal=False, min_line=min_line, max_runs=max_runs
+    )
     features: list[PlanFeatureProposal] = []
 
     for kind, segments in (("wall", horizontal), ("wall", vertical)):
@@ -185,7 +203,9 @@ def _candidate_features(
             )
         )
 
-    for index, polygon in enumerate(_rectangular_room_candidates(horizontal, vertical, width, height)[:100]):
+    for index, polygon in enumerate(
+        _rectangular_room_candidates(horizontal, vertical, width, height)[:100]
+    ):
         if len(features) >= MAX_PROPOSED_FEATURES:
             break
         features.append(
@@ -252,7 +272,9 @@ def _long_runs(
             result.append((float(start), cross, float(end), cross, len(group)))
         else:
             result.append((cross, float(start), cross, float(end), len(group)))
-    result.sort(key=lambda item: (-math.hypot(item[2] - item[0], item[3] - item[1]), item[1], item[0]))
+    result.sort(
+        key=lambda item: (-math.hypot(item[2] - item[0], item[3] - item[1]), item[1], item[0])
+    )
     return result[:max_runs]
 
 

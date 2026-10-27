@@ -79,86 +79,98 @@ def _world(*, body_policy: bool = False) -> WorldState:
 
 
 def _dispatcher() -> EventDispatcher:
-    return EventDispatcher({
-        "effect_program_structure": EffectProgramStructureHandler(),
-        "staff_operation_arrive": StaffOperationArrivalHandler(),
-        "staff_operation_complete": StaffOperationCompletionHandler(),
-    })
+    return EventDispatcher(
+        {
+            "effect_program_structure": EffectProgramStructureHandler(),
+            "staff_operation_arrive": StaffOperationArrivalHandler(),
+            "staff_operation_complete": StaffOperationCompletionHandler(),
+        }
+    )
 
 
 def _task_program(
     *, task_kind: str, target_zone_id: str, target_id: str | None = None, staff_id: str = "S01"
 ) -> EffectProgram:
-    effect = TimedAction.model_validate({
-        "effect_id": f"order-{task_kind}",
-        "op": "staff_task_order",
-        "target_selector": {"kind": "staff", "target_id": staff_id},
-        "start_minute": 0,
-        "parameters": {
-            "task_kind": task_kind,
-            "target_zone_id": target_zone_id,
-            "target_id": target_id,
-            "reason": f"operator directed {task_kind}",
-        },
-        "units": "staff_task_order",
-        "source_id": "ASM-OPERATOR-STAFF-ORDER-TEST",
-        "policy_dependencies": ["staff_operations_v1", "shared_operations_v1"],
-    })
-    return EffectProgram.model_validate({
-        "program_id": f"operator-{task_kind}-order",
-        "narrative": f"Order one worker to perform {task_kind}.",
-        "source_text": f"Assign staff {staff_id} to perform {task_kind}.",
-        "simulation_start_minute": 0,
-        "effects": [effect.model_dump(mode="json")],
-        "support_mode": SupportMode.NATIVE,
-        "compiler_provenance": {
-            "compiler_kind": "offline_rule",
-            "compiler_version": "test-v1",
-        },
-    })
+    effect = TimedAction.model_validate(
+        {
+            "effect_id": f"order-{task_kind}",
+            "op": "staff_task_order",
+            "target_selector": {"kind": "staff", "target_id": staff_id},
+            "start_minute": 0,
+            "parameters": {
+                "task_kind": task_kind,
+                "target_zone_id": target_zone_id,
+                "target_id": target_id,
+                "reason": f"operator directed {task_kind}",
+            },
+            "units": "staff_task_order",
+            "source_id": "ASM-OPERATOR-STAFF-ORDER-TEST",
+            "policy_dependencies": ["staff_operations_v1", "shared_operations_v1"],
+        }
+    )
+    return EffectProgram.model_validate(
+        {
+            "program_id": f"operator-{task_kind}-order",
+            "narrative": f"Order one worker to perform {task_kind}.",
+            "source_text": f"Assign staff {staff_id} to perform {task_kind}.",
+            "simulation_start_minute": 0,
+            "effects": [effect.model_dump(mode="json")],
+            "support_mode": SupportMode.NATIVE,
+            "compiler_provenance": {
+                "compiler_kind": "offline_rule",
+                "compiler_version": "test-v1",
+            },
+        }
+    )
 
 
 def _queue_arrival_for_intake(world: WorldState) -> None:
     from sheltersim.events.effects import schedule_effect_program
 
-    effect = TimedAction.model_validate({
-        "effect_id": "queue-arrival",
-        "op": "add_evacuees",
-        "target_selector": {"kind": "zone", "target_id": "sleeping"},
-        "start_minute": 0,
-        "parameters": {
-            "count": 1,
-            "household_size": 1,
-            "mobility": "independent",
-            "language": "ja",
-            "admission_zone_ids": [],
-            "approach_route_id": None,
-            "person_context_overrides": [],
-        },
-        "units": "evacuee",
-        "source_id": "ASM-OPERATOR-STAFF-ORDER-TEST",
-        "policy_dependencies": ["population_dynamics_v1"],
-        "reversible": False,
-    })
-    program = EffectProgram.model_validate({
-        "program_id": "queue-arrival-for-intake-test",
-        "narrative": "Queue one synthetic arrival for intake.",
-        "source_text": "Queue one arrival.",
-        "simulation_start_minute": 0,
-        "effects": [effect.model_dump(mode="json")],
-        "support_mode": SupportMode.NATIVE,
-        "compiler_provenance": {
-            "compiler_kind": "offline_rule",
-            "compiler_version": "test-v1",
-        },
-    })
+    effect = TimedAction.model_validate(
+        {
+            "effect_id": "queue-arrival",
+            "op": "add_evacuees",
+            "target_selector": {"kind": "zone", "target_id": "sleeping"},
+            "start_minute": 0,
+            "parameters": {
+                "count": 1,
+                "household_size": 1,
+                "mobility": "independent",
+                "language": "ja",
+                "admission_zone_ids": [],
+                "approach_route_id": None,
+                "person_context_overrides": [],
+            },
+            "units": "evacuee",
+            "source_id": "ASM-OPERATOR-STAFF-ORDER-TEST",
+            "policy_dependencies": ["population_dynamics_v1"],
+            "reversible": False,
+        }
+    )
+    program = EffectProgram.model_validate(
+        {
+            "program_id": "queue-arrival-for-intake-test",
+            "narrative": "Queue one synthetic arrival for intake.",
+            "source_text": "Queue one arrival.",
+            "simulation_start_minute": 0,
+            "effects": [effect.model_dump(mode="json")],
+            "support_mode": SupportMode.NATIVE,
+            "compiler_provenance": {
+                "compiler_kind": "offline_rule",
+                "compiler_version": "test-v1",
+            },
+        }
+    )
     world.zones["sleeping"].capacity = sum(
         agent.zone_id == "sleeping" for agent in world.agents.values()
     )
     schedule_effect_program(world, program)
-    outcomes = EventDispatcher({
-        "effect_program_population": EffectProgramPopulationHandler(),
-    }).dispatch_due(world, 0)
+    outcomes = EventDispatcher(
+        {
+            "effect_program_population": EffectProgramPopulationHandler(),
+        }
+    ).dispatch_due(world, 0)
     assert outcomes and outcomes[0].status.value == "applied"
     assert world.model_state["population_dynamics_v1"]["pending_arrivals"]
 
@@ -167,56 +179,66 @@ def test_staff_task_order_routes_and_completes_with_checkpointed_history(tmp_pat
     world = _world()
     world.model_state["staff_operations_v1"]["zones"]["sleeping"]["sanitation"] = 0.4
     source_id = "ASM-OPERATOR-STAFF-ORDER-TEST"
-    effect = TimedAction.model_validate({
-        "effect_id": "clean-sleeping-zone",
-        "op": "staff_task_order",
-        "target_selector": {"kind": "staff", "target_id": "S01"},
-        "start_minute": 0,
-        "parameters": {
-            "task_kind": "cleaning",
-            "target_zone_id": "sleeping",
-            "target_id": None,
-            "reason": "operator directed sanitation recovery",
-        },
-        "units": "staff_task_order",
-        "source_id": source_id,
-        "policy_dependencies": ["staff_operations_v1", "shared_operations_v1"],
-    })
-    program = EffectProgram.model_validate({
-        "program_id": "operator-cleaning-order",
-        "narrative": "Order a qualified worker to clean the sleeping zone.",
-        "source_text": "Assign staff S01 to clean sleeping.",
-        "simulation_start_minute": 0,
-        "effects": [effect.model_dump(mode="json")],
-        "support_mode": SupportMode.NATIVE,
-        "compiler_provenance": {
-            "compiler_kind": "offline_rule",
-            "compiler_version": "test-v1",
-        },
-    })
+    effect = TimedAction.model_validate(
+        {
+            "effect_id": "clean-sleeping-zone",
+            "op": "staff_task_order",
+            "target_selector": {"kind": "staff", "target_id": "S01"},
+            "start_minute": 0,
+            "parameters": {
+                "task_kind": "cleaning",
+                "target_zone_id": "sleeping",
+                "target_id": None,
+                "reason": "operator directed sanitation recovery",
+            },
+            "units": "staff_task_order",
+            "source_id": source_id,
+            "policy_dependencies": ["staff_operations_v1", "shared_operations_v1"],
+        }
+    )
+    program = EffectProgram.model_validate(
+        {
+            "program_id": "operator-cleaning-order",
+            "narrative": "Order a qualified worker to clean the sleeping zone.",
+            "source_text": "Assign staff S01 to clean sleeping.",
+            "simulation_start_minute": 0,
+            "effects": [effect.model_dump(mode="json")],
+            "support_mode": SupportMode.NATIVE,
+            "compiler_provenance": {
+                "compiler_kind": "offline_rule",
+                "compiler_version": "test-v1",
+            },
+        }
+    )
 
     assert validate_effect_program(world, program) == ()
-    unqualified_effect = effect.model_copy(update={
-        "parameters": {
-            **effect.parameters,
-            "task_kind": "maintenance",
-            "target_id": "toilet_1",
-        },
-    })
-    unqualified_program = program.model_copy(update={
-        "program_id": "unqualified-cleaning-order",
-        "effects": [unqualified_effect],
-    })
+    unqualified_effect = effect.model_copy(
+        update={
+            "parameters": {
+                **effect.parameters,
+                "task_kind": "maintenance",
+                "target_id": "toilet_1",
+            },
+        }
+    )
+    unqualified_program = program.model_copy(
+        update={
+            "program_id": "unqualified-cleaning-order",
+            "effects": [unqualified_effect],
+        }
+    )
     assert any(
         "no_qualified_staff" in issue
         for issue in validate_effect_program(_world(), unqualified_program)
     )
     late_effect = effect.model_copy(update={"start_minute": 1})
-    late_program = program.model_copy(update={
-        "program_id": "late-cleaning-order",
-        "simulation_start_minute": 1,
-        "effects": [late_effect],
-    })
+    late_program = program.model_copy(
+        update={
+            "program_id": "late-cleaning-order",
+            "simulation_start_minute": 1,
+            "effects": [late_effect],
+        }
+    )
     assert any(
         "current branch minute" in issue
         for issue in validate_effect_program(_world(), late_program)
@@ -226,8 +248,7 @@ def test_staff_task_order_routes_and_completes_with_checkpointed_history(tmp_pat
     start_outcomes = _dispatcher().dispatch_due(world, 0)
     ingest_applied_shared_operation_records(world, start_outcomes)
     order_event = next(
-        row.event for row in start_outcomes
-        if row.event.event_type == "effect_program_structure"
+        row.event for row in start_outcomes if row.event.event_type == "effect_program_structure"
     )
     assert world.active_tasks
     task = next(iter(world.active_tasks.values()))
@@ -244,14 +265,14 @@ def test_staff_task_order_routes_and_completes_with_checkpointed_history(tmp_pat
 
     assert restored.canonical_json() == world.canonical_json()
     completion = next(
-        row.event for row in world.event_log.records
-        if row.event.event_type == "staff_operation_complete"
-        and row.status.value == "applied"
+        row.event
+        for row in world.event_log.records
+        if row.event.event_type == "staff_operation_complete" and row.status.value == "applied"
     )
     receipt = next(
-        row.event for row in world.event_log.records
-        if row.event.event_type == "staff_operation_transition"
-        and row.status.value == "applied"
+        row.event
+        for row in world.event_log.records
+        if row.event.event_type == "staff_operation_transition" and row.status.value == "applied"
     )
     assert completion.causation_id == order_event.event_id
     assert receipt.causation_id == completion.event_id
@@ -312,8 +333,7 @@ def test_all_other_registered_staff_task_kinds_complete(
     dispatcher = _dispatcher()
     start_outcomes = dispatcher.dispatch_due(world, 0)
     order_event = next(
-        row.event for row in start_outcomes
-        if row.event.event_type == "effect_program_structure"
+        row.event for row in start_outcomes if row.event.event_type == "effect_program_structure"
     )
     task = next(iter(world.active_tasks.values()))
     if task_kind == "intake":
@@ -322,8 +342,7 @@ def test_all_other_registered_staff_task_kinds_complete(
     world.minute_index = task.due_minute
     outcomes = dispatcher.dispatch_due(world, task.due_minute)
     completion = next(
-        row.event for row in outcomes
-        if row.event.event_type == "staff_operation_complete"
+        row.event for row in outcomes if row.event.event_type == "staff_operation_complete"
     )
 
     assert completion.causation_id == order_event.event_id
@@ -411,13 +430,9 @@ def _relief_world(
             task_duration_minutes_by_kind
         )
     if thresholds_by_zone is not None:
-        document["model_configs"]["staff_operations"]["thresholds_by_zone"] = (
-            thresholds_by_zone
-        )
+        document["model_configs"]["staff_operations"]["thresholds_by_zone"] = thresholds_by_zone
     if effects_by_zone is not None:
-        document["model_configs"]["staff_operations"]["effects_by_zone"] = (
-            effects_by_zone
-        )
+        document["model_configs"]["staff_operations"]["effects_by_zone"] = effects_by_zone
     document["model_configs"]["staff_dynamics"] = {
         "shift_windows_by_staff": {
             "S01": [{"start_minute": 0, "end_minute": 2}],
@@ -442,9 +457,9 @@ def _relief_world(
             selections["staff_operations"] = staff_policy_id
         if fatigue_policy_id is not None:
             selections["staff_fatigue"] = fatigue_policy_id
-        document["model_configs"].setdefault(
-            "policy_registry", {"schema_version": 2}
-        ).update(selections)
+        document["model_configs"].setdefault("policy_registry", {"schema_version": 2}).update(
+            selections
+        )
     if fatigue_policy_id is not None:
         document["model_configs"]["staff_dynamics"]["max_continuous_work_minutes"] = 4
     world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
@@ -453,9 +468,7 @@ def _relief_world(
 
 
 def test_zone_specific_staff_threshold_controls_task_assignment() -> None:
-    baseline = _relief_world(
-        previous_zone_id="sleeping", staff_policy_id="staff-urgency-first-v1"
-    )
+    baseline = _relief_world(previous_zone_id="sleeping", staff_policy_id="staff-urgency-first-v1")
     overridden = _relief_world(
         previous_zone_id="sleeping",
         staff_policy_id="staff-urgency-first-v1",
@@ -467,14 +480,10 @@ def test_zone_specific_staff_threshold_controls_task_assignment() -> None:
         world.staff["S01"].skills = ("cleaning",)
         for facility in world.facilities.values():
             facility.working_units = facility.capacity
-        world.model_state[STAFF_OPERATIONS_STATE_KEY]["zones"]["sleeping"][
-            "sanitation"
-        ] = 0.8
+        world.model_state[STAFF_OPERATIONS_STATE_KEY]["zones"]["sleeping"]["sanitation"] = 0.8
 
     baseline_router = SpaceRouter(ZoneGraph.from_states(baseline.zones, baseline.zone_edges))
-    overridden_router = SpaceRouter(
-        ZoneGraph.from_states(overridden.zones, overridden.zone_edges)
-    )
+    overridden_router = SpaceRouter(ZoneGraph.from_states(overridden.zones, overridden.zone_edges))
     baseline_tasks = assign_staff_operations(baseline, 0, baseline_router)
     overridden_tasks = assign_staff_operations(overridden, 0, overridden_router)
 
@@ -530,19 +539,21 @@ def test_shift_relief_preserves_task_and_records_completion_across_checkpoint(
         and row.status.value == "suppressed"
         for row in world.event_log.records
     )
-    assert any(
-        row.event.event_type == "staff_operation_arrive"
-        and row.event.payload["staff_id"] == "S01"
-        and row.status.value == "suppressed"
-        for row in world.event_log.records
-    ) is expect_arrival_suppressed
+    assert (
+        any(
+            row.event.event_type == "staff_operation_arrive"
+            and row.event.payload["staff_id"] == "S01"
+            and row.status.value == "suppressed"
+            for row in world.event_log.records
+        )
+        is expect_arrival_suppressed
+    )
     assert [
         row["status"]
         for row in world.model_state["shared_operations_v1"]["history"]
         if row["event_type"] == "staff_handoff" and row["task_id"] == task_id
     ] == ["reassigned"]
     world.validate()
-
 
     world = Checkpoint.from_json(Checkpoint.capture(world).to_json()).restore_world()
     world.minute_index = 6
@@ -561,7 +572,8 @@ def test_shift_relief_preserves_task_and_records_completion_across_checkpoint(
         if row["event_type"] == "facility_recovery_transition"
     ] == ["restored"]
     staff_receipt = next(
-        row for row in world.model_state["shared_operations_v1"]["history"]
+        row
+        for row in world.model_state["shared_operations_v1"]["history"]
         if row["event_type"] == "staff_operation_transition" and row["task_id"] == task_id
     )
     assert staff_receipt["status"] == "completed"
@@ -585,8 +597,7 @@ def test_staff_factory_changes_routed_task_priority() -> None:
         completion = next(
             event
             for event in world.event_queue.pending()
-            if event.event_type == "staff_operation_complete"
-            and event.payload["staff_id"] == "S01"
+            if event.event_type == "staff_operation_complete" and event.payload["staff_id"] == "S01"
         )
         assert completion.provenance["policy_version"] == policy_id
         selected_tasks[policy_id] = (operation["task_kind"], operation["target_id"])
@@ -604,17 +615,15 @@ def test_staff_fatigue_factory_changes_live_duty_state() -> None:
 
         for minute in range(3):
             update_staff_dynamics(world, minute)
-        fatigue_values[policy_id] = world.model_state[STAFF_DYNAMICS_STATE_KEY]["staff"][
-            "S01"
-        ]["fatigue"]
+        fatigue_values[policy_id] = world.model_state[STAFF_DYNAMICS_STATE_KEY]["staff"]["S01"][
+            "fatigue"
+        ]
 
     assert fatigue_values["staff-fatigue-linear-v1"] == pytest.approx(0.75)
-    assert fatigue_values["staff-fatigue-saturating-v1"] == pytest.approx(
-        1.0 - math.exp(-0.75)
+    assert fatigue_values["staff-fatigue-saturating-v1"] == pytest.approx(1.0 - math.exp(-0.75))
+    assert (
+        fatigue_values["staff-fatigue-linear-v1"] != fatigue_values["staff-fatigue-saturating-v1"]
     )
-    assert fatigue_values["staff-fatigue-linear-v1"] != fatigue_values[
-        "staff-fatigue-saturating-v1"
-    ]
 
 
 def test_staff_operation_completion_has_typed_state_change_and_indexed_receipt(
@@ -628,7 +637,8 @@ def test_staff_operation_completion_has_typed_state_change_and_indexed_receipt(
     operation = world.model_state[STAFF_OPERATIONS_STATE_KEY]["staff"]["S01"]
     assert operation["task_kind"] == "cleaning"
     event = next(
-        event for event in world.event_queue.pending()
+        event
+        for event in world.event_queue.pending()
         if event.event_type == "staff_operation_complete" and event.payload["task_id"] == task_id
     )
 
@@ -658,8 +668,11 @@ def test_staff_operation_completion_has_typed_state_change_and_indexed_receipt(
     page = index.search(
         "main",
         HistoryQuery(
-            kind="operations", start=event.due_minute, end=event.due_minute,
-            staff_id="S01", event_id=typed_event.event.event_id,
+            kind="operations",
+            start=event.due_minute,
+            end=event.due_minute,
+            staff_id="S01",
+            event_id=typed_event.event.event_id,
         ),
         checkpoint.checkpoint_hash,
     )
@@ -676,13 +689,12 @@ def test_zone_specific_staff_effect_changes_applied_cleaning_outcome() -> None:
         effects_by_zone={"toilet": {"cleaning_sanitation_recovery": 0.3}},
     )
     world.facilities["toilet_1"].working_units = world.facilities["toilet_1"].capacity
-    world.model_state[STAFF_OPERATIONS_STATE_KEY]["zones"]["toilet"][
-        "sanitation"
-    ] = 0.4
+    world.model_state[STAFF_OPERATIONS_STATE_KEY]["zones"]["toilet"]["sanitation"] = 0.4
     router = SpaceRouter(ZoneGraph.from_states(world.zones, world.zone_edges))
     task_id = assign_staff_operations(world, 0, router)[0]
     event = next(
-        event for event in world.event_queue.pending()
+        event
+        for event in world.event_queue.pending()
         if event.event_type == "staff_operation_complete" and event.payload["task_id"] == task_id
     )
 
@@ -693,7 +705,8 @@ def test_zone_specific_staff_effect_changes_applied_cleaning_outcome() -> None:
     ingest_applied_shared_operation_records(world, outcomes)
 
     receipt = next(
-        row.event.payload for row in outcomes
+        row.event.payload
+        for row in outcomes
         if row.event.event_type == "staff_operation_transition"
     )
     assert world.model_state[STAFF_OPERATIONS_STATE_KEY]["zones"]["toilet"][
@@ -749,19 +762,16 @@ def test_zone_specific_support_task_response_uses_override(
     world.staff["S01"].skills = ("support", staff_skill)
     body_agents = world.model_state["body_state_v1"]["agents"]
     for agent in world.agents.values():
-        body_agents[agent.id]["uncertainty"] = (
-            0.9 if task_kind == "information_outreach" else 0.0
-        )
+        body_agents[agent.id]["uncertainty"] = 0.9 if task_kind == "information_outreach" else 0.0
         agent.stress = 0.9 if task_kind == "patrol" else 0.0
     person = world.agents["A001"]
     before = body_agents[person.id][initial_field]
     router = SpaceRouter(ZoneGraph.from_states(world.zones, world.zone_edges))
     task_id = assign_staff_operations(world, 0, router)[0]
-    assert world.model_state[STAFF_OPERATIONS_STATE_KEY]["staff"]["S01"][
-        "task_kind"
-    ] == task_kind
+    assert world.model_state[STAFF_OPERATIONS_STATE_KEY]["staff"]["S01"]["task_kind"] == task_kind
     event = next(
-        event for event in world.event_queue.pending()
+        event
+        for event in world.event_queue.pending()
         if event.event_type == "staff_operation_complete" and event.payload["task_id"] == task_id
     )
 
@@ -786,7 +796,8 @@ def test_task_kind_duration_override_changes_assigned_completion_time() -> None:
     assert task_ids
     operation = world.model_state[STAFF_OPERATIONS_STATE_KEY]["staff"]["S01"]
     completion = next(
-        event for event in world.event_queue.pending()
+        event
+        for event in world.event_queue.pending()
         if event.event_type == "staff_operation_complete"
         and event.payload["task_id"] == task_ids[0]
     )
@@ -832,8 +843,7 @@ def test_priority_support_preempts_routed_background_task_with_applied_evidence(
     assert interruption.status.value == "applied"
     assert interruption.event.payload["request_id"] == request.request_id
     assert any(
-        row.event.event_id == old_completion.event_id
-        and row.status.value == "suppressed"
+        row.event.event_id == old_completion.event_id and row.status.value == "suppressed"
         for row in world.event_log.records
     )
     history = world.model_state[STAFF_OPERATIONS_STATE_KEY]["history"][-1]
@@ -852,7 +862,10 @@ def test_priority_support_preempts_routed_background_task_with_applied_evidence(
     page = index.search(
         "main",
         HistoryQuery(
-            kind="operations", start=0, end=0, staff_id="S01",
+            kind="operations",
+            start=0,
+            end=0,
+            staff_id="S01",
             event_id=interruption.event.event_id,
         ),
         checkpoint.checkpoint_hash,
@@ -874,6 +887,5 @@ def test_normal_priority_support_does_not_preempt_routed_background_task() -> No
     assert world.support_requests[request.request_id].status.value == "pending"
     assert world.active_tasks[background_task_id].kind == "staff_operation"
     assert not any(
-        row.event.event_type == "staff_operation_preempted"
-        for row in world.event_log.records
+        row.event.event_type == "staff_operation_preempted" for row in world.event_log.records
     )

@@ -37,27 +37,35 @@ def test_wait_lifecycle_records_completion_and_restores_open_action() -> None:
     world = make_world()
     active: dict[str, dict[str, object]] = {}
     record_action_proposal(
-        world, proposal(ActionKind.WAIT, 0), target_id=None,
-        committed=True, active_actions=active,
+        world,
+        proposal(ActionKind.WAIT, 0),
+        target_id=None,
+        committed=True,
+        active_actions=active,
     )
     world.minute_index = 1
     record_action_proposal(
-        world, proposal(ActionKind.WAIT, 1), target_id=None,
-        committed=True, active_actions=active,
+        world,
+        proposal(ActionKind.WAIT, 1),
+        target_id=None,
+        committed=True,
+        active_actions=active,
     )
     world.minute_index = 3
     record_action_proposal(
-        world, proposal(ActionKind.REST, 3), target_id=None,
-        committed=True, active_actions=active,
+        world,
+        proposal(ActionKind.REST, 3),
+        target_id=None,
+        committed=True,
+        active_actions=active,
     )
 
     rows = [
-        record.event.payload for record in world.event_log.records
+        record.event.payload
+        for record in world.event_log.records
         if record.event.event_type == "agent_action_lifecycle"
     ]
-    assert [row["transition"] for row in rows] == [
-        "started", "continued", "completed", "started"
-    ]
+    assert [row["transition"] for row in rows] == ["started", "continued", "completed", "started"]
     assert rows[2]["duration_minutes"] == 3
     restored_index = active_action_index(world)
     assert restored_index["A001"]["action"] == ActionKind.REST.value
@@ -67,13 +75,19 @@ def test_action_completion_requires_matching_applied_event_log_record() -> None:
     world = make_world()
     active: dict[str, dict[str, object]] = {}
     record_action_proposal(
-        world, proposal(ActionKind.FETCH_WATER, 0), target_id="water_station_1",
-        committed=True, active_actions=active,
+        world,
+        proposal(ActionKind.FETCH_WATER, 0),
+        target_id="water_station_1",
+        committed=True,
+        active_actions=active,
     )
     failed_sequence = world.allocate_event_sequence()
     failed = ScheduledEvent(
-        event_id="failed-completion", kind=EventKind.COMPLETION,
-        due_minute=2, priority=0, sequence=failed_sequence,
+        event_id="failed-completion",
+        kind=EventKind.COMPLETION,
+        due_minute=2,
+        priority=0,
+        sequence=failed_sequence,
         event_type="resource_service_complete",
         payload={"agent_id": "A001", "facility_id": "water_station_1"},
     )
@@ -86,8 +100,11 @@ def test_action_completion_requires_matching_applied_event_log_record() -> None:
 
     applied_sequence = world.allocate_event_sequence()
     applied = ScheduledEvent(
-        event_id="applied-completion", kind=EventKind.COMPLETION,
-        due_minute=2, priority=0, sequence=applied_sequence,
+        event_id="applied-completion",
+        kind=EventKind.COMPLETION,
+        due_minute=2,
+        priority=0,
+        sequence=applied_sequence,
         event_type="resource_service_complete",
         payload={"agent_id": "A001", "facility_id": "water_station_1"},
     )
@@ -97,12 +114,14 @@ def test_action_completion_requires_matching_applied_event_log_record() -> None:
     record_applied_action_completion(world, applied, 2, active_actions=active)
     assert "A001" not in active
     lifecycle = [
-        record.event.payload for record in world.event_log.records
+        record.event.payload
+        for record in world.event_log.records
         if record.event.event_type == "agent_action_lifecycle"
     ]
     assert lifecycle[-1]["transition"] == "completed"
     last_transition = next(
-        record for record in reversed(world.event_log.records)
+        record
+        for record in reversed(world.event_log.records)
         if record.event.event_type == "agent_action_lifecycle"
     )
     assert last_transition.event.causation_id == applied.event_id
@@ -125,19 +144,26 @@ def test_every_behavior_action_has_a_supported_lifecycle_terminal() -> None:
         if action in {ActionKind.REST, ActionKind.SLEEP}:
             world.agents["A001"].needs.fatigue = 0.5
         target_id = (
-            "A002" if action in {
-                ActionKind.SOCIALIZE, ActionKind.CARE_FAMILY, ActionKind.HELP_OTHERS
-            }
-            else "support-request" if action is ActionKind.SEEK_HELP
-            else "info-request" if action is ActionKind.SEEK_INFORMATION
-            else "meal_station_1" if action is ActionKind.COLLECT_MEAL
-            else "water_station_1" if action is ActionKind.FETCH_WATER
-            else "toilet_1" if action is ActionKind.REQUEST_TOILET
+            "A002"
+            if action in {ActionKind.SOCIALIZE, ActionKind.CARE_FAMILY, ActionKind.HELP_OTHERS}
+            else "support-request"
+            if action is ActionKind.SEEK_HELP
+            else "info-request"
+            if action is ActionKind.SEEK_INFORMATION
+            else "meal_station_1"
+            if action is ActionKind.COLLECT_MEAL
+            else "water_station_1"
+            if action is ActionKind.FETCH_WATER
+            else "toilet_1"
+            if action is ActionKind.REQUEST_TOILET
             else None
         )
         record_action_proposal(
-            world, proposal(action, 0), target_id=target_id,
-            committed=True, active_actions=active,
+            world,
+            proposal(action, 0),
+            target_id=target_id,
+            committed=True,
+            active_actions=active,
         )
 
         if action in terminal_events:
@@ -152,15 +178,15 @@ def test_every_behavior_action_has_a_supported_lifecycle_terminal() -> None:
                 event_type=event_type,
                 payload={"agent_id": "A001", **target},
             )
-            world.event_log.append(EventLogRecord(
-                event=event,
-                realized_minute=2,
-                status=EventStatus.APPLIED,
-            ))
-            world.minute_index = 2
-            record_applied_action_completion(
-                world, event, 2, active_actions=active
+            world.event_log.append(
+                EventLogRecord(
+                    event=event,
+                    realized_minute=2,
+                    status=EventStatus.APPLIED,
+                )
             )
+            world.minute_index = 2
+            record_applied_action_completion(world, event, 2, active_actions=active)
         else:
             world.minute_index = 2
             if action in {ActionKind.REST, ActionKind.SLEEP}:
@@ -171,7 +197,8 @@ def test_every_behavior_action_has_a_supported_lifecycle_terminal() -> None:
                 world,
                 proposal(ActionKind.REST if action is ActionKind.WAIT else ActionKind.WAIT, 2),
                 target_id=None,
-                committed=True, active_actions=active,
+                committed=True,
+                active_actions=active,
             )
 
         transitions = [

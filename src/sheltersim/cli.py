@@ -74,10 +74,12 @@ def _cli_usage_account_path(run_path: Path) -> Path:
     return run_path.parent / f".{run_path.name}.llm-usage-account.json"
 
 
-def _cli_accounted_router(settings: LLMSettings, *, operation: str, account_id: str,
-                          branch_id: str | None = None) -> LLMRouter:
+def _cli_accounted_router(
+    settings: LLMSettings, *, operation: str, account_id: str, branch_id: str | None = None
+) -> LLMRouter:
     """Use one opaque ledger account throughout a prepared CLI Run workflow."""
     from sheltersim.llm.accounting import runtime_accounted_router, runtime_usage_store
+
     return runtime_accounted_router(
         runtime_usage_store(os.environ.get("SHELTERSIM_PROJECTS_DIR", "runs/.projects")),
         account_id=account_id,
@@ -96,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command")
     from sheltersim.storage.commands import configure_parser
+
     configure_parser(subparsers)
 
     usage = subparsers.add_parser(
@@ -141,9 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="compare toilet, water and meal units with the work their daily demand needs",
     )
     capacity_diagnostic.add_argument("--scenario", required=True, type=Path)
-    capacity_diagnostic.add_argument(
-        "--phase", choices=("initial", "long-term"), default="initial"
-    )
+    capacity_diagnostic.add_argument("--phase", choices=("initial", "long-term"), default="initial")
     evaluation = subparsers.add_parser(
         "evaluate-models",
         help="run an explicitly requested offline paired model/parameter matrix",
@@ -333,6 +334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "project":
         from sheltersim.storage.commands import execute
+
         try:
             print(_json_text(execute(arguments)))
         except (OSError, ValueError, RuntimeError) as exc:
@@ -384,12 +386,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     generation_calls = existing_calls
             if arguments.generate_scenario:
                 account_id = _new_cli_account_id("prepare")
-                router = _cli_accounted_router(LLMSettings.from_env(), operation="prepare", account_id=account_id)
+                router = _cli_accounted_router(
+                    LLMSettings.from_env(), operation="prepare", account_id=account_id
+                )
                 scenario, generation_manifest = generate_scenario_draft(scenario, router)
                 generated_scenario = json.loads(scenario.canonical_json())
             if arguments.generate_initial_needs:
                 account_id = _new_cli_account_id("prepare")
-                router = _cli_accounted_router(LLMSettings.from_env(), operation="prepare", account_id=account_id)
+                router = _cli_accounted_router(
+                    LLMSettings.from_env(), operation="prepare", account_id=account_id
+                )
                 scenario = generate_initial_needs(scenario, router)
                 generation_manifest = scenario.provenance.get("llm_initial_needs")
                 generated_scenario = json.loads(scenario.canonical_json())
@@ -418,7 +424,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(f"could not prepare scenario: {exc}")
         return 0
     if arguments.command in {
-        "model-catalog", "evaluate-models", "toilet-diagnostic", "service-capacity-diagnostic"
+        "model-catalog",
+        "evaluate-models",
+        "toilet-diagnostic",
+        "service-capacity-diagnostic",
     }:
         try:
             scenario = ScenarioSpec.load(arguments.scenario)
@@ -457,8 +466,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Each Run gets its own allowance under the current settings; the shared
             # campaign ledger still bounds total spending across all accounts.
             account_id = _new_cli_account_id("run")
-            llm_router = _cli_accounted_router(settings, operation="runtime", account_id=account_id, branch_id="main")
-            _write_atomic(_cli_usage_account_path(arguments.output), _json_text({"schema_version": 1, "account_id": account_id}) + "\n")
+            llm_router = _cli_accounted_router(
+                settings, operation="runtime", account_id=account_id, branch_id="main"
+            )
+            _write_atomic(
+                _cli_usage_account_path(arguments.output),
+                _json_text({"schema_version": 1, "account_id": account_id}) + "\n",
+            )
             comparison_report = (
                 _read_json_object(arguments.comparison_report)
                 if arguments.comparison_report is not None
@@ -502,11 +516,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif arguments.llm_mode is not None:
                 settings = replace(settings, mode=LLMMode(arguments.llm_mode))
             account_path = _cli_usage_account_path(arguments.run)
-            account_document = json.loads(account_path.read_text(encoding="utf-8")) if account_path.exists() else {}
-            account_id = account_document.get("account_id") if isinstance(account_document, dict) else None
+            account_document = (
+                json.loads(account_path.read_text(encoding="utf-8"))
+                if account_path.exists()
+                else {}
+            )
+            account_id = (
+                account_document.get("account_id") if isinstance(account_document, dict) else None
+            )
             if not isinstance(account_id, str) or not account_id.startswith("cli-"):
                 account_id = _new_cli_account_id("review")
-            router = _cli_accounted_router(settings, operation="review", account_id=account_id, branch_id="main")
+            router = _cli_accounted_router(
+                settings, operation="review", account_id=account_id, branch_id="main"
+            )
             comparison_report = (
                 _read_json_object(arguments.comparison_report)
                 if arguments.comparison_report is not None

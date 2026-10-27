@@ -105,9 +105,7 @@ class FacilityGeometry(ExtensionModel):
     facility_points: dict[Identifier, Point2D] = Field(default_factory=dict)
     service_points: tuple[FacilityServicePoint, ...] = Field(default=(), max_length=10_000)
     routes: tuple[PhysicalRoute, ...] = ()
-    arrival_approach_routes: tuple[ArrivalApproachRoute, ...] = Field(
-        default=(), max_length=128
-    )
+    arrival_approach_routes: tuple[ArrivalApproachRoute, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="after")
     def geometry_is_bounded(self) -> FacilityGeometry:
@@ -142,10 +140,15 @@ class FacilityGeometry(ExtensionModel):
             raise ValueError("each service point must own a unique queue ID")
         for zone in self.zones:
             coordinates = [(p.x, p.y) for p in zone.polygon]
-            area = abs(sum(
-                a[0] * b[1] - b[0] * a[1]
-                for a, b in zip(coordinates, coordinates[1:] + coordinates[:1])
-            )) / 2
+            area = (
+                abs(
+                    sum(
+                        a[0] * b[1] - b[0] * a[1]
+                        for a, b in zip(coordinates, coordinates[1:] + coordinates[:1])
+                    )
+                )
+                / 2
+            )
             if area <= 0 or zone.usable_area_m2 > area + 1e-8:
                 raise ValueError("usable area must not exceed a nondegenerate polygon area")
         return self
@@ -176,6 +179,7 @@ def validate_scenario_extensions(scenario: Any) -> None:
     from sheltersim.contracts.population import validate_population_context
     from sheltersim.contracts.runtime import declared_states
     from sheltersim.contracts.spatial import validate_spatial_constraints
+
     declared_states(scenario.model_configs)
     validate_spatial_constraints(scenario)
     validate_population_context(scenario)
@@ -190,7 +194,9 @@ def validate_scenario_extensions(scenario: Any) -> None:
             raise ValueError("physical routes must map every scenario edge")
         zone_polygons = {zone.zone_id: zone.polygon for zone in geometry.zones}
         for facility in scenario.facilities:
-            if not point_in_polygon(geometry.facility_points[facility.id], zone_polygons[facility.zone_id]):
+            if not point_in_polygon(
+                geometry.facility_points[facility.id], zone_polygons[facility.zone_id]
+            ):
                 raise ValueError("physical facility point must be inside its scenario zone")
         facility_by_id = {facility.id: facility for facility in scenario.facilities}
         for service_point in geometry.service_points:
@@ -202,7 +208,9 @@ def validate_scenario_extensions(scenario: Any) -> None:
         routes = {route.edge_id: route for route in geometry.routes}
         for edge in scenario.zone_edges:
             route = routes[edge.id]
-            if not point_in_polygon(route.points[0], zone_polygons[edge.from_zone_id]) or not point_in_polygon(route.points[-1], zone_polygons[edge.to_zone_id]):
+            if not point_in_polygon(
+                route.points[0], zone_polygons[edge.from_zone_id]
+            ) or not point_in_polygon(route.points[-1], zone_polygons[edge.to_zone_id]):
                 raise ValueError("physical route endpoints must match the directed zone edge")
             if all(point == route.points[0] for point in route.points):
                 raise ValueError("physical route must have a positive length")
@@ -214,7 +222,7 @@ def validate_scenario_extensions(scenario: Any) -> None:
 
 def polygon_area(polygon: tuple[Point2D, ...]) -> float:
     """Unsigned planar area in square metres; callers validate topology separately."""
-    return abs(sum(a.x*b.y-b.x*a.y for a, b in zip(polygon, (*polygon[1:], polygon[0]))))/2
+    return abs(sum(a.x * b.y - b.x * a.y for a, b in zip(polygon, (*polygon[1:], polygon[0])))) / 2
 
 
 def point_in_polygon(point: Point2D, polygon: tuple[Point2D, ...]) -> bool:
@@ -222,11 +230,19 @@ def point_in_polygon(point: Point2D, polygon: tuple[Point2D, ...]) -> bool:
     inside = False
     previous = polygon[-1]
     for current in polygon:
-        cross = (point.x-previous.x)*(current.y-previous.y) - (point.y-previous.y)*(current.x-previous.x)
-        if abs(cross) < 1e-9 and min(previous.x, current.x)-1e-9 <= point.x <= max(previous.x, current.x)+1e-9 and min(previous.y, current.y)-1e-9 <= point.y <= max(previous.y, current.y)+1e-9:
+        cross = (point.x - previous.x) * (current.y - previous.y) - (point.y - previous.y) * (
+            current.x - previous.x
+        )
+        if (
+            abs(cross) < 1e-9
+            and min(previous.x, current.x) - 1e-9 <= point.x <= max(previous.x, current.x) + 1e-9
+            and min(previous.y, current.y) - 1e-9 <= point.y <= max(previous.y, current.y) + 1e-9
+        ):
             return True
         if (current.y > point.y) != (previous.y > point.y):
-            crossing = (previous.x-current.x)*(point.y-current.y)/(previous.y-current.y)+current.x
+            crossing = (previous.x - current.x) * (point.y - current.y) / (
+                previous.y - current.y
+            ) + current.x
             if point.x < crossing:
                 inside = not inside
         previous = current

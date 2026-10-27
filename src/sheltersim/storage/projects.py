@@ -26,8 +26,13 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import CheckpointArchive
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
-_PRIVATE = re.compile(r"api.?key|secret|password|credential|authorization|raw.?prompt|full.?name|email|phone|address", re.I)
-_SECRET = re.compile(r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|\b[^\s@]+@[^\s@]+\.[^\s@]+\b", re.I)
+_PRIVATE = re.compile(
+    r"api.?key|secret|password|credential|authorization|raw.?prompt|full.?name|email|phone|address",
+    re.I,
+)
+_SECRET = re.compile(
+    r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|\b[^\s@]+@[^\s@]+\.[^\s@]+\b", re.I
+)
 _PHONE = re.compile(r"(?<!\w)(?:\+\d{1,3}[ -])?\d{2,4}[- ]\d{2,4}[- ]\d{3,4}(?!\w)")
 _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
 
@@ -38,12 +43,15 @@ class StorageError(ValueError):
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         candidate = message.split(":", 1)[0]
-        self.code = code or (candidate if re.fullmatch(r"[a-z][a-z0-9_]{1,80}", candidate)
-                             else "storage_conflict")
+        self.code = code or (
+            candidate if re.fullmatch(r"[a-z][a-z0-9_]{1,80}", candidate) else "storage_conflict"
+        )
 
 
 def canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def digest(value: Any) -> str:
@@ -111,10 +119,16 @@ class ProjectStore:
                     msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
     def _path(self, *parts: str) -> Path:
-        if any(not isinstance(part, str) or not (_ID.fullmatch(part) or (part.endswith(".json") and _ID.fullmatch(part[:-5]))) for part in parts):
+        if any(
+            not isinstance(part, str)
+            or not (_ID.fullmatch(part) or (part.endswith(".json") and _ID.fullmatch(part[:-5])))
+            for part in parts
+        ):
             raise StorageError("invalid artifact identifier")
         path = self.root.joinpath(*parts)
-        if not path.resolve().is_relative_to(self.root) or any(p.is_symlink() for p in [path, *path.parents] if p != self.root.parent):
+        if not path.resolve().is_relative_to(self.root) or any(
+            p.is_symlink() for p in [path, *path.parents] if p != self.root.parent
+        ):
             raise StorageError("artifact path cannot follow symlinks")
         return path
 
@@ -127,9 +141,17 @@ class ProjectStore:
             raise StorageError("saved artifact is missing or corrupt") from exc
         # Conversation v2 adds scalar proof/scope records. Other artifact envelopes
         # remain v1; never accept an unrelated future checkpoint/status format.
-        conversation = path.parent.name == "conversations" and len(path.parents) > 2 and path.parents[2].name == "branches"
+        conversation = (
+            path.parent.name == "conversations"
+            and len(path.parents) > 2
+            and path.parents[2].name == "branches"
+        )
         versions = {1, 2} if conversation else {1}
-        if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] not in versions:
+        if (
+            not isinstance(value, dict)
+            or type(value.get("schema_version")) is not int
+            or value["schema_version"] not in versions
+        ):
             raise StorageError("unsupported saved artifact version; migration required")
         return value
 
@@ -168,7 +190,11 @@ class ProjectStore:
 
     def usage(self) -> dict[str, int]:
         paths = [p for p in self.root.rglob("*") if p.is_file() and not p.is_symlink()]
-        return {"bytes": sum(p.stat().st_size for p in paths), "files": len(paths), "limit_bytes": self.max_bytes}
+        return {
+            "bytes": sum(p.stat().st_size for p in paths),
+            "files": len(paths),
+            "limit_bytes": self.max_bytes,
+        }
 
     def create_project(self, project_id: str, *, _internal: bool = False) -> dict[str, Any]:
         if project_id == "runtime-accounts" and not _internal:
@@ -181,14 +207,19 @@ class ProjectStore:
     def projects(self) -> list[dict[str, Any]]:
         # Internal non-Project usage accounts share ProjectStore durability but are
         # not user-created study Projects.
-        return [self._read(p) for p in sorted(self.root.glob("*/project.json"))
-                if p.parent.name != "runtime-accounts"]
+        return [
+            self._read(p)
+            for p in sorted(self.root.glob("*/project.json"))
+            if p.parent.name != "runtime-accounts"
+        ]
 
     def project(self, project_id: str) -> dict[str, Any]:
         project = self._read(self._path(project_id, "project.json"))
         return {**project, "scenarios": self.scenarios(project_id), "runs": self.runs(project_id)}
 
-    def save_scenario(self, project_id: str, scenario: ScenarioSpec, *, approved_hash: str) -> dict[str, Any]:
+    def save_scenario(
+        self, project_id: str, scenario: ScenarioSpec, *, approved_hash: str
+    ) -> dict[str, Any]:
         """Immutable revision; edited/approved content never overwrites an old run."""
         document = json.loads(scenario.canonical_json())
         if safe_document(document) != document:
@@ -200,8 +231,19 @@ class ProjectStore:
             self._read(self._path(project_id, "project.json"))
             prior = [r for r in self.scenarios(project_id) if r["scenario_id"] == scenario.id]
             revision = max((r["scenario_version"] for r in prior), default=0) + 1
-            record = {"schema_version": 1, "scenario_id": scenario.id, "scenario_version": revision, "scenario_hash": scenario_hash, "approved": True, "scenario": document}
-            self._write(self._path(project_id, "scenarios", scenario.id, f"v{revision}.json"), record, immutable=True)
+            record = {
+                "schema_version": 1,
+                "scenario_id": scenario.id,
+                "scenario_version": revision,
+                "scenario_hash": scenario_hash,
+                "approved": True,
+                "scenario": document,
+            }
+            self._write(
+                self._path(project_id, "scenarios", scenario.id, f"v{revision}.json"),
+                record,
+                immutable=True,
+            )
             return record
 
     def scenarios(self, project_id: str) -> list[dict[str, Any]]:
@@ -216,13 +258,26 @@ class ProjectStore:
             raise StorageError("saved scenario integrity mismatch")
         return ScenarioSpec.from_json(canonical(record["scenario"]))
 
-    def create_run(self, project_id: str, run_id: str, scenario_id: str, revision: int) -> dict[str, Any]:
+    def create_run(
+        self, project_id: str, run_id: str, scenario_id: str, revision: int
+    ) -> dict[str, Any]:
         with self.transaction():
             scenario = self.scenario(project_id, scenario_id, revision)
-            ref = RunReference(project_id=project_id, scenario_id=scenario_id, scenario_version=revision, scenario_hash=digest(json.loads(scenario.canonical_json())), run_id=run_id, seed=scenario.seed, model_versions=model_signatures(scenario.model_configs))
+            ref = RunReference(
+                project_id=project_id,
+                scenario_id=scenario_id,
+                scenario_version=revision,
+                scenario_hash=digest(json.loads(scenario.canonical_json())),
+                run_id=run_id,
+                seed=scenario.seed,
+                model_versions=model_signatures(scenario.model_configs),
+            )
             record = {**ref.model_dump(mode="json"), "status": "queued", "archived": False}
             self._write(self._path(project_id, "runs", run_id, "run.json"), record, immutable=True)
-            self._write(self._path(project_id, "runs", run_id, "status.json"), {"schema_version": 1, "status": "queued", "archived": False})
+            self._write(
+                self._path(project_id, "runs", run_id, "status.json"),
+                {"schema_version": 1, "status": "queued", "archived": False},
+            )
             return record
 
     def run(self, project_id: str, run_id: str) -> dict[str, Any]:
@@ -231,7 +286,10 @@ class ProjectStore:
         return {**record, **status, "branches": self.branches(project_id, run_id)}
 
     def runs(self, project_id: str) -> list[dict[str, Any]]:
-        return [self.run(project_id, p.parent.name) for p in sorted(self._path(project_id, "runs").glob("*/run.json"))]
+        return [
+            self.run(project_id, p.parent.name)
+            for p in sorted(self._path(project_id, "runs").glob("*/run.json"))
+        ]
 
     def set_status(self, project_id: str, run_id: str, status: str) -> None:
         if status not in _TERMINAL | {"queued", "running", "paused"}:
@@ -251,7 +309,9 @@ class ProjectStore:
             self.run(project_id, run_id)
             path = self._path(project_id, "runs", run_id, "worker-lock")
             # O_NOFOLLOW/O_BINARY exist only on some platforms; Windows has no symlink flag here.
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            flags = (
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            )
             descriptor = os.open(path, flags, 0o600)
             try:
                 if fcntl is not None:
@@ -297,16 +357,32 @@ class ProjectStore:
                     self.release_run(lease)
         return recovered
 
-    def save_branch(self, project_id: str, reference: BranchReference, checkpoint: Checkpoint, *, expected_checkpoint_hash: str | None = None) -> None:
+    def save_branch(
+        self,
+        project_id: str,
+        reference: BranchReference,
+        checkpoint: Checkpoint,
+        *,
+        expected_checkpoint_hash: str | None = None,
+    ) -> None:
         """Write content first, then atomically move a compare-and-swap branch pointer."""
         # to_dict validates both hashes, WorldState/model compatibility and
         # metrics, and returns an owned snapshot. Reuse it throughout this
         # locked save instead of restoring/copying the growing history again.
-        self._save_branch(project_id, reference, checkpoint, checkpoint.to_dict,
-                          expected_checkpoint_hash=expected_checkpoint_hash)
+        self._save_branch(
+            project_id,
+            reference,
+            checkpoint,
+            checkpoint.to_dict,
+            expected_checkpoint_hash=expected_checkpoint_hash,
+        )
 
     def save_captured_branch(
-        self, project_id: str, reference: BranchReference, checkpoint: Checkpoint, *,
+        self,
+        project_id: str,
+        reference: BranchReference,
+        checkpoint: Checkpoint,
+        *,
         expected_checkpoint_hash: str | None = None,
     ) -> None:
         """Save a checkpoint the caller just created with Checkpoint.capture.
@@ -315,20 +391,33 @@ class ProjectStore:
         and metrics. Only pass an object that has not been shared or mutated
         since; anything else must use save_branch, which validates again.
         """
-        self._save_branch(project_id, reference, checkpoint, checkpoint._document_view,
-                          expected_checkpoint_hash=expected_checkpoint_hash)
+        self._save_branch(
+            project_id,
+            reference,
+            checkpoint,
+            checkpoint._document_view,
+            expected_checkpoint_hash=expected_checkpoint_hash,
+        )
 
     def _save_branch(
-        self, project_id: str, reference: BranchReference, checkpoint: Checkpoint,
-        document_source: Any, *, expected_checkpoint_hash: str | None,
+        self,
+        project_id: str,
+        reference: BranchReference,
+        checkpoint: Checkpoint,
+        document_source: Any,
+        *,
+        expected_checkpoint_hash: str | None,
     ) -> None:
         with self.transaction():
             run = self.run(project_id, reference.run_id)
             scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
             document = document_source()
             world = document["world_state"]
-            if (world["scenario_id"] != scenario.id or world["seed"] != scenario.seed
-                    or world["model_configs"] != scenario.model_configs):
+            if (
+                world["scenario_id"] != scenario.id
+                or world["seed"] != scenario.seed
+                or world["model_configs"] != scenario.model_configs
+            ):
                 raise StorageError("checkpoint does not match immutable run inputs")
             if world["duration_minutes"] != scenario.duration_minutes:
                 raise StorageError("checkpoint duration does not match run inputs")
@@ -336,12 +425,20 @@ class ProjectStore:
                 raise StorageError("fork minute cannot exceed computed history")
             if reference.computed_until != checkpoint.simulation_minute:
                 raise StorageError("branch pointer minute does not match checkpoint")
-            path = self._path(project_id, "runs", reference.run_id, "branches", reference.branch_id, "branch.json")
+            path = self._path(
+                project_id, "runs", reference.run_id, "branches", reference.branch_id, "branch.json"
+            )
             if path.exists():
                 prior = self._read(path)
-                if reference.parent_branch_id != prior["parent_branch_id"] or reference.fork_minute != prior["fork_minute"]:
+                if (
+                    reference.parent_branch_id != prior["parent_branch_id"]
+                    or reference.fork_minute != prior["fork_minute"]
+                ):
                     raise StorageError("branch lineage is immutable")
-                if reference.computed_until == prior["computed_until"] and checkpoint.checkpoint_hash != prior["checkpoint_hash"]:
+                if (
+                    reference.computed_until == prior["computed_until"]
+                    and checkpoint.checkpoint_hash != prior["checkpoint_hash"]
+                ):
                     raise StorageError("same-minute history is immutable; fork first")
                 if expected_checkpoint_hash != prior["checkpoint_hash"]:
                     raise StorageError("branch changed; reload before saving")
@@ -351,38 +448,66 @@ class ProjectStore:
                 raise StorageError("branch does not exist")
             elif reference.parent_branch_id is not None:
                 # Only the parent's lineage pointer is needed, not its history.
-                parent = self.branch_reference(project_id, reference.run_id, reference.parent_branch_id)
+                parent = self.branch_reference(
+                    project_id, reference.run_id, reference.parent_branch_id
+                )
                 if not parent.fork_minute <= reference.fork_minute <= parent.computed_until:
                     raise StorageError("fork point is outside parent history")
-            checkpoint_path = self._path(project_id, "runs", reference.run_id, "checkpoints", f"{checkpoint.checkpoint_hash}.json")
+            checkpoint_path = self._path(
+                project_id,
+                "runs",
+                reference.run_id,
+                "checkpoints",
+                f"{checkpoint.checkpoint_hash}.json",
+            )
             checkpoint_bytes_before = self.checkpoint_write_bytes(project_id, reference.run_id)
             # The archive applies the privacy check to every chunk that is not
             # already stored (stored chunks passed it when first written) and
             # stages new chunks, so a rejected checkpoint writes nothing.
-            archive = CheckpointArchive(checkpoint_path.parent, max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
-                                        content_check=_reject_sensitive_checkpoint_content)
-            encoded_archive = archive._prepare_validated_document(
-                document, checkpoint_hash=checkpoint.checkpoint_hash,
+            archive = CheckpointArchive(
+                checkpoint_path.parent,
+                max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
+                content_check=_reject_sensitive_checkpoint_content,
             )
-            pending_ledger_path = self._path(project_id, "runs", reference.run_id, "checkpoint-write-pending.json")
-            self._write(pending_ledger_path, {
-                "schema_version": 1, "run_id": reference.run_id,
-                "status": "checkpoint_archive_write_in_progress",
-            })
+            encoded_archive = archive._prepare_validated_document(
+                document,
+                checkpoint_hash=checkpoint.checkpoint_hash,
+            )
+            pending_ledger_path = self._path(
+                project_id, "runs", reference.run_id, "checkpoint-write-pending.json"
+            )
+            self._write(
+                pending_ledger_path,
+                {
+                    "schema_version": 1,
+                    "run_id": reference.run_id,
+                    "status": "checkpoint_archive_write_in_progress",
+                },
+            )
             archive._write_prepared()
             new_manifest = not checkpoint_path.exists()
             self._write(checkpoint_path, encoded_archive, immutable=True)
             manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0
             key = (project_id, reference.run_id)
             written_bytes = checkpoint_bytes_before + archive.new_bytes + manifest_bytes
-            self._write(self._path(project_id, "runs", reference.run_id, "checkpoint-write-ledger.json"), {
-                "schema_version": 1, "run_id": reference.run_id,
-                "unique_checkpoint_bytes_written": written_bytes,
-                "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
-            })
+            self._write(
+                self._path(project_id, "runs", reference.run_id, "checkpoint-write-ledger.json"),
+                {
+                    "schema_version": 1,
+                    "run_id": reference.run_id,
+                    "unique_checkpoint_bytes_written": written_bytes,
+                    "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
+                },
+            )
             self._checkpoint_write_bytes[key] = written_bytes
             pending_ledger_path.unlink(missing_ok=True)
-            self._write(path, {**reference.model_dump(mode="json"), "checkpoint_hash": checkpoint.checkpoint_hash})
+            self._write(
+                path,
+                {
+                    **reference.model_dump(mode="json"),
+                    "checkpoint_hash": checkpoint.checkpoint_hash,
+                },
+            )
 
     def checkpoint_write_bytes(self, project_id: str, run_id: str) -> int:
         """Return durable unique checkpoint archive bytes, reconstructing legacy ledgers once."""
@@ -391,11 +516,15 @@ class ProjectStore:
             pending_path = self._path(project_id, "runs", run_id, "checkpoint-write-pending.json")
             if pending_path.exists():
                 value = self._checkpoint_archive_bytes(project_id, run_id)
-                self._write(self._path(project_id, "runs", run_id, "checkpoint-write-ledger.json"), {
-                    "schema_version": 1, "run_id": run_id,
-                    "unique_checkpoint_bytes_written": value,
-                    "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
-                })
+                self._write(
+                    self._path(project_id, "runs", run_id, "checkpoint-write-ledger.json"),
+                    {
+                        "schema_version": 1,
+                        "run_id": run_id,
+                        "unique_checkpoint_bytes_written": value,
+                        "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
+                    },
+                )
                 pending_path.unlink(missing_ok=True)
                 self._checkpoint_write_bytes[key] = value
                 return value
@@ -405,8 +534,13 @@ class ProjectStore:
             if ledger_path.exists():
                 record = self._read(ledger_path)
                 value = record.get("unique_checkpoint_bytes_written")
-                if (record.get("run_id") != run_id or type(value) is not int or value < 0
-                        or record.get("accounting") != "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes"):
+                if (
+                    record.get("run_id") != run_id
+                    or type(value) is not int
+                    or value < 0
+                    or record.get("accounting")
+                    != "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes"
+                ):
                     raise StorageError("checkpoint_write_ledger_corrupt")
             else:
                 value = self._checkpoint_archive_bytes(project_id, run_id)
@@ -424,21 +558,38 @@ class ProjectStore:
         if chunks.is_symlink():
             raise StorageError("unsafe_checkpoint_archive_directory")
         paths = [*directory.glob("*.json"), *chunks.glob("*.json.gz")]
-        if any(path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()) for path in paths):
+        if any(
+            path.is_symlink() or not path.resolve().is_relative_to(directory.resolve())
+            for path in paths
+        ):
             raise StorageError("unsafe_checkpoint_archive_file")
         return sum(path.stat().st_size for path in paths if path.is_file())
 
     def branches(self, project_id: str, run_id: str) -> list[dict[str, Any]]:
-        return [self._read(p) for p in sorted(self._path(project_id, "runs", run_id, "branches").glob("*/branch.json"))]
+        return [
+            self._read(p)
+            for p in sorted(
+                self._path(project_id, "runs", run_id, "branches").glob("*/branch.json")
+            )
+        ]
 
     def branch_reference(self, project_id: str, run_id: str, branch_id: str) -> BranchReference:
         """Read the atomic pointer without decoding its potentially large checkpoint."""
-        return BranchReference.model_validate(self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json")))
+        return BranchReference.model_validate(
+            self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json"))
+        )
 
-    def load_branch(self, project_id: str, run_id: str, branch_id: str) -> tuple[BranchReference, Checkpoint]:
-        reference = BranchReference.model_validate(self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json")))
+    def load_branch(
+        self, project_id: str, run_id: str, branch_id: str
+    ) -> tuple[BranchReference, Checkpoint]:
+        reference = BranchReference.model_validate(
+            self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json"))
+        )
         checkpoint = self.load_checkpoint(project_id, run_id, reference.checkpoint_hash)
-        if checkpoint.checkpoint_hash != reference.checkpoint_hash or checkpoint.simulation_minute != reference.computed_until:
+        if (
+            checkpoint.checkpoint_hash != reference.checkpoint_hash
+            or checkpoint.simulation_minute != reference.computed_until
+        ):
             raise StorageError("branch checkpoint pointer is corrupt")
         # load_checkpoint already validated hashes, model compatibility and the
         # WorldState/metrics restore; callers restore again only if they need objects.
@@ -454,56 +605,108 @@ class ProjectStore:
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
 
-    def checkpoint_document(self, project_id: str, run_id: str, checkpoint_hash: str) -> dict[str,Any]:
-        path=self._path(project_id,"runs",run_id,"checkpoints",f"{checkpoint_hash}.json")
-        record=self._read(path)
-        if record.get("storage_type") in {"checkpoint_archive_v1","checkpoint_archive_v2"}:
+    def checkpoint_document(
+        self, project_id: str, run_id: str, checkpoint_hash: str
+    ) -> dict[str, Any]:
+        path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
+        record = self._read(path)
+        if record.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
             try:
-                document=CheckpointArchive(path.parent).document(record)
+                document = CheckpointArchive(path.parent).document(record)
             except (CheckpointError, ValueError, TypeError, KeyError) as exc:
                 raise StorageError("checkpoint_recorded_document_integrity_mismatch") from exc
         else:
             document = record
-        fields={"schema_version","world_state_schema_version","scenario_id","simulation_minute","state_hash","model_versions","world_state","metrics_state","runtime_state","checkpoint_hash"}
-        if (not isinstance(document,dict) or set(document)!=fields or type(document["schema_version"]) is not int or document["schema_version"]!=1
-                or document["checkpoint_hash"]!=checkpoint_hash
-                or digest({k:v for k,v in document.items() if k!="checkpoint_hash"})!=checkpoint_hash
-                or digest(document["world_state"])!=document["state_hash"]
-                or safe_document(document)!=document):
+        fields = {
+            "schema_version",
+            "world_state_schema_version",
+            "scenario_id",
+            "simulation_minute",
+            "state_hash",
+            "model_versions",
+            "world_state",
+            "metrics_state",
+            "runtime_state",
+            "checkpoint_hash",
+        }
+        if (
+            not isinstance(document, dict)
+            or set(document) != fields
+            or type(document["schema_version"]) is not int
+            or document["schema_version"] != 1
+            or document["checkpoint_hash"] != checkpoint_hash
+            or digest({k: v for k, v in document.items() if k != "checkpoint_hash"})
+            != checkpoint_hash
+            or digest(document["world_state"]) != document["state_hash"]
+            or safe_document(document) != document
+        ):
             raise StorageError("checkpoint_recorded_document_integrity_mismatch")
-        if (type(document["simulation_minute"]) is not int or document["simulation_minute"]<0
-                or not isinstance(document["metrics_state"],dict)
-                or not isinstance(document["world_state"],dict)
-                or not isinstance(document["metrics_state"].get("snapshots"),list)
-                or not isinstance(document["world_state"].get("event_log"),list)):
+        if (
+            type(document["simulation_minute"]) is not int
+            or document["simulation_minute"] < 0
+            or not isinstance(document["metrics_state"], dict)
+            or not isinstance(document["world_state"], dict)
+            or not isinstance(document["metrics_state"].get("snapshots"), list)
+            or not isinstance(document["world_state"].get("event_log"), list)
+        ):
             raise StorageError("checkpoint_recorded_document_structure_invalid")
         return document
 
-    def checkpoint_fields(self, project_id: str, run_id: str, checkpoint_hash: str, fields: tuple[str,...]) -> dict[str,Any]:
+    def checkpoint_fields(
+        self, project_id: str, run_id: str, checkpoint_hash: str, fields: tuple[str, ...]
+    ) -> dict[str, Any]:
         """Verified archive fields, without constructing a WorldState or provider."""
-        path=self._path(project_id,"runs",run_id,"checkpoints",f"{checkpoint_hash}.json")
-        record=self._read(path)
+        path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
+        record = self._read(path)
         if record.get("checkpoint_hash") != checkpoint_hash:
             raise StorageError("checkpoint_pointer_corrupt")
-        if record.get("storage_type") in {"checkpoint_archive_v1","checkpoint_archive_v2"}:
-            archive=CheckpointArchive(path.parent)
-            return {field:archive.project(record,(field,)) for field in fields}
-        checkpoint=Checkpoint.from_dict(record)
-        return {field:checkpoint.to_dict()[field] for field in fields}
+        if record.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
+            archive = CheckpointArchive(path.parent)
+            return {field: archive.project(record, (field,)) for field in fields}
+        checkpoint = Checkpoint.from_dict(record)
+        return {field: checkpoint.to_dict()[field] for field in fields}
 
-    def save_turn(self, project_id: str, run_id: str, branch_id: str, turn_id: str, turn: dict[str, Any]) -> None:
+    def save_turn(
+        self, project_id: str, run_id: str, branch_id: str, turn_id: str, turn: dict[str, Any]
+    ) -> None:
         reference = self.branch_reference(project_id, run_id, branch_id)
-        allowed = {"question", "answer", "evidence", "limitations", "usage", "model_version", "minute", "conversation_id", "claims", "context", "sources"}
+        allowed = {
+            "question",
+            "answer",
+            "evidence",
+            "limitations",
+            "usage",
+            "model_version",
+            "minute",
+            "conversation_id",
+            "claims",
+            "context",
+            "sources",
+        }
         if set(turn) - allowed:
             raise StorageError("unsupported conversation fields")
         evidence = [EvidenceReference.model_validate(item) for item in turn.get("evidence", [])]
         for item in evidence:
-            cited_reference = reference if item.branch_id == branch_id else self.branch_reference(project_id, run_id, item.branch_id)
-            if item.run_id != run_id or not cited_reference.fork_minute <= item.minute <= cited_reference.computed_until:
-                raise StorageError("conversation evidence context does not match saved branch history")
+            cited_reference = (
+                reference
+                if item.branch_id == branch_id
+                else self.branch_reference(project_id, run_id, item.branch_id)
+            )
+            if (
+                item.run_id != run_id
+                or not cited_reference.fork_minute <= item.minute <= cited_reference.computed_until
+            ):
+                raise StorageError(
+                    "conversation evidence context does not match saved branch history"
+                )
         claims = turn.get("claims", [])
         sources = turn.get("sources", [])
-        if not isinstance(claims, list) or len(claims) > 32 or not isinstance(sources, list) or len(sources) > 20:
+        if (
+            not isinstance(claims, list)
+            or len(claims) > 32
+            or not isinstance(sources, list)
+            or len(sources) > 20
+        ):
             raise StorageError("invalid_conversation_proofs")
         aliases = {}
         for source in sources:
@@ -514,39 +717,79 @@ class ProjectStore:
                 raise StorageError("conversation_proof_reference_mismatch")
             aliases[source["alias"]] = item
         for claim in claims:
-            if not isinstance(claim, dict) or set(claim) != {"text", "evidence"} or not isinstance(claim["text"], str):
+            if (
+                not isinstance(claim, dict)
+                or set(claim) != {"text", "evidence"}
+                or not isinstance(claim["text"], str)
+            ):
                 raise StorageError("invalid_conversation_claim")
             proofs = claim["evidence"]
             if not isinstance(proofs, list) or not 1 <= len(proofs) <= 4:
                 raise StorageError("invalid_conversation_claim")
             for proof in proofs:
-                if (not isinstance(proof, dict) or set(proof) != {"alias", "field", "value"}
-                        or proof["alias"] not in aliases or not isinstance(proof["field"], str)
-                        or not 1 <= len(proof["field"]) <= 120
-                        or type(proof["value"]) not in (str, int, float, bool, type(None))):
+                if (
+                    not isinstance(proof, dict)
+                    or set(proof) != {"alias", "field", "value"}
+                    or proof["alias"] not in aliases
+                    or not isinstance(proof["field"], str)
+                    or not 1 <= len(proof["field"]) <= 120
+                    or type(proof["value"]) not in (str, int, float, bool, type(None))
+                ):
                     raise StorageError("invalid_conversation_proof")
         context = turn.get("context")
-        if context is not None and (not isinstance(context, dict) or
-                context.get("run_id") != run_id or context.get("branch_id") != branch_id or
-                context.get("captured_minute") != turn.get("minute")):
+        if context is not None and (
+            not isinstance(context, dict)
+            or context.get("run_id") != run_id
+            or context.get("branch_id") != branch_id
+            or context.get("captured_minute") != turn.get("minute")
+        ):
             raise StorageError("conversation_scope_mismatch")
-        document = {"schema_version": 2 if "claims" in turn else 1, "turn_id": turn_id, **safe_document(turn)}
+        document = {
+            "schema_version": 2 if "claims" in turn else 1,
+            "turn_id": turn_id,
+            **safe_document(turn),
+        }
         with self.transaction():
-            self._write(self._path(project_id, "runs", run_id, "branches", branch_id, "conversations", f"{turn_id}.json"), document, immutable=True)
+            self._write(
+                self._path(
+                    project_id,
+                    "runs",
+                    run_id,
+                    "branches",
+                    branch_id,
+                    "conversations",
+                    f"{turn_id}.json",
+                ),
+                document,
+                immutable=True,
+            )
             from sheltersim.storage.history_index import HistoryIndex
+
             HistoryIndex(self, project_id, run_id).add_turn(branch_id, document)
 
     def conversations(self, project_id: str, run_id: str, branch_id: str) -> list[dict[str, Any]]:
-        return [self._read(p) for p in sorted(self._path(project_id, "runs", run_id, "branches", branch_id, "conversations").glob("*.json"))]
+        return [
+            self._read(p)
+            for p in sorted(
+                self._path(project_id, "runs", run_id, "branches", branch_id, "conversations").glob(
+                    "*.json"
+                )
+            )
+        ]
 
     def archive(self, project_id: str, run_id: str | None = None) -> None:
         with self.transaction():
-            path = self._path(project_id, "project.json") if run_id is None else self._path(project_id, "runs", run_id, "status.json")
+            path = (
+                self._path(project_id, "project.json")
+                if run_id is None
+                else self._path(project_id, "runs", run_id, "status.json")
+            )
             self._write(path, {**self._read(path), "archived": True})
 
     def delete_run(self, project_id: str, run_id: str, *, confirmation: str) -> None:
         """An explicit run-ID confirmation is required; no cascading project deletion."""
         import shutil
+
         lease = self.claim_run(project_id, run_id)
         try:
             with self.transaction():

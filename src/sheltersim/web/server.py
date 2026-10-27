@@ -74,8 +74,11 @@ def _handler_for(
                         if projects is None:
                             raise StorageError("usage storage is unavailable")
                         from sheltersim.llm.accounting import runtime_usage_summary
+
                         payload = runtime_usage_summary(projects.store)
-                    elif parsed.path == "/api/v1/projects" or parsed.path.startswith("/api/v1/projects/"):
+                    elif parsed.path == "/api/v1/projects" or parsed.path.startswith(
+                        "/api/v1/projects/"
+                    ):
                         if projects is None:
                             raise StorageError("project storage is unavailable")
                         parts = [unquote(p) for p in parsed.path.split("/") if p][3:]
@@ -127,7 +130,9 @@ def _handler_for(
                     elif parsed.path == "/api/v1/demo/compare-frames":
                         query = parse_qs(parsed.query)
                         if set(query) - {"branch_ids", "minute"}:
-                            raise WebQueryError("compare-frames received unsupported query parameters")
+                            raise WebQueryError(
+                                "compare-frames received unsupported query parameters"
+                            )
                         raw_ids = _string(query, "branch_ids", "")
                         branch_ids = [item for item in raw_ids.split(",") if item]
                         minute = _optional_integer(query, "minute")
@@ -189,7 +194,9 @@ def _handler_for(
             except WebQueryError as exc:
                 self._json_response(400, {"error": str(exc)})
             except ValueError:
-                self._json_response(400, {"error": "invalid query or saved contract", "code": "invalid_input"})
+                self._json_response(
+                    400, {"error": "invalid query or saved contract", "code": "invalid_input"}
+                )
             except Exception:
                 self._json_response(500, {"error": "inspector request failed"})
 
@@ -197,7 +204,9 @@ def _handler_for(
             parsed = urlsplit(getattr(self, "path", ""))
             parts = [unquote(part) for part in parsed.path.split("/") if part]
             origin = self.headers.get("Origin")
-            if (origin and urlsplit(origin).netloc != self.headers.get("Host")) or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            if (origin and urlsplit(origin).netloc != self.headers.get("Host")) or self.headers.get(
+                "Sec-Fetch-Site"
+            ) == "cross-site":
                 self._json_response(403, {"error": "cross-origin mutations are forbidden"})
                 return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -209,7 +218,9 @@ def _handler_for(
             if parts == ["api", "v1", "results-chat"]:
                 try:
                     origin = self.headers.get("Origin")
-                    if (origin and urlsplit(origin).netloc != self.headers.get("Host")) or self.headers.get("Sec-Fetch-Site") == "cross-site":
+                    if (
+                        origin and urlsplit(origin).netloc != self.headers.get("Host")
+                    ) or self.headers.get("Sec-Fetch-Site") == "cross-site":
                         raise WebQueryError("cross-origin result questions are forbidden")
                     if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                         raise WebQueryError("result questions require application/json")
@@ -221,9 +232,16 @@ def _handler_for(
                         raise WebQueryError("result question must be an object")
                     self._json_response(200, results_chat.ask(body))
                 except (ValueError, UnicodeDecodeError):
-                    self._json_response(400, {"error": "invalid or unavailable result question context"})
+                    self._json_response(
+                        400, {"error": "invalid or unavailable result question context"}
+                    )
                 except Exception:
-                    self._json_response(409, {"error": "result answer unavailable within the current budget or saved context"})
+                    self._json_response(
+                        409,
+                        {
+                            "error": "result answer unavailable within the current budget or saved context"
+                        },
+                    )
                 return
             if parts[:3] == ["api", "v1", "projects"]:
                 try:
@@ -391,22 +409,39 @@ def _handler_for(
                 candidate = (root / relative).resolve()
                 allowed = (
                     relative in {"pdf.min.mjs", "pdf.worker.min.mjs", "LICENSE", "NOTICE.txt"}
-                    or relative.startswith("cmaps/") and Path(relative).suffix in {".bcmap", ".json"}
-                    or relative.startswith("standard_fonts/") and Path(relative).suffix in {".pfb", ".ttf"}
+                    or relative.startswith("cmaps/")
+                    and Path(relative).suffix in {".bcmap", ".json"}
+                    or relative.startswith("standard_fonts/")
+                    and Path(relative).suffix in {".pfb", ".ttf"}
                 )
-                if (not allowed or root not in candidate.parents or not candidate.is_file()):
+                if not allowed or root not in candidate.parents or not candidate.is_file():
                     self._json_response(404, {"error": "PDF renderer asset not found"})
                     return
                 payload = candidate.read_bytes()
-                content_type = "text/javascript" if candidate.suffix == ".mjs" else (
-                    "font/ttf" if candidate.suffix == ".ttf" else mimetypes.guess_type(candidate.name)[0]
-                ) or "application/octet-stream"
+                content_type = (
+                    "text/javascript"
+                    if candidate.suffix == ".mjs"
+                    else (
+                        "font/ttf"
+                        if candidate.suffix == ".ttf"
+                        else mimetypes.guess_type(candidate.name)[0]
+                    )
+                    or "application/octet-stream"
+                )
                 self.send_response(200)
-                self.send_header("Content-Type", f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type)
+                self.send_header(
+                    "Content-Type",
+                    f"{content_type}; charset=utf-8"
+                    if content_type.startswith("text/")
+                    else content_type,
+                )
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self'")
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self'",
+                )
                 self.end_headers()
                 self.wfile.write(payload)
                 return
@@ -445,7 +480,10 @@ def _handler_for(
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self' data: blob:")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; style-src 'self'; img-src 'self' data: blob:",
+            )
             self.end_headers()
             self.wfile.write(payload)
 

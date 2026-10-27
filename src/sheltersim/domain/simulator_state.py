@@ -106,13 +106,9 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         raise ValueError("geometry_overlay requires facility_geometry")
     if "shared_operations" in configs:
         validate_shared_operations_config(configs["shared_operations"])
-    body_policy_enabled = (
-        selected_models(configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
-    )
+    body_policy_enabled = selected_models(configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
     proximity = canonical_proximity_contact_config(configs.get("social_proximity"))
-    if proximity is not None and (
-        "facility_geometry" not in configs or not body_policy_enabled
-    ):
+    if proximity is not None and ("facility_geometry" not in configs or not body_policy_enabled):
         raise ValueError(
             "social_proximity requires facility_geometry and a life-state psychology policy"
         )
@@ -126,20 +122,19 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         and "facility_awareness" not in configs
         and not body_policy_enabled
     ):
-        standalone = {
-            "operator:action_lifecycle": f"{ACTION_LIFECYCLE_POLICY_VERSION}@1:state1"
-        }
+        standalone = {"operator:action_lifecycle": f"{ACTION_LIFECYCLE_POLICY_VERSION}@1:state1"}
         if "population_context" in configs:
             standalone["operator:autonomy_behavior"] = "contextual-autonomy@2:stateless"
         if "zone_environment" in configs:
             from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
+
             environment = ScenarioZoneEnvironmentConfig.model_validate(configs["zone_environment"])
             standalone["operator:zone_environment"] = f"{environment.policy_version}@1:state1"
         return standalone
     versions = {
-        AGENT_DYNAMICS_STATE_KEY: canonical_agent_dynamics_config(
-            configs.get("agent_dynamics")
-        )["policy_version"],
+        AGENT_DYNAMICS_STATE_KEY: canonical_agent_dynamics_config(configs.get("agent_dynamics"))[
+            "policy_version"
+        ],
         POPULATION_DYNAMICS_STATE_KEY: POPULATION_DYNAMICS_POLICY_VERSION,
         SOCIAL_NETWORK_STATE_KEY: SOCIAL_NETWORK_POLICY_VERSION,
         STAFF_DYNAMICS_STATE_KEY: STAFF_DYNAMICS_POLICY_VERSION,
@@ -151,10 +146,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
     versions[STAFF_DYNAMICS_STATE_KEY] = canonical_staff_dynamics_config(
         configs.get("staff_dynamics")
     )["policy_version"]
-    if (
-        configs.get("simulator_extensions", {}).get("enabled", False)
-        or "population" in configs
-    ):
+    if configs.get("simulator_extensions", {}).get("enabled", False) or "population" in configs:
         versions[POPULATION_LIFECYCLE_STATE_KEY] = POPULATION_LIFECYCLE_POLICY_VERSION
         if configs.get("simulator_extensions", {}).get("enabled", False):
             versions[TEMPORARY_SPACES_STATE_KEY] = TEMPORARY_SPACES_POLICY_VERSION
@@ -168,31 +160,40 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         versions[MOVEMENT_STATE_KEY] = MOVEMENT_POLICY_VERSION
     if "geometry_overlay" in configs:
         overlay_config = configs["geometry_overlay"]
-        if (not isinstance(overlay_config, dict)
-                or set(overlay_config) != {"schema_version"}
-                or type(overlay_config["schema_version"]) is not int
-                or overlay_config["schema_version"] not in {1, 2, 3, 4}):
+        if (
+            not isinstance(overlay_config, dict)
+            or set(overlay_config) != {"schema_version"}
+            or type(overlay_config["schema_version"]) is not int
+            or overlay_config["schema_version"] not in {1, 2, 3, 4}
+        ):
             raise ValueError("unsupported geometry_overlay config")
         versions[GEOMETRY_OVERLAY_KEY] = GEOMETRY_OVERLAY_POLICY
     if body_policy_enabled:
         versions[BODY_STATE_KEY] = BODY_POLICY_VERSION
     signatures = {
-        f"simulator:{key}": _simulator_signature(key, version)
-        for key, version in versions.items()
+        f"simulator:{key}": _simulator_signature(key, version) for key, version in versions.items()
     }
     geometry = configs.get("facility_geometry", {})
     service_points = geometry.get("service_points", []) if isinstance(geometry, dict) else []
     if service_points:
         import hashlib
         import json
-        service_hash = hashlib.sha256(json.dumps(
-            service_points, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()).hexdigest()
+
+        service_hash = hashlib.sha256(
+            json.dumps(
+                service_points, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
         signatures["operator:facility_service_points"] = f"facility-service-points@1:{service_hash}"
-    if configs.get("simulator_extensions",{}).get("enabled",False) or "population_context" in configs or body_policy_enabled:
-        signatures["operator:autonomy_behavior"]="contextual-autonomy@2:stateless"
+    if (
+        configs.get("simulator_extensions", {}).get("enabled", False)
+        or "population_context" in configs
+        or body_policy_enabled
+    ):
+        signatures["operator:autonomy_behavior"] = "contextual-autonomy@2:stateless"
     if "zone_environment" in configs:
         from sheltersim.domain.environment import ScenarioZoneEnvironmentConfig
+
         environment = ScenarioZoneEnvironmentConfig.model_validate(configs["zone_environment"])
         signatures["operator:zone_environment"] = f"{environment.policy_version}@1:state1"
     if "facility_awareness" in configs:
@@ -215,9 +216,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         )
     overlay_config = configs.get("geometry_overlay", {})
     if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {2, 3, 4}:
-        signatures["operator:temporary_room_beds"] = (
-            f"{TEMPORARY_ROOM_BED_POLICY_VERSION}@1:state1"
-        )
+        signatures["operator:temporary_room_beds"] = f"{TEMPORARY_ROOM_BED_POLICY_VERSION}@1:state1"
     if isinstance(overlay_config, dict) and overlay_config.get("schema_version") in {3, 4}:
         signatures["operator:temporary_room_intake"] = (
             f"{TEMPORARY_ROOM_INTAKE_POLICY_VERSION}@1:state1"
@@ -226,9 +225,7 @@ def simulator_signatures(configs: dict[str, Any]) -> dict[str, str]:
         signatures["operator:installed_facility_placement"] = (
             f"{INSTALLED_FACILITY_PLACEMENT_POLICY_VERSION}@1:state1"
         )
-    signatures["operator:action_lifecycle"] = (
-        f"{ACTION_LIFECYCLE_POLICY_VERSION}@1:state1"
-    )
+    signatures["operator:action_lifecycle"] = f"{ACTION_LIFECYCLE_POLICY_VERSION}@1:state1"
     return signatures
 
 
@@ -237,7 +234,9 @@ def _simulator_signature(key: str, version: str) -> str:
         implementation_version = "1" if version == "continuous-duty-fatigue-v1" else "2"
     else:
         implementation_version = (
-            "3" if key == BODY_STATE_KEY else "2"
+            "3"
+            if key == BODY_STATE_KEY
+            else "2"
             if key in {BODY_STATE_KEY, STAFF_OPERATIONS_STATE_KEY, SOCIAL_NETWORK_STATE_KEY}
             else "1"
         )
@@ -249,8 +248,7 @@ def initialize_simulator_extensions(world: WorldState) -> None:
     """Create opt-in runtime namespaces before initial checkpoint capture."""
     enabled = world.model_configs.get("simulator_extensions", {}).get("enabled", False)
     body_policy_enabled = (
-        selected_models(world.model_configs)["psychology"]
-        in LIFE_STATE_PSYCHOLOGY_POLICIES
+        selected_models(world.model_configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
     )
     if (
         not enabled
@@ -302,14 +300,25 @@ def validate_simulator_extensions(
     Per-tick validation passes ``validate_event_history=False``: append-only histories
     are then checked only for records from the tick that just ended.
     """
-    required = {key.removeprefix("simulator:") for key in simulator_signatures(world.model_configs) if key.startswith("simulator:")}
-    if TEMPORARY_SPACES_STATE_KEY in world.model_state and TEMPORARY_SPACES_STATE_KEY not in required:
+    required = {
+        key.removeprefix("simulator:")
+        for key in simulator_signatures(world.model_configs)
+        if key.startswith("simulator:")
+    }
+    if (
+        TEMPORARY_SPACES_STATE_KEY in world.model_state
+        and TEMPORARY_SPACES_STATE_KEY not in required
+    ):
         raise ValueError("temporary_spaces_v1 requires an enabled, signed state contract")
     missing = required - set(world.model_state)
     if is_legacy_queue_checkpoint(world):
         missing.discard(FACILITY_QUEUES_STATE_KEY)
-    if FACILITY_QUEUES_LEGACY_MODE_KEY in world.model_state and not is_legacy_queue_checkpoint(world):
-        raise ValueError("legacy facility queue checkpoint marker is invalid or mixed with new state")
+    if FACILITY_QUEUES_LEGACY_MODE_KEY in world.model_state and not is_legacy_queue_checkpoint(
+        world
+    ):
+        raise ValueError(
+            "legacy facility queue checkpoint marker is invalid or mixed with new state"
+        )
     if missing:
         raise ValueError(f"required simulator state is missing: {sorted(missing)}")
     validate_agent_dynamics_state(world)
@@ -323,7 +332,10 @@ def validate_simulator_extensions(
     validate_movement_runtime_state(world)
     validate_geometry_overlay_state(world)
     validate_facility_queue_state(world)
-    if SHARED_OPERATIONS_KEY in world.model_state and "shared_operations" not in world.model_configs:
+    if (
+        SHARED_OPERATIONS_KEY in world.model_state
+        and "shared_operations" not in world.model_configs
+    ):
         raise ValueError("shared_operations_v1 requires its signed Scenario contract")
     validate_shared_operations_state(world, validate_event_history=validate_event_history)
 
@@ -338,11 +350,16 @@ def simulator_state_catalog() -> dict[str, Any]:
     """Installed built-in signatures; no world or mutable namespace is created."""
     return {
         MOVEMENT_STATE_KEY: {
-            "schema_version": 2, "implementation_id": MOVEMENT_POLICY_VERSION,
-            "implementation_version": "1", "entity_kind": "agent",
-            "enabled_by": "facility_geometry config", "source_id": "ASM-SPATIAL-MOVEMENT-V2",
-            "fields": {"positions": {"unit": "metre_2d"},
-                       "journeys": {"unit": "route_progress_with_room_waypoints"}},
+            "schema_version": 2,
+            "implementation_id": MOVEMENT_POLICY_VERSION,
+            "implementation_version": "1",
+            "entity_kind": "agent",
+            "enabled_by": "facility_geometry config",
+            "source_id": "ASM-SPATIAL-MOVEMENT-V2",
+            "fields": {
+                "positions": {"unit": "metre_2d"},
+                "journeys": {"unit": "route_progress_with_room_waypoints"},
+            },
             "external_validation": False,
         },
         FACILITY_QUEUES_STATE_KEY: {
@@ -360,33 +377,52 @@ def simulator_state_catalog() -> dict[str, Any]:
             "external_validation": False,
         },
         BODY_STATE_KEY: {
-            "schema_version": 1, "implementation_id": BODY_POLICY_VERSION,
-            "implementation_version": "3", "entity_kind": "agent",
+            "schema_version": 1,
+            "implementation_id": BODY_POLICY_VERSION,
+            "implementation_version": "3",
+            "entity_kind": "agent",
             "enabled_by": (
-                "policy_registry.psychology=life-state-feedback-v1 "
-                "or mean-reverting-life-state-v1"
+                "policy_registry.psychology=life-state-feedback-v1 or mean-reverting-life-state-v1"
             ),
             "source_id": "ASM-LIFE-STATE-FEEDBACK-V1",
-            "fields": {"sleep_debt_minutes": {"unit": "minute", "lower": 0, "upper": 1440},
-                **{key: {"unit": "normalized_0_1", "lower": 0, "upper": 1}
-                   for key in ("uncertainty", "reassurance", "discontent", "positive_affect",
-                               "negative_affect", "hygiene_need")}},
-            "history": "GET branch/history?kind=social", "retention_limit": 20000,
+            "fields": {
+                "sleep_debt_minutes": {"unit": "minute", "lower": 0, "upper": 1440},
+                **{
+                    key: {"unit": "normalized_0_1", "lower": 0, "upper": 1}
+                    for key in (
+                        "uncertainty",
+                        "reassurance",
+                        "discontent",
+                        "positive_affect",
+                        "negative_affect",
+                        "hygiene_need",
+                    )
+                },
+            },
+            "history": "GET branch/history?kind=social",
+            "retention_limit": 20000,
             "external_validation": False,
         },
         STAFF_OPERATIONS_STATE_KEY: {
-            "schema_version": 1, "implementation_id": STAFF_OPERATIONS_POLICY_VERSION,
-            "implementation_version": "2", "entity_kind": "staff",
+            "schema_version": 1,
+            "implementation_id": STAFF_OPERATIONS_POLICY_VERSION,
+            "implementation_version": "2",
+            "entity_kind": "staff",
             "enabled_by": "staff_operations config, simulator_extensions.enabled or life-state psychology",
             "source_id": "ASM-STAFF-OPERATIONS-V1",
-            "fields": {"operation": {"unit": "typed_task_record"},
-                       "sanitation": {"unit": "normalized_0_1", "lower": 0, "upper": 1}},
-            "history": "GET branch/history?kind=staff", "retention_limit": 20000,
+            "fields": {
+                "operation": {"unit": "typed_task_record"},
+                "sanitation": {"unit": "normalized_0_1", "lower": 0, "upper": 1},
+            },
+            "history": "GET branch/history?kind=staff",
+            "retention_limit": 20000,
             "external_validation": False,
         },
         POPULATION_LIFECYCLE_STATE_KEY: {
-            "schema_version": 1, "implementation_id": POPULATION_LIFECYCLE_POLICY_VERSION,
-            "implementation_version": "1", "entity_kind": "agent",
+            "schema_version": 1,
+            "implementation_id": POPULATION_LIFECYCLE_POLICY_VERSION,
+            "implementation_version": "1",
+            "entity_kind": "agent",
             "enabled_by": "population config or simulator_extensions.enabled",
             "source_id": "ASM-POPULATION-LIFECYCLE-V1",
             "fields": {
@@ -414,8 +450,10 @@ def simulator_state_catalog() -> dict[str, Any]:
             "external_validation": False,
         },
         GEOMETRY_OVERLAY_KEY: {
-            "schema_version": 1, "implementation_id": GEOMETRY_OVERLAY_POLICY,
-            "implementation_version": "1", "entity_kind": "system",
+            "schema_version": 1,
+            "implementation_id": GEOMETRY_OVERLAY_POLICY,
+            "implementation_version": "1",
+            "entity_kind": "system",
             "enabled_by": "geometry_overlay.schema_version=1, 2, 3 or 4",
             "source_id": "ASM-BOUNDED-RUNTIME-GEOMETRY-V1",
             "fields": {
@@ -442,11 +480,16 @@ def simulator_state_catalog() -> dict[str, Any]:
             "external_validation": False,
         },
         SHARED_OPERATIONS_KEY: {
-            "schema_version": 1, "implementation_id": SHARED_OPERATIONS_POLICY,
-            "implementation_version": "1", "entity_kind": "system",
+            "schema_version": 1,
+            "implementation_id": SHARED_OPERATIONS_POLICY,
+            "implementation_version": "1",
+            "entity_kind": "system",
             "enabled_by": "shared_operations.schema_version=1",
             "fields": {
-                "support_requests": {"unit": "typed_request_lifecycle", "identity": "synthetic_agent_id"},
+                "support_requests": {
+                    "unit": "typed_request_lifecycle",
+                    "identity": "synthetic_agent_id",
+                },
                 "history": {"unit": "applied_transition_receipt", "time_unit": "simulation_minute"},
             },
             "history_routes": {
@@ -472,4 +515,3 @@ def simulator_state_catalog() -> dict[str, Any]:
             "external_validation": False,
         },
     }
-

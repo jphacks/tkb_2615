@@ -137,14 +137,12 @@ def validate_population_dynamics_state(world: WorldState) -> None:
                 for related_id in related_ids
             )
         ):
-            raise ValueError("dynamic household context disagrees with generated profile provenance")
+            raise ValueError(
+                "dynamic household context disagrees with generated profile provenance"
+            )
     seen_pending: set[str] = set()
-    pending_context_fields = {
-        "member_index", "care_support_needs", "context_source_id"
-    }
-    approach_fields = {
-        "approach_route_id", "approach_started_minute", "approach_due_minute"
-    }
+    pending_context_fields = {"member_index", "care_support_needs", "context_source_id"}
+    approach_fields = {"approach_route_id", "approach_started_minute", "approach_due_minute"}
     pending_base_fields = {"profile", "traits", "zone_id", "created_minute", "event_id"}
     valid_pending_fields = {
         frozenset(pending_base_fields | context | approach | admission)
@@ -168,9 +166,10 @@ def validate_population_dynamics_state(world: WorldState) -> None:
                 "admission_zone_ids" in pending
                 and (
                     not isinstance(pending["admission_zone_ids"], list)
-                    or any(not isinstance(zone_id, str) for zone_id in pending["admission_zone_ids"])
-                    or len(pending["admission_zone_ids"])
-                    != len(set(pending["admission_zone_ids"]))
+                    or any(
+                        not isinstance(zone_id, str) for zone_id in pending["admission_zone_ids"]
+                    )
+                    or len(pending["admission_zone_ids"]) != len(set(pending["admission_zone_ids"]))
                     or not set(pending["admission_zone_ids"]) <= set(world.zones)
                 )
             )
@@ -181,20 +180,22 @@ def validate_population_dynamics_state(world: WorldState) -> None:
             or not 0 <= pending["member_index"] < MAX_ARRIVALS_PER_EVENT
             or not isinstance(pending["care_support_needs"], list)
             or any(not isinstance(item, str) for item in pending["care_support_needs"])
-            or len(pending["care_support_needs"])
-            != len(set(pending["care_support_needs"]))
+            or len(pending["care_support_needs"]) != len(set(pending["care_support_needs"]))
             or not isinstance(pending["context_source_id"], str)
         ):
             raise ValueError("population_dynamics_v1 pending context is invalid")
-        if pending_context_fields <= set(pending) and list(
-            profile_context.get(pending["profile"]["id"], {}).get(
-                "care_support_needs", ()
+        if (
+            pending_context_fields <= set(pending)
+            and list(
+                profile_context.get(pending["profile"]["id"], {}).get("care_support_needs", ())
             )
-        ) != pending["care_support_needs"]:
+            != pending["care_support_needs"]
+        ):
             raise ValueError("pending care context disagrees with its persisted profile context")
         if approach_fields <= set(pending):
             if (
-                pending["approach_route_id"] not in {
+                pending["approach_route_id"]
+                not in {
                     route.route_id
                     for route in FacilityGeometry.model_validate(
                         world.model_configs.get("facility_geometry", {})
@@ -229,7 +230,8 @@ def validate_population_dynamics_state(world: WorldState) -> None:
             completion_event_id = pending.get("approach_completion_event_id")
             if completed is None and pending["approach_due_minute"] < world.duration_minutes:
                 matching_events = [
-                    event for event in world.event_queue.pending()
+                    event
+                    for event in world.event_queue.pending()
                     if event.event_id == completion_event_id
                     and event.event_type == "population_approach_complete"
                 ]
@@ -238,22 +240,20 @@ def validate_population_dynamics_state(world: WorldState) -> None:
                 completion_event = matching_events[0]
                 if (
                     completion_event.due_minute != pending["approach_due_minute"]
-                    or completion_event.payload.get("agent_id")
-                    != pending["profile"]["id"]
-                    or completion_event.payload.get("route_id")
-                    != pending["approach_route_id"]
+                    or completion_event.payload.get("agent_id") != pending["profile"]["id"]
+                    or completion_event.payload.get("route_id") != pending["approach_route_id"]
                 ):
                     raise ValueError("pending arrival approach completion event disagrees")
             elif completed is None and completion_event_id is not None:
                 raise ValueError("out-of-horizon arrival approach has a completion event")
             elif completed is not None and completion_event_id is not None:
                 raise ValueError("completed arrival approach retains a pending event")
-            presence = world.model_state.get(PRESENCE_NAMESPACE, {}).get("people", {}).get(
-                pending["profile"]["id"], {}
+            presence = (
+                world.model_state.get(PRESENCE_NAMESPACE, {})
+                .get("people", {})
+                .get(pending["profile"]["id"], {})
             )
-            expected_presence_status = (
-                "approaching" if completed is None else "awaiting_admission"
-            )
+            expected_presence_status = "approaching" if completed is None else "awaiting_admission"
             if presence and presence.get("status") != expected_presence_status:
                 raise ValueError("arrival approach disagrees with population presence")
         elif "approach_completed_minute" in pending:
@@ -297,7 +297,8 @@ def queue_arrivals(
                 world.model_configs.get("facility_geometry", {})
             )
             approach_route = next(
-                item for item in geometry.arrival_approach_routes
+                item
+                for item in geometry.arrival_approach_routes
                 if item.route_id == approach_route_id
             )
         except (StopIteration, TypeError, ValueError) as exc:
@@ -308,16 +309,25 @@ def queue_arrivals(
             )
     overlay_config = world.model_configs.get("geometry_overlay", {})
     if admission_zone_ids and (
-        not isinstance(overlay_config, dict)
-        or overlay_config.get("schema_version") not in {3, 4}
+        not isinstance(overlay_config, dict) or overlay_config.get("schema_version") not in {3, 4}
     ):
         raise EventApplicationError(
             "alternate room admission requires geometry_overlay schema_version=3 or 4"
         )
-    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_ARRIVALS_PER_EVENT:
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or not 1 <= count <= MAX_ARRIVALS_PER_EVENT
+    ):
         raise EventApplicationError("population arrival count is outside its supported range")
-    if not isinstance(household_size, int) or isinstance(household_size, bool) or not 1 <= household_size <= 12:
-        raise EventApplicationError("population arrival household_size is outside its supported range")
+    if (
+        not isinstance(household_size, int)
+        or isinstance(household_size, bool)
+        or not 1 <= household_size <= 12
+    ):
+        raise EventApplicationError(
+            "population arrival household_size is outside its supported range"
+        )
     try:
         mobility_value = Mobility(mobility)
     except ValueError as exc:
@@ -328,14 +338,12 @@ def queue_arrivals(
         raise EventApplicationError("population arrival language is invalid") from exc
     try:
         context_overrides = tuple(
-            DynamicArrivalPersonContext.model_validate(item)
-            for item in person_context_overrides
+            DynamicArrivalPersonContext.model_validate(item) for item in person_context_overrides
         )
     except (TypeError, ValueError) as exc:
         raise EventApplicationError("population arrival person context is invalid") from exc
-    if (
-        len({item.member_index for item in context_overrides}) != len(context_overrides)
-        or any(item.member_index >= count for item in context_overrides)
+    if len({item.member_index for item in context_overrides}) != len(context_overrides) or any(
+        item.member_index >= count for item in context_overrides
     ):
         raise EventApplicationError("population arrival person context index is invalid")
     context_by_index = {item.member_index: item for item in context_overrides}
@@ -347,9 +355,11 @@ def queue_arrivals(
     known_ids = set(state["initial_agent_ids"]) | set(state["profile_traits"])
     if len(known_ids) + count > 10_000:
         raise EventApplicationError("population arrival exceeds the 10000-profile history bound")
-    reserved_ids = set(world.agents) | {
-        item["profile"]["id"] for item in state["pending_arrivals"]
-    } | set(state["profile_traits"])
+    reserved_ids = (
+        set(world.agents)
+        | {item["profile"]["id"] for item in state["pending_arrivals"]}
+        | set(state["profile_traits"])
+    )
     prepared: list[dict[str, Any]] = []
     event_digest = hashlib.sha256(event.event_id.encode("utf-8")).hexdigest()[:20]
     for index in range(count):
@@ -425,14 +435,10 @@ def queue_arrivals(
                 "traits": traits,
                 "member_index": index,
                 "care_support_needs": list(
-                    context_by_index[index].care_support_needs
-                    if index in context_by_index
-                    else ()
+                    context_by_index[index].care_support_needs if index in context_by_index else ()
                 ),
                 "context_source_id": (
-                    event.source_id
-                    if isinstance(event.source_id, str)
-                    else POPULATION_SOURCE_ID
+                    event.source_id if isinstance(event.source_id, str) else POPULATION_SOURCE_ID
                 ),
                 "zone_id": zone_id,
                 "admission_zone_ids": list(admission_zone_ids),
@@ -442,9 +448,7 @@ def queue_arrivals(
                     {
                         "approach_route_id": approach_route.route_id,
                         "approach_started_minute": event.due_minute,
-                        "approach_due_minute": (
-                            event.due_minute + approach_route.travel_minutes
-                        ),
+                        "approach_due_minute": (event.due_minute + approach_route.travel_minutes),
                     }
                     if approach_route is not None
                     else {}
@@ -452,9 +456,7 @@ def queue_arrivals(
             }
         )
         reserved_ids.add(agent_id)
-    state.setdefault("profile_context", {}).update(
-        _generated_arrival_context(prepared)
-    )
+    state.setdefault("profile_context", {}).update(_generated_arrival_context(prepared))
     admitted = 0
     for item in prepared:
         state["profile_traits"][item["profile"]["id"]] = item["traits"]
@@ -544,19 +546,15 @@ def _schedule_arrival_approach_completion(
                 "source_ids": list(route.source_ids),
                 "walking_speed_m_per_min": route.walking_speed_m_per_min,
                 "distance_m": route.distance_m,
-            }
+            },
         },
     )
     world.schedule_event(completion)
 
 
-def apply_arrival_approach_completion(
-    world: WorldState, event: ScheduledEvent
-) -> None:
+def apply_arrival_approach_completion(world: WorldState, event: ScheduledEvent) -> None:
     """Commit the APPLIED arrival at the entrance and retain its event-linked history."""
-    expected = {
-        "program_id", "effect_id", "agent_id", "arrival_event_id", "route_id", "zone_id"
-    }
+    expected = {"program_id", "effect_id", "agent_id", "arrival_event_id", "route_id", "zone_id"}
     if event.event_type != "population_approach_complete" or set(event.payload) != expected:
         raise EventApplicationError("arrival approach completion payload fields do not match")
     program_state = world.model_state.get("effect_program_v1", {})
@@ -569,13 +567,18 @@ def apply_arrival_approach_completion(
     ):
         raise EventApplicationError("arrival approach completion is outside its approved program")
     state = world.model_state.get(POPULATION_DYNAMICS_STATE_KEY)
-    pending = next(
-        (
-            item for item in state.get("pending_arrivals", [])
-            if item["profile"]["id"] == event.payload["agent_id"]
-        ),
-        None,
-    ) if isinstance(state, dict) else None
+    pending = (
+        next(
+            (
+                item
+                for item in state.get("pending_arrivals", [])
+                if item["profile"]["id"] == event.payload["agent_id"]
+            ),
+            None,
+        )
+        if isinstance(state, dict)
+        else None
+    )
     if (
         pending is None
         or pending.get("approach_completion_event_id") != event.event_id
@@ -588,7 +591,8 @@ def apply_arrival_approach_completion(
         raise EventApplicationError("arrival approach completion does not match pending arrival")
     route = next(
         (
-            item for item in FacilityGeometry.model_validate(
+            item
+            for item in FacilityGeometry.model_validate(
                 world.model_configs.get("facility_geometry", {})
             ).arrival_approach_routes
             if item.route_id == event.payload["route_id"]
@@ -616,13 +620,11 @@ def _generated_arrival_context(items: list[dict[str, Any]]) -> dict[str, dict[st
     for household_id, members in sorted(households.items()):
         members.sort(key=lambda item: item["profile"]["id"])
         adults = [
-            item["profile"]["id"] for item in members
-            if item["traits"]["household_role"] == "adult"
+            item["profile"]["id"] for item in members if item["traits"]["household_role"] == "adult"
         ]
         caregiver_id = adults[0] if adults else None
         dependents = [
-            item for item in members
-            if item["traits"]["household_role"] in {"child", "dependent"}
+            item for item in members if item["traits"]["household_role"] in {"child", "dependent"}
         ]
         care_for_ids = (
             tuple(sorted(item["profile"]["id"] for item in dependents))
@@ -632,22 +634,24 @@ def _generated_arrival_context(items: list[dict[str, Any]]) -> dict[str, dict[st
         for item in members:
             identity = item["profile"]["id"]
             role = item["traits"]["household_role"]
-            caregiver_ids = (caregiver_id,) if caregiver_id is not None and role in {
-                "child", "dependent"
-            } else ()
-            requires_review = (
-                role in {"child", "dependent"} or bool(care_for_ids)
-            )
-            reasons = (
-                ("synthetic_arrival_care_relationship_requires_review",)
-                if requires_review
+            caregiver_ids = (
+                (caregiver_id,)
+                if caregiver_id is not None and role in {"child", "dependent"}
                 else ()
             )
+            requires_review = role in {"child", "dependent"} or bool(care_for_ids)
+            reasons = (
+                ("synthetic_arrival_care_relationship_requires_review",) if requires_review else ()
+            )
             roles = (
-                ("caregiver",) if role == "adult" and identity == caregiver_id and care_for_ids
-                else ("child",) if role == "child"
-                else ("dependent",) if role == "dependent"
-                else ("alone",) if role == "alone"
+                ("caregiver",)
+                if role == "adult" and identity == caregiver_id and care_for_ids
+                else ("child",)
+                if role == "child"
+                else ("dependent",)
+                if role == "dependent"
+                else ("alone",)
+                if role == "alone"
                 else ()
             )
             context = PersonContext(
@@ -657,14 +661,18 @@ def _generated_arrival_context(items: list[dict[str, Any]]) -> dict[str, dict[st
                 requires_review=requires_review,
                 review_reasons=reasons,
                 roles=roles,
-                guardian_status=(
-                    "accompanied" if caregiver_ids else "unaccompanied"
-                ) if role == "child" else None,
+                guardian_status=("accompanied" if caregiver_ids else "unaccompanied")
+                if role == "child"
+                else None,
                 care_support_needs=tuple(item["care_support_needs"]),
-                source_ids=tuple(sorted({
-                    POPULATION_SOURCE_ID,
-                    item["context_source_id"],
-                })),
+                source_ids=tuple(
+                    sorted(
+                        {
+                            POPULATION_SOURCE_ID,
+                            item["context_source_id"],
+                        }
+                    )
+                ),
             )
             contexts[identity] = context.model_dump(
                 mode="json", exclude_defaults=True, exclude_none=True
@@ -703,18 +711,16 @@ def admit_pending_arrivals(world: WorldState, minute: int) -> tuple[str, ...]:
             remaining.append(item)
     state["pending_arrivals"] = remaining
     if admitted:
-        world.metric_state["population_arrival_count"] = (
-            world.metric_state.get("population_arrival_count", 0.0) + len(admitted)
-        )
+        world.metric_state["population_arrival_count"] = world.metric_state.get(
+            "population_arrival_count", 0.0
+        ) + len(admitted)
     world.metric_state["population_waiting_count"] = float(len(remaining))
     for record in state["arrivals"]:
         # This list contains individual admission receipts and event summaries.
         if "requested_count" not in record:
             continue
         waiting_ids = {
-            item["profile"]["id"]
-            for item in remaining
-            if item["event_id"] == record["event_id"]
+            item["profile"]["id"] for item in remaining if item["event_id"] == record["event_id"]
         }
         record["waiting_count"] = len(waiting_ids)
         record["admitted_count"] = record["requested_count"] - len(waiting_ids)
@@ -732,7 +738,11 @@ def queue_departures(
     """Remove a deterministic local set of residents, preserving stable departure records."""
     if zone_id not in world.zones:
         raise EventApplicationError("population departure references an unknown zone")
-    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_ARRIVALS_PER_EVENT:
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or not 1 <= count <= MAX_ARRIVALS_PER_EVENT
+    ):
         raise EventApplicationError("population departure count is outside its supported range")
     if not isinstance(include_initial, bool):
         raise EventApplicationError("population departure include_initial must be boolean")
@@ -766,9 +776,9 @@ def queue_departures(
         raise EventSuppressed("departure waits for the selected residents' active tasks")
     for agent_id in selected:
         _depart_agent(world, agent_id, event, state)
-    world.metric_state["population_departure_count"] = (
-        world.metric_state.get("population_departure_count", 0.0) + len(selected)
-    )
+    world.metric_state["population_departure_count"] = world.metric_state.get(
+        "population_departure_count", 0.0
+    ) + len(selected)
     world.metric_state["population_waiting_count"] = float(len(state["pending_arrivals"]))
     admit_pending_arrivals(world, world.minute_index)
     return len(selected)
@@ -809,8 +819,7 @@ def _depart_agent(
             item for item in resource_service["request_history"] if item["agent_id"] != agent_id
         ]
         resource_service["queue_stall_history"] = [
-            item for item in resource_service["queue_stall_history"]
-            if item["agent_id"] != agent_id
+            item for item in resource_service["queue_stall_history"] if item["agent_id"] != agent_id
         ]
         resource_service["stall_state"] = {
             facility_id: item
@@ -828,7 +837,8 @@ def _depart_agent(
         if isinstance(cooldowns, dict):
             cooldowns.pop(agent_id, None)
     world.support_requests = {
-        key: request for key, request in world.support_requests.items()
+        key: request
+        for key, request in world.support_requests.items()
         if request.agent_id != agent_id
     }
     remove_agent_dynamics(world, agent_id)
@@ -915,13 +925,15 @@ def _admit_profile(
                 minute=minute,
                 event_id=item["event_id"],
             )
-            world.model_state[MOVEMENT_STATE_KEY]["positions"][agent.id].update({
-                "zone_id": agent.zone_id,
-                "point": point.model_dump(mode="json"),
-                "edge_id": None,
-                "progress": 1.0,
-                "position_kind": "physical",
-            })
+            world.model_state[MOVEMENT_STATE_KEY]["positions"][agent.id].update(
+                {
+                    "zone_id": agent.zone_id,
+                    "point": point.model_dump(mode="json"),
+                    "edge_id": None,
+                    "progress": 1.0,
+                    "position_kind": "physical",
+                }
+            )
     elif room_id is not None:
         from sheltersim.domain.geometry_overlay import admit_to_temporary_room
 
@@ -939,8 +951,11 @@ def _admit_profile(
         minute,
         (
             "admitted"
-            if world.model_state.get(PRESENCE_NAMESPACE, {}).get("people", {})
-            .get(agent.id, {}).get("status") == "awaiting_admission"
+            if world.model_state.get(PRESENCE_NAMESPACE, {})
+            .get("people", {})
+            .get(agent.id, {})
+            .get("status")
+            == "awaiting_admission"
             else "arrived"
         ),
         agent.zone_id,
@@ -964,7 +979,8 @@ def _record_waiting_presence(world: WorldState, item: dict[str, Any]) -> None:
     if "approach_route_id" in item:
         geometry = FacilityGeometry.model_validate(world.model_configs["facility_geometry"])
         route = next(
-            route for route in geometry.arrival_approach_routes
+            route
+            for route in geometry.arrival_approach_routes
             if route.route_id == item["approach_route_id"]
         )
         route_sources = route.source_ids
@@ -977,8 +993,11 @@ def _record_waiting_presence(world: WorldState, item: dict[str, Any]) -> None:
         source_event_ids=(item["event_id"],),
     ).model_dump(mode="json")
     transition = PresenceTransition(
-        transition_id="presence-" + hashlib.sha256(
-            f"{item['event_id']}\0{agent_id}\0{('approaching' if 'approach_route_id' in item else 'waiting')}".encode("utf-8")
+        transition_id="presence-"
+        + hashlib.sha256(
+            f"{item['event_id']}\0{agent_id}\0{('approaching' if 'approach_route_id' in item else 'waiting')}".encode(
+                "utf-8"
+            )
         ).hexdigest()[:24],
         event_id=item["event_id"],
         agent_id=agent_id,
@@ -1008,7 +1027,8 @@ def _record_approach_completed(
     )
     raw["people"][agent_id] = record.model_dump(mode="json")
     transition = PresenceTransition(
-        transition_id="presence-" + hashlib.sha256(
+        transition_id="presence-"
+        + hashlib.sha256(
             f"{event.event_id}\0{agent_id}\0approach-completed".encode("utf-8")
         ).hexdigest()[:24],
         event_id=event.event_id,
@@ -1019,16 +1039,20 @@ def _record_approach_completed(
         to_zone_id=item["zone_id"],
         causation_id=event.causation_id,
         to_household_id=record.household_id,
-        source_ids=tuple(sorted({
-            POPULATION_SOURCE_ID,
-            *next(
-                route.source_ids
-                for route in FacilityGeometry.model_validate(
-                    world.model_configs["facility_geometry"]
-                ).arrival_approach_routes
-                if route.route_id == item["approach_route_id"]
-            ),
-        })),
+        source_ids=tuple(
+            sorted(
+                {
+                    POPULATION_SOURCE_ID,
+                    *next(
+                        route.source_ids
+                        for route in FacilityGeometry.model_validate(
+                            world.model_configs["facility_geometry"]
+                        ).arrival_approach_routes
+                        if route.route_id == item["approach_route_id"]
+                    ),
+                }
+            )
+        ),
     )
     raw["history"] = [*raw["history"], transition.model_dump(mode="json")][-20_000:]
 
@@ -1058,20 +1082,23 @@ def _record_presence_transition(
     if household is None and agent is not None:
         household = agent.profile.group_id
     status = "admitted" if agent is not None else "departed"
-    zone = zone_id or (agent.zone_id if agent is not None else previous.transition_zone_id if previous else None)
+    zone = zone_id or (
+        agent.zone_id if agent is not None else previous.transition_zone_id if previous else None
+    )
     record = PresenceRecord(
         agent_id=agent_id,
         household_id=household,
         status=status,
         since_minute=minute,
         transition_zone_id=zone,
-        source_event_ids=tuple(sorted(set((previous.source_event_ids if previous else ()) + (event_id,)))),
+        source_event_ids=tuple(
+            sorted(set((previous.source_event_ids if previous else ()) + (event_id,)))
+        ),
     )
     raw["people"][agent_id] = record.model_dump(mode="json")
     transition = PresenceTransition(
-        transition_id="presence-" + hashlib.sha256(
-            f"{event_id}\\0{agent_id}\\0{action}".encode("utf-8")
-        ).hexdigest()[:24],
+        transition_id="presence-"
+        + hashlib.sha256(f"{event_id}\\0{agent_id}\\0{action}".encode("utf-8")).hexdigest()[:24],
         event_id=event_id,
         agent_id=agent_id,
         minute=minute,

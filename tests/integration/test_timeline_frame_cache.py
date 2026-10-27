@@ -16,8 +16,9 @@ from sheltersim.storage.frames import FrameCache
 def reconstructed(timeline, branch_id, minute):
     reference = timeline.store.branch_reference("p", "r", branch_id)
     world = timeline.seek(branch_id, minute).world
-    return world_frame(world, run_id="r", branch_id=branch_id,
-                       computed_until=reference.computed_until)
+    return world_frame(
+        world, run_id="r", branch_id=branch_id, computed_until=reference.computed_until
+    )
 
 
 def files(store):

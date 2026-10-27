@@ -49,15 +49,26 @@ MAX_CATALOG_BYTES = 8 * 1024 * 1024
 class PlanAsset(RegionModel):
     source_id: str
     file_name: str = Field(min_length=1, max_length=240)
-    media_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp", "application/geo+json", "application/json"]
+    media_type: Literal[
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "application/geo+json",
+        "application/json",
+    ]
     byte_count: int = Field(gt=0, le=MAX_PLAN_BYTES)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     imported_at: datetime
     source_url: str | None = None
     status: Literal["metadata_only", "manual_trace_required", "vector_data"]
     notice: str
-    retention_state: Literal["transient_request_only", "external_asset_store_required"] = "external_asset_store_required"
-    rights_status: Literal["unknown", "public_license_review_required", "operator_permission_asserted"] = "unknown"
+    retention_state: Literal["transient_request_only", "external_asset_store_required"] = (
+        "external_asset_store_required"
+    )
+    rights_status: Literal[
+        "unknown", "public_license_review_required", "operator_permission_asserted"
+    ] = "unknown"
     use_restriction_note: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -169,10 +180,13 @@ class ManualPlanTrace(RegionModel):
     walls: tuple[ManualPlanWall, ...] = Field(default=(), max_length=1_000)
     openings: tuple[ManualPlanOpening, ...] = Field(default=(), max_length=500)
     obstacles: tuple[ManualPlanObstacle, ...] = Field(default=(), max_length=500)
-    equipment_footprints: tuple[ManualPlanEquipmentFootprint, ...] = Field(default=(), max_length=500)
+    equipment_footprints: tuple[ManualPlanEquipmentFootprint, ...] = Field(
+        default=(), max_length=500
+    )
     route_openings: tuple[ManualRouteOpening, ...] = Field(default=(), max_length=500)
     service_points: tuple[FacilityServicePoint, ...] = Field(
-        default=(), max_length=10_000,
+        default=(),
+        max_length=10_000,
         description="Authored service points use FacilityServicePoint.point_m in calibrated building metres.",
     )
     extraction_proposal_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -194,20 +208,38 @@ class ManualPlanTrace(RegionModel):
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"duplicate {field_name} ID in manual plan trace")
-        if self.plan_pixel_left + (self.plan_pixel_width or self.raster_pixel_width) > self.raster_pixel_width:
+        if (
+            self.plan_pixel_left + (self.plan_pixel_width or self.raster_pixel_width)
+            > self.raster_pixel_width
+        ):
             raise ValueError("calibrated plan crop exceeds raster width")
-        if self.plan_pixel_top + (self.plan_pixel_height or self.raster_pixel_height) > self.raster_pixel_height:
+        if (
+            self.plan_pixel_top + (self.plan_pixel_height or self.raster_pixel_height)
+            > self.raster_pixel_height
+        ):
             raise ValueError("calibrated plan crop exceeds raster height")
         wall_ids = {item.wall_id for item in self.walls}
         if any(item.wall_id not in wall_ids for item in self.openings):
             raise ValueError("every traced opening must reference a traced wall")
-        if any(item.opening_id not in {opening.opening_id for opening in self.openings} for item in self.route_openings):
+        if any(
+            item.opening_id not in {opening.opening_id for opening in self.openings}
+            for item in self.route_openings
+        ):
             raise ValueError("route openings must reference a traced opening")
-        if any(item.route_id not in {route.edge_id for route in self.routes} for item in self.route_openings):
+        if any(
+            item.route_id not in {route.edge_id for route in self.routes}
+            for item in self.route_openings
+        ):
             raise ValueError("route openings must reference a traced route")
-        if any(item.facility_id not in {facility.id for facility in self.facilities} for item in self.equipment_footprints):
+        if any(
+            item.facility_id not in {facility.id for facility in self.facilities}
+            for item in self.equipment_footprints
+        ):
             raise ValueError("equipment footprints must reference a traced facility")
-        if any(item.facility_id not in {facility.id for facility in self.facilities} for item in self.service_points):
+        if any(
+            item.facility_id not in {facility.id for facility in self.facilities}
+            for item in self.service_points
+        ):
             raise ValueError("service points must reference a traced facility")
         return self
 
@@ -218,11 +250,15 @@ class PlanFeatureProposal(RegionModel):
     feature_id: str
     asset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     page_index: int = Field(ge=0, le=10_000)
-    feature_kind: Literal["zone", "facility", "route", "wall", "opening", "obstacle", "service_point"]
+    feature_kind: Literal[
+        "zone", "facility", "route", "wall", "opening", "obstacle", "service_point"
+    ]
     geometry_kind: Literal["point", "line", "polygon"]
     coordinates_px: tuple[tuple[float, float], ...] = Field(min_length=1, max_length=128)
     attributes: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    extraction_method: Literal["vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"]
+    extraction_method: Literal[
+        "vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"
+    ]
     confidence: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     extraction_source_id: str = Field(min_length=1, max_length=64)
     review_status: Literal["pending", "accepted", "rejected"] = "pending"
@@ -253,7 +289,9 @@ class PlanFeatureProposal(RegionModel):
             raise ValueError("polygon extraction features require at least three coordinates")
         for point in self.coordinates_px:
             if len(point) != 2 or any(not math.isfinite(value) or value < 0 for value in point):
-                raise ValueError("extracted pixel coordinates must be finite non-negative x/y pairs")
+                raise ValueError(
+                    "extracted pixel coordinates must be finite non-negative x/y pairs"
+                )
         if len(self.attributes) > 40 or any(
             not key
             or len(key) > 80
@@ -266,7 +304,9 @@ class PlanFeatureProposal(RegionModel):
             len(point) != 2 or any(not math.isfinite(value) or value < 0 for value in point)
             for point in self.corrected_coordinates_px
         ):
-            raise ValueError("human corrected pixel coordinates must be finite non-negative x/y pairs")
+            raise ValueError(
+                "human corrected pixel coordinates must be finite non-negative x/y pairs"
+            )
         if self.corrected_attributes is not None and (
             len(self.corrected_attributes) > 40
             or any(
@@ -277,7 +317,9 @@ class PlanFeatureProposal(RegionModel):
                 for key, value in self.corrected_attributes.items()
             )
         ):
-            raise ValueError("human-corrected extraction attributes must be bounded finite JSON scalars")
+            raise ValueError(
+                "human-corrected extraction attributes must be bounded finite JSON scalars"
+            )
         if self.review_status == "pending" and (self.reviewed_by or self.reviewed_at):
             raise ValueError("pending extraction features cannot have a human reviewer")
         if self.review_status != "pending" and (not self.reviewed_by or self.reviewed_at is None):
@@ -290,7 +332,9 @@ class PlanFeatureProposal(RegionModel):
 class PlanExtractionProposal(RegionModel):
     schema_version: Literal[1] = 1
     asset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    extraction_method: Literal["vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"]
+    extraction_method: Literal[
+        "vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"
+    ]
     features: tuple[PlanFeatureProposal, ...] = Field(max_length=2_000)
     extraction_source_id: str = Field(min_length=1, max_length=64)
     created_at: datetime
@@ -304,7 +348,9 @@ class PlanExtractionProposal(RegionModel):
         if any(item.extraction_method != self.extraction_method for item in self.features):
             raise ValueError("plan extraction feature method must match the proposal method")
         if any(item.extraction_source_id != self.extraction_source_id for item in self.features):
-            raise ValueError("plan extraction features must reference the proposal's extraction source")
+            raise ValueError(
+                "plan extraction features must reference the proposal's extraction source"
+            )
         if len({item.feature_id for item in self.features}) != len(self.features):
             raise ValueError("plan extraction feature IDs must be unique")
         if self.raster_size_px is not None:
@@ -314,7 +360,9 @@ class PlanExtractionProposal(RegionModel):
             for feature in self.features:
                 points = feature.coordinates_px + (feature.corrected_coordinates_px or ())
                 if any(x > width or y > height for x, y in points):
-                    raise ValueError("extracted or corrected coordinates lie outside the declared page")
+                    raise ValueError(
+                        "extracted or corrected coordinates lie outside the declared page"
+                    )
         if self.created_at.tzinfo is None:
             raise ValueError("plan extraction proposal timestamp must include a timezone")
         return self
@@ -325,7 +373,9 @@ class PlanFeatureReview(RegionModel):
     decision: Literal["accepted", "rejected"]
     reviewer_id: str = Field(min_length=1, max_length=120)
     note: str | None = Field(default=None, max_length=500)
-    corrected_coordinates_px: tuple[tuple[float, float], ...] | None = Field(default=None, max_length=128)
+    corrected_coordinates_px: tuple[tuple[float, float], ...] | None = Field(
+        default=None, max_length=128
+    )
     corrected_attributes: dict[str, str | int | float | bool | None] | None = None
     reviewed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -386,16 +436,25 @@ class PlanSourceProvenance(RegionModel):
     @model_validator(mode="after")
     def calibration_is_consistent(self) -> PlanSourceProvenance:
         if (self.raster_size_px is None) != (self.pixel_to_local_m_transform is None):
-            raise ValueError("raster dimensions and pixel-to-metre transform must be supplied together")
+            raise ValueError(
+                "raster dimensions and pixel-to-metre transform must be supplied together"
+            )
         if self.raster_size_px is not None and any(
-            type(value) is not int or not 1 <= value <= 30_000
-            for value in self.raster_size_px
+            type(value) is not int or not 1 <= value <= 30_000 for value in self.raster_size_px
         ):
             raise ValueError("source raster dimensions must be positive bounded pixel counts")
         if self.pixel_to_local_m_transform is not None:
             a, b, c, d, e, f = self.pixel_to_local_m_transform
-            if any(not math.isfinite(value) for value in (a, b, c, d, e, f)) or a <= 0 or d <= 0 or b != 0 or c != 0:
-                raise ValueError("pixel-to-metre transform must be finite, axis-aligned, and positively scaled")
+            if (
+                any(not math.isfinite(value) for value in (a, b, c, d, e, f))
+                or a <= 0
+                or d <= 0
+                or b != 0
+                or c != 0
+            ):
+                raise ValueError(
+                    "pixel-to-metre transform must be finite, axis-aligned, and positively scaled"
+                )
         return self
 
 
@@ -415,23 +474,34 @@ class ImportedPlanGeometry(RegionModel):
         provenance = self.source_provenance
         if provenance is not None:
             if provenance.source_asset_sha256 != self.asset.sha256:
-                raise ValueError("geometry coordinate provenance must reference its exact source Asset")
-            if provenance.source_page_index is not None and self.asset.media_type != "application/pdf":
+                raise ValueError(
+                    "geometry coordinate provenance must reference its exact source Asset"
+                )
+            if (
+                provenance.source_page_index is not None
+                and self.asset.media_type != "application/pdf"
+            ):
                 if provenance.source_page_index != 0:
                     raise ValueError("raster image geometry uses source page index zero")
             if provenance.raster_asset_sha256 is not None and provenance.raster_size_px is None:
                 raise ValueError("a derived raster hash requires its declared pixel dimensions")
             if self.extraction_proposal is not None:
-                pages = {item.page_index for item in accepted_plan_features(self.extraction_proposal)}
+                pages = {
+                    item.page_index for item in accepted_plan_features(self.extraction_proposal)
+                }
                 if pages and provenance.source_page_index not in pages:
-                    raise ValueError("geometry page provenance differs from its reviewed extraction page")
+                    raise ValueError(
+                        "geometry page provenance differs from its reviewed extraction page"
+                    )
         return self
 
 
 def create_plan_extraction_proposal(
     asset: PlanAsset,
     *,
-    extraction_method: Literal["vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"],
+    extraction_method: Literal[
+        "vision_model", "pdf_vector", "ocr", "operator_trace", "raster_heuristic"
+    ],
     extraction_source_id: str,
     features: tuple[PlanFeatureProposal, ...],
     raster_size_px: tuple[int, int] | None = None,
@@ -439,7 +509,10 @@ def create_plan_extraction_proposal(
 ) -> PlanExtractionProposal:
     """Bind externally extracted raster/vector suggestions to the exact uploaded bytes."""
     if asset.status != "manual_trace_required" and asset.media_type not in {
-        "application/pdf", "image/png", "image/jpeg", "image/webp"
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
     }:
         raise ValueError("reviewable extraction proposals require a PDF or image plan asset")
     if any(item.asset_sha256 != asset.sha256 for item in features):
@@ -475,7 +548,9 @@ def review_plan_extraction(
             updated.append(feature)
             continue
         if feature.review_status != "pending":
-            raise ValueError("a reviewed plan feature cannot be reviewed again without creating a new extraction proposal")
+            raise ValueError(
+                "a reviewed plan feature cannot be reviewed again without creating a new extraction proposal"
+            )
         corrected = review.corrected_coordinates_px
         if corrected is not None and proposal.raster_size_px is not None:
             width, height = proposal.raster_size_px
@@ -498,7 +573,7 @@ def review_plan_extraction(
                     "reviewed_at": review.reviewed_at,
                     "review_note": review.note,
                     "corrected_coordinates_px": corrected,
-                "corrected_attributes": review.corrected_attributes,
+                    "corrected_attributes": review.corrected_attributes,
                 }
             )
         )
@@ -543,16 +618,28 @@ def manual_trace_from_reviewed_features(
     def attributes(feature: PlanFeatureProposal) -> dict[str, Any]:
         return feature.attributes | (feature.corrected_attributes or {})
 
-    def required(feature: PlanFeatureProposal, name: str, value_type: type | tuple[type, ...]) -> Any:
+    def required(
+        feature: PlanFeatureProposal, name: str, value_type: type | tuple[type, ...]
+    ) -> Any:
         value = attributes(feature).get(name)
         if value_type is int:
             if not isinstance(value, int) or isinstance(value, bool):
-                raise ValueError(f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires integer {name!r}")
+                raise ValueError(
+                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires integer {name!r}"
+                )
         elif value_type in {float, (int, float)}:
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
-                raise ValueError(f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires numeric {name!r}")
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+            ):
+                raise ValueError(
+                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires numeric {name!r}"
+                )
         elif not isinstance(value, value_type):
-            raise ValueError(f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires {name!r}")
+            raise ValueError(
+                f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires {name!r}"
+            )
         return value
 
     zones: list[ManualPlanZone] = []
@@ -718,7 +805,9 @@ def inspect_plan_upload(
     media_type: str,
     content: bytes,
     source_url: str | None = None,
-    rights_status: Literal["unknown", "public_license_review_required", "operator_permission_asserted"] = "unknown",
+    rights_status: Literal[
+        "unknown", "public_license_review_required", "operator_permission_asserted"
+    ] = "unknown",
     use_restriction_note: str | None = None,
 ) -> PlanAsset:
     """Record evidence for a user-selected plan; raster bytes remain in the Asset store."""
@@ -819,14 +908,18 @@ def import_municipal_shelter_csv(
                 area_m2=_float_cell(row, mapping.area_column),
                 supported_hazards=tuple(
                     part.strip()
-                    for part in (_cell(row, mapping.hazards_column) or "").replace("、", ",").split(",")
+                    for part in (_cell(row, mapping.hazards_column) or "")
+                    .replace("、", ",")
+                    .split(",")
                     if part.strip()
                 ),
                 source_id=source_id,
                 source_kind="municipal",
                 freshness="unknown",
                 verified_by_user=False,
-                notes=("Imported from the operator-supplied file; confirm current status with the municipality.",),
+                notes=(
+                    "Imported from the operator-supplied file; confirm current status with the municipality.",
+                ),
             )
         )
     return source, tuple(records)
@@ -870,7 +963,9 @@ def import_municipal_plan_csv(
         raise ValueError("municipal plan table must be non-empty and no larger than 8 MiB")
     if not source_url.startswith("https://"):
         raise ValueError("municipal plan citation must use HTTPS")
-    reader = csv.DictReader(io.StringIO(content.decode(mapping.encoding)), delimiter=mapping.delimiter)
+    reader = csv.DictReader(
+        io.StringIO(content.decode(mapping.encoding)), delimiter=mapping.delimiter
+    )
     required_columns = (
         mapping.metric_column,
         mapping.value_column,
@@ -879,7 +974,10 @@ def import_municipal_plan_csv(
         mapping.period_column,
         mapping.applicability_column,
     )
-    columns = (*required_columns, *((mapping.municipality_code_column,) if mapping.municipality_code_column else ()))
+    columns = (
+        *required_columns,
+        *((mapping.municipality_code_column,) if mapping.municipality_code_column else ()),
+    )
     if not reader.fieldnames or any(column not in reader.fieldnames for column in columns):
         raise ValueError("every mapped municipal plan column must exist in the uploaded table")
     if len(columns) != len(set(columns)):
@@ -918,7 +1016,9 @@ def import_municipal_plan_csv(
         period = _cell(row, mapping.period_column)
         applicability = _cell(row, mapping.applicability_column)
         if not all((unit, geographic_scope, period, applicability)):
-            raise ValueError(f"municipal plan row {row_number} must include unit, scope, period, and applicability")
+            raise ValueError(
+                f"municipal plan row {row_number} must include unit, scope, period, and applicability"
+            )
         observations.append(
             MunicipalPlanObservation(
                 row_number=row_number,
@@ -944,14 +1044,21 @@ def attach_municipal_plan_data(
     """Attach mapped plan facts while keeping their pending-review status visible."""
     if source.source_kind != "operator":
         raise ValueError("operator supplied municipal plan imports must retain operator provenance")
-    if any(item.source_id != source.id or item.content_sha256 != source.content_sha256 for item in observations):
-        raise ValueError("municipal plan observations must reference the supplied source hash and ID")
+    if any(
+        item.source_id != source.id or item.content_sha256 != source.content_sha256
+        for item in observations
+    ):
+        raise ValueError(
+            "municipal plan observations must reference the supplied source hash and ID"
+        )
     selected_code = research.request.municipality_code
     if selected_code is not None and any(
         item.municipality_code is not None and item.municipality_code != selected_code
         for item in observations
     ):
-        raise ValueError("municipal plan rows include a municipality code different from the selected research request")
+        raise ValueError(
+            "municipal plan rows include a municipality code different from the selected research request"
+        )
     if any(item.source_id == source.id for item in research.municipal_plan_observations):
         raise ValueError("the same municipal plan source cannot be attached more than once")
     sources = {item.id: item for item in research.sources}
@@ -961,7 +1068,10 @@ def attach_municipal_plan_data(
         | {
             "sources": tuple(sources[key] for key in sorted(sources)),
             "municipal_plan_observations": (*research.municipal_plan_observations, *observations),
-            "warnings": (*research.warnings, "取り込んだ自治体計画値は入力者による列対応結果です。出典・単位・期間・地理的適用範囲を確認するまで実測・公式値として扱っていません。"),
+            "warnings": (
+                *research.warnings,
+                "取り込んだ自治体計画値は入力者による列対応結果です。出典・単位・期間・地理的適用範囲を確認するまで実測・公式値として扱っていません。",
+            ),
         }
     )
 
@@ -981,12 +1091,16 @@ def trace_uploaded_plan(
         raise ValueError("image plan trace must use source page index zero")
     if reviewed_proposal is not None:
         if reviewed_proposal.asset_sha256 != asset.sha256:
-            raise ValueError("human-reviewed extraction proposal does not match the uploaded plan hash")
+            raise ValueError(
+                "human-reviewed extraction proposal does not match the uploaded plan hash"
+            )
         accepted_ids = {item.feature_id for item in accepted_plan_features(reviewed_proposal)}
         if trace.extraction_proposal_sha256 != reviewed_proposal.asset_sha256:
             raise ValueError("manual trace is not bound to its reviewed extraction proposal")
         if set(trace.reviewed_feature_ids) != accepted_ids:
-            raise ValueError("manual trace must map every human-accepted extraction feature exactly once")
+            raise ValueError(
+                "manual trace must map every human-accepted extraction feature exactly once"
+            )
         reviewed_pages = {item.page_index for item in accepted_plan_features(reviewed_proposal)}
         if reviewed_pages and trace.source_page_index not in reviewed_pages:
             raise ValueError("manual trace page must match its human-reviewed extraction page")
@@ -1001,7 +1115,10 @@ def trace_uploaded_plan(
         source_page_index=trace.source_page_index,
         raster_size_px=(trace.raster_pixel_width, trace.raster_pixel_height),
         pixel_to_local_m_transform=(
-            sx, 0.0, 0.0, sy,
+            sx,
+            0.0,
+            0.0,
+            sy,
             -trace.plan_pixel_left * sx,
             -trace.plan_pixel_top * sy,
         ),
@@ -1010,12 +1127,7 @@ def trace_uploaded_plan(
     def point(px: float, py: float) -> Point2D:
         right = trace.plan_pixel_left + crop_width
         bottom = trace.plan_pixel_top + crop_height
-        if (
-            px < trace.plan_pixel_left
-            or py < trace.plan_pixel_top
-            or px > right
-            or py > bottom
-        ):
+        if px < trace.plan_pixel_left or py < trace.plan_pixel_top or px > right or py > bottom:
             raise ValueError("trace point lies outside the calibrated plan crop")
         return Point2D(x=(px - trace.plan_pixel_left) * sx, y=(py - trace.plan_pixel_top) * sy)
 
@@ -1034,9 +1146,7 @@ def trace_uploaded_plan(
                 source_ids=(asset.source_id,),
             )
         )
-        zones.append(
-            ZoneSpec(id=item.zone_id, name=item.name, capacity=None)
-        )
+        zones.append(ZoneSpec(id=item.zone_id, name=item.name, capacity=None))
     _validate_zone_topology(tuple(item.polygon for item in physical_zones))
     facility_specs = tuple(
         FacilitySpec(
@@ -1108,10 +1218,20 @@ def trace_uploaded_plan(
             item.polygon for item in physical_zones if item.zone_id == facility.zone_id
         )
         if not all(_point_in_or_on_polygon(vertex, zone_polygon) for vertex in footprint.polygon):
-            raise ValueError(f"equipment footprint {footprint.facility_id!r} lies outside its assigned zone")
+            raise ValueError(
+                f"equipment footprint {footprint.facility_id!r} lies outside its assigned zone"
+            )
         if not _point_in_or_on_polygon(facility_points[footprint.facility_id], footprint.polygon):
-            raise ValueError(f"equipment footprint {footprint.facility_id!r} does not contain its facility point")
-    if trace.walls or trace.openings or trace.obstacles or trace.route_openings or equipment_footprint_values:
+            raise ValueError(
+                f"equipment footprint {footprint.facility_id!r} does not contain its facility point"
+            )
+    if (
+        trace.walls
+        or trace.openings
+        or trace.obstacles
+        or trace.route_openings
+        or equipment_footprint_values
+    ):
         wall_values = tuple(
             FacilityWall(
                 wall_id=item.wall_id,
@@ -1162,7 +1282,9 @@ def trace_uploaded_plan(
     validate_editable_routes(
         routes,
         editable_geometry
-        or EditableFacilityGeometry(width_m=trace.building_width_m, height_m=trace.building_height_m),
+        or EditableFacilityGeometry(
+            width_m=trace.building_width_m, height_m=trace.building_height_m
+        ),
         physical_zones=tuple(physical_zones),
     )
     if {item.zone_id for item in physical_zones} != {item.id for item in zones}:
@@ -1176,7 +1298,9 @@ def trace_uploaded_plan(
         if facility.zone_id not in zone_polygon_by_id or not _point_in_or_on_polygon(
             facility_points[facility.id], zone_polygon_by_id[facility.zone_id]
         ):
-            raise ValueError(f"facility {facility.id!r} point lies outside its assigned traced zone")
+            raise ValueError(
+                f"facility {facility.id!r} point lies outside its assigned traced zone"
+            )
     route_by_id = {item.edge_id: item for item in routes}
     for edge in zone_edges:
         route = route_by_id[edge.id]
@@ -1185,7 +1309,10 @@ def trace_uploaded_plan(
         if not _point_in_or_on_polygon(route.points[-1], zone_polygon_by_id[edge.to_zone_id]):
             raise ValueError(f"route {edge.id!r} does not end inside its to-zone")
     _validate_imported_geometry(
-        tuple(zones), tuple(zone_edges), facility_specs, geometry,
+        tuple(zones),
+        tuple(zone_edges),
+        facility_specs,
+        geometry,
         editable_geometry=editable_geometry,
     )
     return ImportedPlanGeometry(
@@ -1202,7 +1329,9 @@ def trace_uploaded_plan(
             f"Original upload SHA-256: {asset.sha256}",
             f"Trace operator: {trace.operator_id or 'unspecified'}",
             *(
-                ("Extraction confidence is proposal evidence only; accepted/rejected status and pixel corrections were supplied by human review.",)
+                (
+                    "Extraction confidence is proposal evidence only; accepted/rejected status and pixel corrections were supplied by human review.",
+                )
                 if reviewed_proposal is not None
                 else ()
             ),
@@ -1248,8 +1377,7 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
     geometry_data["source_kind"] = "operator"
     geometry_data["source_ids"] = [asset.source_id]
     geometry_data["zones"] = [
-        dict(zone, source_ids=[asset.source_id])
-        for zone in geometry_data.get("zones", ())
+        dict(zone, source_ids=[asset.source_id]) for zone in geometry_data.get("zones", ())
     ]
     geometry = FacilityGeometry.model_validate(geometry_data)
     editable_geometry = None
@@ -1275,7 +1403,8 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
     geometry = with_legacy_service_points(geometry, facility_values)
     validate_editable_routes(
         geometry.routes,
-        editable_geometry or EditableFacilityGeometry(width_m=geometry.width_m, height_m=geometry.height_m),
+        editable_geometry
+        or EditableFacilityGeometry(width_m=geometry.width_m, height_m=geometry.height_m),
         physical_zones=geometry.zones,
     )
     if {item.zone_id for item in geometry.zones} != {item.id for item in zone_values}:
@@ -1286,7 +1415,10 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
         raise ValueError("vector plan must define each scenario edge route exactly once")
     _validate_zone_topology(tuple(item.polygon for item in geometry.zones))
     _validate_imported_geometry(
-        zone_values, edge_values, facility_values, geometry,
+        zone_values,
+        edge_values,
+        facility_values,
+        geometry,
         editable_geometry=editable_geometry,
     )
     return ImportedPlanGeometry(
@@ -1314,7 +1446,11 @@ def _validate_imported_geometry(
     zone_ids = {item.id for item in zones}
     facility_ids = {item.id for item in facilities}
     edge_ids = {item.id for item in edges}
-    if len(zone_ids) != len(zones) or len(facility_ids) != len(facilities) or len(edge_ids) != len(edges):
+    if (
+        len(zone_ids) != len(zones)
+        or len(facility_ids) != len(facilities)
+        or len(edge_ids) != len(edges)
+    ):
         raise ValueError("vector plan scenario IDs must be unique")
     if {item.zone_id for item in geometry.zones} != zone_ids:
         raise ValueError("vector plan geometry must position every scenario zone exactly once")
@@ -1356,9 +1492,7 @@ def _validate_imported_geometry(
     reachable = {"sleeping"}
     while True:
         newly_reachable = {
-            edge.to_zone_id
-            for edge in edges
-            if not edge.closed and edge.from_zone_id in reachable
+            edge.to_zone_id for edge in edges if not edge.closed and edge.from_zone_id in reachable
         }
         updated = reachable | newly_reachable
         if updated == reachable:
@@ -1367,18 +1501,14 @@ def _validate_imported_geometry(
     returnable = {"sleeping"}
     while True:
         newly_returnable = {
-            edge.from_zone_id
-            for edge in edges
-            if not edge.closed and edge.to_zone_id in returnable
+            edge.from_zone_id for edge in edges if not edge.closed and edge.to_zone_id in returnable
         }
         updated = returnable | newly_returnable
         if updated == returnable:
             break
         returnable = updated
     service_zones = {facility.zone_id for facility in facilities}
-    unreachable_services = sorted(
-        (service_zones - reachable) | (service_zones - returnable)
-    )
+    unreachable_services = sorted((service_zones - reachable) | (service_zones - returnable))
     if unreachable_services:
         raise ValueError(
             "vector plan has service facilities without an open round trip from the sleeping zone: "
@@ -1398,10 +1528,18 @@ def revise_imported_plan_geometry(
     This function returns a new value and never mutates the source geometry asset.
     The caller can preview and approve the returned revision under a new geometry ID.
     """
-    imported = imported if isinstance(imported, ImportedPlanGeometry) else ImportedPlanGeometry.model_validate(imported)
+    imported = (
+        imported
+        if isinstance(imported, ImportedPlanGeometry)
+        else ImportedPlanGeometry.model_validate(imported)
+    )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", edit_source_id):
         raise ValueError("plan correction source ID must be a stable identifier")
-    candidate = geometry if isinstance(geometry, FacilityGeometry) else FacilityGeometry.model_validate(geometry)
+    candidate = (
+        geometry
+        if isinstance(geometry, FacilityGeometry)
+        else FacilityGeometry.model_validate(geometry)
+    )
     if editable_geometry is None:
         editable = imported.editable_geometry or EditableFacilityGeometry(
             width_m=candidate.width_m, height_m=candidate.height_m
@@ -1418,7 +1556,11 @@ def revise_imported_plan_geometry(
                 "source_kind": "operator",
                 "source_ids": tuple(sorted(set(candidate.source_ids) | {edit_source_id})),
                 "zones": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate.zones
                 ),
             }
@@ -1426,15 +1568,19 @@ def revise_imported_plan_geometry(
         editable = editable.model_copy(
             update={
                 field_name: tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in getattr(editable, field_name)
                 )
                 for field_name in ("walls", "openings", "obstacles", "equipment_footprints")
             }
         )
-    if not math.isclose(candidate.width_m, editable.width_m, rel_tol=0, abs_tol=1e-9) or not math.isclose(
-        candidate.height_m, editable.height_m, rel_tol=0, abs_tol=1e-9
-    ):
+    if not math.isclose(
+        candidate.width_m, editable.width_m, rel_tol=0, abs_tol=1e-9
+    ) or not math.isclose(candidate.height_m, editable.height_m, rel_tol=0, abs_tol=1e-9):
         raise ValueError("walkable and editable plan geometry must use the same metric dimensions")
     validate_editable_routes(candidate.routes, editable, physical_zones=candidate.zones)
     _validate_imported_geometry(
@@ -1447,7 +1593,10 @@ def revise_imported_plan_geometry(
     notes = imported.notes
     provenance = imported.source_provenance
     if changed:
-        notes = (*notes, f"Operator geometry revision source: {edit_source_id}; original imported geometry remains unchanged.")
+        notes = (
+            *notes,
+            f"Operator geometry revision source: {edit_source_id}; original imported geometry remains unchanged.",
+        )
         if provenance is not None and provenance.pixel_to_local_m_transform is not None:
             provenance = provenance.model_copy(update={"transform_scope": "source_trace_only"})
     return imported.model_copy(
@@ -1486,9 +1635,7 @@ def _int_cell(row: dict[str, str], column: str | None) -> int | None:
 
 def _polygon_area(polygon: tuple[Point2D, ...]) -> float:
     points = [(item.x, item.y) for item in polygon]
-    return abs(
-        sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1]))
-    ) / 2
+    return abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:] + points[:1]))) / 2
 
 
 def _import_metric_feature_collection(
@@ -1526,7 +1673,9 @@ def _import_metric_feature_collection(
             if not isinstance(coordinates, list) or not coordinates:
                 raise ValueError("zone Polygon requires an exterior ring")
             if len(coordinates) != 1:
-                raise ValueError("zone Polygon holes are unsupported; import an exterior-only outline")
+                raise ValueError(
+                    "zone Polygon holes are unsupported; import an exterior-only outline"
+                )
             ring = coordinates[0]
             if not isinstance(ring, list):
                 raise ValueError("zone Polygon exterior ring must be an array")
@@ -1545,7 +1694,12 @@ def _import_metric_feature_collection(
                 )
             )
             physical_zones.append(
-                PhysicalZone(zone_id=zone_id, polygon=polygon, usable_area_m2=area, source_ids=(asset.source_id,))
+                PhysicalZone(
+                    zone_id=zone_id,
+                    polygon=polygon,
+                    usable_area_m2=area,
+                    source_ids=(asset.source_id,),
+                )
             )
         elif feature_type == "facility" and geometry.get("type") == "Point":
             facility_id = str(properties.get("id") or "")
@@ -1599,9 +1753,7 @@ def _import_metric_feature_collection(
             )
             opening_id = properties.get("opening_id")
             if opening_id is not None:
-                route_openings.append(
-                    RouteOpeningUse(route_id=edge_id, opening_id=str(opening_id))
-                )
+                route_openings.append(RouteOpeningUse(route_id=edge_id, opening_id=str(opening_id)))
         elif feature_type == "wall" and geometry.get("type") == "LineString":
             points = tuple(_geojson_point(item) for item in coordinates)
             if len(points) != 2:
@@ -1679,7 +1831,10 @@ def _import_metric_feature_collection(
             tuple(physical_routes), editable_geometry, physical_zones=facility_geometry.zones
         )
     _validate_imported_geometry(
-        tuple(zones), tuple(edges), tuple(facilities), facility_geometry,
+        tuple(zones),
+        tuple(edges),
+        tuple(facilities),
+        facility_geometry,
         editable_geometry=editable_geometry,
     )
     if {item.zone_id for item in physical_zones} != {item.id for item in zones}:
@@ -1695,8 +1850,7 @@ def _import_metric_feature_collection(
         raise ValueError("GeoJSON facility references an unknown zone")
     validate_editable_routes(
         tuple(physical_routes),
-        editable_geometry
-        or EditableFacilityGeometry(width_m=width_m, height_m=height_m),
+        editable_geometry or EditableFacilityGeometry(width_m=width_m, height_m=height_m),
         physical_zones=tuple(physical_zones),
     )
     zone_polygon_by_id = {item.zone_id: item.polygon for item in physical_zones}
@@ -1767,9 +1921,7 @@ def _validate_zone_topology(polygons: tuple[tuple[Point2D, ...], ...]) -> None:
             first_segments = tuple(zip(first, first[1:] + first[:1]))
             second_segments = tuple(zip(second, second[1:] + second[:1]))
             if any(
-                _segments_cross(
-                    (a.x, a.y), (b.x, b.y), (c.x, c.y), (d.x, d.y)
-                )
+                _segments_cross((a.x, a.y), (b.x, b.y), (c.x, c.y), (d.x, d.y))
                 for (a, b) in first_segments
                 for (c, d) in second_segments
             ):
@@ -1792,9 +1944,7 @@ def _validate_zone_topology(polygons: tuple[tuple[Point2D, ...], ...]) -> None:
                 raise ValueError("traced physical zone interiors overlap")
 
 
-def _polygon_interior_samples(
-    polygon: tuple[Point2D, ...]
-) -> tuple[Point2D, ...]:
+def _polygon_interior_samples(polygon: tuple[Point2D, ...]) -> tuple[Point2D, ...]:
     """Sample just inside each edge to catch overlapping collinear boundaries."""
     coordinates = tuple((point.x, point.y) for point in polygon)
     signed_area_twice = sum(
@@ -1825,9 +1975,7 @@ def _polygon_interior_samples(
                 y=(first.y + second.y) / 2 + inward_y * offset,
             )
         )
-    return tuple(
-        sample for sample in samples if _point_strictly_inside(sample, polygon)
-    )
+    return tuple(sample for sample in samples if _point_strictly_inside(sample, polygon))
 
 
 def _point_inside(point: Point2D, polygon: tuple[Point2D, ...]) -> bool:
@@ -1850,9 +1998,9 @@ def _point_strictly_inside(point: Point2D, polygon: tuple[Point2D, ...]) -> bool
 
 def _point_on_polygon(point: Point2D, polygon: tuple[Point2D, ...]) -> bool:
     for first, second in zip(polygon, polygon[1:] + polygon[:1]):
-        cross = (point.x - first.x) * (second.y - first.y) - (
-            point.y - first.y
-        ) * (second.x - first.x)
+        cross = (point.x - first.x) * (second.y - first.y) - (point.y - first.y) * (
+            second.x - first.x
+        )
         within = (
             min(first.x, second.x) - 1e-9 <= point.x <= max(first.x, second.x) + 1e-9
             and min(first.y, second.y) - 1e-9 <= point.y <= max(first.y, second.y) + 1e-9
@@ -1884,5 +2032,3 @@ def _segments_cross(
     crosses_first = o1 > 1e-9 and o2 < -1e-9 or o1 < -1e-9 and o2 > 1e-9
     crosses_second = o3 > 1e-9 and o4 < -1e-9 or o3 < -1e-9 and o4 > 1e-9
     return crosses_first and crosses_second
-
-

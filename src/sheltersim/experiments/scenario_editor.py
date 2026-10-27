@@ -38,9 +38,9 @@ class ScenarioOverrides(_StrictModel):
     food_meal_units: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
     event_frequency: Literal["preset", "disabled"] | None = None
     social_propagation_enabled: StrictBool | None = None
-    behavior_policy: Literal[
-        "utility-softmax-v1", "sleep-aware-utility-softmax-v2", "priority-rule-v1"
-    ] | None = None
+    behavior_policy: (
+        Literal["utility-softmax-v1", "sleep-aware-utility-softmax-v2", "priority-rule-v1"] | None
+    ) = None
 
 
 class ScenarioEditorRequest(_StrictModel):

@@ -44,11 +44,12 @@ def test_checkpoint_section_reads_only_selected_chunks(
 
 
 def test_compressed_checkpoint_retains_hash_and_reuses_chunks(tmp_path):
-    checkpoint = Checkpoint.capture(WorldState.from_scenario(ScenarioSpec.load("fixtures/scenario_100_agents.json")))
+    checkpoint = Checkpoint.capture(
+        WorldState.from_scenario(ScenarioSpec.load("fixtures/scenario_100_agents.json"))
+    )
     archive = CheckpointArchive(tmp_path)
     manifest = archive.encode(checkpoint)
     first = sorted(tmp_path.rglob("*.json.gz"))
     assert archive.decode(manifest).to_json() == checkpoint.to_json()
     assert archive.encode(checkpoint) == manifest
     assert sorted(tmp_path.rglob("*.json.gz")) == first
-

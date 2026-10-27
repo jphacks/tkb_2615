@@ -167,5 +167,3 @@ def test_catalog_exposes_same_seed_common_baseline_comparison_groups() -> None:
     assert presets["delivery_intervention"]["comparison_group"] == group
     assert presets["water_outage"]["seed"] == presets["delivery_delay"]["seed"] == 2026
     assert all(item["agent_count"] <= 100 for item in presets.values())
-
-

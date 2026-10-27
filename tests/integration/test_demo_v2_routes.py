@@ -43,5 +43,3 @@ def test_backup_assets_are_independent_and_served_locally(tmp_path, route, conte
         assert b"/demo-v2.js" in body and b"/demo-v2.css" in body
         assert b'src="/project.js"' not in body and b'src="/app.js"' not in body
         assert b"https://cdn" not in body
-
-

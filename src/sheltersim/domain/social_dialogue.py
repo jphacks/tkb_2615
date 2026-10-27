@@ -10,8 +10,12 @@ from sheltersim.core.world import WorldState
 
 _NEEDS = ("toilet_urgency", "hunger", "fatigue", "hydration_need")
 _AFFECT = (
-    "positive_affect", "negative_affect", "reassurance", "discontent",
-    "uncertainty", "hygiene_need",
+    "positive_affect",
+    "negative_affect",
+    "reassurance",
+    "discontent",
+    "uncertainty",
+    "hygiene_need",
 )
 _INTERACTION_LINES = {
     "reassurance_exchange": "今わかっていることを、一緒に確かめませんか。",
@@ -28,7 +32,11 @@ def capture_social_state_context(
 ) -> dict[str, Any]:
     """Capture anonymous modeled state at proposal time for an applied event's history."""
     identities = sorted(set(participant_ids))
-    if not identities or len(identities) > 2 or any(identity not in world.agents for identity in identities):
+    if (
+        not identities
+        or len(identities) > 2
+        or any(identity not in world.agents for identity in identities)
+    ):
         raise ValueError("social dialogue context requires one or two current participants")
     body_state = world.model_state.get("body_state_v1")
     body_agents = body_state.get("agents", {}) if isinstance(body_state, dict) else {}
@@ -175,19 +183,24 @@ def virtual_dialogue_example(
             effect_agents = effect.get("agent_ids", [])
             if identity in effect_agents:
                 changed.update(
-                    name for name, value in effect.get("deltas", {}).items()
-                    if isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+                    name
+                    for name, value in effect.get("deltas", {}).items()
+                    if isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and value != 0
                 )
-        turns.append({
-            "speaker_id": identity,
-            "role": role,
-            "example_text": _state_based_line(
-                state, interaction=interaction, role=role, changed=changed
-            ),
-            "state_cues": _state_cues(state),
-            "proposal_state": state,
-            "applied_model_changes": sorted(changed),
-        })
+        turns.append(
+            {
+                "speaker_id": identity,
+                "role": role,
+                "example_text": _state_based_line(
+                    state, interaction=interaction, role=role, changed=changed
+                ),
+                "state_cues": _state_cues(state),
+                "proposal_state": state,
+                "applied_model_changes": sorted(changed),
+            }
+        )
     if not turns:
         return None
     return {

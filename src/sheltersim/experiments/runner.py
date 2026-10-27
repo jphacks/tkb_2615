@@ -187,7 +187,9 @@ class OfflineSimulationController:
         if proximity_model_id is not None:
             self.proximity_policy = create_installed_model("social_proximity", world.model_configs)
         else:
-            legacy_config = canonical_proximity_contact_config(world.model_configs.get("social_proximity"))
+            legacy_config = canonical_proximity_contact_config(
+                world.model_configs.get("social_proximity")
+            )
             self.proximity_policy = (
                 DistanceSampledProximityPolicy(legacy_config)
                 if legacy_config is not None
@@ -238,9 +240,7 @@ class OfflineSimulationController:
                 "decision_interval_minutes_by_agent", {}
             ),
             "temperature_by_agent": behavior_config.get("temperature_by_agent", {}),
-            "sleep_debt_utility_weight": behavior_config.get(
-                "sleep_debt_utility_weight", 1.0
-            ),
+            "sleep_debt_utility_weight": behavior_config.get("sleep_debt_utility_weight", 1.0),
             "resource_service_enabled": resource_service_enabled,
             "autonomy_enabled": bool(
                 world.model_configs.get("simulator_extensions", {}).get("enabled", False)
@@ -328,7 +328,9 @@ class OfflineSimulationController:
                 "effect_program_expire": EffectProgramFacilityHandler(expire=True),
                 "effect_program_structure": EffectProgramStructureHandler(),
                 "effect_program_temporary_space": EffectProgramTemporarySpaceHandler(),
-                "effect_program_temporary_space_expire": EffectProgramTemporarySpaceHandler(expire=True),
+                "effect_program_temporary_space_expire": EffectProgramTemporarySpaceHandler(
+                    expire=True
+                ),
                 "effect_program_population": EffectProgramPopulationHandler(),
                 "population_approach_complete": EffectProgramPopulationHandler(),
                 "effect_program_geometry": EffectProgramGeometryHandler(),
@@ -412,16 +414,16 @@ class OfflineSimulationController:
         with geometry_config_scope():
             self._run_phase(phase, world, minute, rng)
 
-    def _run_phase(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
+    def _run_phase(
+        self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom
+    ) -> None:
         if world is not self.world:
             raise ValueError("offline simulation controller is bound to a different WorldState")
         if phase is TickPhase.DISPATCH_DUE_EVENTS:
             outcomes = self.event_dispatcher.dispatch_due(
                 world,
                 minute,
-                after_event=lambda records: ingest_applied_shared_operation_records(
-                    world, records
-                ),
+                after_event=lambda records: ingest_applied_shared_operation_records(world, records),
             )
             for outcome in outcomes:
                 if outcome.status is EventStatus.APPLIED:
@@ -444,7 +446,8 @@ class OfflineSimulationController:
                                 request is not None
                                 and prior is not None
                                 and request.status is SupportRequestStatus.ASSIGNED
-                                and request.assigned_staff_id == outcome.event.payload.get("staff_id")
+                                and request.assigned_staff_id
+                                == outcome.event.payload.get("staff_id")
                                 and world.agents[request.agent_id].activity is Activity.SEEKING_HELP
                             ):
                                 append_applied_care_transition(
@@ -461,7 +464,11 @@ class OfflineSimulationController:
                     if outcome.event.event_type == "support_request_timeout":
                         request_id = outcome.event.payload.get("request_id")
                         request = world.support_requests.get(request_id)
-                        prior = care_receipt_for_request(world, request_id) if isinstance(request_id, str) else None
+                        prior = (
+                            care_receipt_for_request(world, request_id)
+                            if isinstance(request_id, str)
+                            else None
+                        )
                         if (
                             request is not None
                             and prior is not None
@@ -479,8 +486,10 @@ class OfflineSimulationController:
                             )
             geometry_changed = any(
                 outcome.status is EventStatus.APPLIED
-                and outcome.event.event_type in {
-                    "effect_program_geometry", "effect_program_geometry_expire",
+                and outcome.event.event_type
+                in {
+                    "effect_program_geometry",
+                    "effect_program_geometry_expire",
                     "effect_program_structure",
                 }
                 for outcome in outcomes
@@ -499,6 +508,7 @@ class OfflineSimulationController:
                 ):
                     interrupt_staff_trips_on_closed_routes(world, event)
             from sheltersim.domain.population_lifecycle import admit_pending_returns
+
             admit_pending_returns(world, minute)
             self._sync_movement_after_events()
             admit_pending_arrivals(world, minute)
@@ -574,9 +584,7 @@ class OfflineSimulationController:
                     previous_by_agent={
                         agent_id: agent.stress for agent_id, agent in view.agents.items()
                     },
-                    current_by_agent={
-                        delta.agent_id: delta.stress for delta in final_deltas
-                    },
+                    current_by_agent={delta.agent_id: delta.stress for delta in final_deltas},
                     threshold=self.psychology.parameters.high_distress_threshold,
                 )
                 runtime_state = world.model_state.get(PSYCHOLOGICAL_STATE_KEY)
@@ -639,9 +647,7 @@ class OfflineSimulationController:
         elif phase is TickPhase.COLLECT_METRICS:
             self.artifacts.capture_metric(world, minute=minute)
             if minute + 1 >= world.duration_minutes:
-                finalize_active_actions(
-                    world, minute, active_actions=self.active_actions
-                )
+                finalize_active_actions(world, minute, active_actions=self.active_actions)
 
     def _sample_information_contacts(self, minute: int, rng: KeyedRandom) -> None:
         if self.information_policy is None:
@@ -774,7 +780,8 @@ class OfflineSimulationController:
                 continue
             if (
                 current_household_id(self.world, sender.id) is not None
-                and current_household_id(self.world, sender.id) == current_household_id(self.world, recipient.id)
+                and current_household_id(self.world, sender.id)
+                == current_household_id(self.world, recipient.id)
                 and max(sender.stress, recipient.stress)
                 >= self.social_policy.limits.stress_threshold
             ):
@@ -856,13 +863,15 @@ class OfflineSimulationController:
                     movement = self.world.model_state.get(MOVEMENT_STATE_KEY, {})
                     position = movement.get("positions", {}).get(agent.id)
                     if isinstance(position, dict):
-                        position.update({
-                            "zone_id": agent.zone_id,
-                            "point": reservation["point"].model_dump(mode="json"),
-                            "edge_id": None,
-                            "progress": 1.0,
-                            "position_kind": "physical",
-                        })
+                        position.update(
+                            {
+                                "zone_id": agent.zone_id,
+                                "point": reservation["point"].model_dump(mode="json"),
+                                "edge_id": None,
+                                "progress": 1.0,
+                                "position_kind": "physical",
+                            }
+                        )
                     target_id = reservation["target_id"]
                 agent.activity = Activity.SLEEPING
                 agent.target_id = None
@@ -896,13 +905,12 @@ class OfflineSimulationController:
                             status="interrupted",
                             source_ids=care_source_ids_for_agent(self.world, agent.id),
                         )
-                if (
-                    self.information_policy is not None
-                    and (
-                        proposal.action is ActionKind.SEEK_INFORMATION
-                        or self.world.model_state[INFORMATION_SPREAD_STATE_KEY]["query_pressure"][agent.id]
-                        >= self.information_policy.config.query_threshold
-                    )
+                if self.information_policy is not None and (
+                    proposal.action is ActionKind.SEEK_INFORMATION
+                    or self.world.model_state[INFORMATION_SPREAD_STATE_KEY]["query_pressure"][
+                        agent.id
+                    ]
+                    >= self.information_policy.config.query_threshold
                 ):
                     self.information_policy.record_support_request(
                         self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
@@ -934,7 +942,11 @@ class OfflineSimulationController:
             )
             due_minute = self.world.minute_index + interaction_minutes
             interaction_data = {
-                ActionKind.SOCIALIZE: ("reassurance_exchange", "offer_reassurance", "emotional_check_in"),
+                ActionKind.SOCIALIZE: (
+                    "reassurance_exchange",
+                    "offer_reassurance",
+                    "emotional_check_in",
+                ),
                 ActionKind.CARE_FAMILY: ("family_care", "provide_family_support", "family_care"),
                 ActionKind.HELP_OTHERS: ("voluntary_support", "offer_practical_help", "mutual_aid"),
             }[proposal.action]
@@ -1060,12 +1072,21 @@ class OfflineSimulationController:
                                 target_id = facility_id
                             except ValueError as exc:
                                 self.resource_service.record_request_outcome(
-                                    agent_id=agent.id, action=action, outcome="rejected",
-                                    reason="request_rejected", facility_id=facility_id,
-                                    origin_zone_id=agent.zone_id, detail=str(exc),
+                                    agent_id=agent.id,
+                                    action=action,
+                                    outcome="rejected",
+                                    reason="request_rejected",
+                                    facility_id=facility_id,
+                                    origin_zone_id=agent.zone_id,
+                                    detail=str(exc),
                                 )
-                                self.world.metric_state["resource_service_request_rejected_count"] = (
-                                    self.world.metric_state.get("resource_service_request_rejected_count", 0.0) + 1.0
+                                self.world.metric_state[
+                                    "resource_service_request_rejected_count"
+                                ] = (
+                                    self.world.metric_state.get(
+                                        "resource_service_request_rejected_count", 0.0
+                                    )
+                                    + 1.0
                                 )
                         else:
                             room_route = self._facility_approach(agent.id, facility_id)
@@ -1117,7 +1138,9 @@ class OfflineSimulationController:
                                             origin_zone_id=agent.zone_id,
                                             detail=str(exc),
                                         )
-                                        self.world.metric_state["resource_service_request_rejected_count"] = (
+                                        self.world.metric_state[
+                                            "resource_service_request_rejected_count"
+                                        ] = (
                                             self.world.metric_state.get(
                                                 "resource_service_request_rejected_count", 0.0
                                             )
@@ -1175,7 +1198,8 @@ class OfflineSimulationController:
                 target_id is not None
                 or proposal.action in {ActionKind.WAIT, ActionKind.REST, ActionKind.SLEEP}
                 or agent.activity is not prior_activity
-            ) and not (
+            )
+            and not (
                 proposal.action in {ActionKind.SEEK_HELP, ActionKind.SEEK_INFORMATION}
                 and target_id in self.world.support_requests
                 and self.world.support_requests[target_id].status is SupportRequestStatus.UNRESOLVED
@@ -1349,9 +1373,7 @@ class OfflineSimulationController:
             if occupancy + incoming >= zone_capacity:
                 return False
 
-        pending_event_ids = {
-            event.event_id for event in self.world.event_queue.pending()
-        }
+        pending_event_ids = {event.event_id for event in self.world.event_queue.pending()}
         while True:
             sequence = self.world.allocate_event_sequence()
             event_id = f"agent-travel-complete-{sequence}"
@@ -1403,8 +1425,7 @@ class OfflineSimulationController:
             travel_payload["origin_zone_id"] = route.origin_zone_id
         if purpose == "staff_support_travel":
             if not all(
-                isinstance(value, str) and value
-                for value in (support_request_id, support_staff_id)
+                isinstance(value, str) and value for value in (support_request_id, support_staff_id)
             ):
                 raise ValueError("staff support travel requires request and staff IDs")
             travel_payload["request_id"] = support_request_id
@@ -1486,12 +1507,8 @@ class OfflineSimulationController:
         if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < 0:
             raise ValueError("facility queue capacity must be a non-negative integer")
         facility = self.world.facilities[facility_id]
-        queued = (
-            facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
-        )
-        active = (
-            facility.resource_active_agent_ids if resource else facility.active_agent_ids
-        )
+        queued = facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
+        active = facility.resource_active_agent_ids if resource else facility.active_agent_ids
         transit = sum(
             1
             for agent in self.world.agents.values()
@@ -1510,7 +1527,8 @@ class OfflineSimulationController:
             queue_trip_is_active = (
                 agent is not None
                 and agent.activity is Activity.QUEUED
-                and journey.get("purpose") in {
+                and journey.get("purpose")
+                in {
                     "toilet_queue_position",
                     "resource_queue_position",
                     "toilet_queue_service",
@@ -1531,13 +1549,15 @@ class OfflineSimulationController:
                         bed_point = bed_points[index]
                 finish_movement(self.world, agent_id)
                 if bed_point is not None and agent is not None:
-                    state["positions"][agent_id].update({
-                        "zone_id": agent.zone_id,
-                        "point": bed_point,
-                        "edge_id": None,
-                        "progress": 1.0,
-                        "position_kind": "physical",
-                    })
+                    state["positions"][agent_id].update(
+                        {
+                            "zone_id": agent.zone_id,
+                            "point": bed_point,
+                            "edge_id": None,
+                            "progress": 1.0,
+                            "position_kind": "physical",
+                        }
+                    )
 
     def _update_movement(self, minute: int) -> None:
         """Advance route interpolation and atomically reschedule changed paths."""
@@ -1618,13 +1638,15 @@ class OfflineSimulationController:
                     )
                     release_sleep_bed(self.world, agent_id)
                 else:
-                    state["positions"][agent_id].update({
-                        "zone_id": agent.zone_id,
-                        "point": reservation["point"].model_dump(mode="json"),
-                        "edge_id": None,
-                        "progress": 1.0,
-                        "position_kind": "physical",
-                    })
+                    state["positions"][agent_id].update(
+                        {
+                            "zone_id": agent.zone_id,
+                            "point": reservation["point"].model_dump(mode="json"),
+                            "edge_id": None,
+                            "progress": 1.0,
+                            "position_kind": "physical",
+                        }
+                    )
                 agent.activity = Activity.SLEEPING
                 agent.target_id = None
                 self.world.metric_state["movement_replan_count"] = (
@@ -1702,7 +1724,8 @@ class OfflineSimulationController:
         ):
             raise ValueError("replanned resident trip lost its assigned support task")
         completions = [
-            event for event in world.event_queue.pending()
+            event
+            for event in world.event_queue.pending()
             if event.event_type == "staff_support_complete"
             and event.payload.get("task_id") == task.id
         ]
@@ -1730,48 +1753,54 @@ class OfflineSimulationController:
             agent.target_id = None
         if can_schedule:
             world.event_queue.remove(previous_completion.event_id)
-            world.event_log.append(EventLogRecord(
-                event=previous_completion,
-                realized_minute=minute,
-                status=EventStatus.SUPPRESSED,
-                detail="support completion was rescheduled after a route change",
-            ))
+            world.event_log.append(
+                EventLogRecord(
+                    event=previous_completion,
+                    realized_minute=minute,
+                    status=EventStatus.SUPPRESSED,
+                    detail="support completion was rescheduled after a route change",
+                )
+            )
             sequence = world.allocate_event_sequence()
             task.start_minute = minute + (route.travel_minutes if route is not None else 0)
             task.due_minute = due_minute
             staff.busy_until = due_minute
-            world.schedule_event(ScheduledEvent(
-                event_id=f"staff-support-complete-{sequence}",
-                kind=EventKind.COMPLETION,
-                due_minute=due_minute,
-                priority=0,
-                sequence=sequence,
-                event_type="staff_support_complete",
-                payload={
-                    "request_id": request.id,
-                    "agent_id": agent.id,
-                    "staff_id": staff.id,
-                    "task_id": task.id,
-                    "support_duration_minutes": service_minutes,
-                },
-                source_id=task.id,
-                causation_id=journey.get("event_id"),
-                provenance={
-                    "source_type": "assumption",
-                    "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
-                    "policy_version": self.staff_service.policy_version,
-                    "rescheduled_after_route_change": True,
-                },
-            ))
+            world.schedule_event(
+                ScheduledEvent(
+                    event_id=f"staff-support-complete-{sequence}",
+                    kind=EventKind.COMPLETION,
+                    due_minute=due_minute,
+                    priority=0,
+                    sequence=sequence,
+                    event_type="staff_support_complete",
+                    payload={
+                        "request_id": request.id,
+                        "agent_id": agent.id,
+                        "staff_id": staff.id,
+                        "task_id": task.id,
+                        "support_duration_minutes": service_minutes,
+                    },
+                    source_id=task.id,
+                    causation_id=journey.get("event_id"),
+                    provenance={
+                        "source_type": "assumption",
+                        "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
+                        "policy_version": self.staff_service.policy_version,
+                        "rescheduled_after_route_change": True,
+                    },
+                )
+            )
             return True
 
         world.event_queue.remove(previous_completion.event_id)
-        world.event_log.append(EventLogRecord(
-            event=previous_completion,
-            realized_minute=minute,
-            status=EventStatus.SUPPRESSED,
-            detail="support completion was cancelled because the staff route is unavailable",
-        ))
+        world.event_log.append(
+            EventLogRecord(
+                event=previous_completion,
+                realized_minute=minute,
+                status=EventStatus.SUPPRESSED,
+                detail="support completion was cancelled because the staff route is unavailable",
+            )
+        )
         del world.active_tasks[task.id]
         staff.work_queue.clear()
         staff.active_task_id = None
@@ -1838,9 +1867,7 @@ class OfflineSimulationController:
                 graph = ZoneGraph(
                     zones=self.space.graph.zones,
                     edges=tuple(
-                        edge
-                        for edge in self.space.graph.edges
-                        if edge.id not in inaccessible
+                        edge for edge in self.space.graph.edges if edge.id not in inaccessible
                     ),
                 )
                 space = SpaceRouter(graph, self.space.policy)
@@ -1989,7 +2016,10 @@ def run_scenario(
     validate_comparison_scope(scenario, comparison_report)
     if (checkpoint_at_minute is None) != (checkpoint_callback is None):
         raise ValueError("checkpoint minute and callback must be provided together")
-    if checkpoint_at_minute is not None and not 0 < checkpoint_at_minute < scenario.duration_minutes:
+    if (
+        checkpoint_at_minute is not None
+        and not 0 < checkpoint_at_minute < scenario.duration_minutes
+    ):
         raise ValueError("checkpoint minute must be inside the scenario duration")
     world = WorldState.from_scenario(scenario)
     initialize_simulator_extensions(world)
@@ -2081,4 +2111,3 @@ def _agent_view_snapshot(agent: AgentView) -> dict[str, Any]:
             ],
         }
     return snapshot
-

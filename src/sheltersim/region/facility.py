@@ -38,7 +38,9 @@ class FacilityZoneCondition(RegionModel):
     facility_id: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9._:-]{0,63}$")
     facility_kind: str | None = Field(default=None, min_length=1, max_length=80)
     capacity: int = Field(default=1, ge=0)
-    source_id: str = Field(default="SRC-OPERATOR-FACILITY-ZONE", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+    source_id: str = Field(
+        default="SRC-OPERATOR-FACILITY-ZONE", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+    )
     source_kind: Literal["operator", "assumption"] = "operator"
 
     @model_validator(mode="after")
@@ -46,7 +48,8 @@ class FacilityZoneCondition(RegionModel):
         if self.action == "include" and self.area_share is None:
             raise ValueError("an included facility zone requires an area_share")
         if self.action == "exclude" and any(
-            value is not None for value in (self.name, self.area_share, self.facility_id, self.facility_kind)
+            value is not None
+            for value in (self.name, self.area_share, self.facility_id, self.facility_kind)
         ):
             raise ValueError("an excluded facility zone cannot define replacement fields")
         if (self.facility_id is None) != (self.facility_kind is None):
@@ -70,7 +73,10 @@ class FacilityDesignRequest(RegionModel):
 
     @model_validator(mode="after")
     def area_shares_are_bounded(self) -> FacilityDesignRequest:
-        if any(not math.isfinite(value) or value < 0 or value > 1 for value in self.zone_area_shares.values()):
+        if any(
+            not math.isfinite(value) or value < 0 or value > 1
+            for value in self.zone_area_shares.values()
+        ):
             raise ValueError("zone area shares must be finite fractions from 0 to 1")
         if sum(self.zone_area_shares.values()) > 1 + 1e-9:
             raise ValueError("zone area shares cannot exceed the full building area")
@@ -132,8 +138,10 @@ class EditableFacilityGeometry(RegionModel):
         opening_by_id = {item.opening_id: item for item in self.openings}
         if len(wall_by_id) != len(self.walls) or len(opening_by_id) != len(self.openings):
             raise ValueError("facility wall and opening IDs must be unique")
+
         def bounded(point: Point2D) -> bool:
             return 0 <= point.x <= self.width_m and 0 <= point.y <= self.height_m
+
         if any(not bounded(point) for wall in self.walls for point in (wall.start, wall.end)):
             raise ValueError("facility wall segment is outside the building bounds")
         if any(wall.start == wall.end for wall in self.walls):
@@ -144,9 +152,13 @@ class EditableFacilityGeometry(RegionModel):
                 raise ValueError(f"opening {opening.opening_id!r} references an unknown wall")
             if not bounded(opening.start) or not bounded(opening.end):
                 raise ValueError("facility opening is outside the building bounds")
-            if not _point_on_segment(opening.start, wall.start, wall.end) or not _point_on_segment(opening.end, wall.start, wall.end):
+            if not _point_on_segment(opening.start, wall.start, wall.end) or not _point_on_segment(
+                opening.end, wall.start, wall.end
+            ):
                 raise ValueError("facility opening endpoints must lie on their host wall")
-            segment_length = math.hypot(opening.end.x - opening.start.x, opening.end.y - opening.start.y)
+            segment_length = math.hypot(
+                opening.end.x - opening.start.x, opening.end.y - opening.start.y
+            )
             if abs(segment_length - opening.width_m) > max(1e-6, opening.width_m * 1e-6):
                 raise ValueError("facility opening width must match its drawn opening segment")
         for index, first in enumerate(self.openings):
@@ -155,17 +167,27 @@ class EditableFacilityGeometry(RegionModel):
             axis_x = (wall.end.x - wall.start.x) / axis_length
             axis_y = (wall.end.y - wall.start.y) / axis_length
             first_interval = sorted(
-                ((first.start.x - wall.start.x) * axis_x + (first.start.y - wall.start.y) * axis_y,
-                 (first.end.x - wall.start.x) * axis_x + (first.end.y - wall.start.y) * axis_y)
+                (
+                    (first.start.x - wall.start.x) * axis_x
+                    + (first.start.y - wall.start.y) * axis_y,
+                    (first.end.x - wall.start.x) * axis_x + (first.end.y - wall.start.y) * axis_y,
+                )
             )
             for second in self.openings[index + 1 :]:
                 if second.wall_id != first.wall_id:
                     continue
                 second_interval = sorted(
-                    ((second.start.x - wall.start.x) * axis_x + (second.start.y - wall.start.y) * axis_y,
-                     (second.end.x - wall.start.x) * axis_x + (second.end.y - wall.start.y) * axis_y)
+                    (
+                        (second.start.x - wall.start.x) * axis_x
+                        + (second.start.y - wall.start.y) * axis_y,
+                        (second.end.x - wall.start.x) * axis_x
+                        + (second.end.y - wall.start.y) * axis_y,
+                    )
                 )
-                if min(first_interval[1], second_interval[1]) > max(first_interval[0], second_interval[0]) + 1e-8:
+                if (
+                    min(first_interval[1], second_interval[1])
+                    > max(first_interval[0], second_interval[0]) + 1e-8
+                ):
                     raise ValueError("facility openings on the same wall cannot overlap")
         uses = {item.route_id: item.opening_id for item in self.route_openings}
         if len(uses) != len(self.route_openings):
@@ -187,11 +209,13 @@ class EditableFacilityGeometry(RegionModel):
             raise ValueError("equipment footprint is outside the building bounds")
         for item in self.equipment_footprints:
             if not _valid_simple_polygon(item.polygon):
-                raise ValueError("equipment footprint polygons must be simple and have positive area")
+                raise ValueError(
+                    "equipment footprint polygons must be simple and have positive area"
+                )
             points = item.polygon
-            polygon_area = abs(
-                sum(a.x * b.y - b.x * a.y for a, b in zip(points, points[1:] + points[:1]))
-            ) / 2
+            polygon_area = (
+                abs(sum(a.x * b.y - b.x * a.y for a, b in zip(points, points[1:] + points[:1]))) / 2
+            )
             if abs(polygon_area - item.area_m2) > max(1e-6, item.area_m2 * 1e-6):
                 raise ValueError("equipment footprint area does not match its polygon")
         return self
@@ -260,7 +284,9 @@ class StandardShelterGenerator:
             if any(term in condition_text for term in terms):
                 zone_design.append(optional_zone)
                 recognized.update(terms)
-                sleeping_index = next(index for index, item in enumerate(zone_design) if item[0] == "sleeping")
+                sleeping_index = next(
+                    index for index, item in enumerate(zone_design) if item[0] == "sleeping"
+                )
                 key, label, share = zone_design[sleeping_index]
                 zone_design[sleeping_index] = (key, label, share - optional_zone[2])
         zone_design = _apply_zone_conditions(zone_design, request.zone_conditions)
@@ -271,7 +297,10 @@ class StandardShelterGenerator:
             known_zone_ids = {zone_id for zone_id, _, _ in zone_design}
             unknown_zone_ids = set(request.zone_area_shares) - known_zone_ids
             if unknown_zone_ids:
-                raise ValueError("zone area shares reference unknown standard zones: " + ", ".join(sorted(unknown_zone_ids)))
+                raise ValueError(
+                    "zone area shares reference unknown standard zones: "
+                    + ", ".join(sorted(unknown_zone_ids))
+                )
             zone_design = _apply_zone_area_shares(zone_design, request.zone_area_shares)
         gross_area = request.gross_area_m2 or _default_gross_area(
             request.population,
@@ -282,7 +311,8 @@ class StandardShelterGenerator:
         requested_shares = {zone_id: share for zone_id, _, share in zone_design}
         zone_design = _with_accessible_frontage(zone_design, width_m)
         widened_zones = [
-            zone_id for zone_id, _, share in zone_design
+            zone_id
+            for zone_id, _, share in zone_design
             if zone_id != "sleeping" and share > requested_shares[zone_id] + 1e-12
         ]
         sleeping_share = next(share for zone_id, _, share in zone_design if zone_id == "sleeping")
@@ -305,7 +335,8 @@ class StandardShelterGenerator:
                 + "、".join(widened_zones)
             )
         unrecognized = [
-            condition for condition in request.facility_conditions
+            condition
+            for condition in request.facility_conditions
             if not any(term in condition.casefold() for term in recognized)
         ]
         if unrecognized:
@@ -339,23 +370,31 @@ class StandardShelterGenerator:
                 "食料・飲料水の在庫量は施設数から推定していません。在庫を入力しない場合の既定量はScenarioの仮定として記録します。",
             )
         )
-        sources = tuple(sorted({
-            SYNTHETIC_FACILITY_SOURCE_ID,
-            SYNTHETIC_CAPACITY_SOURCE_ID,
-            SYNTHETIC_STAFFING_SOURCE_ID,
-            SYNTHETIC_TOILET_SOURCE_ID,
-            SERVICE_STATION_SOURCE_ID,
-            *area_source_ids,
-            *request.capacity_source_ids,
-            *(item.source_id for item in request.zone_conditions),
-        }))
-        geometry_source_ids = tuple(sorted({
-            SYNTHETIC_FACILITY_SOURCE_ID,
-            *area_source_ids,
-            *request.capacity_source_ids,
-            *(item.source_id for item in request.equipment),
-            *(item.source_id for item in request.zone_conditions),
-        }))
+        sources = tuple(
+            sorted(
+                {
+                    SYNTHETIC_FACILITY_SOURCE_ID,
+                    SYNTHETIC_CAPACITY_SOURCE_ID,
+                    SYNTHETIC_STAFFING_SOURCE_ID,
+                    SYNTHETIC_TOILET_SOURCE_ID,
+                    SERVICE_STATION_SOURCE_ID,
+                    *area_source_ids,
+                    *request.capacity_source_ids,
+                    *(item.source_id for item in request.zone_conditions),
+                }
+            )
+        )
+        geometry_source_ids = tuple(
+            sorted(
+                {
+                    SYNTHETIC_FACILITY_SOURCE_ID,
+                    *area_source_ids,
+                    *request.capacity_source_ids,
+                    *(item.source_id for item in request.equipment),
+                    *(item.source_id for item in request.zone_conditions),
+                }
+            )
+        )
         source_kind = "inferred" if area_source_ids or request.capacity_source_ids else "synthetic"
         if (request.stated_capacity is None and request.capacity_source_ids) or (
             request.stated_capacity is not None and not request.capacity_source_ids
@@ -376,7 +415,9 @@ class StandardShelterGenerator:
             Point2D(x=0.0, y=corridor_depth_m),
         )
         zones.append(
-            ZoneSpec(id="corridor", name="共用通路", capacity=None, display_x=100.0, display_y=100.0)
+            ZoneSpec(
+                id="corridor", name="共用通路", capacity=None, display_x=100.0, display_y=100.0
+            )
         )
         physical_zones.append(
             PhysicalZone(
@@ -426,17 +467,27 @@ class StandardShelterGenerator:
             request.accessible_toilet_count + counts["toilet_standard"], counts["toilet_demand"]
         )
         if toilets > 20:
-            warnings.append("標準モデルのトイレ設備は20基で上限化されています。追加設備を手動指定してください。")
+            warnings.append(
+                "標準モデルのトイレ設備は20基で上限化されています。追加設備を手動指定してください。"
+            )
             toilets = 20
         facilities: list[FacilitySpec] = [
             FacilitySpec(
-                id=f"accessible_toilet_{index:02d}", kind="toilet", zone_id="toilet", capacity=1, working_units=1
+                id=f"accessible_toilet_{index:02d}",
+                kind="toilet",
+                zone_id="toilet",
+                capacity=1,
+                working_units=1,
             )
             for index in range(1, min(request.accessible_toilet_count, toilets) + 1)
         ]
         facilities.extend(
             FacilitySpec(
-                id=f"toilet_{index:02d}", kind="toilet", zone_id="toilet", capacity=1, working_units=1
+                id=f"toilet_{index:02d}",
+                kind="toilet",
+                zone_id="toilet",
+                capacity=1,
+                working_units=1,
             )
             for index in range(1, toilets - min(request.accessible_toilet_count, toilets) + 1)
         )
@@ -444,18 +495,26 @@ class StandardShelterGenerator:
             (
                 *_service_stations("water_station", counts["water_station"]),
                 *_service_stations("meal_distribution", counts["meal_distribution"]),
-                FacilitySpec(id="medical_desk", kind="medical_support", zone_id="medical", capacity=1),
+                FacilitySpec(
+                    id="medical_desk", kind="medical_support", zone_id="medical", capacity=1
+                ),
                 FacilitySpec(id="intake_desk", kind="intake", zone_id="intake", capacity=1),
                 FacilitySpec(id="quiet_support", kind="quiet_space", zone_id="quiet", capacity=1),
             )
         )
         optional_facilities = {
             "pet": FacilitySpec(id="pet_area", kind="pet_support", zone_id="pet", capacity=1),
-            "family": FacilitySpec(id="family_space", kind="family_support", zone_id="family", capacity=1),
-            "private": FacilitySpec(id="privacy_space", kind="privacy_support", zone_id="private", capacity=1),
+            "family": FacilitySpec(
+                id="family_space", kind="family_support", zone_id="family", capacity=1
+            ),
+            "private": FacilitySpec(
+                id="privacy_space", kind="privacy_support", zone_id="private", capacity=1
+            ),
         }
         facilities.extend(
-            item for zone_id, _, _ in zone_design if (item := optional_facilities.get(zone_id)) is not None
+            item
+            for zone_id, _, _ in zone_design
+            if (item := optional_facilities.get(zone_id)) is not None
         )
         facilities.extend(
             FacilitySpec(
@@ -468,13 +527,17 @@ class StandardShelterGenerator:
             if condition.action == "include" and condition.facility_id is not None
         )
         if len({item.id for item in facilities}) != len(facilities):
-            raise ValueError("custom facility IDs must not collide with generated standard facilities")
+            raise ValueError(
+                "custom facility IDs must not collide with generated standard facilities"
+            )
         equipment_overrides = {item.facility_id: item for item in request.equipment}
         facility_ids = {item.id for item in facilities}
         for condition in request.equipment:
             if condition.facility_id not in facility_ids and condition.add:
                 if condition.zone_id not in {item[0] for item in zone_design}:
-                    raise ValueError(f"new equipment {condition.facility_id!r} references an unknown standard zone")
+                    raise ValueError(
+                        f"new equipment {condition.facility_id!r} references an unknown standard zone"
+                    )
                 facilities.append(
                     FacilitySpec(
                         id=condition.facility_id,
@@ -507,9 +570,13 @@ class StandardShelterGenerator:
         for item in request.equipment:
             if item.position_m is None or item.facility_id not in facility_points:
                 continue
-            zone = physical_zone_by_id[next(facility.zone_id for facility in facilities if facility.id == item.facility_id)]
+            zone = physical_zone_by_id[
+                next(facility.zone_id for facility in facilities if facility.id == item.facility_id)
+            ]
             if not point_in_polygon(item.position_m, zone.polygon):
-                raise ValueError(f"equipment {item.facility_id!r} position lies outside its assigned zone")
+                raise ValueError(
+                    f"equipment {item.facility_id!r} position lies outside its assigned zone"
+                )
             facility_points[item.facility_id] = item.position_m
 
         # Water and meal service start only with skilled staff in the food zone, so each
@@ -554,7 +621,11 @@ class StandardShelterGenerator:
             candidates = (zone_center, doorway_point, corridor_approach, corridor_point)
             route_points = (
                 candidates[0],
-                *(point for previous, point in zip(candidates, candidates[1:]) if point != previous),
+                *(
+                    point
+                    for previous, point in zip(candidates, candidates[1:])
+                    if point != previous
+                ),
             )
             for source, target in ((zone_id, "corridor"), ("corridor", zone_id)):
                 edge_id = f"route_{source}_{target}"
@@ -623,7 +694,9 @@ class StandardShelterGenerator:
                     "subject": "facility_gross_area_m2",
                     "value": gross_area,
                     "source_ids": list(area_source_ids),
-                    "basis": "operator_entered" if "SRC-OPERATOR-AREA" in area_source_ids else "source_record",
+                    "basis": "operator_entered"
+                    if "SRC-OPERATOR-AREA" in area_source_ids
+                    else "source_record",
                 }
             )
         if request.stated_capacity is not None:
@@ -642,8 +715,10 @@ class StandardShelterGenerator:
                 "value": {
                     "gross_area_m2": gross_area,
                     "area_basis": (
-                        "operator_entered" if "SRC-OPERATOR-AREA" in area_source_ids
-                        else "sourced_area" if area_source_ids
+                        "operator_entered"
+                        if "SRC-OPERATOR-AREA" in area_source_ids
+                        else "sourced_area"
+                        if area_source_ids
                         else "planning_heuristic"
                     ),
                     "sleeping_usable_area_m2": sleeping_usable_area_m2,
@@ -651,14 +726,16 @@ class StandardShelterGenerator:
                     "aspect_ratio": request.aspect_ratio,
                     "zone_shares": dict((key, share) for key, _, share in zone_design),
                     "facility_conditions": list(request.facility_conditions),
-                    "typed_zone_conditions": [item.model_dump(mode="json") for item in request.zone_conditions],
+                    "typed_zone_conditions": [
+                        item.model_dump(mode="json") for item in request.zone_conditions
+                    ],
                     "target_accessible_route_width_m": 1.8,
                     "minimum_zone_frontage_m": ACCESSIBLE_ROUTE_MIN_WIDTH_M,
                     "frontage_widened_zones": widened_zones,
-                    "minimum_generated_route_width_m": min(
-                        route.width_m for route in routes
-                    ),
-                "equipment_overrides": [item.model_dump(mode="json") for item in request.equipment],
+                    "minimum_generated_route_width_m": min(route.width_m for route in routes),
+                    "equipment_overrides": [
+                        item.model_dump(mode="json") for item in request.equipment
+                    ],
                     "route_speed_m_per_minute": 60,
                 },
                 "reason": "Generic rectangular synthetic model for editing; no official or real facility floor plan supplied.",
@@ -791,7 +868,9 @@ def _default_gross_area(
     population: int, *, aspect_ratio: float, zone_design: list[tuple[str, str, float]]
 ) -> float:
     """Provide enough heuristic sleeping area and doorway frontage by default."""
-    requested_sleeping_share = next(share for zone_id, _, share in zone_design if zone_id == "sleeping")
+    requested_sleeping_share = next(
+        share for zone_id, _, share in zone_design if zone_id == "sleeping"
+    )
     gross_area = max(80.0, population * 3.5 / max(0.01, requested_sleeping_share * 0.9) * 1.1)
     for _ in range(160):
         # Round first so the checked plan is the one the generator builds.
@@ -804,7 +883,9 @@ def _default_gross_area(
         sleeping_usable_area = (
             rounded_area * sleeping_share * (height_m - corridor_depth_m) / height_m * 0.9
         )
-        frontage_met = min(width_m * share for _, _, share in design) >= ACCESSIBLE_ROUTE_MIN_WIDTH_M - 1e-9
+        frontage_met = (
+            min(width_m * share for _, _, share in design) >= ACCESSIBLE_ROUTE_MIN_WIDTH_M - 1e-9
+        )
         if frontage_met and math.floor(sleeping_usable_area / 3.5) >= population:
             return rounded_area
         gross_area *= 1.05
@@ -854,9 +935,7 @@ def _apply_zone_area_shares(
         (
             zone_id,
             label,
-            overrides[zone_id]
-            if zone_id in overrides
-            else remaining * share / base_total,
+            overrides[zone_id] if zone_id in overrides else remaining * share / base_total,
         )
         for zone_id, label, share in zone_design
     ]
@@ -871,7 +950,9 @@ def _apply_zone_conditions(
     required_zone_ids = {"sleeping", "quiet", "medical", "food", "toilet", "intake", "staff"}
     for condition in conditions:
         if condition.zone_id == "corridor" and condition.action == "include":
-            raise ValueError("the shared corridor is generated separately and cannot be redefined as a room")
+            raise ValueError(
+                "the shared corridor is generated separately and cannot be redefined as a room"
+            )
         existing_index = next(
             (index for index, item in enumerate(result) if item[0] == condition.zone_id), None
         )
@@ -881,9 +962,13 @@ def _apply_zone_conditions(
             if existing_index is None:
                 raise ValueError(f"cannot exclude unknown standard zone {condition.zone_id!r}")
             if condition.zone_id in required_zone_ids:
-                raise ValueError(f"required standard shelter zone {condition.zone_id!r} cannot be removed")
+                raise ValueError(
+                    f"required standard shelter zone {condition.zone_id!r} cannot be removed"
+                )
             removed_share = result.pop(existing_index)[2]
-            sleeping_index = next(index for index, item in enumerate(result) if item[0] == "sleeping")
+            sleeping_index = next(
+                index for index, item in enumerate(result) if item[0] == "sleeping"
+            )
             key, label, share = result[sleeping_index]
             result[sleeping_index] = (key, label, share + removed_share)
             continue
@@ -964,10 +1049,19 @@ def _standard_editable_geometry(
     corridor_wall_end = Point2D(x=width_m, y=corridor_depth_m)
     walls = [
         FacilityWall(wall_id="exterior_north", start=zero, end=top_right, source_ids=source_ids),
-        FacilityWall(wall_id="exterior_east", start=top_right, end=bottom_right, source_ids=source_ids),
-        FacilityWall(wall_id="exterior_south", start=bottom_right, end=bottom_left, source_ids=source_ids),
+        FacilityWall(
+            wall_id="exterior_east", start=top_right, end=bottom_right, source_ids=source_ids
+        ),
+        FacilityWall(
+            wall_id="exterior_south", start=bottom_right, end=bottom_left, source_ids=source_ids
+        ),
         FacilityWall(wall_id="exterior_west", start=bottom_left, end=zero, source_ids=source_ids),
-        FacilityWall(wall_id="wall_corridor_partition", start=corridor_wall_start, end=corridor_wall_end, source_ids=source_ids),
+        FacilityWall(
+            wall_id="wall_corridor_partition",
+            start=corridor_wall_start,
+            end=corridor_wall_end,
+            source_ids=source_ids,
+        ),
     ]
     openings: list[FacilityOpening] = []
     route_openings: list[RouteOpeningUse] = []
@@ -1024,9 +1118,11 @@ def _point_on_segment(point: Point2D, start: Point2D, end: Point2D) -> bool:
 
 
 def _valid_simple_polygon(polygon: tuple[Point2D, ...]) -> bool:
-    if len(polygon) < 3 or abs(
-        sum(a.x * b.y - b.x * a.y for a, b in zip(polygon, polygon[1:] + polygon[:1]))
-    ) <= 1e-9:
+    if (
+        len(polygon) < 3
+        or abs(sum(a.x * b.y - b.x * a.y for a, b in zip(polygon, polygon[1:] + polygon[:1])))
+        <= 1e-9
+    ):
         return False
     edges = tuple(zip(polygon, polygon[1:] + polygon[:1]))
     for index, (start, end) in enumerate(edges):
@@ -1064,7 +1160,9 @@ def _properly_crosses(
 def _validate_physical_zone_polygons(zones: tuple[PhysicalZone, ...]) -> None:
     for zone in zones:
         if not _valid_simple_polygon(zone.polygon):
-            raise ValueError(f"walkable zone {zone.zone_id!r} must have a simple positive-area polygon")
+            raise ValueError(
+                f"walkable zone {zone.zone_id!r} must have a simple positive-area polygon"
+            )
     for index, first in enumerate(zones):
         first_polygon = first.polygon
         for second in zones[index + 1 :]:
@@ -1115,7 +1213,9 @@ def _equipment_footprints(
         max_y = max(value.y for value in zone.polygon)
         side = math.sqrt(item.footprint_m2)
         if side > max_x - min_x or side > max_y - min_y:
-            raise ValueError(f"equipment {item.facility_id!r} footprint cannot fit inside its assigned zone")
+            raise ValueError(
+                f"equipment {item.facility_id!r} footprint cannot fit inside its assigned zone"
+            )
         left = min(max(point.x - side / 2, min_x), max_x - side)
         top = min(max(point.y - side / 2, min_y), max_y - side)
         polygon = (
@@ -1125,10 +1225,19 @@ def _equipment_footprints(
             Point2D(x=left, y=top + side),
         )
         if not all(point_in_polygon(vertex, zone.polygon) for vertex in polygon):
-            raise ValueError(f"equipment {item.facility_id!r} footprint crosses its assigned zone boundary")
+            raise ValueError(
+                f"equipment {item.facility_id!r} footprint crosses its assigned zone boundary"
+            )
         for other_id, other_left, other_top, other_right, other_bottom in rectangles:
-            if left < other_right and left + side > other_left and top < other_bottom and top + side > other_top:
-                raise ValueError(f"equipment footprints {item.facility_id!r} and {other_id!r} overlap")
+            if (
+                left < other_right
+                and left + side > other_left
+                and top < other_bottom
+                and top + side > other_top
+            ):
+                raise ValueError(
+                    f"equipment footprints {item.facility_id!r} and {other_id!r} overlap"
+                )
         rectangles.append((item.facility_id, left, top, left + side, top + side))
         footprints.append(
             FacilityEquipmentFootprint(
@@ -1158,7 +1267,9 @@ def validate_editable_routes(
         if item.route_id not in route_ids:
             raise ValueError(f"opening mapping references unknown route {item.route_id!r}")
         if item.opening_id not in openings:
-            raise ValueError(f"route opening mapping references unknown opening {item.opening_id!r}")
+            raise ValueError(
+                f"route opening mapping references unknown opening {item.opening_id!r}"
+            )
         route_openings.setdefault(item.route_id, set()).add(item.opening_id)
     for route in routes:
         if any(
@@ -1179,11 +1290,15 @@ def validate_editable_routes(
                 raise ValueError(f"route {route.edge_id!r} is wider than opening {opening_id!r}")
         for start, end in zip(route.points, route.points[1:]):
             if physical_zones and not _segment_inside_polygon_union(start, end, physical_zones):
-                raise ValueError(f"route {route.edge_id!r} leaves the facility's walkable zone polygons")
+                raise ValueError(
+                    f"route {route.edge_id!r} leaves the facility's walkable zone polygons"
+                )
             if physical_zones and not _segment_has_polygon_clearance(
                 start, end, route.width_m / 2, physical_zones
             ):
-                raise ValueError(f"route {route.edge_id!r} does not fit within the walkable polygon boundary clearance")
+                raise ValueError(
+                    f"route {route.edge_id!r} does not fit within the walkable polygon boundary clearance"
+                )
             for wall in geometry.walls:
                 intersections = _segment_intersection_points(start, end, wall.start, wall.end)
                 if not intersections:
@@ -1198,10 +1313,15 @@ def validate_editable_routes(
                     for opening in geometry.openings
                     if opening.wall_id == wall.wall_id
                     and opening.opening_id in route_openings.get(route.edge_id, set())
-                    and all(_point_on_segment(point, opening.start, opening.end) for point in intersections)
+                    and all(
+                        _point_on_segment(point, opening.start, opening.end)
+                        for point in intersections
+                    )
                 ]
                 if not valid_openings:
-                    raise ValueError(f"route {route.edge_id!r} crosses closed wall {wall.wall_id!r}")
+                    raise ValueError(
+                        f"route {route.edge_id!r} crosses closed wall {wall.wall_id!r}"
+                    )
                 route_dx, route_dy = end.x - start.x, end.y - start.y
                 wall_dx, wall_dy = wall.end.x - wall.start.x, wall.end.y - wall.start.y
                 route_length = math.hypot(route_dx, route_dy)
@@ -1210,19 +1330,29 @@ def validate_editable_routes(
                     route_length * wall_length
                 )
                 if crossing_sine <= 1e-9:
-                    raise ValueError(f"route {route.edge_id!r} follows wall {wall.wall_id!r} instead of crossing it")
+                    raise ValueError(
+                        f"route {route.edge_id!r} follows wall {wall.wall_id!r} instead of crossing it"
+                    )
                 required_opening = route.width_m / crossing_sine
-                if not any(opening.width_m + 1e-8 >= required_opening for opening in valid_openings):
+                if not any(
+                    opening.width_m + 1e-8 >= required_opening for opening in valid_openings
+                ):
                     raise ValueError(
                         f"route {route.edge_id!r} is too oblique for the available opening in wall {wall.wall_id!r}"
                     )
             for obstacle in geometry.obstacles:
-                if _segment_distance_to_polygon(start, end, obstacle.polygon) < route.width_m / 2 - 1e-8:
+                if (
+                    _segment_distance_to_polygon(start, end, obstacle.polygon)
+                    < route.width_m / 2 - 1e-8
+                ):
                     raise ValueError(
                         f"route {route.edge_id!r} lacks width clearance from obstacle {obstacle.obstacle_id!r}"
                     )
             for footprint in geometry.equipment_footprints:
-                if _segment_distance_to_polygon(start, end, footprint.polygon) < route.width_m / 2 - 1e-8:
+                if (
+                    _segment_distance_to_polygon(start, end, footprint.polygon)
+                    < route.width_m / 2 - 1e-8
+                ):
                     raise ValueError(
                         f"route {route.edge_id!r} lacks width clearance from equipment footprint "
                         f"{footprint.facility_id!r}"
@@ -1249,15 +1379,25 @@ def validate_facility_walkability(geometry: FacilityGeometry, raw_constraints: o
         width_m=geometry.width_m,
         height_m=geometry.height_m,
         walls=tuple(
-            FacilityWall(wall_id=item.id, start=item.start, end=item.end, source_ids=item.source_ids)
+            FacilityWall(
+                wall_id=item.id, start=item.start, end=item.end, source_ids=item.source_ids
+            )
             for item in constraints.walls
         ),
         openings=tuple(
             FacilityOpening(
                 opening_id=item.id,
                 wall_id=item.wall_id,
-                start=_opening_endpoint(item.center, walls[item.wall_id].start, walls[item.wall_id].end, -1, item.width_m),
-                end=_opening_endpoint(item.center, walls[item.wall_id].start, walls[item.wall_id].end, 1, item.width_m),
+                start=_opening_endpoint(
+                    item.center,
+                    walls[item.wall_id].start,
+                    walls[item.wall_id].end,
+                    -1,
+                    item.width_m,
+                ),
+                end=_opening_endpoint(
+                    item.center, walls[item.wall_id].start, walls[item.wall_id].end, 1, item.width_m
+                ),
                 width_m=item.width_m,
                 source_ids=item.source_ids,
             )
@@ -1307,13 +1447,16 @@ def validate_facility_physical_layout(
     editable_geometry: EditableFacilityGeometry,
 ) -> None:
     """Reject inconsistent imported or edited floor plans before Scenario mapping."""
-    if not math.isclose(geometry.width_m, editable_geometry.width_m, rel_tol=0, abs_tol=1e-9) or not math.isclose(
-        geometry.height_m, editable_geometry.height_m, rel_tol=0, abs_tol=1e-9
-    ):
+    if not math.isclose(
+        geometry.width_m, editable_geometry.width_m, rel_tol=0, abs_tol=1e-9
+    ) or not math.isclose(geometry.height_m, editable_geometry.height_m, rel_tol=0, abs_tol=1e-9):
         raise ValueError("walkable and editable plan geometry must use the same metric dimensions")
     validate_editable_routes(geometry.routes, editable_geometry, physical_zones=geometry.zones)
     _validate_physical_zone_polygons(geometry.zones)
-    if sum(zone.usable_area_m2 for zone in geometry.zones) > geometry.width_m * geometry.height_m + 1e-6:
+    if (
+        sum(zone.usable_area_m2 for zone in geometry.zones)
+        > geometry.width_m * geometry.height_m + 1e-6
+    ):
         raise ValueError("summed usable zone area exceeds gross building area")
     zone_by_id = {item.zone_id: item for item in geometry.zones}
     facility_by_id = {item.id: item for item in facilities}
@@ -1324,20 +1467,31 @@ def validate_facility_physical_layout(
         point = geometry.facility_points.get(facility.id)
         if zone is None or point is None or not point_in_polygon(point, zone.polygon):
             raise ValueError(f"facility {facility.id!r} must be inside its assigned physical zone")
-        if any(point_in_polygon(point, obstacle.polygon) for obstacle in editable_geometry.obstacles):
+        if any(
+            point_in_polygon(point, obstacle.polygon) for obstacle in editable_geometry.obstacles
+        ):
             raise ValueError(f"facility {facility.id!r} position overlaps a blocked obstacle")
     footprint_by_id = {item.facility_id: item for item in editable_geometry.equipment_footprints}
     unknown_footprints = set(footprint_by_id) - set(facility_by_id)
     if unknown_footprints:
-        raise ValueError("equipment footprint references unknown facility " + sorted(unknown_footprints)[0])
+        raise ValueError(
+            "equipment footprint references unknown facility " + sorted(unknown_footprints)[0]
+        )
     for footprint in editable_geometry.equipment_footprints:
         facility = facility_by_id[footprint.facility_id]
         zone = zone_by_id.get(facility.zone_id)
-        if zone is None or not all(point_in_polygon(vertex, zone.polygon) for vertex in footprint.polygon):
+        if zone is None or not all(
+            point_in_polygon(vertex, zone.polygon) for vertex in footprint.polygon
+        ):
             raise ValueError(f"equipment footprint {facility.id!r} leaves its assigned zone")
         if not point_in_polygon(geometry.facility_points[facility.id], footprint.polygon):
-            raise ValueError(f"equipment footprint {facility.id!r} must contain its facility position")
-        if any(_polygons_overlap(footprint.polygon, obstacle.polygon) for obstacle in editable_geometry.obstacles):
+            raise ValueError(
+                f"equipment footprint {facility.id!r} must contain its facility position"
+            )
+        if any(
+            _polygons_overlap(footprint.polygon, obstacle.polygon)
+            for obstacle in editable_geometry.obstacles
+        ):
             raise ValueError(f"equipment footprint {facility.id!r} overlaps a blocked obstacle")
         if any(
             _segment_distance_to_polygon(wall.start, wall.end, footprint.polygon) <= 1e-8
@@ -1407,7 +1561,10 @@ def validate_facility_service_points(
                 f"Service point {target_id!r} must be inside facility {facility.id!r}'s zone {facility.zone_id!r}.",
                 target_id,
             )
-        if any(point_in_polygon(service_point.point_m, obstacle.polygon) for obstacle in obstacle_by_id.values()):
+        if any(
+            point_in_polygon(service_point.point_m, obstacle.polygon)
+            for obstacle in obstacle_by_id.values()
+        ):
             add(
                 "service_point_in_obstacle",
                 f"Service point {target_id!r} is inside or on a blocked obstacle.",
@@ -1423,7 +1580,9 @@ def validate_facility_service_points(
                 target_id,
             )
         own_footprint = footprint_by_id.get(facility.id)
-        if own_footprint is not None and not point_in_polygon(service_point.point_m, own_footprint.polygon):
+        if own_footprint is not None and not point_in_polygon(
+            service_point.point_m, own_footprint.polygon
+        ):
             add(
                 "service_point_outside_equipment",
                 f"Service point {target_id!r} must lie inside its facility equipment footprint.",
@@ -1506,11 +1665,16 @@ def validate_facility_service_points(
                     opening
                     for opening in editable_geometry.openings
                     if opening.wall_id == wall.wall_id
-                    and all(_point_on_segment(point, opening.start, opening.end) for point in intersections)
+                    and all(
+                        _point_on_segment(point, opening.start, opening.end)
+                        for point in intersections
+                    )
                 ]
                 if matching_openings:
                     approach_openings.append(
-                        RouteOpeningUse(route_id=approach_id, opening_id=matching_openings[0].opening_id)
+                        RouteOpeningUse(
+                            route_id=approach_id, opening_id=matching_openings[0].opening_id
+                        )
                     )
             approach_geometry = editable_geometry.model_copy(
                 update={
@@ -1526,9 +1690,7 @@ def validate_facility_service_points(
                 }
             )
             try:
-                validate_editable_routes(
-                    (approach,), approach_geometry, physical_zones=(zone,)
-                )
+                validate_editable_routes((approach,), approach_geometry, physical_zones=(zone,))
             except ValueError:
                 continue
             service_has_clear_approach = True
@@ -1540,7 +1702,9 @@ def validate_facility_service_points(
                 target_id,
             )
     for facility in facilities:
-        declared_capacity = facility.working_units if facility.working_units is not None else facility.capacity
+        declared_capacity = (
+            facility.working_units if facility.working_units is not None else facility.capacity
+        )
         if service_capacity_by_facility.get(facility.id, 0) > declared_capacity:
             add(
                 "service_point_capacity_exceeds_facility",
@@ -1570,7 +1734,8 @@ def revalidate_standard_facility(
         candidate_geometry = (
             design.geometry
             if geometry is None
-            else geometry if isinstance(geometry, FacilityGeometry)
+            else geometry
+            if isinstance(geometry, FacilityGeometry)
             else FacilityGeometry.model_validate(geometry)
         )
         candidate_editable = (
@@ -1594,14 +1759,20 @@ def revalidate_standard_facility(
 
     candidate_geometry = with_legacy_service_points(candidate_geometry, design.facilities)
 
-    changed = candidate_geometry != design.geometry or candidate_editable != design.editable_geometry
+    changed = (
+        candidate_geometry != design.geometry or candidate_editable != design.editable_geometry
+    )
     if changed:
         candidate_geometry = candidate_geometry.model_copy(
             update={
                 "source_ids": tuple(sorted(set(candidate_geometry.source_ids) | {edit_source_id})),
                 "source_kind": "operator",
                 "zones": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate_geometry.zones
                 ),
             }
@@ -1609,60 +1780,109 @@ def revalidate_standard_facility(
         candidate_editable = candidate_editable.model_copy(
             update={
                 "walls": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate_editable.walls
                 ),
                 "openings": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate_editable.openings
                 ),
                 "obstacles": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate_editable.obstacles
                 ),
                 "equipment_footprints": tuple(
-                    item.model_copy(update={"source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))})
+                    item.model_copy(
+                        update={
+                            "source_ids": tuple(sorted(set(item.source_ids) | {edit_source_id}))
+                        }
+                    )
                     for item in candidate_editable.equipment_footprints
                 ),
             }
         )
 
     issues: list[FacilityGeometryIssue] = []
-    def add_error(code: str, message: str, target_id: str | None = None) -> None:
-        issues.append(FacilityGeometryIssue(code=code, message=message[:1_000], target_id=target_id))
 
-    if not math.isclose(candidate_geometry.width_m, candidate_editable.width_m, rel_tol=0, abs_tol=1e-9) or not math.isclose(
+    def add_error(code: str, message: str, target_id: str | None = None) -> None:
+        issues.append(
+            FacilityGeometryIssue(code=code, message=message[:1_000], target_id=target_id)
+        )
+
+    if not math.isclose(
+        candidate_geometry.width_m, candidate_editable.width_m, rel_tol=0, abs_tol=1e-9
+    ) or not math.isclose(
         candidate_geometry.height_m, candidate_editable.height_m, rel_tol=0, abs_tol=1e-9
     ):
-        add_error("geometry_dimensions_mismatch", "Walkable and editable geometry must use the same metric dimensions.")
+        add_error(
+            "geometry_dimensions_mismatch",
+            "Walkable and editable geometry must use the same metric dimensions.",
+        )
     building_area = candidate_geometry.width_m * candidate_geometry.height_m
     zone_by_id = {zone.zone_id: zone for zone in candidate_geometry.zones}
     design_zone_ids = {zone.id for zone in design.zones}
     if set(zone_by_id) != design_zone_ids:
-        add_error("zone_set_mismatch", "Edited geometry must preserve the standard design's zone IDs.")
+        add_error(
+            "zone_set_mismatch", "Edited geometry must preserve the standard design's zone IDs."
+        )
     for zone in candidate_geometry.zones:
         if any(
             not 0 <= point.x <= candidate_geometry.width_m
             or not 0 <= point.y <= candidate_geometry.height_m
             for point in zone.polygon
         ):
-            add_error("zone_out_of_bounds", f"Zone {zone.zone_id!r} leaves the building bounds.", zone.zone_id)
-        polygon_area = abs(
-            sum(a.x * b.y - b.x * a.y for a, b in zip(zone.polygon, zone.polygon[1:] + zone.polygon[:1]))
-        ) / 2
-        if not _valid_simple_polygon(zone.polygon) or zone.usable_area_m2 <= 0 or zone.usable_area_m2 > polygon_area + 1e-6:
-            add_error("zone_area_invalid", f"Zone {zone.zone_id!r} has invalid polygon or usable area.", zone.zone_id)
+            add_error(
+                "zone_out_of_bounds",
+                f"Zone {zone.zone_id!r} leaves the building bounds.",
+                zone.zone_id,
+            )
+        polygon_area = (
+            abs(
+                sum(
+                    a.x * b.y - b.x * a.y
+                    for a, b in zip(zone.polygon, zone.polygon[1:] + zone.polygon[:1])
+                )
+            )
+            / 2
+        )
+        if (
+            not _valid_simple_polygon(zone.polygon)
+            or zone.usable_area_m2 <= 0
+            or zone.usable_area_m2 > polygon_area + 1e-6
+        ):
+            add_error(
+                "zone_area_invalid",
+                f"Zone {zone.zone_id!r} has invalid polygon or usable area.",
+                zone.zone_id,
+            )
     try:
         _validate_physical_zone_polygons(candidate_geometry.zones)
     except ValueError as exc:
         add_error("zone_overlap_or_topology", str(exc))
     if sum(zone.usable_area_m2 for zone in candidate_geometry.zones) > building_area + 1e-6:
-        add_error("usable_area_exceeds_building", "Summed usable zone area exceeds gross building area.")
+        add_error(
+            "usable_area_exceeds_building", "Summed usable zone area exceeds gross building area."
+        )
 
     route_by_id = {route.edge_id: route for route in candidate_geometry.routes}
     expected_route_ids = {edge.id for edge in design.zone_edges}
     if set(route_by_id) != expected_route_ids:
-        add_error("route_set_mismatch", "Edited geometry routes must match the standard design's directed zone edges.")
+        add_error(
+            "route_set_mismatch",
+            "Edited geometry routes must match the standard design's directed zone edges.",
+        )
     try:
         validate_editable_routes(
             candidate_geometry.routes,
@@ -1697,7 +1917,11 @@ def revalidate_standard_facility(
                     f"Route {route.edge_id!r} must end inside its declared target zone {edge.to_zone_id!r}.",
                     route.edge_id,
                 )
-        if edge and ({edge.from_zone_id, edge.to_zone_id} & required_access_zones) and not route.accessible:
+        if (
+            edge
+            and ({edge.from_zone_id, edge.to_zone_id} & required_access_zones)
+            and not route.accessible
+        ):
             add_error(
                 "accessible_route_deficit",
                 f"Route {route.edge_id!r} is narrower than the required 1.8 m accessible-route width.",
@@ -1706,14 +1930,27 @@ def revalidate_standard_facility(
 
     facility_by_id = {facility.id: facility for facility in design.facilities}
     if set(candidate_geometry.facility_points) != set(facility_by_id):
-        add_error("facility_position_set_mismatch", "Every generated facility must have exactly one edited position.")
+        add_error(
+            "facility_position_set_mismatch",
+            "Every generated facility must have exactly one edited position.",
+        )
     for facility_id, point in candidate_geometry.facility_points.items():
         facility = facility_by_id.get(facility_id)
         zone = zone_by_id.get(facility.zone_id) if facility else None
         if zone is None or not point_in_polygon(point, zone.polygon):
-            add_error("facility_position_outside_zone", f"Facility {facility_id!r} lies outside its assigned zone.", facility_id)
-        if any(point_in_polygon(point, obstacle.polygon) for obstacle in candidate_editable.obstacles):
-            add_error("facility_position_inside_obstacle", f"Facility {facility_id!r} overlaps an obstacle.", facility_id)
+            add_error(
+                "facility_position_outside_zone",
+                f"Facility {facility_id!r} lies outside its assigned zone.",
+                facility_id,
+            )
+        if any(
+            point_in_polygon(point, obstacle.polygon) for obstacle in candidate_editable.obstacles
+        ):
+            add_error(
+                "facility_position_inside_obstacle",
+                f"Facility {facility_id!r} overlaps an obstacle.",
+                facility_id,
+            )
     footprint_by_id = {item.facility_id: item for item in candidate_editable.equipment_footprints}
     for footprint in candidate_editable.equipment_footprints:
         facility = facility_by_id.get(footprint.facility_id)
@@ -1735,7 +1972,10 @@ def revalidate_standard_facility(
                     footprint.facility_id,
                 )
                 break
-        if any(_polygons_overlap(footprint.polygon, obstacle.polygon) for obstacle in candidate_editable.obstacles):
+        if any(
+            _polygons_overlap(footprint.polygon, obstacle.polygon)
+            for obstacle in candidate_editable.obstacles
+        ):
             add_error(
                 "equipment_overlaps_obstacle",
                 f"Equipment footprint {footprint.facility_id!r} intersects an obstacle.",
@@ -1751,7 +1991,8 @@ def revalidate_standard_facility(
                 footprint.facility_id,
             )
         if any(
-            other_id != footprint.facility_id and _polygons_overlap(footprint.polygon, other.polygon)
+            other_id != footprint.facility_id
+            and _polygons_overlap(footprint.polygon, other.polygon)
             for other_id, other in footprint_by_id.items()
         ):
             add_error(
@@ -1763,7 +2004,11 @@ def revalidate_standard_facility(
         item.facility_id for item in candidate_editable.equipment_footprints
     } - set(facility_by_id)
     for facility_id in sorted(unknown_footprints):
-        add_error("unknown_equipment_footprint", f"Equipment footprint {facility_id!r} has no matching facility.", facility_id)
+        add_error(
+            "unknown_equipment_footprint",
+            f"Equipment footprint {facility_id!r} has no matching facility.",
+            facility_id,
+        )
 
     sleeping = zone_by_id.get("sleeping")
     excluded_sleeping_area_m2 = 0.0
@@ -1786,12 +2031,17 @@ def revalidate_standard_facility(
                     obstacle.obstacle_id,
                 )
                 continue
-            excluded_sleeping_area_m2 += abs(
-                sum(
-                    start.x * end.y - end.x * start.y
-                    for start, end in zip(obstacle.polygon, obstacle.polygon[1:] + obstacle.polygon[:1])
+            excluded_sleeping_area_m2 += (
+                abs(
+                    sum(
+                        start.x * end.y - end.x * start.y
+                        for start, end in zip(
+                            obstacle.polygon, obstacle.polygon[1:] + obstacle.polygon[:1]
+                        )
+                    )
                 )
-            ) / 2
+                / 2
+            )
         for footprint in candidate_editable.equipment_footprints:
             facility = facility_by_id.get(footprint.facility_id)
             if facility is not None and facility.zone_id == "sleeping":
@@ -1811,9 +2061,12 @@ def revalidate_standard_facility(
         ),
         None,
     )
-    supported_capacity = min(area_capacity, source_capacity) if source_capacity is not None else area_capacity
+    supported_capacity = (
+        min(area_capacity, source_capacity) if source_capacity is not None else area_capacity
+    )
     warnings = [
-        warning for warning in design.warnings
+        warning
+        for warning in design.warnings
         if "参考収容数" not in warning
         and "公開収容数" not in warning
         and "1.8 m未満" not in warning
@@ -1856,7 +2109,9 @@ def revalidate_standard_facility(
     )
 
 
-def _opening_endpoint(center: Point2D, start: Point2D, end: Point2D, direction: int, width: float) -> Point2D:
+def _opening_endpoint(
+    center: Point2D, start: Point2D, end: Point2D, direction: int, width: float
+) -> Point2D:
     length = math.hypot(end.x - start.x, end.y - start.y)
     if length == 0:
         raise ValueError("opening references a zero-length wall")
@@ -1910,12 +2165,16 @@ def _point_segment_distance(point: Point2D, start: Point2D, end: Point2D) -> flo
     length_squared = dx * dx + dy * dy
     if length_squared <= 1e-18:
         return math.hypot(point.x - start.x, point.y - start.y)
-    fraction = max(0.0, min(1.0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared))
+    fraction = max(
+        0.0, min(1.0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared)
+    )
     closest = Point2D(x=start.x + fraction * dx, y=start.y + fraction * dy)
     return math.hypot(point.x - closest.x, point.y - closest.y)
 
 
-def _segment_distance(start: Point2D, end: Point2D, other_start: Point2D, other_end: Point2D) -> float:
+def _segment_distance(
+    start: Point2D, end: Point2D, other_start: Point2D, other_end: Point2D
+) -> float:
     if _segment_intersection_points(start, end, other_start, other_end):
         return 0.0
     return min(
@@ -1995,11 +2254,13 @@ def _polygons_have_interior_overlap(
             x=sum(
                 (start.x + end.x) * (start.x * end.y - end.x * start.y)
                 for start, end in zip(polygon, polygon[1:] + polygon[:1])
-            ) / (3 * cross_sum),
+            )
+            / (3 * cross_sum),
             y=sum(
                 (start.y + end.y) * (start.x * end.y - end.x * start.y)
                 for start, end in zip(polygon, polygon[1:] + polygon[:1])
-            ) / (3 * cross_sum),
+            )
+            / (3 * cross_sum),
         )
         return centroid if strictly_inside(centroid, polygon) else None
 
@@ -2071,7 +2332,9 @@ def _segment_has_polygon_clearance(
                 for edge_start, edge_end in zip(
                     other.polygon, other.polygon[1:] + other.polygon[:1]
                 ):
-                    for crossing in _segment_intersection_points(first, second, edge_start, edge_end):
+                    for crossing in _segment_intersection_points(
+                        first, second, edge_start, edge_end
+                    ):
                         if abs(dx) >= abs(dy) and abs(dx) > 1e-12:
                             fraction = (crossing.x - first.x) / dx
                         elif abs(dy) > 1e-12:
@@ -2085,8 +2348,7 @@ def _segment_has_polygon_clearance(
                 midpoint_t = (lower + upper) / 2
                 midpoint = Point2D(x=first.x + midpoint_t * dx, y=first.y + midpoint_t * dy)
                 shared_boundary = any(
-                    other.zone_id != zone.zone_id
-                    and point_in_polygon(midpoint, other.polygon)
+                    other.zone_id != zone.zone_id and point_in_polygon(midpoint, other.polygon)
                     for other in zones
                 )
                 if shared_boundary:
@@ -2098,14 +2360,10 @@ def _segment_has_polygon_clearance(
     return True
 
 
-def _segment_intersects_polygon(
-    start: Point2D, end: Point2D, polygon: tuple[Point2D, ...]
-) -> bool:
+def _segment_intersects_polygon(start: Point2D, end: Point2D, polygon: tuple[Point2D, ...]) -> bool:
     if point_in_polygon(start, polygon) or point_in_polygon(end, polygon):
         return True
     return any(
         _segment_intersection_points(start, end, first, second)
         for first, second in zip(polygon, polygon[1:] + polygon[:1])
     )
-
-

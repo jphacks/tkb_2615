@@ -94,7 +94,9 @@ def test_environment_key_is_suppressed_outside_explicit_live_integration_case(
     monkeypatch.delenv("SHELTERSIM_ALLOW_LIVE_API_TESTS", raising=False)
     assert LLMSettings.from_env().api_key is None
     monkeypatch.setenv("SHELTERSIM_ALLOW_LIVE_API_TESTS", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/live/test_live_api.py::test_live_models (call)")
+    monkeypatch.setenv(
+        "PYTEST_CURRENT_TEST", "tests/live/test_live_api.py::test_live_models (call)"
+    )
     assert LLMSettings.from_env().api_key == "sk-ant-test-key-not-used"
     # tests/integration holds ordinary offline integration tests, not paid ones.
     monkeypatch.setenv(
@@ -116,14 +118,27 @@ def test_price_floor_prevents_undercount_and_unknown_model_is_not_called() -> No
     assert underpriced.price_for(underpriced.opus_model) == ModelPrice(4.0, 20.0)
 
     provider = FakeProvider()
-    unknown = LLMSettings(mode="record", api_key="test", opus_model="claude-unpriced-model",
-        budget_usd=1, cache_path=Path("unused.json"))
+    unknown = LLMSettings(
+        mode="record",
+        api_key="test",
+        opus_model="claude-unpriced-model",
+        budget_usd=1,
+        cache_path=Path("unused.json"),
+    )
     router = LLMRouter(unknown, provider=provider, tape=ResponseTape())
-    assert json.loads(router.complete(LLMTask(stage=LLMStage.PREPARE,
-        input_text="request", state_hash="state", prompt_version="unknown-model-v1",
-        fallback_text='{"priority":0,"rationale":"rule-based fallback"}',
-        output_schema=SUPPORT_ADVICE_SCHEMA, max_output_tokens=32))) == {
-            "priority": 0, "rationale": "rule-based fallback"}
+    assert json.loads(
+        router.complete(
+            LLMTask(
+                stage=LLMStage.PREPARE,
+                input_text="request",
+                state_hash="state",
+                prompt_version="unknown-model-v1",
+                fallback_text='{"priority":0,"rationale":"rule-based fallback"}',
+                output_schema=SUPPORT_ADVICE_SCHEMA,
+                max_output_tokens=32,
+            )
+        )
+    ) == {"priority": 0, "rationale": "rule-based fallback"}
     assert provider.calls == []
     assert router.records[0].outcome == "unknown_model_price"
 
@@ -151,16 +166,28 @@ def test_cache_hit_and_replay_reuse_exact_inputs_without_network() -> None:
 
 
 def test_non_search_tape_identity_remains_compatible_with_prior_cache_keys() -> None:
-    task = LLMTask(stage=LLMStage.PREPARE, input_text="same input", state_hash="same state",
-        prompt_version="same prompt", max_output_tokens=32)
+    task = LLMTask(
+        stage=LLMStage.PREPARE,
+        input_text="same input",
+        state_hash="same state",
+        prompt_version="same prompt",
+        max_output_tokens=32,
+    )
     old_material = {
-        "stage": "prepare", "model_id": "claude-opus-5", "state_hash": "same state",
+        "stage": "prepare",
+        "model_id": "claude-opus-5",
+        "state_hash": "same state",
         "input_hash": hashlib.sha256(b'"same input"').hexdigest(),
-        "prompt_version": "same prompt", "schema_version": 1,
-        "output_schema": None, "max_output_tokens": 32,
+        "prompt_version": "same prompt",
+        "schema_version": 1,
+        "output_schema": None,
+        "max_output_tokens": 32,
     }
-    expected = hashlib.sha256(json.dumps(old_material, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+    expected = hashlib.sha256(
+        json.dumps(
+            old_material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
     assert task.cache_key("claude-opus-5") == expected
 
 
@@ -168,8 +195,12 @@ def test_tape_snapshot_is_json_native_for_project_checkpoints() -> None:
     from sheltersim.storage.projects import safe_document
 
     tape = ResponseTape()
-    tape.put("key", ProviderResponse(text="{}", model_id="claude-haiku-5-5", input_tokens=1,
-                                     output_tokens=1, elapsed_ms=0.0))
+    tape.put(
+        "key",
+        ProviderResponse(
+            text="{}", model_id="claude-haiku-5-5", input_tokens=1, output_tokens=1, elapsed_ms=0.0
+        ),
+    )
     document = tape.to_dict()
 
     # Project storage rejects a Checkpoint whose sanitized copy differs from it.
@@ -238,9 +269,7 @@ def test_schema_invalid_output_is_classified_and_retains_actual_usage() -> None:
 
 
 def test_empty_text_response_is_fallback_with_reported_provider_usage() -> None:
-    router = LLMRouter(
-        settings(), provider=FakeProvider(responses=[""]), tape=ResponseTape()
-    )
+    router = LLMRouter(settings(), provider=FakeProvider(responses=[""]), tape=ResponseTape())
 
     assert json.loads(router.complete(task()))["priority"] == 0
     assert router.records[0].outcome == "invalid_output"
@@ -301,34 +330,59 @@ def test_stop_policy_raises_after_recording_failure() -> None:
 
 
 def test_official_domain_search_captures_citations_and_itemized_billable_usage() -> None:
-    citation = SimpleNamespace(type="web_search_result_location",
-        url="https://www.city.example.lg.jp/shelter", title="Municipal shelter page",
-        cited_text="Official page excerpt")
-    foreign = SimpleNamespace(type="web_search_result_location",
-        url="https://example.com/page", title="Unapproved page", cited_text="ignored")
+    citation = SimpleNamespace(
+        type="web_search_result_location",
+        url="https://www.city.example.lg.jp/shelter",
+        title="Municipal shelter page",
+        cited_text="Official page excerpt",
+    )
+    foreign = SimpleNamespace(
+        type="web_search_result_location",
+        url="https://example.com/page",
+        title="Unapproved page",
+        cited_text="ignored",
+    )
     text_block = SimpleNamespace(type="text", text='{"ok":true}', citations=[citation, foreign])
-    usage = SimpleNamespace(input_tokens=100, output_tokens=20,
-        cache_creation_input_tokens=30, cache_creation=SimpleNamespace(
-            ephemeral_5m_input_tokens=10, ephemeral_1h_input_tokens=20),
-        cache_read_input_tokens=5, server_tool_use=SimpleNamespace(web_search_requests=1))
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=20,
+        cache_creation_input_tokens=30,
+        cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=10, ephemeral_1h_input_tokens=20),
+        cache_read_input_tokens=5,
+        server_tool_use=SimpleNamespace(web_search_requests=1),
+    )
 
     class Messages:
         request = None
 
         def create(self, **kwargs):
             self.request = kwargs
-            return SimpleNamespace(content=[text_block], usage=usage, model="claude-opus-5-5",
-                                   id="msg-test")
+            return SimpleNamespace(
+                content=[text_block], usage=usage, model="claude-opus-5-5", id="msg-test"
+            )
 
     messages = Messages()
-    task = LLMTask(stage=LLMStage.PREPARE, input_text="Find official municipal sources",
-        state_hash="region-state", prompt_version="source-candidates-v1",
-        fallback_text='{"ok":false}', max_output_tokens=64,
-        web_search_allowed_domains=("go.jp", "lg.jp"), max_web_searches=1)
+    task = LLMTask(
+        stage=LLMStage.PREPARE,
+        input_text="Find official municipal sources",
+        state_hash="region-state",
+        prompt_version="source-candidates-v1",
+        fallback_text='{"ok":false}',
+        max_output_tokens=64,
+        web_search_allowed_domains=("go.jp", "lg.jp"),
+        max_web_searches=1,
+    )
     response = AnthropicProvider("test-key", client=SimpleNamespace(messages=messages)).complete(
-        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=5)
-    assert messages.request["tools"] == [{"type": "web_search_20250305", "name": "web_search",
-        "max_uses": 1, "allowed_domains": ["go.jp", "lg.jp"]}]
+        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=5
+    )
+    assert messages.request["tools"] == [
+        {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 1,
+            "allowed_domains": ["go.jp", "lg.jp"],
+        }
+    ]
     assert len(response.citations) == 1
     assert response.citations[0].url.endswith("/shelter")
     assert response.cache_creation_5m_input_tokens == 10
@@ -340,15 +394,22 @@ def test_official_domain_search_captures_citations_and_itemized_billable_usage()
     restored = ResponseTape.from_dict(persisted.to_dict())
     assert restored.get(task.cache_key(response.model_id)).citations == response.citations
 
-    router = LLMRouter(LLMSettings(mode=LLMMode.RECORD, api_key="test",
-        budget_usd=10, max_input_tokens=256, max_output_tokens=64),
+    router = LLMRouter(
+        LLMSettings(
+            mode=LLMMode.RECORD,
+            api_key="test",
+            budget_usd=10,
+            max_input_tokens=256,
+            max_output_tokens=64,
+        ),
         provider=AnthropicProvider("test-key", client=SimpleNamespace(messages=messages)),
-        tape=ResponseTape())
+        tape=ResponseTape(),
+    )
     router.complete(task)
     assert router.records[0].web_search_requests == 1
     assert router.records[0].cache_creation_input_tokens == 30
-    assert router.records[0].estimated_search_cost_usd == .01
-    assert router.records[0].estimated_cost_usd == pytest.approx(.011011)
+    assert router.records[0].estimated_search_cost_usd == 0.01
+    assert router.records[0].estimated_cost_usd == pytest.approx(0.011011)
 
 
 @pytest.mark.parametrize("search_enabled", [False, True])
@@ -399,7 +460,8 @@ def test_messages_use_streaming_when_sdk_supports_it(search_enabled: bool) -> No
     )
     messages = Messages()
     result = AnthropicProvider("test-key", client=SimpleNamespace(messages=messages)).complete(
-        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=60)
+        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=60
+    )
 
     assert messages.called
     if search_enabled:
@@ -456,14 +518,22 @@ def _captured_request(stage: LLMStage) -> dict:
 
         def create(self, **kwargs):
             self.request = kwargs
-            return SimpleNamespace(content=[text_block], usage=usage, model="claude-opus-5-5",
-                                   id="msg-test")
+            return SimpleNamespace(
+                content=[text_block], usage=usage, model="claude-opus-5-5", id="msg-test"
+            )
 
     messages = Messages()
-    stage_task = LLMTask(stage=stage, input_text="request", state_hash="state",
-        prompt_version="stage-request-v1", fallback_text='{"ok":false}', max_output_tokens=64)
+    stage_task = LLMTask(
+        stage=stage,
+        input_text="request",
+        state_hash="state",
+        prompt_version="stage-request-v1",
+        fallback_text='{"ok":false}',
+        max_output_tokens=64,
+    )
     AnthropicProvider("test-key", client=SimpleNamespace(messages=messages)).complete(
-        model_id="claude-opus-5-5", task=stage_task, max_output_tokens=64, timeout_seconds=5)
+        model_id="claude-opus-5-5", task=stage_task, max_output_tokens=64, timeout_seconds=5
+    )
     return messages.request
 
 
@@ -483,10 +553,22 @@ def test_router_adds_thinking_headroom_outside_runtime() -> None:
 
     provider = FakeProvider(responses=['{"ok":true}'])
     router = LLMRouter(settings(budget_usd=1.0), provider=provider, tape=ResponseTape())
-    router.complete(LLMTask(stage=LLMStage.PREPARE, input_text="request", state_hash="state",
-        prompt_version="headroom-v1", fallback_text='{"ok":false}', max_output_tokens=32,
-        output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}},
-                       "required": ["ok"], "additionalProperties": False}))
+    router.complete(
+        LLMTask(
+            stage=LLMStage.PREPARE,
+            input_text="request",
+            state_hash="state",
+            prompt_version="headroom-v1",
+            fallback_text='{"ok":false}',
+            max_output_tokens=32,
+            output_schema={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+        )
+    )
     runtime_provider = FakeProvider()
     LLMRouter(settings(), provider=runtime_provider, tape=ResponseTape()).complete(task())
 
@@ -496,8 +578,14 @@ def test_router_adds_thinking_headroom_outside_runtime() -> None:
 
 
 def _schema_task(schema: dict) -> LLMTask:
-    return LLMTask(stage=LLMStage.PREPARE, input_text="request", state_hash="state",
-        prompt_version="schema-v1", output_schema=schema, fallback_text="{}")
+    return LLMTask(
+        stage=LLMStage.PREPARE,
+        input_text="request",
+        state_hash="state",
+        prompt_version="schema-v1",
+        output_schema=schema,
+        fallback_text="{}",
+    )
 
 
 def test_validator_follows_pydantic_refs_unions_and_typed_maps() -> None:
@@ -508,8 +596,12 @@ def test_validator_follows_pydantic_refs_unions_and_typed_maps() -> None:
         "$defs": {"Share": {"type": "number", "minimum": 0, "exclusiveMaximum": 1}},
         "properties": {
             "shares": {"type": "object", "additionalProperties": {"$ref": "#/$defs/Share"}},
-            "kind": {"oneOf": [{"const": "outage", "type": "string"},
-                               {"const": "closure", "type": "string"}]},
+            "kind": {
+                "oneOf": [
+                    {"const": "outage", "type": "string"},
+                    {"const": "closure", "type": "string"},
+                ]
+            },
             "code": {"type": "string", "pattern": "^[0-9]{5}$", "minLength": 5},
         },
         "required": ["shares", "kind"],
@@ -543,28 +635,44 @@ def test_adapter_keeps_search_results_when_the_json_answer_has_no_citations() ->
     def result(url: str, title: str) -> SimpleNamespace:
         return SimpleNamespace(type="web_search_result", url=url, title=title)
 
-    search_block = SimpleNamespace(type="web_search_tool_result", content=[
-        result("https://www.city.example.lg.jp/bousai", "Municipal disaster plan"),
-        result("https://example.com/blog", "Unapproved page"),
-        result("https://www.city.example.lg.jp/bousai", "Duplicate"),
-    ])
-    error_block = SimpleNamespace(type="web_search_tool_result",
-                                  content=SimpleNamespace(type="web_search_tool_result_error"))
+    search_block = SimpleNamespace(
+        type="web_search_tool_result",
+        content=[
+            result("https://www.city.example.lg.jp/bousai", "Municipal disaster plan"),
+            result("https://example.com/blog", "Unapproved page"),
+            result("https://www.city.example.lg.jp/bousai", "Duplicate"),
+        ],
+    )
+    error_block = SimpleNamespace(
+        type="web_search_tool_result", content=SimpleNamespace(type="web_search_tool_result_error")
+    )
     text_block = SimpleNamespace(type="text", text='{"ok":true}', citations=None)
-    usage = SimpleNamespace(input_tokens=100, output_tokens=20,
-                            server_tool_use=SimpleNamespace(web_search_requests=1))
+    usage = SimpleNamespace(
+        input_tokens=100, output_tokens=20, server_tool_use=SimpleNamespace(web_search_requests=1)
+    )
 
     class Messages:
         def create(self, **_kwargs):
-            return SimpleNamespace(content=[search_block, error_block, text_block], usage=usage,
-                                   model="claude-opus-5-5", id="msg-test")
+            return SimpleNamespace(
+                content=[search_block, error_block, text_block],
+                usage=usage,
+                model="claude-opus-5-5",
+                id="msg-test",
+            )
 
-    task = LLMTask(stage=LLMStage.PREPARE, input_text="Find official municipal sources",
-        state_hash="region-state", prompt_version="source-candidates-v1",
-        fallback_text='{"ok":false}', max_output_tokens=64,
-        web_search_allowed_domains=("go.jp", "lg.jp"), max_web_searches=1)
+    task = LLMTask(
+        stage=LLMStage.PREPARE,
+        input_text="Find official municipal sources",
+        state_hash="region-state",
+        prompt_version="source-candidates-v1",
+        fallback_text='{"ok":false}',
+        max_output_tokens=64,
+        web_search_allowed_domains=("go.jp", "lg.jp"),
+        max_web_searches=1,
+    )
     response = AnthropicProvider("test-key", client=SimpleNamespace(messages=Messages())).complete(
-        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=5)
+        model_id="claude-opus-5-5", task=task, max_output_tokens=64, timeout_seconds=5
+    )
 
     assert [citation.url for citation in response.citations] == [
         "https://www.city.example.lg.jp/bousai"
@@ -582,9 +690,7 @@ def test_task_input_byte_limit_lets_a_bounded_large_context_reach_the_provider()
     assert provider.calls == []
     assert router.records[-1].outcome == "input_token_limit"
 
-    declared = LLMTask(
-        **{**task(text=oversized).__dict__, "input_byte_limit": 2_000}
-    )
+    declared = LLMTask(**{**task(text=oversized).__dict__, "input_byte_limit": 2_000})
     router.complete(declared)
     assert len(provider.calls) == 1
     assert router.records[-1].outcome == "recorded"
@@ -599,8 +705,9 @@ def test_task_input_byte_limit_lets_a_bounded_large_context_reach_the_provider()
 
 def test_task_input_byte_limit_never_lowers_a_larger_setting() -> None:
     provider = FakeProvider()
-    router = LLMRouter(settings(max_input_tokens=4_096, budget_usd=1.0), provider=provider,
-                       tape=ResponseTape())
+    router = LLMRouter(
+        settings(max_input_tokens=4_096, budget_usd=1.0), provider=provider, tape=ResponseTape()
+    )
 
     router.complete(LLMTask(**{**task(text="z" * 3_000).__dict__, "input_byte_limit": 1_000}))
 

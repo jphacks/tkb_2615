@@ -125,9 +125,14 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_
     settings = LLMSettings.from_env().for_live_integration_tests()
     # Opus and Sonnet always think, so each non-runtime call reserves thinking headroom
     # (about $0.09 for Opus before the call); actual spend stays far below this cap.
-    settings = replace(settings, max_api_calls=3, live_test_max_calls=3,
-                       live_test_budget_usd=0.15, budget_usd=0.15,
-                       intervention_model_family="sonnet")
+    settings = replace(
+        settings,
+        max_api_calls=3,
+        live_test_max_calls=3,
+        live_test_budget_usd=0.15,
+        budget_usd=0.15,
+        intervention_model_family="sonnet",
+    )
     settings = replace(settings, cache_path=tmp_path / "live-api-tape.json")
     store = runtime_usage_store()
     store.create_project("runtime-accounts", _internal=True)
@@ -135,7 +140,11 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_
     ledger.create(usage_limits(settings))
     router = LLMRouter(settings)
     router.provider = AccountedProvider(
-        router.provider, ledger, settings, "live_api_qa", branch_id=None,
+        router.provider,
+        ledger,
+        settings,
+        "live_api_qa",
+        branch_id=None,
         campaign_ledger=task_campaign_ledger(store),
     )
     tasks = [
@@ -164,8 +173,10 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_
     # Billed output includes thinking outside runtime; runtime Haiku runs without it.
     answer_cap = 32
     for record in router.records:
-        limit = answer_cap if record.stage == LLMStage.RUNTIME.value else (
-            answer_cap + THINKING_HEADROOM_TOKENS
+        limit = (
+            answer_cap
+            if record.stage == LLMStage.RUNTIME.value
+            else (answer_cap + THINKING_HEADROOM_TOKENS)
         )
         assert record.output_tokens <= limit
     assert router.spent_usd <= settings.budget_usd
@@ -186,20 +197,36 @@ def test_live_official_domain_search_returns_only_verifiable_source_candidates(t
     from sheltersim.region.research import _official_source_search_task
 
     # Two calls of allowance: a web-search call reserves output for two sampling passes.
-    settings = replace(LLMSettings.from_env(), mode="record", max_api_calls=2,
-        max_input_tokens=4096, max_output_tokens=256, max_concurrency=1,
-        timeout_seconds=120, budget_usd=10, cache_path=tmp_path / "source-search-tape.json")
+    settings = replace(
+        LLMSettings.from_env(),
+        mode="record",
+        max_api_calls=2,
+        max_input_tokens=4096,
+        max_output_tokens=256,
+        max_concurrency=1,
+        timeout_seconds=120,
+        budget_usd=10,
+        cache_path=tmp_path / "source-search-tape.json",
+    )
     store = runtime_usage_store()
     store.create_project("runtime-accounts", _internal=True)
     local = UsageLedger(store, "runtime-accounts", "live-source-search-stream-qa")
     local.create(usage_limits(settings))
     campaign = task_campaign_ledger(store)
     router = LLMRouter(settings)
-    router.provider = AccountedProvider(router.provider, local, settings,
-        "live_official_source_search", branch_id=None, campaign_ledger=campaign)
-    task = _official_source_search_task(RegionResearchRequest(
-        municipality_query="墨田区", selected_municipality_name="墨田区",
-        disaster="earthquake"))
+    router.provider = AccountedProvider(
+        router.provider,
+        local,
+        settings,
+        "live_official_source_search",
+        branch_id=None,
+        campaign_ledger=campaign,
+    )
+    task = _official_source_search_task(
+        RegionResearchRequest(
+            municipality_query="墨田区", selected_municipality_name="墨田区", disaster="earthquake"
+        )
+    )
 
     output = router.complete(task)
     assert router.records[-1].outcome == "recorded"
@@ -208,19 +235,28 @@ def test_live_official_domain_search_returns_only_verifiable_source_candidates(t
     assert response is not None
     assert response.citations
     candidates = [
-        {"title": item.title, "url": item.url, "cited_text": item.cited_text,
-         "accessed_at": "2026-10-23T00:00:00+00:00"}
+        {
+            "title": item.title,
+            "url": item.url,
+            "cited_text": item.cited_text,
+            "accessed_at": "2026-10-23T00:00:00+00:00",
+        }
         for item in response.citations
     ]
     from sheltersim.region.models import LLMSearchSourceCandidate
+
     verified_candidates = [LLMSearchSourceCandidate.model_validate(item) for item in candidates]
-    assert all(item.status == "candidate_not_independently_verified" for item in verified_candidates)
+    assert all(
+        item.status == "candidate_not_independently_verified" for item in verified_candidates
+    )
     assert output
     assert campaign.summary()["totals"]["calls"] >= 1
     assert campaign.summary()["estimated_cost_usd"] < 50
 
 
-def test_live_scenario_intervention_runtime_review_and_results_question(tmp_path, monkeypatch) -> None:
+def test_live_scenario_intervention_runtime_review_and_results_question(
+    tmp_path, monkeypatch
+) -> None:
     """Exercise real feature schemas and saved evidence under the shared paid cap."""
     import json
     import uuid
@@ -356,15 +392,17 @@ def test_live_scenario_intervention_runtime_review_and_results_question(tmp_path
     projects_root = store.root
     demo = DemoService(usage_store=ProjectStore(projects_root))
     chat = ResultsChatService(InspectorService(tmp_path / "runs"), demo)
-    answer = chat.ask({
-        "run_id": output.name,
-        "branch_id": "main",
-        "question": (
-            "Return one cited fact for the exact JSON value in alias S1 field stress_mean. "
-            "Use field stress_mean and copy the scalar as a JSON-serialized string. "
-            "Do not add an explanation."
-        ),
-    })
+    answer = chat.ask(
+        {
+            "run_id": output.name,
+            "branch_id": "main",
+            "question": (
+                "Return one cited fact for the exact JSON value in alias S1 field stress_mean. "
+                "Use field stress_mean and copy the scalar as a JSON-serialized string. "
+                "Do not add an explanation."
+            ),
+        }
+    )
     print(
         "LIVE_FEATURE_QA="
         + json.dumps(
@@ -379,9 +417,14 @@ def test_live_scenario_intervention_runtime_review_and_results_question(tmp_path
                 "q_and_a": {
                     key: answer.get("usage", {}).get(key)
                     for key in (
-                        "outcome", "error_kind", "accepted_fact_count",
-                        "accepted_explanation_count", "rejected_fact_batch",
-                        "rejected_explanation_batch", "input_tokens", "output_tokens",
+                        "outcome",
+                        "error_kind",
+                        "accepted_fact_count",
+                        "accepted_explanation_count",
+                        "rejected_fact_batch",
+                        "rejected_explanation_batch",
+                        "input_tokens",
+                        "output_tokens",
                         "answer_fallback_kind",
                     )
                 },

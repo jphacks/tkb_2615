@@ -108,8 +108,10 @@ def test_an_entered_staff_total_keeps_one_general_staff_member(
 @pytest.mark.parametrize("population", [10, 30, 100])
 def test_small_standard_plans_give_every_room_an_accessible_doorway(population: int) -> None:
     design = StandardShelterGenerator().generate(FacilityDesignRequest(population=population))
-    assert all(route.accessible and route.width_m >= ACCESSIBLE_ROUTE_MIN_WIDTH_M
-               for route in design.geometry.routes)
+    assert all(
+        route.accessible and route.width_m >= ACCESSIBLE_ROUTE_MIN_WIDTH_M
+        for route in design.geometry.routes
+    )
     assert design.capacity_supported >= population
     layout = next(row for row in design.assumptions if row["subject"] == "standard_shelter_layout")
     assert layout["value"]["frontage_widened_zones"]

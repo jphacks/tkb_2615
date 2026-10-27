@@ -19,18 +19,27 @@ from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.storage.projects import digest
 
 
-def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_until: int,
-                state_hash: str | None = None) -> dict[str, Any]:
+def world_frame(
+    world: WorldState,
+    *,
+    run_id: str,
+    branch_id: str,
+    computed_until: int,
+    state_hash: str | None = None,
+) -> dict[str, Any]:
     """No state initialization, policy evaluation, RNG draws or provider capability.
 
     A caller that already holds the digest of ``world.to_dict()`` (a checkpoint's
     ``state_hash``) may pass it to avoid serializing the whole history again.
     """
     from sheltersim.domain.geometry_overlay import effective_geometry, effective_spatial_constraints
+
     geometry = effective_geometry(world)
     movement = world.model_state.get("movement_v1", {})
     positions = movement.get("positions", {})
-    traits = world.model_state.get("population_dynamics_v1", {}).get("profile_traits", world.model_configs.get("population", {}).get("people", {}))
+    traits = world.model_state.get("population_dynamics_v1", {}).get(
+        "profile_traits", world.model_configs.get("population", {}).get("people", {})
+    )
     memory = world.model_state.get("agent_dynamics_v1", {}).get("agents", {})
     staff_memory = world.model_state.get("staff_dynamics_v1", {}).get("staff", {})
     beliefs = world.model_state.get("information_spread_v1", {}).get("beliefs", {})
@@ -39,7 +48,7 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
     context_people = population_context_people(world)
     agents = []
     people = []
-    social_events,social_window_truncated = social_event_records(world)
+    social_events, social_window_truncated = social_event_records(world)
     group_zones: dict[str, set[str]] = {}
     for current_agent in world.agents.values():
         if current_household_id(world, current_agent.id) is not None:
@@ -52,9 +61,23 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
         point = Point2D.model_validate(record["point"]) if record.get("point") is not None else None
         kind = record.get("position_kind", "unavailable")
         zone = world.zones[agent.zone_id]
-        if point is None and geometry is None and zone.display_x is not None and zone.display_y is not None:
+        if (
+            point is None
+            and geometry is None
+            and zone.display_x is not None
+            and zone.display_y is not None
+        ):
             point, kind = Point2D(x=zone.display_x, y=zone.display_y), "display_only"
-        agents.append(AgentPosition(agent_id=agent.id, zone_id=record.get("zone_id", agent.zone_id), point=point, edge_id=record.get("edge_id"), progress=record.get("progress", 0), position_kind=kind))
+        agents.append(
+            AgentPosition(
+                agent_id=agent.id,
+                zone_id=record.get("zone_id", agent.zone_id),
+                point=point,
+                edge_id=record.get("edge_id"),
+                progress=record.get("progress", 0),
+                position_kind=kind,
+            )
+        )
         dialogue = [
             item
             for item in social_events
@@ -86,27 +109,31 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
                         support_wait_reason_codes(world, request_id, minute=world.minute_index)
                     )
                 active_care_requests.append(projected)
-        people.append({
-            "id": agent.id,
-            "group_id": agent.profile.group_id,
-            "zone_id": agent.zone_id,
-            "family_separated": bool(household_zones - {agent.zone_id}),
-            "activity": agent.activity.value,
-            "target_id": agent.target_id,
-            "stress": agent.stress,
-            "trust": agent.trust,
-            "needs": vars(agent.needs).copy(),
-            "mobility": agent.profile.mobility.value,
-            "support_need": agent.profile.support_need,
-            "traits": traits.get(agent.id),
-            "context": deepcopy(context_people.get(agent.id)) if isinstance(context_people, dict) else None,
-            "care_requests": active_care_requests,
-            "care_history": care_histories.get(agent.id, []),
-            "decision": memory.get(agent.id),
-            "beliefs": dict(list(beliefs.get(agent.id, {}).items())[:16]),
-            "dialogue": dialogue,
-            "dialogue_status": "structured_events_only" if dialogue else "no_retained_events",
-        })
+        people.append(
+            {
+                "id": agent.id,
+                "group_id": agent.profile.group_id,
+                "zone_id": agent.zone_id,
+                "family_separated": bool(household_zones - {agent.zone_id}),
+                "activity": agent.activity.value,
+                "target_id": agent.target_id,
+                "stress": agent.stress,
+                "trust": agent.trust,
+                "needs": vars(agent.needs).copy(),
+                "mobility": agent.profile.mobility.value,
+                "support_need": agent.profile.support_need,
+                "traits": traits.get(agent.id),
+                "context": deepcopy(context_people.get(agent.id))
+                if isinstance(context_people, dict)
+                else None,
+                "care_requests": active_care_requests,
+                "care_history": care_histories.get(agent.id, []),
+                "decision": memory.get(agent.id),
+                "beliefs": dict(list(beliefs.get(agent.id, {}).items())[:16]),
+                "dialogue": dialogue,
+                "dialogue_status": "structured_events_only" if dialogue else "no_retained_events",
+            }
+        )
     kpis = MetricSnapshot.from_world(world).csv_row()
     kpis.pop("source_ids_json", None)
     kpis.update(resource_metric_values(world) or {})
@@ -136,32 +163,67 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
                 )
                 break
             remaining -= segment
-        incoming_arrivals.append({
-            "agent_id": item["profile"]["id"],
-            "route_id": route.route_id,
-            "destination_zone_id": route.destination_zone_id,
-            "position": position.model_dump(mode="json"),
-            "progress": progress,
-            "status": (
-                "awaiting_admission"
-                if item.get("approach_completed_minute") is not None
-                else "censored"
-                if world.minute_index >= world.duration_minutes
-                and item["approach_due_minute"] >= world.duration_minutes
-                else "approaching"
-            ),
-            "arrival_minute": item["approach_due_minute"],
-        })
-    capacity = sum(zone.capacity or 0 for key, zone in world.zones.items() if key == "sleeping" or key.startswith("sleeping_"))
-    kpis.update({"population": len(world.agents), "pending_arrivals": len(pending), "sleeping_capacity": capacity, "occupancy_ratio": len(world.agents) / capacity if capacity else None})
-    events = [{"event_id": r.event.event_id, "minute": r.realized_minute, "event_type": r.event.event_type, "kind": r.event.kind.value, "status": r.status.value, "source_id": r.event.source_id, "causation_id": r.event.causation_id} for r in world.event_log.recent(100)]
-    frame = TimelineFrame(run_id=run_id, branch_id=branch_id, minute=world.minute_index, computed_until=computed_until, state_hash=state_hash if state_hash is not None else digest(world.to_dict()), agents=tuple(agents), kpis=kpis, events=tuple(events)).model_dump(mode="json")
+        incoming_arrivals.append(
+            {
+                "agent_id": item["profile"]["id"],
+                "route_id": route.route_id,
+                "destination_zone_id": route.destination_zone_id,
+                "position": position.model_dump(mode="json"),
+                "progress": progress,
+                "status": (
+                    "awaiting_admission"
+                    if item.get("approach_completed_minute") is not None
+                    else "censored"
+                    if world.minute_index >= world.duration_minutes
+                    and item["approach_due_minute"] >= world.duration_minutes
+                    else "approaching"
+                ),
+                "arrival_minute": item["approach_due_minute"],
+            }
+        )
+    capacity = sum(
+        zone.capacity or 0
+        for key, zone in world.zones.items()
+        if key == "sleeping" or key.startswith("sleeping_")
+    )
+    kpis.update(
+        {
+            "population": len(world.agents),
+            "pending_arrivals": len(pending),
+            "sleeping_capacity": capacity,
+            "occupancy_ratio": len(world.agents) / capacity if capacity else None,
+        }
+    )
+    events = [
+        {
+            "event_id": r.event.event_id,
+            "minute": r.realized_minute,
+            "event_type": r.event.event_type,
+            "kind": r.event.kind.value,
+            "status": r.status.value,
+            "source_id": r.event.source_id,
+            "causation_id": r.event.causation_id,
+        }
+        for r in world.event_log.recent(100)
+    ]
+    frame = TimelineFrame(
+        run_id=run_id,
+        branch_id=branch_id,
+        minute=world.minute_index,
+        computed_until=computed_until,
+        state_hash=state_hash if state_hash is not None else digest(world.to_dict()),
+        agents=tuple(agents),
+        kpis=kpis,
+        events=tuple(events),
+    ).model_dump(mode="json")
     zone_geometry = {z.zone_id: z.polygon for z in geometry.zones} if geometry else {}
     facilities = []
     independent_queues = world.model_state.get("facility_queues_v1", {})
     for f in sorted(world.facilities.values(), key=lambda f: f.id):
         point = geometry.facility_points.get(f.id) if geometry else None
-        if point is not None and (f.zone_id not in zone_geometry or not point_in_polygon(point, zone_geometry[f.zone_id])):
+        if point is not None and (
+            f.zone_id not in zone_geometry or not point_in_polygon(point, zone_geometry[f.zone_id])
+        ):
             point = None
         service_queues = []
         if geometry is not None:
@@ -170,40 +232,110 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
                     continue
                 queue = independent_queues.get("queues", {}).get(service_point.queue_id, {})
                 requests = independent_queues.get("requests", {})
-                service_queues.append({
-                    "service_point_id": service_point.id,
-                    "queue_id": service_point.queue_id,
-                    "point": service_point.point_m.model_dump(mode="json"),
-                    "queue_agent_ids": [
-                        requests[item]["agent_id"] for item in queue.get("queued_request_ids", [])
-                        if item in requests
-                    ],
-                    "active_agent_ids": [
-                        requests[item]["agent_id"] for item in queue.get("active_request_ids", [])
-                        if item in requests
-                    ],
-                    "queued_request_ids": list(queue.get("queued_request_ids", [])),
-                    "active_request_ids": list(queue.get("active_request_ids", [])),
-                    "service_capacity_concurrent": service_point.service_capacity,
-                    "accessibility": service_point.access.accessibility,
-                    "required_access_tags": list(service_point.access.required_access_tags),
-                    "required_staff_skills": list(service_point.access.required_staff_skills),
-                    "last_stall": deepcopy(queue.get("last_stall")),
-                })
-        facilities.append({"id": f.id, "kind": f.kind, "zone_id": f.zone_id, "capacity": f.capacity, "working_units": f.working_units, "point": point.model_dump() if point else None, "queue_agent_ids": list(f.queue_agent_ids), "active_agent_ids": list(f.active_agent_ids), "resource_queue_agent_ids": list(f.resource_queue_agent_ids), "resource_active_agent_ids": list(f.resource_active_agent_ids), "service_queues": service_queues})
+                service_queues.append(
+                    {
+                        "service_point_id": service_point.id,
+                        "queue_id": service_point.queue_id,
+                        "point": service_point.point_m.model_dump(mode="json"),
+                        "queue_agent_ids": [
+                            requests[item]["agent_id"]
+                            for item in queue.get("queued_request_ids", [])
+                            if item in requests
+                        ],
+                        "active_agent_ids": [
+                            requests[item]["agent_id"]
+                            for item in queue.get("active_request_ids", [])
+                            if item in requests
+                        ],
+                        "queued_request_ids": list(queue.get("queued_request_ids", [])),
+                        "active_request_ids": list(queue.get("active_request_ids", [])),
+                        "service_capacity_concurrent": service_point.service_capacity,
+                        "accessibility": service_point.access.accessibility,
+                        "required_access_tags": list(service_point.access.required_access_tags),
+                        "required_staff_skills": list(service_point.access.required_staff_skills),
+                        "last_stall": deepcopy(queue.get("last_stall")),
+                    }
+                )
+        facilities.append(
+            {
+                "id": f.id,
+                "kind": f.kind,
+                "zone_id": f.zone_id,
+                "capacity": f.capacity,
+                "working_units": f.working_units,
+                "point": point.model_dump() if point else None,
+                "queue_agent_ids": list(f.queue_agent_ids),
+                "active_agent_ids": list(f.active_agent_ids),
+                "resource_queue_agent_ids": list(f.resource_queue_agent_ids),
+                "resource_active_agent_ids": list(f.resource_active_agent_ids),
+                "service_queues": service_queues,
+            }
+        )
     relationships = world.model_state.get("social_network_v1", {}).get("relationships", {})
     geometry_payload = geometry.model_dump(mode="json") if geometry else None
     if geometry_payload is not None and not geometry.arrival_approach_routes:
         geometry_payload.pop("arrival_approach_routes", None)
-    frame.update({"people": people, "facilities": facilities, "staff": [{"id": s.id, "zone_id": s.zone_id, "skills": list(s.skills), "active_task_id": s.active_task_id, "position": movement.get("staff_positions", {}).get(s.id), "dynamics": staff_memory.get(s.id)} for s in sorted(world.staff.values(), key=lambda s: s.id)], "geometry": geometry_payload, "zones": [{"id": z.id, "name": z.name, "capacity": z.capacity} for z in world.zones.values()], "social": {"edges": [{"pair": json.loads(key), **value} for key, value in list(sorted(relationships.items()))[:2000]], "total_edges": len(relationships), "truncated": len(relationships) > 2000, "interactions": social_events}, "movement": {"edge_usage_agent_minutes": dict(movement.get("edge_usage_minutes", {})), "journey_count": len(movement.get("journeys", {})), "active_journeys": [{"agent_id": agent_id, **journey} for agent_id, journey in sorted(movement.get("journeys", {}).items())]}, "pending_arrivals": len(pending), "incoming_arrivals": incoming_arrivals, "kpi_time_semantics": "state at boundary before this tick", "position_limitations": ["Staff travel follows the installed zone route model; in-room obstacle avoidance and shared doorway arbitration remain approximations.", "Missing physical coordinates are not generated as walking trajectories.", "Arrival approach coordinates and walking speeds are explicit operator or source inputs, not inferred from a map."]})
+    frame.update(
+        {
+            "people": people,
+            "facilities": facilities,
+            "staff": [
+                {
+                    "id": s.id,
+                    "zone_id": s.zone_id,
+                    "skills": list(s.skills),
+                    "active_task_id": s.active_task_id,
+                    "position": movement.get("staff_positions", {}).get(s.id),
+                    "dynamics": staff_memory.get(s.id),
+                }
+                for s in sorted(world.staff.values(), key=lambda s: s.id)
+            ],
+            "geometry": geometry_payload,
+            "zones": [
+                {"id": z.id, "name": z.name, "capacity": z.capacity} for z in world.zones.values()
+            ],
+            "social": {
+                "edges": [
+                    {"pair": json.loads(key), **value}
+                    for key, value in list(sorted(relationships.items()))[:2000]
+                ],
+                "total_edges": len(relationships),
+                "truncated": len(relationships) > 2000,
+                "interactions": social_events,
+            },
+            "movement": {
+                "edge_usage_agent_minutes": dict(movement.get("edge_usage_minutes", {})),
+                "journey_count": len(movement.get("journeys", {})),
+                "active_journeys": [
+                    {"agent_id": agent_id, **journey}
+                    for agent_id, journey in sorted(movement.get("journeys", {}).items())
+                ],
+            },
+            "pending_arrivals": len(pending),
+            "incoming_arrivals": incoming_arrivals,
+            "kpi_time_semantics": "state at boundary before this tick",
+            "position_limitations": [
+                "Staff travel follows the installed zone route model; in-room obstacle avoidance and shared doorway arbitration remain approximations.",
+                "Missing physical coordinates are not generated as walking trajectories.",
+                "Arrival approach coordinates and walking speeds are explicit operator or source inputs, not inferred from a map.",
+            ],
+        }
+    )
     from sheltersim.contracts.spatial import occupancy_snapshot
+
     body = world.model_state.get("body_state_v1", {})
     operations = world.model_state.get("staff_operations_v1", {})
     for person in frame["people"]:
         person["body"] = deepcopy(body.get("agents", {}).get(person["id"]))
     for staff in frame["staff"]:
         staff["operation"] = deepcopy(operations.get("staff", {}).get(staff["id"]))
-    frame["presence"] = deepcopy({key:value for key,value in world.model_state.get("population_presence_v1", {}).items() if key!="history"})
+    frame["presence"] = deepcopy(
+        {
+            key: value
+            for key, value in world.model_state.get("population_presence_v1", {}).items()
+            if key != "history"
+        }
+    )
     # History is fetched through its index, never duplicated in every frame.
     frame["presence"].pop("history", None)
     frame["sanitation"] = deepcopy(operations.get("zones", {}))
@@ -214,7 +346,8 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
         },
         "social": {
             "retained_records": len(body.get("history", [])),
-            "event_window_truncated":social_window_truncated,"frame_event_scan_limit":5000,
+            "event_window_truncated": social_window_truncated,
+            "frame_event_scan_limit": 5000,
             "retention_limit": 20000,
             "recent_effects": deepcopy(body.get("history", [])[-200:]),
         },
@@ -227,6 +360,7 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
     }
     frame["occupancy"] = occupancy_snapshot(world)
     from sheltersim.domain.common_operations import operational_demand_snapshot
+
     frame["operational_demand"] = operational_demand_snapshot(world)
     common_operations = world.model_state.get("shared_operations_v1", {})
     frame["recorded_history"]["shared_operations"] = {
@@ -237,7 +371,13 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
         "claim_boundary": "only event-linked applied transitions are indexed; this does not imply an unrecorded outcome",
     }
     frame["spatial_constraints"] = effective_spatial_constraints(world).model_dump(mode="json")
-    frame["geometry_overlay"] = deepcopy({key: value for key, value in world.model_state.get("geometry_overlay_v1", {}).items() if key != "history"})
+    frame["geometry_overlay"] = deepcopy(
+        {
+            key: value
+            for key, value in world.model_state.get("geometry_overlay_v1", {}).items()
+            if key != "history"
+        }
+    )
     overlay_rooms = frame["geometry_overlay"].get("temporary_rooms", {})
     if isinstance(overlay_rooms, dict):
         bed_reservations = frame["geometry_overlay"].get("bed_reservations", {})
@@ -288,13 +428,23 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
                 "admissions are explicit capacity assignments"
             )
     from sheltersim.domain.environment import zone_environment_view
+
     for zone in frame["zones"]:
         conditions = zone_environment_view(world, zone["id"])
-        zone["conditions"] = {key: getattr(conditions, key) for key in (
-            "ventilation_effectiveness", "lighting_level", "privacy_level", "temperature_c",
-            "condition_modifier_event_ids", "condition_assumption_ids")}
+        zone["conditions"] = {
+            key: getattr(conditions, key)
+            for key in (
+                "ventilation_effectiveness",
+                "lighting_level",
+                "privacy_level",
+                "temperature_c",
+                "condition_modifier_event_ids",
+                "condition_assumption_ids",
+            )
+        }
 
     from sheltersim.contracts.runtime import entity_projections
+
     projections = entity_projections(world)
     context_people = population_context_people(world)
     for person in frame["people"]:
@@ -316,14 +466,14 @@ def world_frame(world: WorldState, *, run_id: str, branch_id: str, computed_unti
     return rendered
 
 
-def social_event_records(world: WorldState) -> tuple[list[dict[str,Any]],bool]:
+def social_event_records(world: WorldState) -> tuple[list[dict[str, Any]], bool]:
     social_event_types = {
         "information_contact_update",
         "social_interaction",
         "information_correction",
     }
     social_events = []
-    outcomes,window_truncated=world.event_log.recent_matching(frozenset(social_event_types))
+    outcomes, window_truncated = world.event_log.recent_matching(frozenset(social_event_types))
     for outcome in outcomes:
         event = outcome.event
         if event.event_type not in social_event_types or outcome.status.value != "applied":
@@ -364,16 +514,25 @@ def social_event_records(world: WorldState) -> tuple[list[dict[str,Any]],bool]:
             if isinstance(value, (str, int)) and not isinstance(value, bool):
                 projected[field] = value
         social_events.append(projected)
-    return social_events,window_truncated
+    return social_events, window_truncated
 
-def person_projection(world: WorldState, identity: str, *, social_events: list[dict[str,Any]] | None = None) -> dict[str,Any]:
+
+def person_projection(
+    world: WorldState, identity: str, *, social_events: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Bounded selected-person evidence; no whole-world hash or model evaluation."""
     from copy import deepcopy
-    presence=world.model_state.get("population_presence_v1",{}).get("people",{}).get(identity)
-    agent=world.agents.get(identity)
-    if agent is None:return {"person":None,"position":None,"presence":deepcopy(presence)}
-    traits=world.model_state.get("population_dynamics_v1",{}).get("profile_traits",world.model_configs.get("population",{}).get("people",{})).get(identity)
-    context=population_context_people(world).get(identity)
+
+    presence = world.model_state.get("population_presence_v1", {}).get("people", {}).get(identity)
+    agent = world.agents.get(identity)
+    if agent is None:
+        return {"person": None, "position": None, "presence": deepcopy(presence)}
+    traits = (
+        world.model_state.get("population_dynamics_v1", {})
+        .get("profile_traits", world.model_configs.get("population", {}).get("people", {}))
+        .get(identity)
+    )
+    context = population_context_people(world).get(identity)
     active_care_requests = []
     care_state = world.model_state.get("shared_operations_v1", {}).get("support_requests", {})
     if isinstance(care_state, dict):
@@ -394,34 +553,89 @@ def person_projection(world: WorldState, identity: str, *, social_events: list[d
                     support_wait_reason_codes(world, request_id, minute=world.minute_index)
                 )
             active_care_requests.append(request)
-    person={"id":identity,"group_id":agent.profile.group_id,"household_id":presence.get("household_id") if presence else (context or {}).get("household_id",agent.profile.group_id),
-        "zone_id":agent.zone_id,"activity":agent.activity.value,"target_id":agent.target_id,
-        "stress":agent.stress,"trust":agent.trust,"needs":vars(agent.needs).copy(),"mobility":agent.profile.mobility.value,
-        "support_need":agent.profile.support_need,"traits":deepcopy(traits),"context":deepcopy(context),
-        "decision":deepcopy(world.model_state.get("agent_dynamics_v1",{}).get("agents",{}).get(identity)),
-        "beliefs":deepcopy(dict(list(world.model_state.get("information_spread_v1",{}).get("beliefs",{}).get(identity,{}).items())[:16])),
-        "body":deepcopy(world.model_state.get("body_state_v1",{}).get("agents",{}).get(identity)),
+    person = {
+        "id": identity,
+        "group_id": agent.profile.group_id,
+        "household_id": presence.get("household_id")
+        if presence
+        else (context or {}).get("household_id", agent.profile.group_id),
+        "zone_id": agent.zone_id,
+        "activity": agent.activity.value,
+        "target_id": agent.target_id,
+        "stress": agent.stress,
+        "trust": agent.trust,
+        "needs": vars(agent.needs).copy(),
+        "mobility": agent.profile.mobility.value,
+        "support_need": agent.profile.support_need,
+        "traits": deepcopy(traits),
+        "context": deepcopy(context),
+        "decision": deepcopy(
+            world.model_state.get("agent_dynamics_v1", {}).get("agents", {}).get(identity)
+        ),
+        "beliefs": deepcopy(
+            dict(
+                list(
+                    world.model_state.get("information_spread_v1", {})
+                    .get("beliefs", {})
+                    .get(identity, {})
+                    .items()
+                )[:16]
+            )
+        ),
+        "body": deepcopy(
+            world.model_state.get("body_state_v1", {}).get("agents", {}).get(identity)
+        ),
         "care_requests": active_care_requests,
         "care_history": care_history_for_agent(world, identity),
-        "dialogue":None,"dialogue_status":"not_recorded"}
+        "dialogue": None,
+        "dialogue_status": "not_recorded",
+    }
     overlay = world.model_state.get("geometry_overlay_v1", {})
-    reservation = overlay.get("bed_reservations", {}).get(identity) if isinstance(overlay, dict) else None
+    reservation = (
+        overlay.get("bed_reservations", {}).get(identity) if isinstance(overlay, dict) else None
+    )
     person["sleeping_place"] = deepcopy(reservation)
-    admission = overlay.get("room_admissions", {}).get(identity) if isinstance(overlay, dict) else None
+    admission = (
+        overlay.get("room_admissions", {}).get(identity) if isinstance(overlay, dict) else None
+    )
     person["physical_room"] = deepcopy(admission)
-    if social_events is None:social_events,_=social_event_records(world)
-    dialogue=[item for item in social_events if identity in item["actors"] or
-              item["event_type"]=="information_correction" and item.get("zone_id")==agent.zone_id][-20:]
-    person["dialogue"]=deepcopy(dialogue)
-    person["dialogue_status"]="structured_events_only" if dialogue else "no_retained_events"
-    person["family_separated"]=any(current_household_id(world, other.id)==current_household_id(world, agent.id) and other.zone_id!=agent.zone_id
-        for other in world.agents.values()) if current_household_id(world, agent.id) is not None else False
-    record=world.model_state.get("movement_v1",{}).get("positions",{}).get(identity,{})
-    point=Point2D.model_validate(record["point"]) if record.get("point") is not None else None
-    kind=record.get("position_kind","unavailable")
-    zone=world.zones[agent.zone_id]
-    if point is None and not world.model_configs.get("facility_geometry") and zone.display_x is not None and zone.display_y is not None:
-        point,kind=Point2D(x=zone.display_x,y=zone.display_y),"display_only"
-    position=AgentPosition(agent_id=identity,zone_id=record.get("zone_id",agent.zone_id),point=point,
-        edge_id=record.get("edge_id"),progress=record.get("progress",0),position_kind=kind).model_dump(mode="json")
-    return {"person":person,"position":position,"presence":deepcopy(presence)}
+    if social_events is None:
+        social_events, _ = social_event_records(world)
+    dialogue = [
+        item
+        for item in social_events
+        if identity in item["actors"]
+        or item["event_type"] == "information_correction"
+        and item.get("zone_id") == agent.zone_id
+    ][-20:]
+    person["dialogue"] = deepcopy(dialogue)
+    person["dialogue_status"] = "structured_events_only" if dialogue else "no_retained_events"
+    person["family_separated"] = (
+        any(
+            current_household_id(world, other.id) == current_household_id(world, agent.id)
+            and other.zone_id != agent.zone_id
+            for other in world.agents.values()
+        )
+        if current_household_id(world, agent.id) is not None
+        else False
+    )
+    record = world.model_state.get("movement_v1", {}).get("positions", {}).get(identity, {})
+    point = Point2D.model_validate(record["point"]) if record.get("point") is not None else None
+    kind = record.get("position_kind", "unavailable")
+    zone = world.zones[agent.zone_id]
+    if (
+        point is None
+        and not world.model_configs.get("facility_geometry")
+        and zone.display_x is not None
+        and zone.display_y is not None
+    ):
+        point, kind = Point2D(x=zone.display_x, y=zone.display_y), "display_only"
+    position = AgentPosition(
+        agent_id=identity,
+        zone_id=record.get("zone_id", agent.zone_id),
+        point=point,
+        edge_id=record.get("edge_id"),
+        progress=record.get("progress", 0),
+        position_kind=kind,
+    ).model_dump(mode="json")
+    return {"person": person, "position": position, "presence": deepcopy(presence)}

@@ -57,10 +57,16 @@ class InitialResourceCondition(RegionModel):
         if self.status == "entered" and any(value is None for value in quantities):
             raise ValueError("entered initial inventory requires both water and food quantities")
         if self.status == "incomplete" and all(value is None for value in quantities):
-            raise ValueError("incomplete initial inventory must preserve at least one entered quantity")
+            raise ValueError(
+                "incomplete initial inventory must preserve at least one entered quantity"
+            )
         if self.status == "entered" and not self.source_ids:
             object.__setattr__(self, "source_ids", (OPERATOR_CONDITION_SOURCE_ID,))
-        if self.status == "incomplete" and any(value is not None for value in quantities) and not self.source_ids:
+        if (
+            self.status == "incomplete"
+            and any(value is not None for value in quantities)
+            and not self.source_ids
+        ):
             object.__setattr__(self, "source_ids", (OPERATOR_CONDITION_SOURCE_ID,))
         if len(self.source_ids) != len(set(self.source_ids)):
             raise ValueError("initial inventory source IDs must be unique")
@@ -86,7 +92,9 @@ class FacilityEquipmentCondition(RegionModel):
         if self.add and (not self.facility_kind or not self.zone_id):
             raise ValueError("new equipment requires facility_kind and zone_id")
         if not self.add and (self.facility_kind is not None or self.zone_id is not None):
-            raise ValueError("facility_kind and zone_id are only accepted when adding new equipment")
+            raise ValueError(
+                "facility_kind and zone_id are only accepted when adding new equipment"
+            )
         return self
 
 
@@ -213,10 +221,13 @@ ScheduledCondition = Annotated[
 
 class StaffShiftInput(RegionModel):
     """Operator-declared positive weekly availability, distinct from absence events."""
+
     staff_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
     start_minute: int = Field(strict=True, ge=0, lt=10080)
     end_minute: int = Field(strict=True, gt=0, le=10080)
-    source_id: str = Field(default=OPERATOR_CONDITION_SOURCE_ID, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+    source_id: str = Field(
+        default=OPERATOR_CONDITION_SOURCE_ID, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+    )
     source_kind: Literal["operator"] = "operator"
 
     @model_validator(mode="after")
@@ -244,7 +255,10 @@ class OperationalConditions(RegionModel):
             raise ValueError("at most 128 scheduled region conditions are supported")
         source_kinds: dict[str, str] = {}
         entries = [
-            *((source_id, self.initial_resources.source_kind) for source_id in self.initial_resources.source_ids),
+            *(
+                (source_id, self.initial_resources.source_kind)
+                for source_id in self.initial_resources.source_ids
+            ),
             *((item.source_id, item.source_kind) for item in self.equipment),
             *((item.source_id, item.source_kind) for item in self.scheduled),
             *((item.source_id, item.source_kind) for item in self.staff_shifts),
@@ -274,7 +288,12 @@ class OperationalConditions(RegionModel):
         zone_ids: set[str],
         facilities: tuple[object, ...],
         staff: tuple[object, ...],
-    ) -> tuple[InitialStockSpec | None, tuple[PlannedEventSpec, ...], dict[str, dict[str, object]], tuple[str, ...]]:
+    ) -> tuple[
+        InitialStockSpec | None,
+        tuple[PlannedEventSpec, ...],
+        dict[str, dict[str, object]],
+        tuple[str, ...],
+    ]:
         """Compile supported conditions only; unsupported or unknown values stay visible as blockers."""
         facility_by_id = {item.id: item for item in facilities}
         staff_ids = {item.id for item in staff}
@@ -284,7 +303,9 @@ class OperationalConditions(RegionModel):
                 blockers.append(f"設備条件が未知の施設ID {item.facility_id!r} を参照しています。")
         stock = self.initial_resources
         if stock.status == "incomplete":
-            blockers.append("初期在庫の水・食料の両方を明示してください。不明を0には変換していません。")
+            blockers.append(
+                "初期在庫の水・食料の両方を明示してください。不明を0には変換していません。"
+            )
         invalid_stock_zone = (
             stock.status == "entered"
             and stock.zone_id is not None
@@ -321,7 +342,9 @@ class OperationalConditions(RegionModel):
             causation_id: str | None = None,
         ) -> None:
             if due_minute < 0 or due_minute >= duration_minutes:
-                blockers.append(f"運営条件 {event_type} の開始時刻はシミュレーション期間内にしてください。")
+                blockers.append(
+                    f"運営条件 {event_type} の開始時刻はシミュレーション期間内にしてください。"
+                )
                 return
             events.append(
                 PlannedEventSpec(
@@ -344,23 +367,37 @@ class OperationalConditions(RegionModel):
 
         sequence = 0
         for index, condition in enumerate(self.scheduled):
-            configured_start = getattr(condition, "start_minute", getattr(condition, "due_minute", 0))
+            configured_start = getattr(
+                condition, "start_minute", getattr(condition, "due_minute", 0)
+            )
             if configured_start >= duration_minutes:
                 blockers.append("運営条件の開始時刻はシミュレーション期間内にしてください。")
                 continue
             if condition.kind == "facility_outage":
                 facility = facility_by_id.get(condition.facility_id)
-                working_capacity = facility.capacity if facility is not None and facility.working_units is None else (facility.working_units or 0 if facility is not None else 0)
+                working_capacity = (
+                    facility.capacity
+                    if facility is not None and facility.working_units is None
+                    else (facility.working_units or 0 if facility is not None else 0)
+                )
                 if facility is None or condition.units_out > working_capacity:
-                    blockers.append(f"設備停止条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}.")
+                    blockers.append(
+                        f"設備停止条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}."
+                    )
                     continue
-                for occurrence, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for occurrence, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("設備停止条件の復旧時刻はシミュレーション終了前にしてください。")
+                        blockers.append(
+                            "設備停止条件の復旧時刻はシミュレーション終了前にしてください。"
+                        )
                         continue
                     concurrent_units = sum(
                         units
-                        for existing_start, existing_end, units in facility_outage_windows.get(condition.facility_id, ())
+                        for existing_start, existing_end, units in facility_outage_windows.get(
+                            condition.facility_id, ()
+                        )
                         if start_minute < existing_end and end_minute > existing_start
                     )
                     if concurrent_units + condition.units_out > working_capacity:
@@ -372,20 +409,47 @@ class OperationalConditions(RegionModel):
                         (start_minute, end_minute, condition.units_out)
                     )
                     sequence += 1
-                    add_event("facility_outage", start_minute, {"facility_id": condition.facility_id, "units_out": condition.units_out}, condition.source_id, condition.source_kind, sequence, index)
+                    add_event(
+                        "facility_outage",
+                        start_minute,
+                        {"facility_id": condition.facility_id, "units_out": condition.units_out},
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                    )
                     sequence += 1
-                    add_event("facility_recovery", end_minute, {"facility_id": condition.facility_id, "units_restored": condition.units_out}, condition.source_id, condition.source_kind, sequence, index)
+                    add_event(
+                        "facility_recovery",
+                        end_minute,
+                        {
+                            "facility_id": condition.facility_id,
+                            "units_restored": condition.units_out,
+                        },
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                    )
             elif condition.kind == "staff_unavailable":
                 if condition.staff_id not in staff_ids:
-                    blockers.append(f"運営条件が未知の職員IDを参照しています: {condition.staff_id}.")
+                    blockers.append(
+                        f"運営条件が未知の職員IDを参照しています: {condition.staff_id}."
+                    )
                     continue
-                for _, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for _, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("職員不在条件の復帰時刻はシミュレーション終了前にしてください。")
+                        blockers.append(
+                            "職員不在条件の復帰時刻はシミュレーション終了前にしてください。"
+                        )
                         continue
                     if any(
                         start_minute < existing_end and end_minute > existing_start
-                        for existing_start, existing_end in staff_unavailable_windows.get(condition.staff_id, ())
+                        for existing_start, existing_end in staff_unavailable_windows.get(
+                            condition.staff_id, ()
+                        )
                     ):
                         blockers.append(
                             f"職員不在条件が重なり、復帰時刻を正しく定義できません: {condition.staff_id}."
@@ -395,18 +459,32 @@ class OperationalConditions(RegionModel):
                         (start_minute, end_minute)
                     )
                     sequence += 1
-                    add_event("staff_unavailable", start_minute, {"staff_id": condition.staff_id, "until_minute": end_minute}, condition.source_id, condition.source_kind, sequence, index)
+                    add_event(
+                        "staff_unavailable",
+                        start_minute,
+                        {"staff_id": condition.staff_id, "until_minute": end_minute},
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                    )
             elif condition.kind in {"extreme_heat", "extreme_cold"}:
                 if condition.zone_id not in zone_ids:
                     blockers.append("気温影響条件が未知のゾーンを参照しています。")
                     continue
-                for occurrence, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for occurrence, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("気温影響条件はシミュレーション終了前に終了する時間帯を指定してください。")
+                        blockers.append(
+                            "気温影響条件はシミュレーション終了前に終了する時間帯を指定してください。"
+                        )
                         continue
                     active_count = sum(
                         1
-                        for existing_start, existing_end in environmental_stressor_windows.get(condition.zone_id, ())
+                        for existing_start, existing_end in environmental_stressor_windows.get(
+                            condition.zone_id, ()
+                        )
                         if existing_start <= start_minute < existing_end
                     )
                     if active_count >= 16:
@@ -417,33 +495,72 @@ class OperationalConditions(RegionModel):
                     )
                     needs_infrastructure = True
                     sequence += 1
-                    add_event(condition.kind, start_minute, {"stressor_id": f"region-stressor-{index:03d}-{occurrence:03d}", "zone_id": condition.zone_id, "until_minute": end_minute}, condition.source_id, condition.source_kind, sequence, index)
+                    add_event(
+                        condition.kind,
+                        start_minute,
+                        {
+                            "stressor_id": f"region-stressor-{index:03d}-{occurrence:03d}",
+                            "zone_id": condition.zone_id,
+                            "until_minute": end_minute,
+                        },
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                    )
             elif condition.kind == "water_outage":
                 facility = facility_by_id.get(condition.facility_id)
                 if facility is None or facility.kind != "water_station":
                     blockers.append("断水条件は既知の給水設備を指定してください。")
                     continue
                 if initial_stock is None:
-                    blockers.append("断水条件をシミュレーションへ反映するには、水・食料の入力済み在庫が必要です。")
+                    blockers.append(
+                        "断水条件をシミュレーションへ反映するには、水・食料の入力済み在庫が必要です。"
+                    )
                     continue
                 if not any(item.kind == "meal_distribution" for item in facilities):
-                    blockers.append("断水条件をシミュレーションへ反映するには食事配布設備も必要です。")
+                    blockers.append(
+                        "断水条件をシミュレーションへ反映するには食事配布設備も必要です。"
+                    )
                     continue
                 needs_resource_service = True
-                for occurrence, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for occurrence, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("断水条件の復旧時刻はシミュレーション終了前にしてください。")
+                        blockers.append(
+                            "断水条件の復旧時刻はシミュレーション終了前にしてください。"
+                        )
                         continue
                     sequence += 1
                     outage_id = f"region-water-outage-{index:03d}-{occurrence:03d}"
                     outage_event_id = f"region-condition-{sequence:03d}-water_outage"
-                    add_event("water_outage", start_minute, {"outage_id": outage_id, "facility_id": condition.facility_id}, condition.source_id, condition.source_kind, sequence, index)
+                    add_event(
+                        "water_outage",
+                        start_minute,
+                        {"outage_id": outage_id, "facility_id": condition.facility_id},
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                    )
                     sequence += 1
                     # ScenarioSpec validation requires a restoration to name its outage.
-                    add_event("water_restored", end_minute, {"outage_id": outage_id}, condition.source_id, condition.source_kind, sequence, index, causation_id=outage_event_id)
+                    add_event(
+                        "water_restored",
+                        end_minute,
+                        {"outage_id": outage_id},
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
+                        causation_id=outage_event_id,
+                    )
             elif condition.kind == "power_outage":
                 if infrastructure_config is None:
-                    blockers.append("停電条件には依存関係を含むinfrastructure設定が必要です。施設への影響を推測していません。")
+                    blockers.append(
+                        "停電条件には依存関係を含むinfrastructure設定が必要です。施設への影響を推測していません。"
+                    )
                     continue
                 affected = dependent_facilities(
                     infrastructure_config.model_dump(mode="json"),
@@ -451,17 +568,27 @@ class OperationalConditions(RegionModel):
                     set(facility_by_id),
                 )
                 if not affected:
-                    blockers.append(f"停電条件の設備系統 {condition.component_id!r} は有効な施設依存関係を持ちません。")
+                    blockers.append(
+                        f"停電条件の設備系統 {condition.component_id!r} は有効な施設依存関係を持ちません。"
+                    )
                     continue
-                for occurrence, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for occurrence, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("停電条件はシミュレーション終了前に復旧する時刻を指定してください。")
+                        blockers.append(
+                            "停電条件はシミュレーション終了前に復旧する時刻を指定してください。"
+                        )
                         continue
                     sequence += 1
                     add_event(
                         "power_outage",
                         start_minute,
-                        {"outage_id": f"region-power-outage-{index:03d}-{occurrence:03d}", "component_id": condition.component_id, "until_minute": end_minute},
+                        {
+                            "outage_id": f"region-power-outage-{index:03d}-{occurrence:03d}",
+                            "component_id": condition.component_id,
+                            "until_minute": end_minute,
+                        },
                         condition.source_id,
                         condition.source_kind,
                         sequence,
@@ -471,22 +598,35 @@ class OperationalConditions(RegionModel):
             elif condition.kind == "equipment_failure":
                 facility = facility_by_id.get(condition.facility_id)
                 working_capacity = (
-                    facility.capacity if facility is not None and facility.working_units is None
-                    else facility.working_units if facility is not None and facility.working_units is not None
+                    facility.capacity
+                    if facility is not None and facility.working_units is None
+                    else facility.working_units
+                    if facility is not None and facility.working_units is not None
                     else 0
                 )
                 if facility is None or condition.units_out > working_capacity:
-                    blockers.append(f"故障条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}.")
+                    blockers.append(
+                        f"故障条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}."
+                    )
                     continue
-                for occurrence, (start_minute, end_minute) in enumerate(_repeating_windows(condition, duration_minutes)):
+                for occurrence, (start_minute, end_minute) in enumerate(
+                    _repeating_windows(condition, duration_minutes)
+                ):
                     if end_minute >= duration_minutes:
-                        blockers.append("設備故障条件はシミュレーション終了前に復旧する時刻を指定してください。")
+                        blockers.append(
+                            "設備故障条件はシミュレーション終了前に復旧する時刻を指定してください。"
+                        )
                         continue
                     sequence += 1
                     add_event(
                         "equipment_failure",
                         start_minute,
-                        {"outage_id": f"region-equipment-failure-{index:03d}-{occurrence:03d}", "facility_id": condition.facility_id, "units_out": condition.units_out, "until_minute": end_minute},
+                        {
+                            "outage_id": f"region-equipment-failure-{index:03d}-{occurrence:03d}",
+                            "facility_id": condition.facility_id,
+                            "units_out": condition.units_out,
+                            "until_minute": end_minute,
+                        },
                         condition.source_id,
                         condition.source_kind,
                         sequence,
@@ -495,9 +635,13 @@ class OperationalConditions(RegionModel):
                     needs_infrastructure = True
             elif condition.kind in {"resource_delivery", "resource_loss"}:
                 if initial_stock is None or condition.warehouse_id != initial_stock.warehouse_id:
-                    blockers.append("資源の納入・損失イベントには同じ倉庫の入力済み初期在庫が必要です。")
+                    blockers.append(
+                        "資源の納入・損失イベントには同じ倉庫の入力済み初期在庫が必要です。"
+                    )
                     continue
-                for due_minute in _repeating_minutes(condition.due_minute, condition.repeat_every_minutes, duration_minutes):
+                for due_minute in _repeating_minutes(
+                    condition.due_minute, condition.repeat_every_minutes, duration_minutes
+                ):
                     sequence += 1
                     payload = {
                         "warehouse_id": condition.warehouse_id,
@@ -509,8 +653,13 @@ class OperationalConditions(RegionModel):
                         # without it the first state validation stopped the Run.
                         payload["shipment_id"] = f"region-shipment-{sequence:03d}"
                     add_event(
-                        condition.kind, due_minute, payload, condition.source_id,
-                        condition.source_kind, sequence, index,
+                        condition.kind,
+                        due_minute,
+                        payload,
+                        condition.source_id,
+                        condition.source_kind,
+                        sequence,
+                        index,
                     )
 
         model_configs: dict[str, dict[str, object]] = {}
@@ -520,7 +669,9 @@ class OperationalConditions(RegionModel):
             if initial_stock is None:
                 blockers.append("資源サービス条件には入力済み初期在庫が必要です。")
             elif not has_water or not has_food:
-                blockers.append("資源をシミュレーションで配布するには給水・食事配布設備の両方が必要です。")
+                blockers.append(
+                    "資源をシミュレーションで配布するには給水・食事配布設備の両方が必要です。"
+                )
             else:
                 model_configs["resource_service"] = default_resource_service_config().model_dump(
                     mode="json"
@@ -541,7 +692,10 @@ class OperationalConditions(RegionModel):
         return initial_stock, tuple(events), model_configs, tuple(blockers)
 
     def provenance_sources(self) -> tuple[dict[str, object], ...]:
-        kinds = {source_id: self.initial_resources.source_kind for source_id in self.initial_resources.source_ids}
+        kinds = {
+            source_id: self.initial_resources.source_kind
+            for source_id in self.initial_resources.source_ids
+        }
         kinds.update({item.source_id: item.source_kind for item in self.equipment})
         kinds.update({item.source_id: item.source_kind for item in self.scheduled})
         kinds.update({item.source_id: item.source_kind for item in self.staff_shifts})
@@ -646,17 +800,20 @@ def with_standard_provisioning(
                 repeat_every_minutes=interval_days * 1440,
             )
             for resource_id, per_day in (
-                ("water_ml", water_per_day), ("food_meal_units", meals_per_day)
+                ("water_ml", water_per_day),
+                ("food_meal_units", meals_per_day),
             )
         ]
-    provisioned = OperationalConditions.model_validate({
-        **conditions.model_dump(),
-        "initial_resources": stock.model_dump(),
-        "scheduled": [
-            *(item.model_dump() for item in conditions.scheduled),
-            *(item.model_dump() for item in deliveries),
-        ],
-    })
+    provisioned = OperationalConditions.model_validate(
+        {
+            **conditions.model_dump(),
+            "initial_resources": stock.model_dump(),
+            "scheduled": [
+                *(item.model_dump() for item in conditions.scheduled),
+                *(item.model_dump() for item in deliveries),
+            ],
+        }
+    )
     record = {
         "id": STANDARD_PROVISIONING_SOURCE_ID,
         "subject": "standard_provisioning",

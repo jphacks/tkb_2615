@@ -74,5 +74,3 @@ def test_api_enabled_run_writes_usage_and_separate_opus_review(tmp_path: Path) -
     assert review["status"] == "validated"
     assert world.minute_index == 1
     assert world.canonical_json() == offline_world.canonical_json()
-
-

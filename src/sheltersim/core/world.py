@@ -231,15 +231,15 @@ class WorldState:
         if selected_models(world.model_configs)["psychology"] in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
             psychology_config = world.model_configs.get("psychology", {})
             baselines = {
-                agent_id: psychology_config.get("baseline_distress_by_agent", {}).get(
-                    agent_id, 0.0
-                )
+                agent_id: psychology_config.get("baseline_distress_by_agent", {}).get(agent_id, 0.0)
                 for agent_id in world.agents
             }
             world.model_state[PSYCHOLOGICAL_STATE_KEY] = create_psychological_state(baselines)
         from sheltersim.domain.simulator_state import initialize_simulator_extensions
+
         initialize_simulator_extensions(world)
         from sheltersim.contracts.runtime import initialize_declared_states
+
         initialize_declared_states(world)
         world.validate()
         return world
@@ -262,17 +262,30 @@ class WorldState:
         try:
             selected_models(self.model_configs)
             from sheltersim.contracts.runtime import validate_declared_states
+
             validate_declared_states(self)
         except ValueError as exc:
             raise StateInvariantError(str(exc)) from exc
-        extension_keys = {"movement_v1", "agent_dynamics_v1", "social_network_v1", "staff_dynamics_v1", "population_dynamics_v1", "body_state_v1", "staff_operations_v1", "temporary_spaces_v1", "shared_operations_v1"}
+        extension_keys = {
+            "movement_v1",
+            "agent_dynamics_v1",
+            "social_network_v1",
+            "staff_dynamics_v1",
+            "population_dynamics_v1",
+            "body_state_v1",
+            "staff_operations_v1",
+            "temporary_spaces_v1",
+            "shared_operations_v1",
+        }
         from sheltersim.domain.simulator_state import simulator_signatures
-        if extension_keys.intersection(self.model_state) or simulator_signatures(self.model_configs):
+
+        if extension_keys.intersection(self.model_state) or simulator_signatures(
+            self.model_configs
+        ):
             from sheltersim.domain.simulator_state import validate_simulator_extensions
+
             try:
-                validate_simulator_extensions(
-                    self, validate_event_history=validate_event_history
-                )
+                validate_simulator_extensions(self, validate_event_history=validate_event_history)
             except (ValueError, KeyError, TypeError) as exc:
                 raise StateInvariantError("invalid simulator extension state") from exc
         resource_service_enabled = "resource_service" in self.model_configs
@@ -432,7 +445,8 @@ class WorldState:
 
                 # A facility with independent queues has one head per queue (#118).
                 if self.facilities[facility_id].kind not in (
-                    "water_station", "meal_distribution"
+                    "water_station",
+                    "meal_distribution",
                 ) or record["agent_id"] not in queue_head_agent_ids(self, facility_id):
                     raise StateInvariantError(
                         "resource queue stall must describe the current facility queue head"
@@ -778,7 +792,9 @@ class WorldState:
                 target.setdefault(task_id, []).append(event)
         for task in self.active_tasks.values():
             if task.kind in (
-                "travel_to_toilet", "travel_to_resource", "travel_return",
+                "travel_to_toilet",
+                "travel_to_resource",
+                "travel_return",
                 "staff_support_travel",
             ):
                 if task.agent_id is None or task.resource_id is not None:
@@ -1088,14 +1104,11 @@ class WorldState:
                 or request.cooldown_until < 0
             ):
                 raise StateInvariantError(f"support request {request.id!r} has invalid timing")
-            if (
-                request.last_assignment_attempt_minute is not None
-                and (
-                    type(request.last_assignment_attempt_minute) is not int
-                    or not request.requested_minute
-                    <= request.last_assignment_attempt_minute
-                    <= self.minute_index
-                )
+            if request.last_assignment_attempt_minute is not None and (
+                type(request.last_assignment_attempt_minute) is not int
+                or not request.requested_minute
+                <= request.last_assignment_attempt_minute
+                <= self.minute_index
             ):
                 raise StateInvariantError(
                     f"support request {request.id!r} has invalid assignment-attempt timing"
@@ -1103,7 +1116,8 @@ class WorldState:
             assignment_reason = request.last_assignment_wait_reason_code
             if assignment_reason is not None and (
                 not isinstance(assignment_reason, str)
-                or assignment_reason not in {
+                or assignment_reason
+                not in {
                     "no_available_qualified_staff",
                     "route_unavailable_at_assignment",
                     "insufficient_run_time",
@@ -1141,7 +1155,8 @@ class WorldState:
                 if agent.activity is Activity.MOVING:
                     travel_events = (
                         travel_events_by_task.get(travel_task.id, [])
-                        if travel_task is not None else []
+                        if travel_task is not None
+                        else []
                     )
                     if (
                         travel_task is None
@@ -1155,9 +1170,8 @@ class WorldState:
                         raise StateInvariantError(
                             f"assigned support request {request.id!r} has invalid resident travel"
                         )
-                elif (
-                    agent.activity is not Activity.SEEKING_HELP
-                    or (travel_task is not None and travel_task.kind == "staff_support_travel")
+                elif agent.activity is not Activity.SEEKING_HELP or (
+                    travel_task is not None and travel_task.kind == "staff_support_travel"
                 ):
                     raise StateInvariantError(
                         f"assigned support request {request.id!r} must seek help or travel to staff"
@@ -1274,7 +1288,8 @@ class WorldState:
                     if not profile_ids <= historical_ids:
                         raise ValueError("population_dynamics_v1 contains an unknown profile ID")
                     archived_agent_ids = set(population_state["initial_agent_ids"]) | {
-                        item["agent_id"] for item in population_state["arrivals"]
+                        item["agent_id"]
+                        for item in population_state["arrivals"]
                         if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
                     }
                 ledger_arguments = (
@@ -1315,9 +1330,7 @@ class WorldState:
                     raise StateInvariantError("event log cannot contain future realization times")
                 if record.realized_minute >= self.duration_minutes:
                     raise StateInvariantError("event log is outside the scenario duration")
-            max_realized_sequence = max(
-                (event.sequence for event in realized_events), default=-1
-            )
+            max_realized_sequence = max((event.sequence for event in realized_events), default=-1)
         else:
             if any(self.event_log.contains_id(event_id) for event_id in queue_ids):
                 raise StateInvariantError("an event cannot be both pending and realized")
@@ -1328,9 +1341,7 @@ class WorldState:
             if event.due_minute >= self.duration_minutes:
                 raise StateInvariantError(f"event {event.event_id!r} is outside the scenario")
         max_queued_sequence = max((event.sequence for event in queued_events), default=-1)
-        if self.id_counters.get("event", 0) <= max(
-            max_queued_sequence, max_realized_sequence
-        ):
+        if self.id_counters.get("event", 0) <= max(max_queued_sequence, max_realized_sequence):
             raise StateInvariantError("event ID counter must be greater than scheduled sequences")
 
     def allocate_event_sequence(self) -> int:

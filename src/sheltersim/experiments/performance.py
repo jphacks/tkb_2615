@@ -27,4 +27,17 @@ class PhaseProfiler:
             self.cpu_seconds[key] += time.process_time() - cpu
 
     def report(self) -> dict[str, Any]:
-        return {"schema_version": 1, "instrumented": True, "overhead_included": True, "phases": [{"phase": key, "calls": self.calls[key], "wall_seconds": self.wall_seconds[key], "cpu_seconds": self.cpu_seconds[key]} for key in sorted(self.calls, key=lambda k: -self.wall_seconds[k])]}
+        return {
+            "schema_version": 1,
+            "instrumented": True,
+            "overhead_included": True,
+            "phases": [
+                {
+                    "phase": key,
+                    "calls": self.calls[key],
+                    "wall_seconds": self.wall_seconds[key],
+                    "cpu_seconds": self.cpu_seconds[key],
+                }
+                for key in sorted(self.calls, key=lambda k: -self.wall_seconds[k])
+            ],
+        }

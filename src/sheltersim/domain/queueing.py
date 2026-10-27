@@ -24,9 +24,12 @@ def prepare_facility_queue(
     movement = world.model_state.get("movement_v1", {})
     if isinstance(movement, dict) and any(
         journey.get("facility_id") == facility_id
-        and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
+        and journey.get("purpose")
+        in {
+            "toilet_queue_position",
+            "resource_queue_position",
+            "toilet_queue_service",
+            "resource_queue_service",
         }
         for journey in movement.get("journeys", {}).values()
     ):
@@ -87,9 +90,13 @@ def prepare_independent_facility_queue(
         return
     movement = world.model_state.get("movement_v1", {})
     if isinstance(movement, dict) and any(
-        journey.get("queue_id") == queue_id and journey.get("purpose") in {
-            "toilet_queue_position", "resource_queue_position",
-            "toilet_queue_service", "resource_queue_service",
+        journey.get("queue_id") == queue_id
+        and journey.get("purpose")
+        in {
+            "toilet_queue_position",
+            "resource_queue_position",
+            "toilet_queue_service",
+            "resource_queue_service",
         }
         for journey in movement.get("journeys", {}).values()
     ):
@@ -249,10 +256,14 @@ def _abandon_and_retry(
         from sheltersim.domain.facility_queues import (
             record_queue_transition,
         )
+
         request = finish_facility_queue_service(world, task.id, status="abandoned")
         if request is not None:
             record_queue_transition(
-                world, request, transition="abandoned", task_id=task.id,
+                world,
+                request,
+                transition="abandoned",
+                task_id=task.id,
                 wait_minutes=minute - request["requested_minute"],
                 causation_id=task.id,
             )
