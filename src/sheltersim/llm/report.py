@@ -159,7 +159,9 @@ _METRIC_LABELS_JA = {
     "support_no_qualified_worker_request_minutes": "資格を満たすスタッフがいない依頼分数",
     "support_fairness_promoted_assignment_count": "公平性ルールで優先された支援要請数",
     "support_wait_staff_busy_request_minutes": "対応中の資格者がいる支援待ち依頼分数",
-    "support_wait_staff_off_shift_request_minutes": "勤務時間外の資格者がいる支援待ち依頼分数",
+    "support_wait_staff_off_shift_request_minutes": (
+        "勤務していない資格者がいる支援待ち依頼分数（時間外・不在）"
+    ),
 }
 _HYPOTHESIS_LABELS_JA = {
     "capacity_may_contribute_to_wait": "処理能力が待ち時間に関係する可能性があります。",

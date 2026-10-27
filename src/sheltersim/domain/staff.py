@@ -243,8 +243,11 @@ class StaffService:
                     ]
                     if any(staff.active_task_id is not None for staff in qualified):
                         blocker_exposure["support_wait_staff_busy_request_minutes"] += 1
+                    # "Off shift" covers every qualified worker who is not working
+                    # now: outside a shift window or away (set_staff_availability, #74).
                     if any(
                         not staff_dynamics_on_shift(world, staff.id, minute)
+                        or not staff_is_available(world, staff.id)
                         for staff in qualified
                     ):
                         blocker_exposure["support_wait_staff_off_shift_request_minutes"] += 1

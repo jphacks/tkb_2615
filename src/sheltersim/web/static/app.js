@@ -2475,7 +2475,7 @@ $("demo-compare").addEventListener("click", async () => {
       support_no_qualified_worker_request_minutes: "資格のあるスタッフがいない依頼分数",
       support_fairness_promoted_assignment_count: "公平性ルールで優先された依頼",
       support_wait_staff_busy_request_minutes: "対応中の資格者がいる支援待ち依頼分数",
-      support_wait_staff_off_shift_request_minutes: "勤務時間外の資格者がいる支援待ち依頼分数",
+      support_wait_staff_off_shift_request_minutes: "勤務していない資格者がいる支援待ち依頼分数（時間外・不在）",
     };
     const differences = Object.entries(report.final_metric_differences || {}).map(([key, values]) => {
       const delta = values.delta;
