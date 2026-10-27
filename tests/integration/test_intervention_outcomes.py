@@ -1057,11 +1057,6 @@ def test_people_walk_around_a_partition_while_it_stands(main_line) -> None:
     ), "a partition beside the path should not stop anyone using the toilets"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#84: people walk to a temporary room's bed but do not sleep there",
-)
 def test_people_who_go_to_sleep_use_the_beds_of_a_temporary_room(main_line) -> None:
     beds = [
         {"x": 1.0, "y": 9.0},
@@ -1095,7 +1090,8 @@ def test_people_who_go_to_sleep_use_the_beds_of_a_temporary_room(main_line) -> N
     main, child = _fork_main(main_line, "temporary-room", program)
 
     assert _applied(child, "effect_program_geometry", op="temporary_room_geometry")
-    assert _applied(child, "agent_travel_complete", purpose="sleep_bed")
+    trips = _applied(child, "agent_travel_complete", purpose="sleep_bed")
+    assert trips
     sleeping_in_a_bed = 0
     for world in main_line.iter_worlds("temporary-room", FORK_MINUTE + 1, OUTAGE_END_MINUTE - 1):
         positions = world.model_state["movement_v1"]["positions"]
@@ -1103,7 +1099,9 @@ def test_people_who_go_to_sleep_use_the_beds_of_a_temporary_room(main_line) -> N
             agent.activity is Activity.SLEEPING and positions[agent_id]["point"] in beds
             for agent_id, agent in world.agents.items()
         )
-    assert sleeping_in_a_bed > 0
+    # Before #84 was fixed people woke on arrival and walked back every decision,
+    # so nobody slept in a bed; now each walk is followed by sleep there.
+    assert sleeping_in_a_bed > len(trips)
 
 
 def _environment_action(op: str, parameters: dict[str, Any], units: str) -> TimedAction:

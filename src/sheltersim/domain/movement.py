@@ -646,6 +646,22 @@ def staff_position_snapshots(
     }
 
 
+def _reserved_bed_point(world: WorldState, agent_id: str) -> Point2D | None:
+    """The temporary-room bed a sleeping person reserved, so they stay in it (#84)."""
+    overlay = world.model_state.get("geometry_overlay_v1")
+    if not isinstance(overlay, dict):
+        return None
+    reservation = overlay.get("bed_reservations", {}).get(agent_id)
+    if not isinstance(reservation, dict):
+        return None
+    room = overlay.get("temporary_rooms", {}).get(reservation.get("room_id"), {})
+    beds = room.get("bed_points_m", []) if isinstance(room, dict) else []
+    index = reservation.get("bed_index")
+    if type(index) is not int or not 0 <= index < len(beds):
+        return None
+    return Point2D.model_validate(beds[index])
+
+
 def _set_stationary_position(
     world: WorldState, agent_id: str, geometry: FacilityGeometry | None
 ) -> None:
@@ -659,6 +675,8 @@ def _set_stationary_position(
             point = _queue_slot_position(world, geometry, agent.id, agent.target_id)
         elif agent.activity is Activity.IN_SERVICE and agent.target_id:
             point = geometry.facility_points.get(agent.target_id)
+        elif agent.activity is Activity.SLEEPING:
+            point = _reserved_bed_point(world, agent_id)
         point = point or _zone_center(geometry, agent.zone_id)
     elif agent.zone_id in world.zones:
         zone = world.zones[agent.zone_id]

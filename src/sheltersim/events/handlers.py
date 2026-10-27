@@ -2078,9 +2078,13 @@ class AgentTravelCompletionHandler:
             })
         del world.active_tasks[task_id]
         agent.zone_id = destination_zone_id
+        # A person who walked to a temporary room's bed chose to sleep, so they
+        # sleep on arrival instead of idling until their next decision (#84).
         agent.activity = (
             Activity.SEEKING_HELP
             if purpose == "staff_support_travel"
+            else Activity.SLEEPING
+            if purpose == "sleep_bed"
             else Activity.IDLE
         )
         agent.target_id = None
