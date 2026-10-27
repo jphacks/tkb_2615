@@ -77,3 +77,25 @@ def test_cli_offline_run_does_not_warn(
     assert json.loads(captured.out)["llm_status"]["status"] == "not_requested"
     # The fixture selects no psychology model, so only the legacy-model notice may appear.
     assert [line for line in captured.err.splitlines() if "legacy model" not in line] == []
+
+
+def test_each_cli_run_opens_its_own_usage_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    small_benchmark_scenario,
+) -> None:
+    monkeypatch.setenv("SHELTERSIM_PROJECTS_DIR", str(tmp_path / "projects"))
+    frozen = _frozen_scenario(tmp_path, small_benchmark_scenario(30))
+    accounts = []
+    for name in ("first", "second"):
+        output = tmp_path / name
+        assert (
+            cli.main(["run", "--offline", "--scenario", str(frozen), "--output", str(output)]) == 0
+        )
+        document = json.loads(cli._cli_usage_account_path(output).read_text(encoding="utf-8"))
+        accounts.append(document["account_id"])
+    capsys.readouterr()
+
+    assert all(account.startswith("cli-run-") for account in accounts)
+    assert accounts[0] != accounts[1]
