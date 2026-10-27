@@ -1,4 +1,5 @@
-"""The generator gives each Scenario standard toilets, stations and station staff.
+"""The generator gives each Scenario standard toilets, stations and station staff, and
+standard plans give every room an accessible doorway and keep their requested shares.
 
 These check the generator itself, so they build drafts directly. Stock and
 resupply are checked in tests/unit/region/test_conditions.py, and the runs in
@@ -13,7 +14,13 @@ from sheltersim.experiments.initial_scenario import (
     InitialScenarioBuilder,
     InitialScenarioRequest,
 )
-from sheltersim.region.facility import SYNTHETIC_STAFFING_SOURCE_ID, standard_service_counts
+from sheltersim.region.facility import (
+    SYNTHETIC_STAFFING_SOURCE_ID,
+    FacilityDesignRequest,
+    StandardShelterGenerator,
+    standard_service_counts,
+)
+from sheltersim.region.models import ACCESSIBLE_ROUTE_MIN_WIDTH_M
 
 
 def _draft(evacuees: int, duration_days: float = 1, **overrides: object):
@@ -96,3 +103,21 @@ def test_an_entered_staff_total_keeps_one_general_staff_member(
         if item["source_id"] == SYNTHETIC_STAFFING_SOURCE_ID
     )
     assert record["value"]["entered_total"] == entered
+
+
+@pytest.mark.parametrize("population", [10, 30, 100])
+def test_small_standard_plans_give_every_room_an_accessible_doorway(population: int) -> None:
+    design = StandardShelterGenerator().generate(FacilityDesignRequest(population=population))
+    assert all(route.accessible and route.width_m >= ACCESSIBLE_ROUTE_MIN_WIDTH_M
+               for route in design.geometry.routes)
+    assert design.capacity_supported >= population
+    layout = next(row for row in design.assumptions if row["subject"] == "standard_shelter_layout")
+    assert layout["value"]["frontage_widened_zones"]
+    assert any("出入口幅" in warning for warning in design.warnings)
+
+
+def test_large_standard_plans_keep_their_requested_shares() -> None:
+    design = StandardShelterGenerator().generate(FacilityDesignRequest(population=300))
+    layout = next(row for row in design.assumptions if row["subject"] == "standard_shelter_layout")
+    assert layout["value"]["frontage_widened_zones"] == []
+    assert layout["value"]["zone_shares"]["intake"] == pytest.approx(0.05)

@@ -59,7 +59,6 @@ UNSORTED = frozenset(
         "test_resume_checkpoint_loads.py",
         "test_scaling_storage.py",
         "test_smoke.py",
-        "test_startable_generated_scenarios.py",
         "test_story_report.py",
         "test_support_priority_runtime.py",
         "test_timed_branch_plan.py",
