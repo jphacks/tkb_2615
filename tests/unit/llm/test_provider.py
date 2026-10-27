@@ -411,7 +411,7 @@ def test_messages_use_streaming_when_sdk_supports_it(search_enabled: bool) -> No
 
 
 def test_prepare_generation_routes_through_opus_and_returns_a_reviewable_draft() -> None:
-    fixture = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+    fixture = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
     document = json.loads(fixture.read_text(encoding="utf-8"))
     document["profiles"] = document["profiles"][:2]
     document["scheduled_events"] = []
