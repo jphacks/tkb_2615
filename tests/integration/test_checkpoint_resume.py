@@ -1,5 +1,11 @@
 """A Run resumed from a Checkpoint continues exactly as the uninterrupted Run.
 
+On the shared generated Scenario, so the Checkpoint holds what a Run made on the
+Project screen holds: people and staff walking on the floor plan (movement_v1),
+queues at service points, and toilets an intervention placed on the floor plan
+(geometry_overlay_v1). Until #137 this ran on failure_day3, which has neither a
+floor plan nor facility awareness.
+
 The Checkpoint's schema, save and load, and the versions and hashes it refuses
 are checked in tests/unit/core/test_checkpoint.py.
 """
@@ -7,73 +13,46 @@ are checked in tests/unit/core/test_checkpoint.py.
 from __future__ import annotations
 
 from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.engine import TickEngine, TickPhase
-from sheltersim.core.rng import CounterRNG
+from sheltersim.core.engine import TickEngine
 from sheltersim.core.world import WorldState
-from sheltersim.domain.facilities import ToiletServiceManager
-from sheltersim.domain.staff import StaffService
-from sheltersim.events.handlers import (
-    EventDispatcher,
-    FacilityOutageHandler,
-    StaffSupportCompletionHandler,
-    SupportRequestTimeoutHandler,
-    ToiletServiceCompletionHandler,
-)
+from sheltersim.domain.geometry_overlay import GEOMETRY_OVERLAY_KEY
+from sheltersim.domain.movement import MOVEMENT_STATE_KEY
+from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.metrics import MetricsRecorder
+from sheltersim.experiments.runner import OfflineSimulationController
+from sheltersim.experiments.timeline import _MetricSink
+
+INSTALL_MINUTE = 20
+# People walk to and queue at the toilets, and staff walk to a person, at this minute.
+CHECKPOINT_MINUTE = 40
 
 
-def make_phase_handler(world: WorldState, metrics: MetricsRecorder):
-    toilet = ToiletServiceManager(world)
-    staff = StaffService(world)
-    dispatcher = EventDispatcher(
-        {
-            "facility_outage": FacilityOutageHandler(),
-            "toilet_service_complete": ToiletServiceCompletionHandler(),
-            "staff_support_complete": StaffSupportCompletionHandler(),
-            "support_request_timeout": SupportRequestTimeoutHandler(),
-        }
-    )
-
-    def handle(phase: TickPhase, state: WorldState, minute: int, rng: CounterRNG) -> None:
-        if phase is TickPhase.DISPATCH_DUE_EVENTS:
-            dispatcher.dispatch_due(state, minute)
-        elif phase is TickPhase.ARBITRATE_ACTIONS:
-            toilet.arbitrate(minute, rng, validate_state=False)
-            staff.assign_pending(minute, validate_state=False)
-        elif phase is TickPhase.COLLECT_METRICS:
-            metrics.capture(state, minute=minute)
-
-    return handle
+def _engine(world: WorldState, metrics: MetricsRecorder) -> TickEngine:
+    """The controller the Project screen runs, recording metrics into metrics."""
+    return TickEngine(world, phase_handler=OfflineSimulationController(world, _MetricSink(metrics)))
 
 
 def test_checkpoint_restore_then_uninterrupted_run_is_fully_identical(
-    live_checkpoint_world,
+    generated_scenario, add_toilets_program
 ) -> None:
-    world = live_checkpoint_world
-    metrics = MetricsRecorder()
-    engine = TickEngine(world, phase_handler=make_phase_handler(world, metrics))
-    engine.run(steps=3)
+    runtime = BranchRuntime.from_world(WorldState.from_scenario(generated_scenario))
+    runtime.apply_effect_program(add_toilets_program(start_minute=INSTALL_MINUTE))
+    world, metrics = runtime.world, runtime.metrics
+    uninterrupted = _engine(world, metrics)
+    uninterrupted.run(steps=CHECKPOINT_MINUTE)
 
-    checkpoint = Checkpoint.capture(
-        world,
-        metrics=metrics,
-        runtime_state={"decision_tape_cursor": 11},
-    )
-    resumed_world = checkpoint.restore_world()
-    resumed_metrics = checkpoint.restore_metrics()
-    uninterrupted_engine = TickEngine(
-        world,
-        phase_handler=make_phase_handler(world, metrics),
-    )
-    resumed_engine = TickEngine(
-        resumed_world,
-        phase_handler=make_phase_handler(resumed_world, resumed_metrics),
-    )
+    assert world.model_state[MOVEMENT_STATE_KEY]["journeys"]
+    assert world.model_state[GEOMETRY_OVERLAY_KEY]["facility_points"]
+    assert {"toilet_queue", "staff_support_travel"} <= {
+        task.kind for task in world.active_tasks.values()
+    }
 
-    uninterrupted_engine.run(steps=45)
-    resumed_engine.run(steps=45)
+    # Through JSON, as the Project screen saves and loads it.
+    checkpoint = Checkpoint.from_json(Checkpoint.capture(world, metrics=metrics).to_json())
+    resumed_world, resumed_metrics = checkpoint.restore_state()
+
+    uninterrupted.run(steps=60)
+    _engine(resumed_world, resumed_metrics).run(steps=60)
 
     assert resumed_world.canonical_json() == world.canonical_json()
     assert resumed_metrics.to_dict() == metrics.to_dict()
-    assert checkpoint.world_state_schema_version == 5
-    assert checkpoint.schema_version == 1

@@ -1,77 +1,69 @@
 """The trace level changes how much a Run writes, not the simulation state hash or the
 metrics and events a Run saves.
+
+On a generated Scenario run with run_scenario, so the decisions come from the
+controller a Run uses, with people walking on the floor plan. Until #137 the first
+test called the behavior policy by hand on scenario_100_agents and the second ran
+h00_small_replay; neither has a floor plan or facility awareness.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
-from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
-from sheltersim.core.world import WorldState
+import pytest
+
+from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.traces import RunArtifactWriter
-from sheltersim.policies.behavior import BehaviorDecisionRunner, WorldView
 
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
-SMALL_REPLAY = Path(__file__).parents[2] / "fixtures" / "scenarios" / "h00_small_replay.json"
+# 90 minutes: every person decides several times, and three runs stay short.
+DURATION_DAYS = 0.0625
 
 
-def test_trace_level_changes_artifact_detail_not_simulation_hash(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
-
-    def run(level: TraceLevel) -> tuple[str, list[str]]:
-        world = WorldState.from_scenario(scenario)
-        output_directory = tmp_path / level.value
-        artifacts = RunArtifactWriter(scenario, output_directory, trace_level=level)
-        artifacts.write_initial(world)
-        policy_runner = BehaviorDecisionRunner()
-
-        def observe(phase, state, minute, rng) -> None:
-            if phase is TickPhase.PROPOSE_ACTIONS:
-                for proposal in policy_runner.propose_due(WorldView.from_world(state), rng):
-                    artifacts.record_decision(proposal)
-            if phase is TickPhase.COLLECT_METRICS:
-                artifacts.capture_metric(state, minute=minute)
-
-        traces: list[object] = []
-        engine = TickEngine(
-            world,
-            phase_handler=observe,
-            trace_level=level,
-            trace_sink=traces.append if level is not TraceLevel.OFF else None,
+@pytest.fixture(scope="module")
+def runs(tmp_path_factory, generated_previews) -> dict[TraceLevel, tuple[Path, str]]:
+    """The same generated Scenario run at each trace level: output folder and final state."""
+    preview = generated_previews(duration_days=DURATION_DAYS)
+    scenario = ScenarioSpec.model_validate(copy.deepcopy(preview["scenario"]))
+    root = tmp_path_factory.mktemp("trace-level")
+    return {
+        level: (
+            root / level.value,
+            run_scenario(scenario, root / level.value, trace_level=level).canonical_json(),
         )
-        engine.run(steps=2)
-        final_state = world.canonical_json()
-        artifacts.finalize(world)
-        decisions = (output_directory / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-        return final_state, decisions
-
-    off_state, off_decisions = run(TraceLevel.OFF)
-    summary_state, summary_decisions = run(TraceLevel.SUMMARY)
-    full_state, full_decisions = run(TraceLevel.FULL)
-
-    assert off_state == summary_state == full_state
-    assert off_decisions == []
-    assert summary_decisions
-    assert "candidates" not in json.loads(summary_decisions[0])
-    assert "candidates" in json.loads(full_decisions[0])
+        for level in TraceLevel
+    }
 
 
-def test_same_seed_small_scenario_has_identical_canonical_outputs(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(SMALL_REPLAY)
-    first = run_scenario(scenario, tmp_path / "first", trace_level=TraceLevel.OFF)
-    second = run_scenario(scenario, tmp_path / "second", trace_level=TraceLevel.SUMMARY)
+def _decisions(directory: Path) -> list[dict]:
+    lines = (directory / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines]
 
-    assert first.canonical_json() == second.canonical_json()
-    for filename in ("metrics.csv", "events_realized.jsonl"):
-        assert (tmp_path / "first" / filename).read_bytes() == (
-            tmp_path / "second" / filename
-        ).read_bytes()
-    manifests = [
-        json.loads((tmp_path / name / "manifest.json").read_text(encoding="utf-8"))
-        for name in ("first", "second")
-    ]
-    assert manifests[0]["final_state_hash"] == manifests[1]["final_state_hash"]
-    assert manifests[0]["scenario_hash"] == manifests[1]["scenario_hash"]
+
+def _manifest(directory: Path) -> dict:
+    return json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+
+
+def test_trace_level_changes_artifact_detail_not_simulation_hash(runs) -> None:
+    off, summary, full = (runs[level][0] for level in TraceLevel)
+
+    assert runs[TraceLevel.OFF][1] == runs[TraceLevel.SUMMARY][1] == runs[TraceLevel.FULL][1]
+    assert _decisions(off) == []
+    assert _decisions(summary)
+    assert len(_decisions(summary)) == len(_decisions(full))
+    assert all("candidates" not in decision for decision in _decisions(summary))
+    assert all("candidates" in decision for decision in _decisions(full))
+
+
+def test_same_seed_has_identical_canonical_outputs_at_every_trace_level(runs) -> None:
+    directories = [runs[level][0] for level in TraceLevel]
+
+    for filename in ("metrics.csv", "operational_kpis.csv", "events_realized.jsonl"):
+        contents = {(directory / filename).read_bytes() for directory in directories}
+        assert len(contents) == 1, filename
+    manifests = [_manifest(directory) for directory in directories]
+    assert len({manifest["final_state_hash"] for manifest in manifests}) == 1
+    assert len({manifest["scenario_hash"] for manifest in manifests}) == 1
