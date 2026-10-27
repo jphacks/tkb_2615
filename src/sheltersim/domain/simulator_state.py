@@ -93,6 +93,7 @@ from sheltersim.domain.staff_operations import (
 )
 from sheltersim.domain.temporary_spaces import (
     TEMPORARY_SPACES_POLICY_VERSION,
+    TEMPORARY_SPACES_SOURCE_ID,
     TEMPORARY_SPACES_STATE_KEY,
     create_temporary_spaces_state,
     validate_temporary_spaces_state,
@@ -401,8 +402,8 @@ def simulator_state_catalog() -> dict[str, Any]:
             "implementation_id": TEMPORARY_SPACES_POLICY_VERSION,
             "implementation_version": "1",
             "entity_kind": "zone",
-            "enabled_by": "population config or simulator_extensions.enabled",
-            "source_id": "ASM-TEMPORARY-CAPACITY-V1",
+            "enabled_by": "simulator_extensions.enabled",
+            "source_id": TEMPORARY_SPACES_SOURCE_ID,
             "fields": {
                 "people_capacity": {"unit": "person", "input": "approved EffectProgram"},
                 "sleeping_capacity": {"unit": "sleeping_place", "input": "approved EffectProgram"},

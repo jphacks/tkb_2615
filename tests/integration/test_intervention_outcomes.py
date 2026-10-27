@@ -29,7 +29,7 @@ from sheltersim.events.effects import (
     TimedAction,
 )
 from sheltersim.events.models import EventLogRecord, EventStatus
-from sheltersim.experiments.branch import BranchError, BranchRuntime
+from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.operational_kpis import operational_kpi_values
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -736,33 +736,47 @@ def test_someone_who_has_used_water_or_meals_can_go_out_and_come_back(main_line)
     assert all(row in history for row in used), "the earlier water and meal records were lost"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=BranchError,
-    reason="#80: generated Scenarios do not enable the temporary space state",
-)
-def test_a_temporary_space_is_opened_for_its_window(main_line) -> None:
-    # What the extra capacity should change for operators is to be decided once
-    # it applies; until then this checks only that it opens and closes.
-    program = _program(
-        _action(
-            "add_temporary_space",
-            TargetSelector(kind="zone", target_id="sleeping"),
-            {"people_capacity": 10, "sleeping_capacity": 10},
-            units="person_capacity",
-            policy_dependencies=["temporary_spaces_v1"],
-            end_minute=OUTAGE_END_MINUTE,
-        )
+def test_a_temporary_space_lets_arriving_people_in_at_once(main_line) -> None:
+    # The sleeping area holds 21 and its 20 residents start there, so most of
+    # 20 arrivals wait for room unless a temporary space adds capacity (#80).
+    arrivals = _action(
+        "add_evacuees",
+        TargetSelector(kind="zone", target_id="sleeping"),
+        {"count": 20},
+        units="evacuee",
+        policy_dependencies=["population_dynamics_v1"],
     )
+    space = _action(
+        "add_temporary_space",
+        TargetSelector(kind="zone", target_id="sleeping"),
+        {"people_capacity": 20, "sleeping_capacity": 20},
+        units="person_capacity",
+        policy_dependencies=["temporary_spaces_v1"],
+        end_minute=OUTAGE_END_MINUTE,
+    )
+    _fork(main_line, "main", FORK_MINUTE, "crowd", _program(arrivals))
+    _fork(main_line, "main", FORK_MINUTE, "crowd-space", _program(space, arrivals))
 
-    main, child = _fork_main(main_line, "temporary-space", program)
+    first = FORK_MINUTE + 1
+    crowd = _advance(main_line, "crowd", first)
+    crowd_space = _advance(main_line, "crowd-space", first)
+    residents = len(main_line.seek("main", first).world.agents)
 
-    applied_ops = [
-        record.event.payload.get("op")
-        for record in child.event_log.records
-        if record.status is EventStatus.APPLIED
+    (record,) = crowd_space.model_state["temporary_spaces_v1"]["spaces"].values()
+    assert (record["zone_id"], record["people_capacity"], record["active"]) == (
+        "sleeping",
+        20,
+        True,
+    )
+    assert len(crowd_space.agents) == residents + 20
+    assert len(crowd.agents) < residents + 20
+    after = _advance(main_line, "crowd-space", COMPARE_MINUTE)
+    assert [row.realized_minute for row in _applied(after, "effect_program_temporary_space")] == [
+        FORK_MINUTE
     ]
-    assert applied_ops.count("add_temporary_space") >= 2
+    assert [
+        row.realized_minute for row in _applied(after, "effect_program_temporary_space_expire")
+    ] == [OUTAGE_END_MINUTE]
 
 
 def _geometry_action(

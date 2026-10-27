@@ -33,6 +33,8 @@ def test_generated_scenario_has_the_floor_plan_and_awareness_of_a_ui_scenario(
     )
     assert configs["facility_geometry"]["facility_points"]
     assert configs["agent_dynamics"]["policy_version"]
+    # Lets an operator approve a temporary space (#80).
+    assert configs["simulator_extensions"] == {"enabled": True}
     assert len(generated_scenario.profiles) == 20
     assert generated_scenario.duration_minutes == 360
 

@@ -1998,10 +1998,10 @@ class EffectProgramTemporarySpaceHandler:
         effect_id = event.payload.get("effect_id")
         modifier_id = event.payload.get("modifier_id")
         zone_id = event.payload.get("zone_id")
-        program = (
-            state.get("programs", {}).get(program_id)
-            if isinstance(state, dict) and isinstance(program_id, str) else None
-        )
+        # Approved programs live in the EffectProgram state, like every other
+        # operator's; temporary_spaces_v1 holds only the spaces themselves (#80).
+        programs = world.model_state.get(EFFECT_PROGRAM_STATE_KEY, {}).get("programs", {})
+        program = programs.get(program_id) if isinstance(program_id, str) else None
         if (
             not isinstance(state, dict)
             or not isinstance(program, dict)
@@ -2898,6 +2898,7 @@ def validate_effect_program_state(
                 "add_evacuees": "effect_program_population",
                 "depart_evacuees": "effect_program_population",
                 "population_presence": "effect_program_population",
+                "add_temporary_space": "effect_program_temporary_space",
                     "move_facility": "effect_program_geometry",
                     "transfer_equipment": "effect_program_geometry",
                     "set_partition": "effect_program_geometry",
@@ -2914,6 +2915,7 @@ def validate_effect_program_state(
                 "set_lighting": "effect_program_environment_expire",
                 "set_privacy": "effect_program_environment_expire",
                 "set_temperature": "effect_program_environment_expire",
+                "add_temporary_space": "effect_program_temporary_space_expire",
                     "set_partition": "effect_program_geometry_expire",
                     "set_route_access": "effect_program_geometry_expire",
                     "temporary_room_geometry": "effect_program_geometry_expire",
