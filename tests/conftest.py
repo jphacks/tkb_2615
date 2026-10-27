@@ -274,6 +274,38 @@ def generated_scenario_with_split_queues(generated_scenario):
     return ScenarioSpec.model_validate(document)
 
 
+@pytest.fixture
+def place_three_at_facility() -> Callable[[Any, str], None]:
+    """Stand A001-A003 in a facility's area and keep everyone from deciding anew.
+
+    A request to a facility's queue needs its person to have arrived there.
+    """
+
+    def place(world: Any, facility_id: str) -> None:
+        from sheltersim.domain.geometry_overlay import effective_geometry
+        from sheltersim.domain.movement import MOVEMENT_STATE_KEY
+
+        zone_id = world.facilities[facility_id].zone_id
+        zone = next(row for row in effective_geometry(world).zones if row.zone_id == zone_id)
+        centre = {
+            "x": sum(point.x for point in zone.polygon) / len(zone.polygon),
+            "y": sum(point.y for point in zone.polygon) / len(zone.polygon),
+        }
+        for agent in world.agents.values():
+            agent.next_decision_at = 100
+        for agent_id in ("A001", "A002", "A003"):
+            world.agents[agent_id].zone_id = zone_id
+            world.model_state[MOVEMENT_STATE_KEY]["positions"][agent_id].update(
+                zone_id=zone_id,
+                point=dict(centre),
+                edge_id=None,
+                progress=0.0,
+                position_kind="physical",
+            )
+
+    return place
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Give each parallel worker one long simulation to start with.
 

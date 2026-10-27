@@ -131,15 +131,16 @@ def _drop_stale_resource_stall(world: WorldState, facility_id: str) -> None:
 
     The stall record describes why the current head is waiting. Reordering or a head
     that leaves the queue makes it stale; the next arbitration records the new head.
+    With independent queues, the head of any of the facility's queues stays current.
     """
+    from sheltersim.domain.facility_queues import queue_head_agent_ids
     from sheltersim.domain.resource_service import SERVICE_STATE_KEY
 
     state = world.model_state.get(SERVICE_STATE_KEY)
     if not isinstance(state, dict):
         return
     record = state["stall_state"].get(facility_id)
-    queue = world.facilities[facility_id].resource_queue_agent_ids
-    if record is not None and (not queue or queue[0] != record["agent_id"]):
+    if record is not None and record["agent_id"] not in queue_head_agent_ids(world, facility_id):
         del state["stall_state"][facility_id]
 
 

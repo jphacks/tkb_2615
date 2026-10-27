@@ -8,13 +8,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from sheltersim.contracts.workspace import HistoryQuery
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.rng import CounterRNG
-from sheltersim.core.world import StateInvariantError, WorldState
+from sheltersim.core.world import WorldState
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY
 from sheltersim.domain.movement import MOVEMENT_STATE_KEY
@@ -29,38 +27,13 @@ from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-QUEUED = ("A001", "A002", "A003")
-
-
-def prepare_queued_agents(world: WorldState, facility_id: str) -> None:
-    """Stand three people in the facility's area and keep everyone from deciding anew."""
-    from sheltersim.domain.geometry_overlay import effective_geometry
-
-    zone_id = world.facilities[facility_id].zone_id
-    zone = next(row for row in effective_geometry(world).zones if row.zone_id == zone_id)
-    centre = {
-        "x": sum(point.x for point in zone.polygon) / len(zone.polygon),
-        "y": sum(point.y for point in zone.polygon) / len(zone.polygon),
-    }
-    for agent in world.agents.values():
-        agent.next_decision_at = 100
-    for agent_id in QUEUED:
-        world.agents[agent_id].zone_id = zone_id
-        world.model_state[MOVEMENT_STATE_KEY]["positions"][agent_id].update(
-            zone_id=zone_id,
-            point=dict(centre),
-            edge_id=None,
-            progress=0.0,
-            position_kind="physical",
-        )
-
 
 def test_explicit_queues_run_independently_and_restore_from_checkpoint(
-    generated_scenario_with_split_queues, tmp_path: Path
+    place_three_at_facility, generated_scenario_with_split_queues, tmp_path: Path
 ) -> None:
     scenario = generated_scenario_with_split_queues
     world = WorldState.from_scenario(scenario)
-    prepare_queued_agents(world, "toilet_01")
+    place_three_at_facility(world, "toilet_01")
     service = ToiletServiceManager(world, min_service_minutes=2, max_service_minutes=2)
     service.request("A001", "toilet_01", queue_id="toilet_01-left-fifo")
     service.request("A002", "toilet_01", queue_id="toilet_01-left-fifo")
@@ -110,7 +83,7 @@ def test_explicit_queues_run_independently_and_restore_from_checkpoint(
         if record.event.event_type == "toilet_service_complete"
         and record.event.payload["facility_id"] == "toilet_01"
     ]
-    assert sorted(row["agent_id"] for row in toilet_completions) == list(QUEUED)
+    assert sorted(row["agent_id"] for row in toilet_completions) == ["A001", "A002", "A003"]
     assert all(row["staff_id"] == "toilet_staff_01" for row in toilet_completions)
     assert world.staff["toilet_staff_01"].active_task_id is None
     assert all(
@@ -142,13 +115,13 @@ def test_explicit_queues_run_independently_and_restore_from_checkpoint(
 
 
 def test_independent_resource_queues_reserve_staff_and_consume_stock(
-    generated_scenario_with_split_queues, tmp_path: Path
+    place_three_at_facility, generated_scenario_with_split_queues, tmp_path: Path
 ) -> None:
     from sheltersim.domain.resources import RESOURCE_LEDGER_KEY
 
     scenario = generated_scenario_with_split_queues
     world = WorldState.from_scenario(scenario)
-    prepare_queued_agents(world, "water_station_main")
+    place_three_at_facility(world, "water_station_main")
     served_before = world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["water_ml"]["served"]
     per_service = world.model_configs["resource_service"]["water_ml_per_service"]
     service = ResourceServiceManager(world)
@@ -181,19 +154,16 @@ def test_independent_resource_queues_reserve_staff_and_consume_stock(
     world.validate()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=StateInvariantError,
-    reason="#118: a stall at the second queue's head fails the facility-wide head check",
-)
 def test_independent_water_queues_wait_for_room_when_the_station_serves_one(
+    place_three_at_facility,
     generated_scenario_with_split_queues,
 ) -> None:
+    """Each queue's head waits for room without logging a new stall every minute (#118)."""
     document = generated_scenario_with_split_queues.model_dump(mode="json")
     station = next(row for row in document["facilities"] if row["id"] == "water_station_main")
     station["capacity"] = station["working_units"] = 1
     world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
-    prepare_queued_agents(world, "water_station_main")
+    place_three_at_facility(world, "water_station_main")
     service = ResourceServiceManager(world)
     for agent_id, queue_id in (
         ("A001", "water_station_main-left-fifo"),
@@ -203,7 +173,7 @@ def test_independent_water_queues_wait_for_room_when_the_station_serves_one(
         service.request(agent_id, "water_station_main", queue_id=queue_id)
     controller = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))
 
-    TickEngine(world, phase_handler=controller, rng=CounterRNG(world.seed)).run(16)
+    TickEngine(world, phase_handler=controller, rng=CounterRNG(world.seed)).run(20)
 
     served = [
         record.event.payload["agent_id"]
@@ -212,3 +182,10 @@ def test_independent_water_queues_wait_for_room_when_the_station_serves_one(
         and record.event.payload["facility_id"] == "water_station_main"
     ]
     assert sorted(served) == ["A001", "A002", "A003"]
+    # While both queues wait, the station keeps describing the same head.
+    stalls = world.model_state["resource_service_v1"]["queue_stall_history"]
+    assert [(row["agent_id"], row["reason"]) for row in stalls] == [
+        ("A003", "capacity"),
+        ("A002", "capacity"),
+    ]
+    assert world.metric_state["resource_service_wait_capacity_count"] == 2

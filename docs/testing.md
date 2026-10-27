@@ -110,7 +110,7 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 
 比べるのは変化の向きだけで、大きさは確かめません。係数の多くは実測で校正されていないためです。期待どおりに効かない介入や、生成Scenarioに適用できない介入が見つかったら、テストで隠さずに不具合のIssueにします（例：#65）。
 
-- 不具合で今は確かめられない振る舞いは、期待する形でテストを書き、`pytest.mark.xfail(strict=True, raises=…)`にIssue番号を付けて置きます（#72、#74、#76、#78〜#80、#82〜#84で使い、どれも直して印を外しました）。`raises`で失敗の種類を限るので、不具合を直したのに期待と違う結果になった場合も気づけます。直したら印を外します。
+- 不具合で今は確かめられない振る舞いは、期待する形でテストを書き、`pytest.mark.xfail(strict=True, raises=…)`にIssue番号を付けて置きます（#72、#74、#76、#78〜#80、#82〜#84、#118で使い、どれも直して印を外しました）。`raises`で失敗の種類を限るので、不具合を直したのに期待と違う結果になった場合も気づけます。直したら印を外します。
 - 職員が待機中のときにしか出せない指示は、本線を先に進め、`TimelineStore.iter_worlds`で条件を満たす最初の時刻を探してから分岐させます（読み取りだけで、状態も乱数も変えません）。
 - 作業の引き継ぎのように、別の介入で作った状態が前提になるものは、介入したBranchからさらに分岐させます。
 - 仕切りや設備の移設のように、KPIに現れにくい空間の変化は、人の歩く経路（`movement_v1`の`journeys`）や移動の完了イベントが通る区画で確かめます。移動時間は分単位なので、数メートルの違いは時間に出ません。
@@ -132,7 +132,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件、#118で1件、#87で1本・1件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました。残りは#115で、`test_round3_common_services.py`と合わせて担当と範囲ごとに分けました（新しいファイル11本と、既存の`unit/web/test_workspace.py`・`unit/domain/test_population_lifecycle.py`。確かめる内容は変えていません）。`test_staff_support_travel.py`は、生成された図面に迂回経路を1本だけ手で足して確かめています。`test_facility_queues.py`、`test_population_demand_integration.py`、`test_effect_program.py`も移しました。図面のない部品のテスト（介入の事前検証など）と、生成器が作らない形が要るテストは、fixtureのまま理由を書いて残しています。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件、#118で3件、#87で1本・1件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました。残りは#115で、`test_round3_common_services.py`と合わせて担当と範囲ごとに分けました（新しいファイル11本と、既存の`unit/web/test_workspace.py`・`unit/domain/test_population_lifecycle.py`。確かめる内容は変えていません）。`test_staff_support_travel.py`は、生成された図面に迂回経路を1本だけ手で足して確かめています。`test_facility_queues.py`、`test_population_demand_integration.py`、`test_effect_program.py`も移しました。図面のない部品のテスト（介入の事前検証など）と、生成器が作らない形が要るテストは、fixtureのまま理由を書いて残しています。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -166,7 +166,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_engine.py` | core | 4 | 6 |  |  | 契約 | fixture | long_simulation |
 | `test_per_tick_history_validation.py` | core | 3 | 6 |  |  |  | 生成 |  |
 | `test_state.py` | core | 20 |  |  |  | 契約 | fixture |  |
-| `unit/core/test_world.py` | core | 7 |  |  |  | 契約 | 生成（実行なし） |  |
+| `unit/core/test_world.py` | core | 9 |  |  |  | 契約 | 生成（実行なし） |  |
 | `unit/core/test_checkpoint.py` | core | 1 |  |  |  | 契約 | fixture |  |
 | `test_action_lifecycle.py` | domain | 3 |  |  |  |  | fixture |  |
 | `test_ambient_demand_effects.py` | domain | 10 |  |  | 4 | 契約 | fixture |  |
@@ -309,7 +309,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 | 担当 | ファイル | 単体 | 統合 | e2e | 範囲が混ざるファイル | 生成Scenarioを実行するファイル |
 |---|---|---|---|---|---|---|
-| core | 6 | 40 | 13 | 0 | 3 | 1 |
+| core | 6 | 42 | 13 | 0 | 3 | 1 |
 | domain | 34 | 190 | 19 | 1 | 4 | 10 |
 | events | 5 | 26 | 32 | 0 | 0 | 2 |
 | policies | 12 | 106 | 14 | 1 | 5 | 2 |
@@ -320,9 +320,9 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | web | 24 | 39 | 86 | 14 | 15 | 2 |
 | cli | 3 | 1 | 17 | 1 | 2 | 0 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
-| 計 | 140 | 703 | 233 | 21 | 43 | 21 |
+| 計 | 140 | 705 | 233 | 21 | 43 | 21 |
 
-957件のうち単体が703件（73%）、統合が233件（24%）、e2eが21件（2%）です。範囲が1つだけのファイルは、単体だけが73本、統合だけまたはe2eだけが23本で、残りの43本は範囲が混ざっています（ほかに、実行しないライブテストが1本）。
+959件のうち単体が705件（74%）、統合が233件（24%）、e2eが21件（2%）です。範囲が1つだけのファイルは、単体だけが73本、統合だけまたはe2eだけが23本で、残りの43本は範囲が混ざっています（ほかに、実行しないライブテストが1本）。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 

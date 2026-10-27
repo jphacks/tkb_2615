@@ -329,6 +329,9 @@ class ResourceServiceManager:
         world = self.world
         queue_state = world.model_state[FACILITY_QUEUES_STATE_KEY]
         started: list[ScheduledEvent] = []
+        # Each queue's head may wait for its own reason; the facility keeps one of them.
+        stalls: list[tuple[str, str]] = []
+        previous = world.model_state[SERVICE_STATE_KEY]["stall_state"].get(facility.id)
         facility_limit = min(facility.capacity, facility.working_units)
         skill = self.config["water_staff_skill" if resource_id == "water_ml" else "meal_staff_skill"]
         quantity = self.config[
@@ -355,7 +358,7 @@ class ResourceServiceManager:
                     raise StateInvariantError("independent resource queue lost its active task")
                 if resource_id == "water_ml" and water_service_blocked(world, facility.id):
                     mark_stall(world, queue_id, request_id, "outage")
-                    self._record_queue_stall(facility.id, agent_id, "water_outage")
+                    stalls.append((agent_id, "water_outage"))
                     break
                 point_capacity = physical_service_capacity(
                     world, facility.id, point.service_capacity, queue_id
@@ -365,7 +368,7 @@ class ResourceServiceManager:
                     or len(facility.resource_active_agent_ids) >= facility_limit
                 ):
                     mark_stall(world, queue_id, request_id, "capacity")
-                    self._record_queue_stall(facility.id, agent_id, "capacity")
+                    stalls.append((agent_id, "capacity"))
                     break
                 required_skills = set(point.access.required_staff_skills)
                 staff_member = next(
@@ -382,18 +385,18 @@ class ResourceServiceManager:
                 )
                 if staff_member is None:
                     mark_stall(world, queue_id, request_id, "staff")
-                    self._record_queue_stall(facility.id, agent_id, "staff")
+                    stalls.append((agent_id, "staff"))
                     break
                 account = world.model_state[RESOURCE_LEDGER_KEY]["accounts"][resource_id]
                 if account["remaining"] - account["reserved"] < quantity:
                     mark_stall(world, queue_id, request_id, "stock")
-                    self._record_queue_stall(facility.id, agent_id, "stock")
+                    stalls.append((agent_id, "stock"))
                     break
                 service_minutes = self.config["service_minutes"]
                 due_minute = minute + service_minutes
                 if due_minute >= world.duration_minutes:
                     mark_stall(world, queue_id, request_id, "run_end")
-                    self._record_queue_stall(facility.id, agent_id, "run_end")
+                    stalls.append((agent_id, "run_end"))
                     break
                 if progress_physical_queue_head_to_service(
                     world, facility.id, resource=True, minute=minute, queue_id=queue_id
@@ -462,7 +465,23 @@ class ResourceServiceManager:
                 self._clear_queue_stall(facility.id)
                 self._record_queue_wait(minute - queue_task.start_minute, resource_id)
                 started.append(completion_event)
+        self._record_independent_queue_stall(facility.id, stalls, previous)
         return started
+
+    def _record_independent_queue_stall(
+        self, facility_id: str, stalls: list[tuple[str, str]], previous: dict[str, str] | None
+    ) -> None:
+        """Keep a still-waiting head's record, else record the first stalled queue's head.
+
+        Recording every queue's head in turn would log a new stall each minute while
+        two queues both wait, and count each wait reason again every minute (#118).
+        """
+        if not stalls:
+            return
+        if previous is not None and (previous["agent_id"], previous["reason"]) in stalls:
+            self.world.model_state[SERVICE_STATE_KEY]["stall_state"][facility_id] = previous
+            return
+        self._record_queue_stall(facility_id, *stalls[0])
 
     def complete(self, event: ScheduledEvent) -> None:
         """Consume one completed reservation, relieve its need, and release staff/slot."""
