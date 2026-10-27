@@ -1,4 +1,4 @@
-"""WorldState.validate checks records against people and model state the Run holds.
+"""WorldState from a Scenario, its serialization, and what WorldState.validate refuses.
 
 That a Scenario with a scheduled resource loss runs to the end is checked in
 tests/integration/test_resource_loss.py.
@@ -6,12 +6,19 @@ tests/integration/test_resource_loss.py.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from sheltersim.core.world import StateInvariantError, WorldState
+from sheltersim.domain.models import Activity
 from sheltersim.domain.operational import OPERATIONAL_EVENTS_KEY
 from sheltersim.domain.resource_service import SERVICE_STATE_KEY, ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
+from sheltersim.experiments.scenario import ScenarioSpec
+
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def _water_request(agent_id: str) -> dict[str, object]:
@@ -166,3 +173,93 @@ def test_a_scenario_that_opts_into_operational_events_keeps_their_state(
 
     with pytest.raises(StateInvariantError, match="requires operational_events_v1 state"):
         world.validate()
+
+
+def test_world_rejects_duplicate_queue_membership() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world.agents["A001"].activity = Activity.QUEUED
+    world.facilities["toilet_1"].queue_agent_ids.append("A001")
+    world.facilities["toilet_2"].queue_agent_ids.append("A001")
+
+    with pytest.raises(StateInvariantError, match="multiple facility queues"):
+        world.validate()
+
+
+def test_world_rejects_duplicate_entries_in_one_queue() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world.agents["A001"].activity = Activity.QUEUED
+    world.facilities["toilet_1"].queue_agent_ids.extend(("A001", "A001"))
+
+    with pytest.raises(StateInvariantError, match="duplicate queue entries"):
+        world.validate()
+
+
+def test_world_rejects_agent_with_unknown_zone() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world.agents["A001"].zone_id = "missing-zone"
+
+    with pytest.raises(StateInvariantError, match="unknown zone"):
+        world.validate()
+
+
+def test_world_canonical_json_is_stable() -> None:
+    scenario = ScenarioSpec.load(FIXTURE)
+    world_a = WorldState.from_scenario(scenario)
+    world_b = WorldState.from_scenario(scenario)
+
+    assert world_a.canonical_json() == world_b.canonical_json()
+
+
+def test_initial_world_preserves_scenario_graph_and_model_config() -> None:
+    scenario = ScenarioSpec.load(FIXTURE)
+
+    world = WorldState.from_scenario(scenario)
+
+    assert len(world.zone_edges) == len(scenario.zone_edges)
+    assert world.model_configs == scenario.model_configs
+
+
+def test_initial_world_owns_its_mutable_model_config_copy() -> None:
+    scenario = ScenarioSpec.load(FIXTURE)
+    world = WorldState.from_scenario(scenario)
+
+    world.model_configs["behavior"]["mode"] = "changed-in-world"
+
+    assert scenario.model_configs["behavior"]["mode"] == "offline"
+
+
+def test_initial_needs_copy_into_mutable_agent_state_and_serialize_separately() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    agent = world.agents["A001"]
+    initial_hunger = agent.profile.initial_needs.hunger
+
+    agent.needs.hunger = 0.9
+    serialized = json.loads(world.canonical_json())
+    serialized_agent = next(
+        item for item in serialized["agents"] if item["profile"]["id"] == "A001"
+    )
+    assert agent.profile.initial_needs.hunger == initial_hunger
+    assert agent.needs.hunger == 0.9
+    assert serialized_agent["profile"]["initial_needs"]["hunger"] == initial_hunger
+    assert serialized_agent["needs"]["hunger"] == 0.9
+
+
+def test_world_rejects_mutated_need_state_outside_the_normalized_range() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world.agents["A001"].needs.fatigue = -0.01
+
+    with pytest.raises(StateInvariantError, match="invalid need levels"):
+        world.validate()
+
+
+def test_world_state_v5_rejects_old_versions_and_unknown_fields() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    document = world.to_dict()
+
+    old_version = dict(document, schema_version=4)
+    with pytest.raises(StateInvariantError, match="unsupported world-state schema version"):
+        WorldState.from_dict(old_version)
+
+    extended = dict(document, unexpected_contract_field=True)
+    with pytest.raises(StateInvariantError, match="fields do not match"):
+        WorldState.from_dict(extended)
