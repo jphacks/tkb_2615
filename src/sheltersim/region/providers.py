@@ -570,7 +570,10 @@ class EStatProvider:
             return ()
         if not query.strip() or not 1 <= limit <= 50:
             raise ValueError("query must be non-empty and limit must be between 1 and 50")
-        url = f"{self.base_url}/getStatsList?{urlencode({'appId': self.app_id, 'searchWord': query, 'limit': limit})}"
+        url = (
+            f"{self.base_url}/getStatsList?"
+            f"{urlencode({'appId': self.app_id, 'searchWord': query, 'limit': limit})}"
+        )
         root = _get_json(url).get("GET_STATS_LIST", {})
         if not isinstance(root, dict):
             return ()
@@ -605,7 +608,8 @@ class EStatProvider:
         if not table_id.strip():
             raise ValueError("an e-Stat table ID must be selected")
         document = _get_json(
-            f"{self.base_url}/getMetaInfo?{urlencode({'appId': self.app_id, 'statsDataId': table_id})}"
+            f"{self.base_url}/getMetaInfo?"
+            f"{urlencode({'appId': self.app_id, 'statsDataId': table_id})}"
         )
         root = document.get("GET_META_INFO", {})
         metadata = root.get("METADATA_INF", {}) if isinstance(root, dict) else {}

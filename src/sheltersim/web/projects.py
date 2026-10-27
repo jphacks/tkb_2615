@@ -470,7 +470,10 @@ class ProjectAPI:
                                 {
                                     "schema_version": 1,
                                     "status": "unavailable",
-                                    "limitation": "No validated report was generated within the configured mode/budget.",
+                                    "limitation": (
+                                        "No validated report was generated within the configured "
+                                        "mode/budget."
+                                    ),
                                 },
                             )
                     except (StorageError, OSError):
@@ -514,7 +517,8 @@ class ProjectAPI:
                             "run_peak_memory_bytes": None,
                             "memory_attribution_status": "unavailable",
                             "memory_attribution_reason": (
-                                "Runs execute in the shared server process; process-wide RSS cannot be attributed to this Run."
+                                "Runs execute in the shared server process; process-wide RSS "
+                                "cannot be attributed to this Run."
                             ),
                             "project_storage_before_bytes": storage_before,
                             "project_storage_after_bytes": storage_after,

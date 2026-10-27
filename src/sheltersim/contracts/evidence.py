@@ -69,8 +69,14 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
         "domain": "simulator",
         "parameters": parameters,
         "assumption_source_id": record["source_id"],
-        "formula": "Typed routed tasks consume duration/travel/availability; bounded sanitation and information feedback at completion",
-        "reference": "Installed staff_operations operator; experimental engineering assumptions, no empirical calibration",
+        "formula": (
+            "Typed routed tasks consume duration/travel/availability; bounded sanitation and "
+            "information feedback at completion"
+        ),
+        "reference": (
+            "Installed staff_operations operator; experimental engineering assumptions, no "
+            "empirical calibration"
+        ),
     }
     from sheltersim.domain.movement import (
         MOVEMENT_POLICY_VERSION,
@@ -108,14 +114,25 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
         "domain": "simulator",
         "parameters": movement_parameters,
         "assumption_source_id": movement_record["source_id"],
-        "formula": "Mobility speed and measured density determine route time; room geometry determines waypoints",
-        "reference": "Installed spatial movement operator; engineering assumptions, not externally validated",
+        "formula": (
+            "Mobility speed and measured density determine route time; room geometry determines "
+            "waypoints"
+        ),
+        "reference": (
+            "Installed spatial movement operator; engineering assumptions, not externally validated"
+        ),
     }
     toilet_service = ToiletServiceConfig().model_dump(mode="json")
     catalog[TOILET_SERVICE_POLICY_VERSION] = {
         "domain": "simulator",
-        "reference": "Installed deterministic FIFO toilet service; duration bounds are synthetic and uncalibrated",
-        "formula": "Keyed random discrete uniform integer duration between inclusive minimum and maximum minutes",
+        "reference": (
+            "Installed deterministic FIFO toilet service; duration bounds are synthetic and "
+            "uncalibrated"
+        ),
+        "formula": (
+            "Keyed random discrete uniform integer duration between inclusive minimum and "
+            "maximum minutes"
+        ),
         "assumption_source_id": toilet_service["source_id"],
         "implementation_version": "1",
         "state_schema_version": 1,
@@ -141,7 +158,9 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
     catalog[STAFF_DYNAMICS_POLICY_VERSION] = {
         "domain": "simulator",
         "reference": "Installed continuous-duty staff fatigue and recovery operator",
-        "formula": "Continuous work accrues fatigue; required break duration is set by rest_minutes",
+        "formula": (
+            "Continuous work accrues fatigue; required break duration is set by rest_minutes"
+        ),
         "assumption_source_id": STAFF_DYNAMICS_SOURCE_ID,
         "implementation_version": "1",
         "state_schema_version": 1,
@@ -155,7 +174,9 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
                 "value_type": "integer",
                 "source_id": STAFF_DYNAMICS_SOURCE_ID,
                 "evidence_grade": "C",
-                "applicability": "Required recovery interval after the configured continuous-work limit",
+                "applicability": (
+                    "Required recovery interval after the configured continuous-work limit"
+                ),
             },
         },
     }
@@ -174,7 +195,9 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
             "value_type": "integer",
             "source_id": SHIFT_STAFF_DYNAMICS_SOURCE_ID,
             "evidence_grade": "C",
-            "applicability": "Required recovery interval after the configured continuous-work limit",
+            "applicability": (
+                "Required recovery interval after the configured continuous-work limit"
+            ),
         },
         "staff_dynamics.off_shift_fatigue_recovery_per_minute": {
             "default": shift_config["off_shift_fatigue_recovery_per_minute"],
@@ -183,7 +206,9 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
             "upper": 1.0,
             "source_id": SHIFT_STAFF_DYNAMICS_SOURCE_ID,
             "evidence_grade": "C",
-            "applicability": "Synthetic off-shift fatigue recovery; active only under staff-dynamics v2",
+            "applicability": (
+                "Synthetic off-shift fatigue recovery; active only under staff-dynamics v2"
+            ),
         },
         "staff_dynamics.shift_windows_by_staff.*": {
             "default": {},
@@ -203,7 +228,10 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
     catalog[SHIFT_STAFF_DYNAMICS_POLICY_VERSION] = {
         "domain": "simulator",
         "reference": "Installed weekly shift and rest-state operator; synthetic staff assumptions",
-        "formula": "Weekly staff availability, fatigue threshold recovery breaks and bounded off-shift recovery",
+        "formula": (
+            "Weekly staff availability, fatigue threshold recovery breaks and bounded off-shift "
+            "recovery"
+        ),
         "assumption_source_id": SHIFT_STAFF_DYNAMICS_SOURCE_ID,
         "implementation_version": "2",
         "state_schema_version": 1,
@@ -224,8 +252,13 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
     }
     catalog[STAFF_SUPPORT_POLICY_VERSION] = {
         "domain": "simulator",
-        "reference": "Installed FIFO support assignment with bounded timeout, task duration, cooldown and fairness aging",
-        "formula": "FIFO skill-matched assignment with fairness aging and reason-coded request timeout",
+        "reference": (
+            "Installed FIFO support assignment with bounded timeout, task duration, cooldown and "
+            "fairness aging"
+        ),
+        "formula": (
+            "FIFO skill-matched assignment with fairness aging and reason-coded request timeout"
+        ),
         "assumption_source_id": STAFF_SUPPORT_SOURCE_ID,
         "implementation_version": "2",
         "state_schema_version": 1,
@@ -240,7 +273,8 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
                 "source_id": STAFF_SUPPORT_SOURCE_ID,
                 "evidence_grade": "C",
                 "applicability": (
-                    "Synthetic staff-support lifecycle timing; not an operational service-level standard"
+                    "Synthetic staff-support lifecycle timing; not an operational "
+                    "service-level standard"
                 ),
             }
             for name, value in staff_support_defaults.items()
@@ -306,8 +340,14 @@ def operator_evidence_catalog() -> dict[str, dict[str, Any]]:
         }
     catalog[resource_service_id] = {
         "domain": "simulator",
-        "reference": "Installed opt-in staffed resource service; no local consumption or staffing calibration supplied",
-        "formula": "completion consumes reserved stock and applies bounded service relief; behavior thresholds and utility weights drive requests",
+        "reference": (
+            "Installed opt-in staffed resource service; no local consumption or staffing "
+            "calibration supplied"
+        ),
+        "formula": (
+            "completion consumes reserved stock and applies bounded service relief; behavior "
+            "thresholds and utility weights drive requests"
+        ),
         "assumption_source_id": RESOURCE_SERVICE_ASSUMPTION_ID,
         "implementation_version": "1",
         "state_schema_version": 1,

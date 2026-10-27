@@ -106,7 +106,9 @@ class ProjectServices:
                 "shared_operations_state": SharedOperationsState.model_json_schema(),
                 "action_lifecycle_receipt": ActionLifecycleReceipt.model_json_schema(),
                 "care_transition_receipt": CareTransitionReceipt.model_json_schema(),
-                "staff_support_continuity_receipt": StaffSupportContinuityReceipt.model_json_schema(),
+                (
+                    "staff_support_continuity_receipt"
+                ): StaffSupportContinuityReceipt.model_json_schema(),
                 "staff_handoff_receipt": StaffHandoffReceipt.model_json_schema(),
                 "facility_recovery_receipt": FacilityRecoveryReceipt.model_json_schema(),
                 "operational_demand_snapshot": OperationalDemandSnapshot.model_json_schema(),
@@ -129,14 +131,26 @@ class ProjectServices:
                         "enabled_by": "geometry_overlay.schema_version=3 or 4",
                         "arrival_parameters": {
                             "admission_zone_ids": "explicit ordered fallback zones",
-                            "approach_route_id": "optional FacilityGeometry.arrival_approach_routes ID ending at the preferred zone",
+                            "approach_route_id": (
+                                "optional FacilityGeometry.arrival_approach_routes ID ending at "
+                                "the preferred zone"
+                            ),
                         },
-                        "capacity": "active room people_capacity; assignments persist through expiry",
-                        "arrival_movement": "optional operator/source-supplied route with explicit metric coordinates and walking speed, checkpointed progress, entrance waiting, and admission history; route-free arrivals retain direct admission",
+                        "capacity": (
+                            "active room people_capacity; assignments persist through expiry"
+                        ),
+                        "arrival_movement": (
+                            "optional operator/source-supplied route with explicit metric "
+                            "coordinates and walking speed, checkpointed progress, entrance "
+                            "waiting, and admission history; route-free arrivals retain direct "
+                            "admission"
+                        ),
                     },
                 },
                 "time_semantics": {
-                    "operation_receipts": "event realized_minute; transition occurs at this boundary",
+                    "operation_receipts": (
+                        "event realized_minute; transition occurs at this boundary"
+                    ),
                     "timeline_frames": "before_tick",
                     "operational_demand": "before_tick observed state only",
                 },
@@ -458,10 +472,15 @@ class ProjectServices:
                 {
                     "coverage": "persisted_records_only",
                     "verified": False,
-                    "ordering": "saved_sequence_then_receipt_id; legacy request order may be unavailable"
+                    "ordering": (
+                        "saved_sequence_then_receipt_id; legacy request order may be unavailable"
+                    )
                     if kind == "usage"
                     else "stored_reference_order",
-                    "limits": "No raw prompts/responses, provider keys, host ownership records or invented approval dates.",
+                    "limits": (
+                        "No raw prompts/responses, provider keys, host ownership records or "
+                        "invented approval dates."
+                    ),
                 }
             )
             return result
@@ -555,7 +574,10 @@ class ProjectServices:
                     if saved["model_versions"].get(key) != installed.get(key)
                 ]
                 compatible = False
-                limitation = "Installed schema/model validation requires an explicit migration/new Run; original checkpoint is retained."
+                limitation = (
+                    "Installed schema/model validation requires an explicit migration/new Run; "
+                    "original checkpoint is retained."
+                )
             settings = saved["runtime_state"].get("llm_settings", {})
             return {
                 "schema_version": 1,

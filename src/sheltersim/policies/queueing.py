@@ -28,7 +28,10 @@ class NeedWeightedPhysicalQueuePolicy:
 
     model_id = "need-weighted-physical-queue-v1"
     source_id = "ASM-NEED-WEIGHTED-PHYSICAL-QUEUE-V1"
-    formula = "priority = service_need + min(wait_minutes / 1440, 0.1); abandon when wait >= service_limit and need < persistence_threshold"
+    formula = (
+        "priority = service_need + min(wait_minutes / 1440, 0.1); abandon when wait >= "
+        "service_limit and need < persistence_threshold"
+    )
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         config = {} if config is None else config

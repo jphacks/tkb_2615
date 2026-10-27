@@ -920,7 +920,8 @@ class UtilityBehaviorPolicy:
         if information_query_enabled:
             support_trigger = (
                 "support_need>=0.25 and maximum need/stress>=0.50, or information query pressure "
-                f">={self.information_query_threshold:g} or uncertainty>=0.65; no_open_support_request and "
+                f">={self.information_query_threshold:g} or uncertainty>=0.65; "
+                "no_open_support_request and "
                 "support_cooldown_elapsed"
             )
         else:

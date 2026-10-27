@@ -33,7 +33,10 @@ class RegionResearchRequest(RegionModel):
     weather_area_code: str | None = Field(
         default=None,
         pattern=r"^\d{6}$",
-        description="Selected six-digit JMA forecast-file code; nested area applicability remains unknown without a separate mapping.",
+        description=(
+            "Selected six-digit JMA forecast-file code; nested area applicability remains "
+            "unknown without a separate mapping."
+        ),
     )
 
     @model_validator(mode="after")

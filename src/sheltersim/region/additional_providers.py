@@ -368,7 +368,9 @@ class ConfiguredRegionalDataProvider:
                     RegionalProviderStatus(
                         data_kind=kind,
                         status="not_configured",
-                        applicability="No deployment-configured endpoint for the requested data class.",
+                        applicability=(
+                            "No deployment-configured endpoint for the requested data class."
+                        ),
                         message="自治体計画・災害数値の取得Providerが構成されていません。",
                     )
                 )
@@ -608,7 +610,8 @@ class ConfiguredRegionalDataProvider:
                         )
                 except (TypeError, ValueError) as exc:
                     warnings.append(
-                        f"{config.title}の{row_number}行目は観測スキーマを満たしません: {str(exc)[:240]}"
+                        f"{config.title}の{row_number}行目は観測スキーマを満たしません: "
+                        f"{str(exc)[:240]}"
                     )
                     continue
                 if config.data_kind == "municipal_plan":
@@ -631,12 +634,16 @@ class ConfiguredRegionalDataProvider:
                     record_count=local_count,
                     applicability=(
                         f"municipality={requested_name}; disaster={request.disaster}; "
-                        f"season={request.season or 'not specified'}; target_date={request.target_date or 'not specified'}"
+                        f"season={request.season or 'not specified'}; "
+                        f"target_date={request.target_date or 'not specified'}"
                     ),
                     message=(
                         "古いキャッシュのため観測値は適用不可です。"
                         if snapshot.stale_cache_fallback
-                        else "構成Providerから一致する数値レコードを取得しました。適用条件はレコードごとに確認してください。"
+                        else (
+                            "構成Providerから一致する数値レコードを取得しました。"
+                            "適用条件はレコードごとに確認してください。"
+                        )
                         if local_count
                         else "取得はできましたが、自治体・災害・期間に一致する行がありません。"
                     ),
@@ -658,7 +665,9 @@ class ConfiguredRegionalDataProvider:
                 RegionalProviderStatus(
                     data_kind="municipal_plan",
                     status="conflicting",
-                    applicability="Same metric/scope/period produced different values in configured sources.",
+                    applicability=(
+                        "Same metric/scope/period produced different values in configured sources."
+                    ),
                     message="同じ適用範囲の複数の自治体資料に矛盾する数値があるため、自動採用しません。",
                 )
             )
@@ -667,7 +676,9 @@ class ConfiguredRegionalDataProvider:
                 RegionalProviderStatus(
                     data_kind="hazard",
                     status="conflicting",
-                    applicability="Same metric/scope/period produced different values in configured sources.",
+                    applicability=(
+                        "Same metric/scope/period produced different values in configured sources."
+                    ),
                     message="同じ適用範囲の複数のハザード資料に矛盾する数値があるため、自動採用しません。",
                 )
             )
@@ -725,7 +736,9 @@ class JmaForecastProvider:
                 RegionalProviderStatus(
                     data_kind="weather",
                     status="not_configured",
-                    applicability="A six-digit JMA forecast area was not selected for this municipality.",
+                    applicability=(
+                        "A six-digit JMA forecast area was not selected for this municipality."
+                    ),
                     message="気象庁予報区域コードが選択されていないため、予報を地域条件へ結び付けていません。",
                 ),
             )
@@ -829,7 +842,10 @@ class JmaForecastProvider:
                 accessed_at=now,
                 retrieved_at=snapshot.retrieved_at,
                 geographic_scope=f"JMA forecast area {area_code}",
-                license_note="Official forecast description only. It is not a shelter indoor temperature, hazard impact, or long-range climate projection.",
+                license_note=(
+                    "Official forecast description only. It is not a shelter indoor temperature, "
+                    "hazard impact, or long-range climate projection."
+                ),
                 freshness="historical" if snapshot.stale_cache_fallback else "unknown",
                 content_sha256=snapshot.content_sha256,
                 etag=snapshot.etag,
@@ -843,7 +859,10 @@ class JmaForecastProvider:
                         data_kind="weather",
                         status="out_of_scope",
                         source_id=source_id,
-                        applicability=f"JMA forecast valid dates: {', '.join(sorted(item.isoformat() for item in valid_dates)) or 'none'}",
+                        applicability=(
+                            "JMA forecast valid dates: "
+                            f"{', '.join(sorted(item.isoformat() for item in valid_dates)) or 'none'}"
+                        ),
                         message="指定日の気象庁予報は提供範囲外です。長期の気象条件は不明として扱います。",
                     ),
                 )
@@ -864,7 +883,8 @@ class JmaForecastProvider:
                     source_id=source_id,
                     record_count=len(observations),
                     applicability=(
-                        f"JMA forecast-file area={area_code}; nested forecast areas are returned with their own codes; "
+                        f"JMA forecast-file area={area_code}; nested forecast areas are "
+                        "returned with their own codes; "
                         f"target_date={request.target_date or 'not selected'}; "
                         f"valid_dates={', '.join(sorted(item.isoformat() for item in valid_dates))}"
                     ),
@@ -884,7 +904,10 @@ class JmaForecastProvider:
                 source_kind="official",
                 accessed_at=now,
                 geographic_scope=f"JMA forecast area {area_code}",
-                license_note="Configured public endpoint; an unavailable response is not evidence of zero weather risk.",
+                license_note=(
+                    "Configured public endpoint; an unavailable response is not evidence of zero "
+                    "weather risk."
+                ),
                 freshness="unknown",
             )
             return (
@@ -894,7 +917,9 @@ class JmaForecastProvider:
                     data_kind="weather",
                     status="unavailable",
                     source_id=source_id,
-                    applicability=f"JMA area={area_code}; target_date={request.target_date or 'not selected'}",
+                    applicability=(
+                        f"JMA area={area_code}; target_date={request.target_date or 'not selected'}"
+                    ),
                     message=str(exc)[:1_000],
                 ),
             )

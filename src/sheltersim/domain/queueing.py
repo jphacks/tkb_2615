@@ -273,7 +273,9 @@ def _abandon_and_retry(
             event=abandon,
             realized_minute=minute,
             status=EventStatus.APPLIED,
-            detail="Agent left a prolonged low-urgency queue and will reconsider after a bounded delay",
+            detail=(
+                "Agent left a prolonged low-urgency queue and will reconsider after a bounded delay"
+            ),
         )
     )
     if route is not None and route.travel_minutes > 0:

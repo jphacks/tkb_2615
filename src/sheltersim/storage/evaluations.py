@@ -80,7 +80,10 @@ class EvaluationStore:
             "plan": plan.model_dump(mode="json"),
             "runs": runs,
             "comparisons": comparisons,
-            "limits": "Imported aggregate results; paired summaries recomputed. No simulation or empirical verification was performed by this import.",
+            "limits": (
+                "Imported aggregate results; paired summaries recomputed. No simulation or "
+                "empirical verification was performed by this import."
+            ),
         }
         with self.store.transaction():
             self.store._read(self.store._path(project_id, "project.json"))

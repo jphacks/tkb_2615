@@ -1233,7 +1233,10 @@ def _schedule_queue_trip(
         raise ValueError("physical queue reservation has no matching active queue task")
     sequence = world.allocate_event_sequence()
     event_id = f"physical-queue-trip-{sequence}"
-    purpose = f"{'resource' if resource else 'toilet'}_queue_{'position' if phase == 'position' else 'service'}"
+    purpose = (
+        f"{'resource' if resource else 'toilet'}_queue_"
+        f"{'position' if phase == 'position' else 'service'}"
+    )
     event = ScheduledEvent(
         event_id=event_id,
         kind=EventKind.COMPLETION,

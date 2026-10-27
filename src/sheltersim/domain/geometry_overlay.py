@@ -923,7 +923,8 @@ def _validate_facility_room_clearance(
             shifted = tuple(Point2D(x=item.x + dx, y=item.y + dy) for item in footprint.polygon)
             if _polygons_overlap(shifted, polygon):
                 raise ValueError(
-                    "facility_in_use: moved equipment footprint would enter an active temporary room"
+                    "facility_in_use: moved equipment footprint would enter an active "
+                    "temporary room"
                 )
 
 
@@ -932,7 +933,8 @@ def validate_geometry_change(
 ) -> None:
     if GEOMETRY_OVERLAY_KEY not in world.model_state:
         raise ValueError(
-            "geometry_overlay_required: declare the versioned geometry overlay before approving effects"
+            "geometry_overlay_required: declare the versioned geometry overlay before "
+            "approving effects"
         )
     geometry = effective_geometry(world)
     if geometry is None:
@@ -1034,7 +1036,8 @@ def validate_geometry_change(
             for wall in constraints.walls
         ):
             raise ValueError(
-                "clear_width_insufficient: transferred equipment must remain half a metre from walls"
+                "clear_width_insufficient: transferred equipment must remain half a metre "
+                "from walls"
             )
         if (
             plan_in_room_route(
@@ -1118,7 +1121,8 @@ def validate_geometry_change(
             raise ValueError("target_missing: facility has no surveyed position")
         if end_minute is not None:
             raise ValueError(
-                "unsupported_move_expiry: same-zone moves are permanent; approve an explicit later move"
+                "unsupported_move_expiry: same-zone moves are permanent; approve an explicit "
+                "later move"
             )
         if any(
             (

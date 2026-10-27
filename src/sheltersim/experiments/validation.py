@@ -187,7 +187,9 @@ def parameter_catalog(scenario: ScenarioSpec) -> list[dict[str, Any]]:
                     "upper": upper,
                     "evidence_grade": "C",
                     "source_id": sources[domain],
-                    "applicability": "synthetic single-shelter hypothesis; no empirical calibration",
+                    "applicability": (
+                        "synthetic single-shelter hypothesis; no empirical calibration"
+                    ),
                     "external_validation": False,
                 }
             )
@@ -334,7 +336,10 @@ def evidence_context(
         ),
         "dataset_registry": dataset,
         "external_validation": False,
-        "interpretation": "計算結果は仮定に依存する試算です。単一seedの改善を強い因果効果や実際の安全性の予測として扱いません。",
+        "interpretation": (
+            "計算結果は仮定に依存する試算です。"
+            "単一seedの改善を強い因果効果や実際の安全性の予測として扱いません。"
+        ),
     }
 
 
@@ -391,7 +396,10 @@ def paired_summary(
         "sample_stdev": stdev,
         "approximate_95_percent_seed_mean_interval": interval,
         "uncertain": interval is None or interval[0] <= 0 <= interval[1] or len(deltas) < 3,
-        "interpretation": "Chosen-seed descriptive simulation differences; interval excludes structural model uncertainty and is not a real-world causal confidence interval.",
+        "interpretation": (
+            "Chosen-seed descriptive simulation differences; interval excludes structural model "
+            "uncertainty and is not a real-world causal confidence interval."
+        ),
     }
 
 
@@ -465,7 +473,9 @@ def _variant_scenario(base: ScenarioSpec, variant: EvaluationVariant, seed: int)
                     "id": source_id,
                     "source_kind": "assumption",
                     "title": f"Installed model coefficient {source_id}",
-                    "description": "Experimental model coefficient metadata; no empirical calibration claim.",
+                    "description": (
+                        "Experimental model coefficient metadata; no empirical calibration claim."
+                    ),
                 }
             )
 
@@ -604,7 +614,10 @@ def evaluate_models(
         "runs": rows,
         "comparisons": comparisons,
         "evidence": evidence_context(base, source_manifest),
-        "limits": "No external validity established. Model structural uncertainty is not captured by seed variation.",
+        "limits": (
+            "No external validity established. Model structural uncertainty is not captured by "
+            "seed variation."
+        ),
     }
     (destination / "evaluation.json").write_text(
         canonical(safe_document(report)) + "\n", encoding="utf-8"

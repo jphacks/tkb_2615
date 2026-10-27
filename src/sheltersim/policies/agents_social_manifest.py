@@ -23,7 +23,9 @@ _BODY_UNITS = {
     "positive_affect_decay_per_minute": "normalized_affect_per_minute",
     "negative_affect_stress_rate": "normalized_stress_per_affect_per_minute",
     "hygiene_growth_per_minute": "normalized_hygiene_need_per_minute",
-    "sanitation_hygiene_growth_per_minute": "normalized_hygiene_need_per_minute_per_sanitation_deficit",
+    "sanitation_hygiene_growth_per_minute": (
+        "normalized_hygiene_need_per_minute_per_sanitation_deficit"
+    ),
     "sanitation_stress_rate": "normalized_stress_per_sanitation_deficit_per_minute",
     "affect_transfer_rate": "normalized_affect_per_recorded_contact",
     "relationship_trust_gain": "normalized_trust_per_recorded_contact",
@@ -39,7 +41,9 @@ _BODY_UNITS = {
     "hygiene_support_relief": "normalized_hygiene_need_per_completed_staff_support",
     "caregiver_assistance_stress_relief": "normalized_stress_relief_per_caregiver_assistance",
     "caregiver_assistance_reassurance_gain": "normalized_reassurance_per_caregiver_assistance",
-    "privacy_accommodation_discontent_relief": "normalized_discontent_relief_per_privacy_accommodation",
+    "privacy_accommodation_discontent_relief": (
+        "normalized_discontent_relief_per_privacy_accommodation"
+    ),
     "mobility_assistance_stress_relief": "normalized_stress_relief_per_mobility_assistance",
     "language_access_uncertainty_relief": "normalized_uncertainty_relief_per_language_access",
     "medical_assessment_uncertainty_relief": "normalized_uncertainty_relief_per_medical_assessment",
@@ -99,7 +103,9 @@ _ENVIRONMENT_UNITS = {
     "max_rest_decision_minutes": "minute",
     "max_active_modifiers_per_zone": "modifier_count",
     "lighting_sleep_efficiency_loss": "relative_sleep_efficiency_per_normalized_lighting",
-    "ventilation_hygiene_growth_per_minute": "normalized_hygiene_need_per_minute_per_ventilation_deficit",
+    "ventilation_hygiene_growth_per_minute": (
+        "normalized_hygiene_need_per_minute_per_ventilation_deficit"
+    ),
     "privacy_discontent_per_minute": "normalized_discontent_per_minute_per_privacy_deficit",
     "temperature_stress_per_degree_minute": "normalized_stress_per_celsius_degree_per_minute",
     "comfortable_min_temperature_c": "degree_celsius",
@@ -166,59 +172,73 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
     per_agent_parameters = {
         "sleep_debt_stress_rate_by_agent": (
             "normalized_stress_per_sleep_debt_minute_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate sleep-debt response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate sleep-debt response; others "
+            "use the shared coefficient",
         ),
         "negative_affect_stress_rate_by_agent": (
             "normalized_stress_per_negative_affect_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate negative-affect response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate negative-affect response; "
+            "others use the shared coefficient",
         ),
         "discontent_stress_rate_by_agent": (
             "normalized_stress_per_discontent_per_minute_by_agent_id",
-            "Residents with an explicit ID may use a separate discontent response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate discontent response; others "
+            "use the shared coefficient",
         ),
         "complaint_reassurance_gain_by_agent": (
             "normalized_reassurance_per_staff_response_by_agent_id",
-            "Residents with an explicit ID may use a separate staff reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate staff reassurance response; "
+            "others use the shared coefficient",
         ),
         "hygiene_support_relief_by_agent": (
             "normalized_hygiene_need_per_completed_staff_support_by_agent_id",
-            "Residents with an explicit ID may use a separate hygiene-support response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate hygiene-support response; "
+            "others use the shared coefficient",
         ),
         "caregiver_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_caregiver_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate caregiver stress response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate caregiver stress response; "
+            "others use the shared coefficient",
         ),
         "caregiver_assistance_reassurance_gain_by_agent": (
             "normalized_reassurance_per_caregiver_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate caregiver reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate caregiver reassurance "
+            "response; others use the shared coefficient",
         ),
         "privacy_accommodation_discontent_relief_by_agent": (
             "normalized_discontent_relief_per_privacy_accommodation_by_agent_id",
-            "Residents with an explicit ID may use a separate privacy response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate privacy response; others use "
+            "the shared coefficient",
         ),
         "mobility_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_mobility_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate mobility response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate mobility response; others use "
+            "the shared coefficient",
         ),
         "language_access_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_language_access_by_agent_id",
-            "Residents with an explicit ID may use a separate language-access response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate language-access response; "
+            "others use the shared coefficient",
         ),
         "medical_assessment_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_medical_assessment_by_agent_id",
-            "Residents with an explicit ID may use a separate medical-assessment response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate medical-assessment response; "
+            "others use the shared coefficient",
         ),
         "medication_support_uncertainty_relief_by_agent": (
             "normalized_uncertainty_relief_per_medication_support_by_agent_id",
-            "Residents with an explicit ID may use a separate medication-support response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate medication-support response; "
+            "others use the shared coefficient",
         ),
         "dependent_assistance_stress_relief_by_agent": (
             "normalized_stress_relief_per_dependent_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate dependent stress response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate dependent stress response; "
+            "others use the shared coefficient",
         ),
         "dependent_assistance_reassurance_gain_by_agent": (
             "normalized_reassurance_per_dependent_assistance_by_agent_id",
-            "Residents with an explicit ID may use a separate dependent reassurance response; others use the shared coefficient",
+            "Residents with an explicit ID may use a separate dependent reassurance "
+            "response; others use the shared coefficient",
         ),
     }
     for field, (unit, applicability) in per_agent_parameters.items():
@@ -382,7 +402,8 @@ def agents_social_model_catalog() -> dict[str, dict[str, Any]]:
         "movement_v1": _model(
             "spatial-route-and-room-waypoint-v2",
             "ASM-SPATIAL-MOVEMENT-V2",
-            "declared metre-scale route length divided by mobility speed and bounded density slowdown",
+            "declared metre-scale route length divided by mobility speed and bounded density "
+            "slowdown",
             movement,
         ),
         "staff_dynamics_v1": _model(

@@ -127,12 +127,30 @@ class UsageLedger:
                 ),
             },
             "explanation": {
-                "cost": "Provider-price estimate, not an invoice. Includes conservative pending/uncertain reservations.",
-                "failure": "Timeout/crash may have reached the provider. Its reservation is retained, not refunded automatically.",
-                "retry": "SDK retries are disabled. Repeating a reserved request does not authorize a second paid attempt.",
-                "history": "Offline/cache/exact replay spends no new allowance. Legacy unrecorded calls are unknown, not zero.",
-                "scope": "One preparation-to-Run account, shared by every sibling Branch and analysis stage; Project totals aggregate accounts.",
-                "continuation": "Changing environment limits does not enlarge an existing allowance; frozen accounts cannot make paid calls.",
+                "cost": (
+                    "Provider-price estimate, not an invoice. Includes conservative "
+                    "pending/uncertain reservations."
+                ),
+                "failure": (
+                    "Timeout/crash may have reached the provider. Its reservation is retained, "
+                    "not refunded automatically."
+                ),
+                "retry": (
+                    "SDK retries are disabled. Repeating a reserved request does not authorize a "
+                    "second paid attempt."
+                ),
+                "history": (
+                    "Offline/cache/exact replay spends no new allowance. Legacy unrecorded calls "
+                    "are unknown, not zero."
+                ),
+                "scope": (
+                    "One preparation-to-Run account, shared by every sibling Branch and analysis "
+                    "stage; Project totals aggregate accounts."
+                ),
+                "continuation": (
+                    "Changing environment limits does not enlarge an existing allowance; frozen "
+                    "accounts cannot make paid calls."
+                ),
             },
         }
 

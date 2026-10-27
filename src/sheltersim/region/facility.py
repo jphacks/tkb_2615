@@ -331,7 +331,10 @@ class StandardShelterGenerator:
         warnings: list[str] = []
         if widened_zones:
             warnings.append(
-                f"出入口幅{ACCESSIBLE_ROUTE_MIN_WIDTH_M} mを確保するため、次のゾーンの面積配分を広げ、その分を避難スペースから差し引きました: "
+                (
+                    f"出入口幅{ACCESSIBLE_ROUTE_MIN_WIDTH_M} mを確保するため、"
+                    "次のゾーンの面積配分を広げ、その分を避難スペースから差し引きました: "
+                )
                 + "、".join(widened_zones)
             )
         unrecognized = [
@@ -362,11 +365,13 @@ class StandardShelterGenerator:
         )
         if minimum_route_width < ACCESSIBLE_ROUTE_MIN_WIDTH_M:
             warnings.append(
-                "標準モデルの共用通路または居室出入口は1.8 m未満です。一部の生成経路はアクセシブル経路として扱っていません。"
+                "標準モデルの共用通路または居室出入口は1.8 m未満です。"
+                "一部の生成経路はアクセシブル経路として扱っていません。"
             )
         warnings.extend(
             (
-                "平面形状、1.8 m通路、面積配分、設備数は標準モデルの仮定です。実施設の図面・法令適合・避難安全性を示しません。",
+                "平面形状、1.8 m通路、面積配分、設備数は標準モデルの仮定です。"
+                "実施設の図面・法令適合・避難安全性を示しません。",
                 "食料・飲料水の在庫量は施設数から推定していません。在庫を入力しない場合の既定量はScenarioの仮定として記録します。",
             )
         )
@@ -536,7 +541,8 @@ class StandardShelterGenerator:
             if condition.facility_id not in facility_ids and condition.add:
                 if condition.zone_id not in {item[0] for item in zone_design}:
                     raise ValueError(
-                        f"new equipment {condition.facility_id!r} references an unknown standard zone"
+                        f"new equipment {condition.facility_id!r} references an unknown "
+                        "standard zone"
                     )
                 facilities.append(
                     FacilitySpec(
@@ -705,7 +711,10 @@ class StandardShelterGenerator:
                     "subject": "published_facility_capacity",
                     "value": request.stated_capacity,
                     "source_id": request.capacity_source_ids[0],
-                    "description": "Copied from the selected shelter record; current designation and applicability require confirmation.",
+                    "description": (
+                        "Copied from the selected shelter record; current designation and "
+                        "applicability require confirmation."
+                    ),
                 }
             )
         assumptions = (
@@ -738,7 +747,10 @@ class StandardShelterGenerator:
                     ],
                     "route_speed_m_per_minute": 60,
                 },
-                "reason": "Generic rectangular synthetic model for editing; no official or real facility floor plan supplied.",
+                "reason": (
+                    "Generic rectangular synthetic model for editing; no official or real "
+                    "facility floor plan supplied."
+                ),
                 "source_id": SYNTHETIC_FACILITY_SOURCE_ID,
             },
             {
@@ -750,7 +762,11 @@ class StandardShelterGenerator:
                     "area_based_capacity": area_capacity,
                     "capacity_used": capacity_supported,
                 },
-                "reason": "Usable sleeping area divided by a visible 3.5 m²/person planning heuristic; not a legal code or suitability determination. When a source capacity is supplied, the lower of the two values is used.",
+                "reason": (
+                    "Usable sleeping area divided by a visible 3.5 m²/person planning heuristic; "
+                    "not a legal code or suitability determination. When a source capacity is "
+                    "supplied, the lower of the two values is used."
+                ),
                 "source_id": SYNTHETIC_CAPACITY_SOURCE_ID,
             },
             {
@@ -763,7 +779,12 @@ class StandardShelterGenerator:
                     "station_staff_zone_id": "food",
                     "entered_total": request.staff_count,
                 },
-                "reason": "One general staff member per 100 requested occupants (minimum one) plus one station-based staff member per water or meal station; an entered total keeps at least one general staff member. Not an operational staffing standard.",
+                "reason": (
+                    "One general staff member per 100 requested occupants (minimum one) plus one "
+                    "station-based staff member per water or meal station; an entered total "
+                    "keeps at least one general staff member. Not an operational staffing "
+                    "standard."
+                ),
                 "source_id": SYNTHETIC_STAFFING_SOURCE_ID,
             },
             {
@@ -776,7 +797,11 @@ class StandardShelterGenerator:
                     "total": toilets,
                     "maximum": 20,
                 },
-                "reason": "The larger of the entered accessible toilets plus one per 50 occupants (Cabinet Office initial planning figure) and the units the modeled daily use needs at the target load, capped at 20.",
+                "reason": (
+                    "The larger of the entered accessible toilets plus one per 50 occupants "
+                    "(Cabinet Office initial planning figure) and the units the modeled daily "
+                    "use needs at the target load, capped at 20."
+                ),
                 "source_id": SYNTHETIC_TOILET_SOURCE_ID,
             },
             {
@@ -786,7 +811,10 @@ class StandardShelterGenerator:
                     "water_station": counts["water_station"],
                     "meal_distribution": counts["meal_distribution"],
                 },
-                "reason": "Units that keep the modeled daily water and meal demand within the target load (at least one each); no public standard sets station counts.",
+                "reason": (
+                    "Units that keep the modeled daily water and meal demand within the target "
+                    "load (at least one each); no public standard sets station counts."
+                ),
                 "source_id": SERVICE_STATION_SOURCE_ID,
             },
         )
@@ -1296,7 +1324,8 @@ def validate_editable_routes(
                 start, end, route.width_m / 2, physical_zones
             ):
                 raise ValueError(
-                    f"route {route.edge_id!r} does not fit within the walkable polygon boundary clearance"
+                    f"route {route.edge_id!r} does not fit within the walkable polygon "
+                    "boundary clearance"
                 )
             for wall in geometry.walls:
                 intersections = _segment_intersection_points(start, end, wall.start, wall.end)
@@ -1304,7 +1333,8 @@ def validate_editable_routes(
                     clearance = _segment_distance(start, end, wall.start, wall.end)
                     if clearance < route.width_m / 2 - 1e-8:
                         raise ValueError(
-                            f"route {route.edge_id!r} lacks width clearance from wall {wall.wall_id!r}"
+                            f"route {route.edge_id!r} lacks width clearance from wall "
+                            f"{wall.wall_id!r}"
                         )
                     continue
                 valid_openings = [
@@ -1330,14 +1360,16 @@ def validate_editable_routes(
                 )
                 if crossing_sine <= 1e-9:
                     raise ValueError(
-                        f"route {route.edge_id!r} follows wall {wall.wall_id!r} instead of crossing it"
+                        f"route {route.edge_id!r} follows wall {wall.wall_id!r} instead of "
+                        "crossing it"
                     )
                 required_opening = route.width_m / crossing_sine
                 if not any(
                     opening.width_m + 1e-8 >= required_opening for opening in valid_openings
                 ):
                     raise ValueError(
-                        f"route {route.edge_id!r} is too oblique for the available opening in wall {wall.wall_id!r}"
+                        f"route {route.edge_id!r} is too oblique for the available opening "
+                        f"in wall {wall.wall_id!r}"
                     )
             for obstacle in geometry.obstacles:
                 if (
@@ -1345,7 +1377,8 @@ def validate_editable_routes(
                     < route.width_m / 2 - 1e-8
                 ):
                     raise ValueError(
-                        f"route {route.edge_id!r} lacks width clearance from obstacle {obstacle.obstacle_id!r}"
+                        f"route {route.edge_id!r} lacks width clearance from obstacle "
+                        f"{obstacle.obstacle_id!r}"
                     )
             for footprint in geometry.equipment_footprints:
                 if (
@@ -1546,7 +1579,8 @@ def validate_facility_service_points(
         if facility is None:
             add(
                 "service_point_unknown_facility",
-                f"Service point {target_id!r} references unknown facility {service_point.facility_id!r}.",
+                f"Service point {target_id!r} references unknown facility "
+                f"{service_point.facility_id!r}.",
                 target_id,
             )
             continue
@@ -1557,7 +1591,8 @@ def validate_facility_service_points(
         if zone is None or not point_in_polygon(service_point.point_m, zone.polygon):
             add(
                 "service_point_outside_zone",
-                f"Service point {target_id!r} must be inside facility {facility.id!r}'s zone {facility.zone_id!r}.",
+                f"Service point {target_id!r} must be inside facility {facility.id!r}'s zone "
+                f"{facility.zone_id!r}.",
                 target_id,
             )
         if any(
@@ -1575,7 +1610,8 @@ def validate_facility_service_points(
         ):
             add(
                 "service_point_on_wall",
-                f"Service point {target_id!r} lies on a wall; place the service location in walkable space.",
+                f"Service point {target_id!r} lies on a wall; place the service location in "
+                "walkable space.",
                 target_id,
             )
         own_footprint = footprint_by_id.get(facility.id)
@@ -1697,7 +1733,9 @@ def validate_facility_service_points(
         if not graph_reaches_shared_corridor or not service_has_clear_approach:
             add(
                 "service_point_access_route_missing",
-                f"Service point {target_id!r} is marked accessible but has no clear {ACCESSIBLE_ROUTE_MIN_WIDTH_M:g} m approach to a connected accessible route.",
+                f"Service point {target_id!r} is marked accessible but has no clear "
+                f"{ACCESSIBLE_ROUTE_MIN_WIDTH_M:g} m approach to a connected accessible "
+                "route.",
                 target_id,
             )
     for facility in facilities:
@@ -1707,7 +1745,8 @@ def validate_facility_service_points(
         if service_capacity_by_facility.get(facility.id, 0) > declared_capacity:
             add(
                 "service_point_capacity_exceeds_facility",
-                f"Service points for facility {facility.id!r} exceed its declared working-unit capacity {declared_capacity}.",
+                f"Service points for facility {facility.id!r} exceed its declared "
+                f"working-unit capacity {declared_capacity}.",
                 facility.id,
             )
     return tuple(issues)
@@ -1907,13 +1946,15 @@ def revalidate_standard_facility(
             if from_zone is None or not point_in_polygon(route.points[0], from_zone.polygon):
                 add_error(
                     "route_start_outside_source_zone",
-                    f"Route {route.edge_id!r} must start inside its declared source zone {edge.from_zone_id!r}.",
+                    f"Route {route.edge_id!r} must start inside its declared source zone "
+                    f"{edge.from_zone_id!r}.",
                     route.edge_id,
                 )
             if to_zone is None or not point_in_polygon(route.points[-1], to_zone.polygon):
                 add_error(
                     "route_end_outside_target_zone",
-                    f"Route {route.edge_id!r} must end inside its declared target zone {edge.to_zone_id!r}.",
+                    f"Route {route.edge_id!r} must end inside its declared target zone "
+                    f"{edge.to_zone_id!r}.",
                     route.edge_id,
                 )
         if (
@@ -1923,7 +1964,8 @@ def revalidate_standard_facility(
         ):
             add_error(
                 "accessible_route_deficit",
-                f"Route {route.edge_id!r} is narrower than the required 1.8 m accessible-route width.",
+                f"Route {route.edge_id!r} is narrower than the required 1.8 m "
+                "accessible-route width.",
                 route.edge_id,
             )
 
@@ -1960,7 +2002,8 @@ def revalidate_standard_facility(
         if marker is None or not point_in_polygon(marker, footprint.polygon):
             add_error(
                 "equipment_marker_outside_footprint",
-                f"Facility {footprint.facility_id!r} position must remain inside its equipment footprint.",
+                f"Facility {footprint.facility_id!r} position must remain inside its "
+                "equipment footprint.",
                 footprint.facility_id,
             )
         for start, end in zip(footprint.polygon, footprint.polygon[1:] + footprint.polygon[:1]):
@@ -2016,7 +2059,8 @@ def revalidate_standard_facility(
             if _polygons_have_interior_overlap(first.polygon, second.polygon):
                 add_error(
                     "obstacles_overlap",
-                    f"Obstacles {first.obstacle_id!r} and {second.obstacle_id!r} overlap; merge or correct their outlines before recalculating capacity.",
+                    f"Obstacles {first.obstacle_id!r} and {second.obstacle_id!r} overlap; "
+                    "merge or correct their outlines before recalculating capacity.",
                     first.obstacle_id,
                 )
     if sleeping is not None:
@@ -2026,7 +2070,8 @@ def revalidate_standard_facility(
             if not all(point_in_polygon(point, sleeping.polygon) for point in obstacle.polygon):
                 add_error(
                     "obstacle_crosses_zone_boundary",
-                    f"Obstacle {obstacle.obstacle_id!r} crosses a zone boundary; review its area assignment.",
+                    f"Obstacle {obstacle.obstacle_id!r} crosses a zone boundary; review its "
+                    "area assignment.",
                     obstacle.obstacle_id,
                 )
                 continue
@@ -2075,9 +2120,11 @@ def revalidate_standard_facility(
             FacilityGeometryIssue(
                 code="capacity_deficit",
                 message=(
-                    f"Net sleeping area {effective_sleeping_area_m2:.2f} m² supports at most {supported_capacity} "
+                    f"Net sleeping area {effective_sleeping_area_m2:.2f} m² supports at most "
+                    f"{supported_capacity} "
                     "by the 3.5 m² planning heuristic; "
-                    f"the request is {design.requested_population}. Occupancy is not increased to fit."
+                    f"the request is {design.requested_population}. Occupancy is not "
+                    "increased to fit."
                 ),
                 severity="warning",
                 target_id="sleeping",

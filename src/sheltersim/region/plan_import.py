@@ -187,7 +187,10 @@ class ManualPlanTrace(RegionModel):
     service_points: tuple[FacilityServicePoint, ...] = Field(
         default=(),
         max_length=10_000,
-        description="Authored service points use FacilityServicePoint.point_m in calibrated building metres.",
+        description=(
+            "Authored service points use FacilityServicePoint.point_m in calibrated building "
+            "metres."
+        ),
     )
     extraction_proposal_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reviewed_feature_ids: tuple[str, ...] = ()
@@ -549,7 +552,8 @@ def review_plan_extraction(
             continue
         if feature.review_status != "pending":
             raise ValueError(
-                "a reviewed plan feature cannot be reviewed again without creating a new extraction proposal"
+                "a reviewed plan feature cannot be reviewed again without creating a new "
+                "extraction proposal"
             )
         corrected = review.corrected_coordinates_px
         if corrected is not None and proposal.raster_size_px is not None:
@@ -625,7 +629,8 @@ def manual_trace_from_reviewed_features(
         if value_type is int:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(
-                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires integer {name!r}"
+                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} "
+                    f"requires integer {name!r}"
                 )
         elif value_type in {float, (int, float)}:
             if (
@@ -634,7 +639,8 @@ def manual_trace_from_reviewed_features(
                 or not math.isfinite(value)
             ):
                 raise ValueError(
-                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} requires numeric {name!r}"
+                    f"reviewed {feature.feature_kind} feature {feature.feature_id!r} "
+                    f"requires numeric {name!r}"
                 )
         elif not isinstance(value, value_type):
             raise ValueError(
@@ -839,9 +845,16 @@ def inspect_plan_upload(
         source_url=source_url,
         status="manual_trace_required" if raster else "vector_data",
         notice=(
-            "The original PDF/image is retained in the external Asset store. Candidate extraction is heuristic and untrusted; an operator must review, calibrate, and trace zones, fixtures, and routes."
+            (
+                "The original PDF/image is retained in the external Asset store. Candidate "
+                "extraction is heuristic and untrusted; an operator must review, calibrate, and "
+                "trace zones, fixtures, and routes."
+            )
             if raster
-            else "Vector data must be explicitly mapped to the canonical scenario zones, facilities, and routes."
+            else (
+                "Vector data must be explicitly mapped to the canonical scenario zones, "
+                "facilities, and routes."
+            )
         ),
         retention_state="external_asset_store_required",
         rights_status=rights_status,
@@ -890,7 +903,9 @@ def import_municipal_shelter_csv(
         published_on=published_on,
         geographic_scope="operator-supplied dataset; geographic scope not inferred",
         freshness="unknown",
-        license_note="Confirm publication date, terms, coverage, and latest revisions with the publisher.",
+        license_note=(
+            "Confirm publication date, terms, coverage, and latest revisions with the publisher."
+        ),
     )
     records: list[ShelterCandidate] = []
     for index, row in enumerate(reader, start=1):
@@ -918,7 +933,8 @@ def import_municipal_shelter_csv(
                 freshness="unknown",
                 verified_by_user=False,
                 notes=(
-                    "Imported from the operator-supplied file; confirm current status with the municipality.",
+                    "Imported from the operator-supplied file; confirm current status with "
+                    "the municipality.",
                 ),
             )
         )
@@ -995,7 +1011,10 @@ def import_municipal_plan_csv(
         geographic_scope="operator supplied; each row preserves its mapped scope",
         freshness="unknown",
         content_sha256=digest,
-        license_note="Operator-mapped values are not independently verified; confirm the cited plan, terms, period, and geographic applicability before use.",
+        license_note=(
+            "Operator-mapped values are not independently verified; confirm the cited plan, "
+            "terms, period, and geographic applicability before use."
+        ),
     )
     observations: list[MunicipalPlanObservation] = []
     for row_number, row in enumerate(reader, start=1):
@@ -1017,7 +1036,8 @@ def import_municipal_plan_csv(
         applicability = _cell(row, mapping.applicability_column)
         if not all((unit, geographic_scope, period, applicability)):
             raise ValueError(
-                f"municipal plan row {row_number} must include unit, scope, period, and applicability"
+                f"municipal plan row {row_number} must include unit, scope, period, and "
+                "applicability"
             )
         observations.append(
             MunicipalPlanObservation(
@@ -1057,7 +1077,8 @@ def attach_municipal_plan_data(
         for item in observations
     ):
         raise ValueError(
-            "municipal plan rows include a municipality code different from the selected research request"
+            "municipal plan rows include a municipality code different from the selected "
+            "research request"
         )
     if any(item.source_id == source.id for item in research.municipal_plan_observations):
         raise ValueError("the same municipal plan source cannot be attached more than once")
@@ -1325,12 +1346,14 @@ def trace_uploaded_plan(
         extraction_proposal=reviewed_proposal,
         source_provenance=source_provenance,
         notes=(
-            "Geometry is an operator trace calibrated to stated raster extents; check source plan, scale, closures, and accessible paths.",
+            "Geometry is an operator trace calibrated to stated raster extents; check source "
+            "plan, scale, closures, and accessible paths.",
             f"Original upload SHA-256: {asset.sha256}",
             f"Trace operator: {trace.operator_id or 'unspecified'}",
             *(
                 (
-                    "Extraction confidence is proposal evidence only; accepted/rejected status and pixel corrections were supplied by human review.",
+                    "Extraction confidence is proposal evidence only; accepted/rejected "
+                    "status and pixel corrections were supplied by human review.",
                 )
                 if reviewed_proposal is not None
                 else ()
@@ -1595,7 +1618,8 @@ def revise_imported_plan_geometry(
     if changed:
         notes = (
             *notes,
-            f"Operator geometry revision source: {edit_source_id}; original imported geometry remains unchanged.",
+            f"Operator geometry revision source: {edit_source_id}; original imported "
+            "geometry remains unchanged.",
         )
         if provenance is not None and provenance.pixel_to_local_m_transform is not None:
             provenance = provenance.model_copy(update={"transform_scope": "source_trace_only"})
@@ -1802,7 +1826,8 @@ def _import_metric_feature_collection(
             )
         else:
             raise ValueError(
-                "GeoJSON features must map to zone, facility, service_point, route, wall, opening, obstacle, or equipment_footprint geometry"
+                "GeoJSON features must map to zone, facility, service_point, route, wall, "
+                "opening, obstacle, or equipment_footprint geometry"
             )
     _validate_zone_topology(tuple(item.polygon for item in physical_zones))
     facility_geometry = FacilityGeometry(
@@ -1874,7 +1899,9 @@ def _import_metric_feature_collection(
         geometry=facility_geometry,
         editable_geometry=editable_geometry,
         notes=(
-            "Metric local-coordinate GeoJSON features imported with explicit ShelterSim feature types, including optional editable walls, openings, obstacles, and equipment footprints.",
+            "Metric local-coordinate GeoJSON features imported with explicit ShelterSim "
+            "feature types, including optional editable walls, openings, obstacles, and "
+            "equipment footprints.",
             f"Original upload SHA-256: {asset.sha256}",
         ),
     )

@@ -356,7 +356,10 @@ def runtime_usage_summary(store: ProjectStore) -> dict[str, Any]:
         "campaign": campaign,
         "totals_by_scope": totals_by_scope,
         "unrecorded_history": "unknown_not_zero",
-        "storage_scope": "one task-wide campaign ledger shared by every Project, Run, CLI, Web worker and process using this configured ProjectStore root",
+        "storage_scope": (
+            "one task-wide campaign ledger shared by every Project, Run, CLI, Web worker and "
+            "process using this configured ProjectStore root"
+        ),
     }
 
 

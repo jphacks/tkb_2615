@@ -271,7 +271,8 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
             or "body_dynamics" not in configs
         ):
             raise ValueError(
-                "body_dynamics formula selection requires body_dynamics config and life-state psychology"
+                "body_dynamics formula selection requires body_dynamics config and "
+                "life-state psychology"
             )
     if "staff_operations" in models and "staff_operations" not in configs:
         raise ValueError("staff_operations formula selection requires staff_operations config")
@@ -349,7 +350,8 @@ def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
                 )
                 if declared.get(namespace) != signature or actual != signature:
                     raise ValueError(
-                        "selected model requires an installed, explicitly versioned state contract; migration required"
+                        "selected model requires an installed, explicitly versioned state "
+                        "contract; migration required"
                     )
     return models
 
@@ -402,7 +404,10 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     policies: dict[str, str] = {}
     for domain, model_id in selected_models(configs).items():
         definition = catalog[model_id]
-        base = f"{model_id}@{definition['implementation_version']}:state{definition['state_schema_version']}"
+        base = (
+            f"{model_id}@{definition['implementation_version']}:state"
+            f"{definition['state_schema_version']}"
+        )
         if registry_version >= 2:
             signature_definition = deepcopy(definition)
             signature_inputs = _model_parameter_config(configs, definition)

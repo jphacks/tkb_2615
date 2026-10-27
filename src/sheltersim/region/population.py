@@ -473,7 +473,8 @@ class GeneratedPopulation(RegionModel):
                 or dependent.group_id != relationship.household_id
             ):
                 raise ValueError(
-                    "household relationship endpoints must be distinct members of the same household"
+                    "household relationship endpoints must be distinct members of the same "
+                    "household"
                 )
             if relationship.source_id not in self.population.source_ids:
                 raise ValueError("household relationships must cite a population source ID")
@@ -482,7 +483,8 @@ class GeneratedPopulation(RegionModel):
                 child_age = self.population.people[relationship.dependent_id].age_years
                 if child_age >= 18 or parent_age < 18 or parent_age - child_age < 16:
                     raise ValueError(
-                        "synthetic parent/guardian links require an adult caregiver at least 16 years older than a minor"
+                        "synthetic parent/guardian links require an adult caregiver at least "
+                        "16 years older than a minor"
                     )
             elif relationship.relationship == "caregiver_support":
                 caregiver_age = self.population.people[relationship.caregiver_id].age_years
@@ -491,7 +493,8 @@ class GeneratedPopulation(RegionModel):
                     or not self.population.people[relationship.dependent_id].medical_support
                 ):
                     raise ValueError(
-                        "synthetic care-support links require an adult caregiver and a person with a support need"
+                        "synthetic care-support links require an adult caregiver and a "
+                        "person with a support need"
                     )
             elif relationship.relationship == "partner":
                 if any(
@@ -1121,7 +1124,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_AGE_ASSUMPTION_ID,
                     "subject": "synthetic_age_band_mix",
                     "value": {"child": 1, "adult": 1, "older_adult": 1},
-                    "reason": "No selected regional age table was supplied; equal band weights are only a generic simulation default.",
+                    "reason": (
+                        "No selected regional age table was supplied; equal band weights are "
+                        "only a generic simulation default."
+                    ),
                     "source_id": SYNTHETIC_AGE_ASSUMPTION_ID,
                 }
             )
@@ -1130,7 +1136,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_AGE_ASSUMPTION_ID,
                     "title": "Generic synthetic age-band assumption",
                     "source_kind": "assumption",
-                    "description": "Not an official statistic and not calibrated to the requested municipality.",
+                    "description": (
+                        "Not an official statistic and not calibrated to the requested "
+                        "municipality."
+                    ),
                 }
             )
         if household_assumed:
@@ -1139,7 +1148,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                     "subject": "synthetic_household_size_mix",
                     "value": {str(size): weight for size, weight in mix.size_weights.items()},
-                    "reason": "No selected regional household table was supplied; weights are a generator heuristic.",
+                    "reason": (
+                        "No selected regional household table was supplied; weights are a "
+                        "generator heuristic."
+                    ),
                     "source_id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                 }
             )
@@ -1148,7 +1160,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_HOUSEHOLD_ASSUMPTION_ID,
                     "title": "Generic synthetic household-size assumption",
                     "source_kind": "assumption",
-                    "description": "Not an official statistic and not calibrated to the requested municipality.",
+                    "description": (
+                        "Not an official statistic and not calibrated to the requested "
+                        "municipality."
+                    ),
                 }
             )
         if language_assumed:
@@ -1157,7 +1172,11 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                     "subject": "synthetic_language_mix",
                     "value": normalized_language_weights,
-                    "reason": "No source was supplied for the language assignment weights; one primary language is sampled per synthetic profile and the weights are not calibrated to the requested region.",
+                    "reason": (
+                        "No source was supplied for the language assignment weights; one primary "
+                        "language is sampled per synthetic profile and the weights are not "
+                        "calibrated to the requested region."
+                    ),
                     "source_id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                 }
             )
@@ -1166,7 +1185,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_LANGUAGE_ASSUMPTION_ID,
                     "title": "Synthetic language assignment assumption",
                     "source_kind": "assumption",
-                    "description": "One primary language is sampled per synthetic profile; not calibrated to census, visa, or municipal language data.",
+                    "description": (
+                        "One primary language is sampled per synthetic profile; not calibrated "
+                        "to census, visa, or municipal language data."
+                    ),
                 }
             )
         if not selection.age_band_multipliers:
@@ -1175,7 +1197,11 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_EVACUATION_SELECTION_ID,
                     "subject": "evacuation_selection_by_age",
                     "value": {band.label: 1.0 for band in bands},
-                    "reason": "No evacuation-selection data was supplied; selection is uniform across the observed resident distribution and is not an official evacuation rate.",
+                    "reason": (
+                        "No evacuation-selection data was supplied; selection is uniform across "
+                        "the observed resident distribution and is not an official evacuation "
+                        "rate."
+                    ),
                     "source_id": SYNTHETIC_EVACUATION_SELECTION_ID,
                 }
             )
@@ -1184,7 +1210,10 @@ class SyntheticPopulationGenerator:
                     "id": SYNTHETIC_EVACUATION_SELECTION_ID,
                     "title": "Uniform synthetic evacuation-selection assumption",
                     "source_kind": "assumption",
-                    "description": "No evacuation-rate data was supplied; the resident distribution is used without an age-specific selection adjustment.",
+                    "description": (
+                        "No evacuation-rate data was supplied; the resident distribution is used "
+                        "without an age-specific selection adjustment."
+                    ),
                 }
             )
         assumptions.append(
@@ -1197,7 +1226,12 @@ class SyntheticPopulationGenerator:
                     "relationships_created_from_age_or_co_residence": False,
                     "unlinked_minor_requires_review": True,
                 },
-                "reason": "A shared household ID is not evidence of a family relationship. Parent, partner, and care links are created only from explicit household templates; age checks only reject implausible declared links. Unlinked minors remain flagged for operator review.",
+                "reason": (
+                    "A shared household ID is not evidence of a family relationship. Parent, "
+                    "partner, and care links are created only from explicit household templates; "
+                    "age checks only reject implausible declared links. Unlinked minors remain "
+                    "flagged for operator review."
+                ),
                 "source_id": SYNTHETIC_HOUSEHOLD_CONSTRUCTION_ID,
             }
         )
@@ -1217,7 +1251,10 @@ class SyntheticPopulationGenerator:
                     "id": OPERATOR_POPULATION_SOURCE_ID,
                     "subject": "unselected_household_templates",
                     "value": list(unselected_template_ids),
-                    "reason": "These operator templates did not match a generated household size in this seed and were not applied.",
+                    "reason": (
+                        "These operator templates did not match a generated household size in "
+                        "this seed and were not applied."
+                    ),
                     "source_id": OPERATOR_POPULATION_SOURCE_ID,
                 }
             )
@@ -1234,7 +1271,11 @@ class SyntheticPopulationGenerator:
                             1 for person in people.values() if person.age_years < 18
                         ),
                     },
-                    "reason": "No household composition was entered, so generic synthetic templates place each generated minor with a linked adult. They describe no real family and are not regional statistics.",
+                    "reason": (
+                        "No household composition was entered, so generic synthetic templates "
+                        "place each generated minor with a linked adult. They describe no real "
+                        "family and are not regional statistics."
+                    ),
                     "source_id": household_composition.source_ids[0],
                 }
             )
@@ -1243,7 +1284,10 @@ class SyntheticPopulationGenerator:
                     "id": source_id,
                     "title": "Generic synthetic household composition templates",
                     "source_kind": "assumption",
-                    "description": "Template shapes and weights are a generator heuristic; operator-entered compositions replace them.",
+                    "description": (
+                        "Template shapes and weights are a generator heuristic; operator-entered "
+                        "compositions replace them."
+                    ),
                 }
                 for source_id in household_composition.source_ids
             )
@@ -1252,7 +1296,9 @@ class SyntheticPopulationGenerator:
                 "id": SYNTHETIC_HOUSEHOLD_CONSTRUCTION_ID,
                 "title": "Synthetic household relationship policy",
                 "source_kind": "assumption",
-                "description": "Household membership never creates family or guardian links by itself.",
+                "description": (
+                    "Household membership never creates family or guardian links by itself."
+                ),
             }
         )
         assumptions.append(
@@ -1261,16 +1307,26 @@ class SyntheticPopulationGenerator:
                 "subject": "synthetic_person_traits",
                 "value": {
                     "medical_support": "unknown unless an explicit rate is supplied",
-                    "support_need_rule": "explicit medical, medication, or additional access need raises support_need to at least 0.5",
+                    "support_need_rule": (
+                        "explicit medical, medication, or additional access need raises "
+                        "support_need to at least 0.5"
+                    ),
                     "mobility_support_from_profile": True,
-                    "household_role_rule": "child below 18; alone for a one-person adult household; otherwise adult or dependent when explicit support is linked",
+                    "household_role_rule": (
+                        "child below 18; alone for a one-person adult household; otherwise adult "
+                        "or dependent when explicit support is linked"
+                    ),
                     "mobility_weights": {
                         "independent": profile_set.manifest.template.independent_weight,
                         "assisted": profile_set.manifest.template.assisted_weight,
                         "wheelchair": profile_set.manifest.template.wheelchair_weight,
                     },
                 },
-                "reason": "Medical support, information access, and pet status remain unknown unless an explicit input rate or distribution is supplied. Mobility weights and caregiver links are generic generation rules, not local data.",
+                "reason": (
+                    "Medical support, information access, and pet status remain unknown unless "
+                    "an explicit input rate or distribution is supplied. Mobility weights and "
+                    "caregiver links are generic generation rules, not local data."
+                ),
                 "source_id": SYNTHETIC_TRAIT_ASSUMPTION_ID,
             }
         )
@@ -1279,7 +1335,11 @@ class SyntheticPopulationGenerator:
                 "id": SYNTHETIC_TRAIT_ASSUMPTION_ID,
                 "title": "Synthetic person-trait mapping",
                 "source_kind": "assumption",
-                "description": "Traits are generated from the documented profile template; mobility, medical support, and household relations are not inferred from age or identity.",
+                "description": (
+                    "Traits are generated from the documented profile template; mobility, "
+                    "medical support, and household relations are not inferred from age or "
+                    "identity."
+                ),
             }
         )
         if (
@@ -1292,7 +1352,10 @@ class SyntheticPopulationGenerator:
                     "id": OPERATOR_POPULATION_SOURCE_ID,
                     "title": "Operator-entered population generation conditions",
                     "source_kind": "operator",
-                    "description": "Input rates and categories were entered by the scenario operator and are not regional statistics.",
+                    "description": (
+                        "Input rates and categories were entered by the scenario operator and "
+                        "are not regional statistics."
+                    ),
                 }
             )
         declared_household_source_ids = set()
@@ -1324,7 +1387,8 @@ class SyntheticPopulationGenerator:
                     if household_composition
                     else "operator",
                     "description": (
-                        "This is a user-supplied source ID declaration. The generator does not verify the citation or its applicability."
+                        "This is a user-supplied source ID declaration. The generator does "
+                        "not verify the citation or its applicability."
                     ),
                 }
             )
@@ -1432,7 +1496,8 @@ def _sample_household_ages(
         )
         if supported_maximum is None:
             raise ValueError(
-                f"household template has no selected age support for person slot {profiles[slot_to_index[slot]].id!r} "
+                "household template has no selected age support for person slot "
+                f"{profiles[slot_to_index[slot]].id!r} "
                 f"within ages {minimum_age}..{maximum_age}"
             )
         minimum_by_slot[slot] = minimum_age

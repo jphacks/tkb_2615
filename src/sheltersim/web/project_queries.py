@@ -190,11 +190,17 @@ class ProjectQueries:
                 "kind": query.kind,
                 "coverage": "exact_checkpoint_replay_for_requested_sample_minutes",
                 "completeness": "complete_for_requested_samples",
-                "completeness_reason": "Each returned minute is reconstructed exactly; this sampled response does not claim every intervening event or lifetime record.",
+                "completeness_reason": (
+                    "Each returned minute is reconstructed exactly; this sampled response does "
+                    "not claim every intervening event or lifetime record."
+                ),
                 "oldest_minute": requested_minutes[0] if requested_minutes else None,
                 "newest_minute": requested_minutes[-1] if requested_minutes else None,
                 "retention_limit": None,
-                "retention_limit_reason": "No sample retention cap applies; the query is bounded by pagination and the computed Run range.",
+                "retention_limit_reason": (
+                    "No sample retention cap applies; the query is bounded by pagination and the "
+                    "computed Run range."
+                ),
                 "requested_range": [query.start, query.end],
                 "complete_lifetime_history": False,
             }
@@ -278,7 +284,10 @@ class ProjectQueries:
             "frames": frames,
             "metadata": metadata,
             "compatibility": compatibility,
-            "interpretation": "Descriptive model comparison; seed equality alone does not establish pairing or real-world causation.",
+            "interpretation": (
+                "Descriptive model comparison; seed equality alone does not establish pairing or "
+                "real-world causation."
+            ),
         }
 
     def first_divergence(self, project: str, query: Any) -> dict[str, Any]:
@@ -395,5 +404,8 @@ class ProjectQueries:
                 ),
             ),
             "time_semantics": "end_of_tick" if query.mode == "kpis" else "before_tick",
-            "limits": "Exact at recorded resolution and requested scope. Seed/model/input differences are descriptive; this is not empirical causality.",
+            "limits": (
+                "Exact at recorded resolution and requested scope. Seed/model/input differences "
+                "are descriptive; this is not empirical causality."
+            ),
         }

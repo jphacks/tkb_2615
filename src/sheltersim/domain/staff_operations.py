@@ -163,7 +163,8 @@ def canonical_staff_operations_config(raw: Any) -> dict[str, Any]:
                 or not lower <= value <= upper
             ):
                 raise ValueError(
-                    f"staff_operations per-zone {name} must be finite and within {lower:g}..{upper:g}"
+                    f"staff_operations per-zone {name} must be finite and within "
+                    f"{lower:g}..{upper:g}"
                 )
     return config
 

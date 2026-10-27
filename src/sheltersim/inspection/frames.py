@@ -315,9 +315,11 @@ def world_frame(
             "incoming_arrivals": incoming_arrivals,
             "kpi_time_semantics": "state at boundary before this tick",
             "position_limitations": [
-                "Staff travel follows the installed zone route model; in-room obstacle avoidance and shared doorway arbitration remain approximations.",
+                "Staff travel follows the installed zone route model; in-room obstacle "
+                "avoidance and shared doorway arbitration remain approximations.",
                 "Missing physical coordinates are not generated as walking trajectories.",
-                "Arrival approach coordinates and walking speeds are explicit operator or source inputs, not inferred from a map.",
+                "Arrival approach coordinates and walking speeds are explicit operator or "
+                "source inputs, not inferred from a map.",
             ],
         }
     )
@@ -368,7 +370,10 @@ def world_frame(
         "retained_records": len(common_operations.get("history", [])),
         "retention_limit": 20000,
         "read_route": "branch/history?kind=care or kind=operations",
-        "claim_boundary": "only event-linked applied transitions are indexed; this does not imply an unrecorded outcome",
+        "claim_boundary": (
+            "only event-linked applied transitions are indexed; this does not imply an "
+            "unrecorded outcome"
+        ),
     }
     frame["spatial_constraints"] = effective_spatial_constraints(world).model_dump(mode="json")
     frame["geometry_overlay"] = deepcopy(

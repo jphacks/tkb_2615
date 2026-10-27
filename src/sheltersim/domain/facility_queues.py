@@ -208,7 +208,8 @@ def validate_facility_queue_state(world: WorldState) -> None:
                         or staff_member.busy_until != task.due_minute
                     ):
                         raise ValueError(
-                            "staff-required toilet service has no matching skilled staff reservation"
+                            "staff-required toilet service has no matching skilled staff "
+                            "reservation"
                         )
                 mirror = (
                     facility.resource_active_agent_ids

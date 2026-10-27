@@ -624,7 +624,8 @@ class WorldState:
             capacity = effective_total_zone_capacity(self, zone_id, occupancy=occupancy)
             if capacity is not None and occupancy > capacity:
                 raise StateInvariantError(
-                    f"zone {zone_id!r} exceeds nominal plus approved temporary or physical-room capacity"
+                    f"zone {zone_id!r} exceeds nominal plus approved temporary or "
+                    "physical-room capacity"
                 )
 
         for facility in self.facilities.values():

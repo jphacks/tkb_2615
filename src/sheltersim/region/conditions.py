@@ -382,7 +382,8 @@ class OperationalConditions(RegionModel):
                 )
                 if facility is None or condition.units_out > working_capacity:
                     blockers.append(
-                        f"設備停止条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}."
+                        "設備停止条件が未知の設備または過剰な停止数を参照しています: "
+                        f"{condition.facility_id}."
                     )
                     continue
                 for occurrence, (start_minute, end_minute) in enumerate(
@@ -402,7 +403,8 @@ class OperationalConditions(RegionModel):
                     )
                     if concurrent_units + condition.units_out > working_capacity:
                         blockers.append(
-                            f"設備停止条件が重なり、施設 {condition.facility_id!r} の稼働可能数を超えます。"
+                            f"設備停止条件が重なり、施設 {condition.facility_id!r} "
+                            "の稼働可能数を超えます。"
                         )
                         continue
                     facility_outage_windows.setdefault(condition.facility_id, []).append(
@@ -452,7 +454,8 @@ class OperationalConditions(RegionModel):
                         )
                     ):
                         blockers.append(
-                            f"職員不在条件が重なり、復帰時刻を正しく定義できません: {condition.staff_id}."
+                            "職員不在条件が重なり、復帰時刻を正しく定義できません: "
+                            f"{condition.staff_id}."
                         )
                         continue
                     staff_unavailable_windows.setdefault(condition.staff_id, []).append(
@@ -569,7 +572,8 @@ class OperationalConditions(RegionModel):
                 )
                 if not affected:
                     blockers.append(
-                        f"停電条件の設備系統 {condition.component_id!r} は有効な施設依存関係を持ちません。"
+                        f"停電条件の設備系統 {condition.component_id!r} "
+                        "は有効な施設依存関係を持ちません。"
                     )
                     continue
                 for occurrence, (start_minute, end_minute) in enumerate(
@@ -606,7 +610,8 @@ class OperationalConditions(RegionModel):
                 )
                 if facility is None or condition.units_out > working_capacity:
                     blockers.append(
-                        f"故障条件が未知の設備または過剰な停止数を参照しています: {condition.facility_id}."
+                        "故障条件が未知の設備または過剰な停止数を参照しています: "
+                        f"{condition.facility_id}."
                     )
                     continue
                 for occurrence, (start_minute, end_minute) in enumerate(

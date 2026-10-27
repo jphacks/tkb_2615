@@ -282,7 +282,10 @@ class DemoService:
                         "exact": False,
                         "branch_id": branch_id,
                         "minute": minute,
-                        "limitation": "Legacy demo has no exact checkpoint here; use Project timeline for any-minute replay.",
+                        "limitation": (
+                            "Legacy demo has no exact checkpoint here; use Project timeline for "
+                            "any-minute replay."
+                        ),
                     }
                 world = checkpoint.restore_world()
             frame = world_frame(
@@ -303,7 +306,9 @@ class DemoService:
             "minute": at_minute,
             "frames": frames,
             "exact": all(frame["exact"] for frame in frames),
-            "interpretation": "Legacy demo checkpoints only; Project and Demo identities cannot be mixed.",
+            "interpretation": (
+                "Legacy demo checkpoints only; Project and Demo identities cannot be mixed."
+            ),
         }
 
     def scenario_presets(self) -> dict[str, Any]:

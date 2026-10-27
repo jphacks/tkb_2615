@@ -990,7 +990,8 @@ class ScenarioSpec(ContractModel):
                 or not 1 <= fairness_minutes <= timeout_minutes
             ):
                 raise ValueError(
-                    "staff support_fairness_minutes must be positive and no greater than the unresolved timeout"
+                    "staff support_fairness_minutes must be positive and no greater than the "
+                    "unresolved timeout"
                 )
         validate_scenario_extensions(self)
         return self

@@ -77,8 +77,10 @@ def extract_plan_features_from_asset(
         raster_size_px=(width, height),
         notes=(
             "All candidates are low-confidence image heuristics and remain pending human review.",
-            "The extractor does not read labels, infer scale, identify facility equipment, or establish legal/egress compliance.",
-            f"Rendered page {page_index}; pixel dimensions are {width} x {height}. Calibrate scale and correct geometry before mapping.",
+            "The extractor does not read labels, infer scale, identify facility equipment, "
+            "or establish legal/egress compliance.",
+            f"Rendered page {page_index}; pixel dimensions are {width} x {height}. Calibrate "
+            "scale and correct geometry before mapping.",
         ),
     )
 

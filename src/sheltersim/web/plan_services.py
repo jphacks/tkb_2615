@@ -283,7 +283,10 @@ class PlanServices:
             "schema_version": 1,
             "preview_id": preview_id,
             **record,
-            "limits": "Raster extraction, when requested, is an untrusted bounded heuristic. Geometry requires human review/calibration. No provider call is made by this adapter.",
+            "limits": (
+                "Raster extraction, when requested, is an untrusted bounded heuristic. Geometry "
+                "requires human review/calibration. No provider call is made by this adapter."
+            ),
         }
 
     def _preview(self, project: str, preview_id: str, asset: str, kind: str) -> dict[str, Any]:

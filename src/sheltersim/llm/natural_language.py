@@ -1060,9 +1060,14 @@ def _compiler_payload(
         "task": "Compile a free-form shelter intervention into a typed EffectProgram preview.",
         "instructions": _COMPILER_INSTRUCTIONS,
         "population_geometry_rules": [
-            "Reunion uses population_presence(action=reunite), candidate_ids with at least two known people and target_id as one anchor; other operations use one target_id.",
-            "Geometry operators are bounded: same-zone idle permanent moves; temporary partitions and route closures require an end minute. Never infer missing coordinates or claim an unsupported layout change succeeded.",
-            "A capability or compiler result is only a proposal; runtime geometry, capacity, identity, approval and effect validation still apply.",
+            "Reunion uses population_presence(action=reunite), candidate_ids with at least "
+            "two known people and target_id as one anchor; other operations use one "
+            "target_id.",
+            "Geometry operators are bounded: same-zone idle permanent moves; temporary "
+            "partitions and route closures require an end minute. Never infer missing "
+            "coordinates or claim an unsupported layout change succeeded.",
+            "A capability or compiler result is only a proposal; runtime geometry, capacity, "
+            "identity, approval and effect validation still apply.",
         ],
         "untrusted_narrative": sanitized_text,
         "branch": {

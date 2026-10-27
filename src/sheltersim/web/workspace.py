@@ -484,7 +484,10 @@ class ProjectWorkspace:
                 "status": "compiled" if not issues else "blocked",
                 "support_mode": program.support_mode.value,
                 "compiler_provenance": program.compiler_provenance.model_dump(mode="json"),
-                "explanation": "Operator supplied a typed EffectProgram; validation is required before approval.",
+                "explanation": (
+                    "Operator supplied a typed EffectProgram; validation is required before "
+                    "approval."
+                ),
                 "program": program.model_dump(mode="json"),
                 "can_apply": not issues,
                 "validation_issues": list(issues),

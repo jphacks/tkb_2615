@@ -239,7 +239,10 @@ def _handler_for(
                     self._json_response(
                         409,
                         {
-                            "error": "result answer unavailable within the current budget or saved context"
+                            "error": (
+                                "result answer unavailable within the current budget or saved "
+                                "context"
+                            )
                         },
                     )
                 return
@@ -440,7 +443,8 @@ def _handler_for(
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header(
                     "Content-Security-Policy",
-                    "default-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self'",
+                    "default-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
+                    "font-src 'self' data: blob:; worker-src 'self'",
                 )
                 self.end_headers()
                 self.wfile.write(payload)

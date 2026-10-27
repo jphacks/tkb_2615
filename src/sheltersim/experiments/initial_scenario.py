@@ -137,7 +137,8 @@ class InitialScenarioRequest(RegionModel):
             return {}
         if not isinstance(raw, dict) or len(raw) > 64:
             raise ValueError(
-                "model parameter overrides must contain at most 64 finite JSON numbers or bounded entity maps"
+                "model parameter overrides must contain at most 64 finite JSON numbers or "
+                "bounded entity maps"
             )
         try:
             encoded = json.dumps(raw, allow_nan=False, separators=(",", ":"))
@@ -234,7 +235,8 @@ class InitialScenarioRequest(RegionModel):
             for path in self.model_parameter_overrides
         ):
             raise ValueError(
-                "policy parameter overrides require namespaced catalog paths, including a declared wildcard segment where applicable"
+                "policy parameter overrides require namespaced catalog paths, including a "
+                "declared wildcard segment where applicable"
             )
         return self
 
@@ -297,7 +299,8 @@ class InitialScenarioBuilder:
             }
             if wrong_areas:
                 raise ValueError(
-                    "population observations include an area code different from the selected e-Stat area"
+                    "population observations include an area code different from the "
+                    "selected e-Stat area"
                 )
         selected_shelter: ShelterCandidate | None = None
         if selected_shelter_id is not None:
@@ -346,7 +349,8 @@ class InitialScenarioBuilder:
             plan_override is not None or design.requested_population != request.evacuees
         ):
             raise ValueError(
-                "standard correction must preserve requested population and cannot replace an uploaded plan"
+                "standard correction must preserve requested population and cannot replace "
+                "an uploaded plan"
             )
         zones = design.zones
         edges = design.zone_edges
@@ -427,7 +431,10 @@ class InitialScenarioBuilder:
                     "図面の避難スペース面積、図面入力容量、施設公開容量に差があります。シナリオでは確認できる数値のうち最も小さい容量を使っています。"
                 )
             if reconciled_capacity < request.evacuees:
-                blocker = f"入力人数{request.evacuees}人が図面から見積もった避難スペース容量{reconciled_capacity}人を超えています。人数または図面を確認してください。"
+                blocker = (
+                    f"入力人数{request.evacuees}人が図面から見積もった避難スペース容量"
+                    f"{reconciled_capacity}人を超えています。人数または図面を確認してください。"
+                )
                 design_warnings.append(blocker)
                 approval_blockers.append(blocker)
             plan_capacity_assumptions.append(
@@ -442,7 +449,11 @@ class InitialScenarioBuilder:
                         if selected_shelter
                         else None,
                     },
-                    "reason": "For imported geometry, the lower of the uploaded zone capacity, area-based 3.5 m²/person heuristic, and selected source capacity is retained for the draft.",
+                    "reason": (
+                        "For imported geometry, the lower of the uploaded zone capacity, "
+                        "area-based 3.5 m²/person heuristic, and selected source capacity is "
+                        "retained for the draft."
+                    ),
                     "source_id": "ASM-PLAN-CAPACITY-RECONCILIATION-V1",
                 }
             )
@@ -457,7 +468,10 @@ class InitialScenarioBuilder:
         if "sleeping" not in zone_ids:
             raise ValueError("scenario must include a 'sleeping' starting zone")
         if plan_override is None and design.capacity_supported < request.evacuees:
-            blocker = f"入力人数{request.evacuees}人が標準モデルの避難スペース容量{design.capacity_supported}人を超えています。人数または面積を調整してください。"
+            blocker = (
+                f"入力人数{request.evacuees}人が標準モデルの避難スペース容量"
+                f"{design.capacity_supported}人を超えています。人数または面積を調整してください。"
+            )
             approval_blockers.append(blocker)
         population = self.population_generator.generate(
             count=request.evacuees,
@@ -528,9 +542,15 @@ class InitialScenarioBuilder:
                 "title": "Operator-edited standard shelter zone composition",
                 "source_kind": condition.source_kind,
                 "description": (
-                    "Zone changes were entered by the scenario operator; geometry and capacity remain synthetic and require review."
+                    (
+                        "Zone changes were entered by the scenario operator; geometry and "
+                        "capacity remain synthetic and require review."
+                    )
                     if condition.source_kind == "operator"
-                    else "Zone changes are explicit scenario assumptions; geometry and capacity remain synthetic."
+                    else (
+                        "Zone changes are explicit scenario assumptions; geometry and capacity "
+                        "remain synthetic."
+                    )
                 ),
             }
             prior = extra_source_records.get(condition.source_id)
@@ -571,7 +591,10 @@ class InitialScenarioBuilder:
                         else {}
                     ),
                 },
-                "reason": "Default simulation behavior configuration; not calibrated to local observations.",
+                "reason": (
+                    "Default simulation behavior configuration; not calibrated to local "
+                    "observations."
+                ),
                 "source_id": (
                     "ASM-PRIORITY-RULE-BEHAVIOR-V1"
                     if request.behavior_policy_id == "priority-rule-v1"
@@ -591,7 +614,10 @@ class InitialScenarioBuilder:
                     "support_cooldown_minutes": 30,
                     "support_fairness_minutes": 30,
                 },
-                "reason": "Generic support timing and fairness-aging delay used by the simulation model; not an operational staffing standard.",
+                "reason": (
+                    "Generic support timing and fairness-aging delay used by the simulation "
+                    "model; not an operational staffing standard."
+                ),
                 "source_id": "ASM-STAFF-SUPPORT-LIFECYCLE-V1",
             },
             {
@@ -602,7 +628,10 @@ class InitialScenarioBuilder:
                     "minimum_minutes": 4,
                     "maximum_minutes": 8,
                 },
-                "reason": "Generic toilet service timing used by the simulation model; not measured at the selected facility.",
+                "reason": (
+                    "Generic toilet service timing used by the simulation model; not measured at "
+                    "the selected facility."
+                ),
                 "source_id": TOILET_SERVICE_SOURCE_ID,
             },
         )
@@ -628,7 +657,10 @@ class InitialScenarioBuilder:
                     "id": source_id,
                     "title": "Operator-declared population input reference",
                     "source_kind": "operator",
-                    "description": "Identifier supplied with operator population/selection input; external citation and applicability have not been verified.",
+                    "description": (
+                        "Identifier supplied with operator population/selection input; external "
+                        "citation and applicability have not been verified."
+                    ),
                 },
             )
         if OPERATOR_POPULATION_SOURCE_ID in population.population.source_ids:
@@ -638,7 +670,10 @@ class InitialScenarioBuilder:
                     "id": OPERATOR_POPULATION_SOURCE_ID,
                     "title": "Operator-entered population generation conditions",
                     "source_kind": "operator",
-                    "description": "Rates and categories were entered by the scenario operator and are not regional statistics.",
+                    "description": (
+                        "Rates and categories were entered by the scenario operator and are not "
+                        "regional statistics."
+                    ),
                 },
             )
         for record in request.operational_conditions.provenance_sources():
@@ -688,7 +723,10 @@ class InitialScenarioBuilder:
                 "id": STANDARD_PROVISIONING_SOURCE_ID,
                 "title": "Standard food and water provisioning",
                 "source_kind": "assumption",
-                "description": "Drinking water of 3 L per person per day and three days of stock follow national household guidance; outside supply starts on the chosen day.",
+                "description": (
+                    "Drinking water of 3 L per person per day and three days of stock follow "
+                    "national household guidance; outside supply starts on the chosen day."
+                ),
             }
             model_assumptions = (*model_assumptions, provisioning)
         if "resource_service" in operational_model_configs:
@@ -696,7 +734,11 @@ class InitialScenarioBuilder:
                 "id": RESOURCE_SERVICE_ASSUMPTION_ID,
                 "title": "Generic water and meal service conversion",
                 "source_kind": "assumption",
-                "description": "The opt-in service model uses five-minute service duration, 250 ml water, and one meal unit per completed service; calibrate these assumptions before operational use.",
+                "description": (
+                    "The opt-in service model uses five-minute service duration, 250 ml water, "
+                    "and one meal unit per completed service; calibrate these assumptions before "
+                    "operational use."
+                ),
             }
             model_assumptions = (
                 *model_assumptions,
@@ -708,7 +750,10 @@ class InitialScenarioBuilder:
                         "water_ml_per_service": 250,
                         "food_meal_units_per_service": 1,
                     },
-                    "reason": "Generic service conversion coefficients are assumptions, not measured staffing or consumption data.",
+                    "reason": (
+                        "Generic service conversion coefficients are assumptions, not measured "
+                        "staffing or consumption data."
+                    ),
                     "source_id": RESOURCE_SERVICE_ASSUMPTION_ID,
                 },
             )
@@ -719,7 +764,10 @@ class InitialScenarioBuilder:
                 "id": infrastructure_source_id,
                 "title": "Scenario infrastructure configuration",
                 "source_kind": "assumption",
-                "description": "Infrastructure dependencies and environmental coefficients are explicitly configured assumptions, not measured facility engineering data.",
+                "description": (
+                    "Infrastructure dependencies and environmental coefficients are explicitly "
+                    "configured assumptions, not measured facility engineering data."
+                ),
             }
             model_assumptions = (
                 *model_assumptions,
@@ -727,7 +775,10 @@ class InitialScenarioBuilder:
                     "id": infrastructure_source_id,
                     "subject": "infrastructure_dependencies_and_coefficients",
                     "value": infrastructure_config,
-                    "reason": "Configured dependency edges and stress coefficients are assumptions. Event timing and targets come from separate condition inputs.",
+                    "reason": (
+                        "Configured dependency edges and stress coefficients are assumptions. "
+                        "Event timing and targets come from separate condition inputs."
+                    ),
                     "source_id": infrastructure_source_id,
                 },
             )
@@ -758,7 +809,10 @@ class InitialScenarioBuilder:
                                 if zone.id == "sleeping"
                             ),
                             "source_id": plan_override.asset.source_id,
-                            "description": "Capacity supplied in the operator-uploaded scenario mapping; not independently verified.",
+                            "description": (
+                                "Capacity supplied in the operator-uploaded scenario mapping; "
+                                "not independently verified."
+                            ),
                         }
                     ]
                     if plan_override is not None
@@ -793,7 +847,12 @@ class InitialScenarioBuilder:
                     item.model_dump(mode="json") for item in population.person_requirements
                 ],
                 "unaccompanied_minor_ids": unaccompanied_minors,
-                "shared_population_contract_note": "Caregiver, pet, medical-support and information-access requirements are shown in the region preview. PopulationSpec v1 cannot persist all of them as engine traits; see the Round 2 result handoff for the coordinated v2 contract.",
+                "shared_population_contract_note": (
+                    "Caregiver, pet, medical-support and information-access requirements are "
+                    "shown in the region preview. PopulationSpec v1 cannot persist all of them "
+                    "as engine traits; see the Round 2 result handoff for the coordinated v2 "
+                    "contract."
+                ),
             },
             "operational_conditions": request.operational_conditions.model_dump(mode="json"),
             "editable_facility_geometry": editable_geometry.model_dump(mode="json")
@@ -806,7 +865,8 @@ class InitialScenarioBuilder:
             "notes": [
                 *(
                     [
-                        "No starting food or water inventory was entered; the standard provisioning assumption was applied."
+                        "No starting food or water inventory was entered; the standard "
+                        "provisioning assumption was applied."
                     ]
                     if request.operational_conditions.initial_resources.status == "unknown"
                     else []
@@ -828,7 +888,10 @@ class InitialScenarioBuilder:
                     "id": "ASM-INITIAL-SCENARIO-DEFAULTS-V1",
                     "subject": "scenario_default_fields",
                     "value": defaulted,
-                    "reason": "These setup values were not explicitly entered in the initial scenario text.",
+                    "reason": (
+                        "These setup values were not explicitly entered in the initial scenario "
+                        "text."
+                    ),
                     "source_id": "ASM-INITIAL-SCENARIO-DEFAULTS-V1",
                 },
             ]
@@ -873,7 +936,10 @@ class InitialScenarioBuilder:
                     "id": extraction.extraction_source_id,
                     "title": "External PDF/image extraction proposal",
                     "source_kind": "assumption",
-                    "description": "Extraction output is untrusted source evidence. Only separately human-accepted features were mapped into the facility trace.",
+                    "description": (
+                        "Extraction output is untrusted source evidence. Only separately "
+                        "human-accepted features were mapped into the facility trace."
+                    ),
                 }
                 for feature in extraction.features:
                     source_records.setdefault(
@@ -882,7 +948,10 @@ class InitialScenarioBuilder:
                             "id": feature.extraction_source_id,
                             "title": f"Plan feature extraction: {feature.feature_kind}",
                             "source_kind": "assumption",
-                            "description": "Feature-level extractor output; confidence is not a human confirmation.",
+                            "description": (
+                                "Feature-level extractor output; confidence is not a human "
+                                "confirmation."
+                            ),
                         },
                     )
             provenance["sources"] = [source_records[key] for key in sorted(source_records)]
@@ -1100,7 +1169,9 @@ class InitialScenarioBuilder:
                         "id": source_id,
                         "title": title,
                         "source_kind": "assumption",
-                        "description": "Installed synthetic coefficients; not empirically calibrated.",
+                        "description": (
+                            "Installed synthetic coefficients; not empirically calibrated."
+                        ),
                     }
                 )
             provenance["assumptions"].append(
@@ -1108,7 +1179,10 @@ class InitialScenarioBuilder:
                     "id": source_id,
                     "subject": title,
                     "source_id": source_id,
-                    "reason": "New generated Scenario explicitly enables the installed experimental model.",
+                    "reason": (
+                        "New generated Scenario explicitly enables the installed experimental "
+                        "model."
+                    ),
                 }
             )
         from sheltersim.domain.agent_dynamics import (
@@ -1130,7 +1204,10 @@ class InitialScenarioBuilder:
                 "id": ORIENTATION_FACILITY_SOURCE_ID,
                 "title": "Intake orientation to shared shelter facilities",
                 "source_kind": "assumption",
-                "description": "Every Agent is assumed to be shown the shared service facilities at intake; not observed at a real shelter.",
+                "description": (
+                    "Every Agent is assumed to be shown the shared service facilities at intake; "
+                    "not observed at a real shelter."
+                ),
             }
         )
         provenance["assumptions"].append(
@@ -1139,7 +1216,10 @@ class InitialScenarioBuilder:
                 "subject": "initial_facility_knowledge",
                 "value": {"known_facility_kinds": sorted(ORIENTATION_FACILITY_KINDS)},
                 "source_id": ORIENTATION_FACILITY_SOURCE_ID,
-                "reason": "Agents choose only facilities they know; shared services are known from the start, group-specific spaces are learned on arrival.",
+                "reason": (
+                    "Agents choose only facilities they know; shared services are known from the "
+                    "start, group-specific spaces are learned on arrival."
+                ),
             }
         )
         provenance["sources"].append(
@@ -1349,7 +1429,10 @@ class InitialScenarioBuilder:
                         "id": source_id,
                         "title": title,
                         "source_kind": "assumption",
-                        "description": "Installed experimental operator; coefficients are not empirically calibrated.",
+                        "description": (
+                            "Installed experimental operator; coefficients are not empirically "
+                            "calibrated."
+                        ),
                     }
                 )
             provenance["assumptions"].append(
@@ -1357,7 +1440,10 @@ class InitialScenarioBuilder:
                     "id": source_id,
                     "subject": title,
                     "source_id": source_id,
-                    "reason": f"Scenario selected installed model {model_id}; coefficients remain experimental assumptions.",
+                    "reason": (
+                        f"Scenario selected installed model {model_id}; coefficients remain "
+                        "experimental assumptions."
+                    ),
                 }
             )
         if request.social_proximity_policy_id == "distance-sampled-proximity-v1":
@@ -1371,7 +1457,11 @@ class InitialScenarioBuilder:
                         "id": PROXIMITY_CONTACT_SOURCE_ID,
                         "title": "Distance-sampled physical proximity",
                         "source_kind": "assumption",
-                        "description": "The configured physical distance and sampling frequency are experimental assumptions; proximity is not dialogue and is not calibrated to shelter observations.",
+                        "description": (
+                            "The configured physical distance and sampling frequency are "
+                            "experimental assumptions; proximity is not dialogue and is not "
+                            "calibrated to shelter observations."
+                        ),
                     }
                 )
             provenance["assumptions"].append(
@@ -1379,7 +1469,10 @@ class InitialScenarioBuilder:
                     "id": PROXIMITY_CONTACT_SOURCE_ID,
                     "subject": "Physical proximity sampling",
                     "source_id": PROXIMITY_CONTACT_SOURCE_ID,
-                    "reason": "Scenario selected distance-sampled-proximity-v1 with a 15-minute interval, 1.5-metre threshold and 500-pair sample cap.",
+                    "reason": (
+                        "Scenario selected distance-sampled-proximity-v1 with a 15-minute "
+                        "interval, 1.5-metre threshold and 500-pair sample cap."
+                    ),
                 }
             )
         provenance["population_generation"]["shared_population_contract_note"] = (
@@ -1439,7 +1532,10 @@ class InitialScenarioBuilder:
                         "id": source_id,
                         "source_kind": "assumption",
                         "title": f"{item['model_id']} coefficient metadata",
-                        "description": "Installed experimental coefficient metadata; no empirical calibration claim.",
+                        "description": (
+                            "Installed experimental coefficient metadata; no empirical "
+                            "calibration claim."
+                        ),
                     }
                 )
             assumption_record = {
@@ -1453,7 +1549,8 @@ class InitialScenarioBuilder:
                 "source_id": source_id,
                 "reason": (
                     f"Operator-selected value for the selected installed model {item['model_id']}; "
-                    "validated against Model Catalog bounds and included in the Scenario configuration hash. "
+                    "validated against Model Catalog bounds and included in the Scenario "
+                    "configuration hash. "
                     "It is not empirically calibrated."
                 ),
             }
@@ -1471,7 +1568,9 @@ class InitialScenarioBuilder:
                         "id": config["source_id"],
                         "source_kind": "assumption",
                         "title": "Installed experimental " + key,
-                        "description": "Uncalibrated operator coefficients; no empirical validity claim.",
+                        "description": (
+                            "Uncalibrated operator coefficients; no empirical validity claim."
+                        ),
                     }
                 )
         if core_suite_selected:
@@ -1521,7 +1620,10 @@ class InitialScenarioBuilder:
                 "id": "ASM-AFFECT-TRANSFER-V1",
                 "source_kind": "assumption",
                 "title": "Installed affect transfer",
-                "description": "Synthetic contact transfer equation, not calibrated to measured shelter outcomes.",
+                "description": (
+                    "Synthetic contact transfer equation, not calibrated to measured shelter "
+                    "outcomes."
+                ),
             }
         )
         scenario = ScenarioSpec(
@@ -1816,7 +1918,8 @@ def _apply_selected_policy_parameter_overrides(
                 for zone_id, raw_fields in sorted(raw_value.items()):
                     if not isinstance(raw_fields, dict) or not raw_fields:
                         raise ValueError(
-                            f"policy parameter {path!r} requires a non-empty field map for each zone"
+                            f"policy parameter {path!r} requires a non-empty field map for "
+                            "each zone"
                         )
                     if set(raw_fields) - set(field_units):
                         raise ValueError(

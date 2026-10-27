@@ -496,7 +496,10 @@ class ProjectStore:
                     "schema_version": 1,
                     "run_id": reference.run_id,
                     "unique_checkpoint_bytes_written": written_bytes,
-                    "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
+                    "accounting": (
+                        "unique content-addressed chunk bytes plus immutable checkpoint manifest "
+                        "bytes"
+                    ),
                 },
             )
             self._checkpoint_write_bytes[key] = written_bytes
@@ -522,7 +525,10 @@ class ProjectStore:
                         "schema_version": 1,
                         "run_id": run_id,
                         "unique_checkpoint_bytes_written": value,
-                        "accounting": "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes",
+                        "accounting": (
+                            "unique content-addressed chunk bytes plus immutable checkpoint "
+                            "manifest bytes"
+                        ),
                     },
                 )
                 pending_path.unlink(missing_ok=True)
@@ -539,7 +545,10 @@ class ProjectStore:
                     or type(value) is not int
                     or value < 0
                     or record.get("accounting")
-                    != "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes"
+                    != (
+                        "unique content-addressed chunk bytes plus immutable checkpoint manifest "
+                        "bytes"
+                    )
                 ):
                     raise StorageError("checkpoint_write_ledger_corrupt")
             else:

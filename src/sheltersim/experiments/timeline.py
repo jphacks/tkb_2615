@@ -554,7 +554,8 @@ class TimelineStore:
                 )
             else:
                 raise TimelineError(
-                    "live continuation needs the configured router; offline history cannot change mode"
+                    "live continuation needs the configured router; offline history cannot "
+                    "change mode"
                 )
         elif router is not None and head.simulation_minute > 0:
             raise TimelineError("cannot add a provider to an existing offline history")

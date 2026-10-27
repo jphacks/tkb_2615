@@ -408,7 +408,9 @@ def simulator_state_catalog() -> dict[str, Any]:
             "implementation_id": STAFF_OPERATIONS_POLICY_VERSION,
             "implementation_version": "2",
             "entity_kind": "staff",
-            "enabled_by": "staff_operations config, simulator_extensions.enabled or life-state psychology",
+            "enabled_by": (
+                "staff_operations config, simulator_extensions.enabled or life-state psychology"
+            ),
             "source_id": "ASM-STAFF-OPERATIONS-V1",
             "fields": {
                 "operation": {"unit": "typed_task_record"},
@@ -493,8 +495,13 @@ def simulator_state_catalog() -> dict[str, Any]:
                 "history": {"unit": "applied_transition_receipt", "time_unit": "simulation_minute"},
             },
             "history_routes": {
-                "care": "GET /api/v1/projects/{project}/runs/{run}/branches/{branch}/history?kind=care",
-                "operations": "GET /api/v1/projects/{project}/runs/{run}/branches/{branch}/history?kind=operations",
+                "care": (
+                    "GET /api/v1/projects/{project}/runs/{run}/branches/{branch}/history?kind=care"
+                ),
+                "operations": (
+                    "GET "
+                    "/api/v1/projects/{project}/runs/{run}/branches/{branch}/history?kind=operations"
+                ),
             },
             "retention_limit": 20000,
             "external_validation": False,

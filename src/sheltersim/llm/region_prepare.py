@@ -66,16 +66,27 @@ def parse_scenario_text(text: str, *, router: LLMRouter | None = None) -> Scenar
             stage=LLMStage.PREPARE,
             input_text=(
                 "Extract scenario values only when they are explicitly stated in the user's text. "
-                "Do not invent municipality, disaster, population, duration, floor area, facility counts, initial stock, schedules, trait percentages, hazard exposure, or official statistics. "
+                "Do not invent municipality, disaster, population, duration, floor area, "
+                "facility counts, initial stock, schedules, trait percentages, hazard "
+                "exposure, or official statistics. "
                 "Unknown water or food stock must stay null; never convert unknown to zero. "
                 "Treat season as context and do not infer temperature effects from season alone. "
-                "For an explicitly stated operating schedule, use minutes from scenario start and include only supported typed condition kinds in the schema; convert stated hours or days exactly, and leave unstated start/end times unknown. "
-                "Power outages require an explicitly supplied component_id plus infrastructure dependency_edges; equipment failures require a known facility_id and units_out. Never invent IDs or dependency paths. "
-                "Use facility_zones only for explicitly requested optional/custom zones; do not remove sleeping, toilet, food, water, intake, medical, staff, or corridor functions. "
-                "A disaster name alone is context, not evidence of a facility outage, route closure, heat/cold stress, or damage event. "
-                "Use population rates and distributions only when the user stated them or attached source data. "
-                "Return an empty string for every unstated scalar and empty arrays or default objects for unstated structured conditions.\n\n"
-                + text
+                "For an explicitly stated operating schedule, use minutes from scenario "
+                "start and include only supported typed condition kinds in the schema; "
+                "convert stated hours or days exactly, and leave unstated start/end times "
+                "unknown. "
+                "Power outages require an explicitly supplied component_id plus "
+                "infrastructure dependency_edges; equipment failures require a known "
+                "facility_id and units_out. Never invent IDs or dependency paths. "
+                "Use facility_zones only for explicitly requested optional/custom zones; do "
+                "not remove sleeping, toilet, food, water, intake, medical, staff, or "
+                "corridor functions. "
+                "A disaster name alone is context, not evidence of a facility outage, route "
+                "closure, heat/cold stress, or damage event. "
+                "Use population rates and distributions only when the user stated them or "
+                "attached source data. "
+                "Return an empty string for every unstated scalar and empty arrays or "
+                "default objects for unstated structured conditions.\n\n" + text
             ),
             state_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             prompt_version="region-scenario-extraction-v1",
@@ -232,12 +243,14 @@ def _parse_explicit_fields(text: str) -> dict[str, Any]:
     if staff:
         values["staff_count"] = int(staff.group(1))
     water = re.search(
-        r"(?:飲料水|備蓄水|水(?:の在庫|在庫)?|water(?: stock)?)\s*[:：=]?\s*([0-9][0-9,.]*)\s*(ml|mL|リットル|ℓ|L|l)",
+        r"(?:飲料水|備蓄水|水(?:の在庫|在庫)?|water(?: stock)?)"
+        r"\s*[:：=]?\s*([0-9][0-9,.]*)\s*(ml|mL|リットル|ℓ|L|l)",
         text,
         re.IGNORECASE,
     )
     food = re.search(
-        r"(?:食料|食糧|食事在庫|food(?: stock)?|meal(?: stock)?)\s*[:：=]?\s*([0-9][0-9,]*)\s*(?:食分|食|meal units?)",
+        r"(?:食料|食糧|食事在庫|food(?: stock)?|meal(?: stock)?)"
+        r"\s*[:：=]?\s*([0-9][0-9,]*)\s*(?:食分|食|meal units?)",
         text,
         re.IGNORECASE,
     )
@@ -304,7 +317,8 @@ def _extract_municipality(text: str) -> str | None:
     if municipality_match:
         return municipality_match.group(0)
     english_match = re.search(
-        r"\bin\s+([A-Za-z][A-Za-z .'-]{1,40}?)(?=\s+(?:for|during|with|disaster|flood|earthquake)|[,.;]|$)",
+        r"\bin\s+([A-Za-z][A-Za-z .'-]{1,40}?)"
+        r"(?=\s+(?:for|during|with|disaster|flood|earthquake)|[,.;]|$)",
         text,
         re.IGNORECASE,
     )

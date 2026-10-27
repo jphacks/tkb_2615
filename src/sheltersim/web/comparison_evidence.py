@@ -173,7 +173,16 @@ def condition_differences(
         "total_items": None,
         "minute": query.minute,
         "verified": False,
-        "path_semantics": "JSON pointer; /@id maps uniquely identified stored rows by id or command_id",
-        "integrity_scope": "Scenario logical hashes and selected checkpoint manifest/chunks; not a full World verification",
-        "limits": "Original Scenario inputs and approved command audit through minute, not an effective physical outcome or causal proof. Configuration traversal may revisit earlier paths on later pages; this is not historical-log streaming.",
+        "path_semantics": (
+            "JSON pointer; /@id maps uniquely identified stored rows by id or command_id"
+        ),
+        "integrity_scope": (
+            "Scenario logical hashes and selected checkpoint manifest/chunks; not a full World "
+            "verification"
+        ),
+        "limits": (
+            "Original Scenario inputs and approved command audit through minute, not an "
+            "effective physical outcome or causal proof. Configuration traversal may revisit "
+            "earlier paths on later pages; this is not historical-log streaming."
+        ),
     }

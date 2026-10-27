@@ -131,7 +131,10 @@ def _state_based_line(
     if role == "participant" and interaction == "reassurance_exchange":
         if "reassurance" in changed or "uncertainty" in changed:
             if "stress_high_at_proposal" in cues or "uncertainty_high_at_proposal" in cues:
-                return "不安がありましたが、分かっていることを一緒に確かめられて少し安心できた気がします。"
+                return (
+                    "不安がありましたが、"
+                    "分かっていることを一緒に確かめられて少し安心できた気がします。"
+                )
             return "分かっていることを一緒に確かめられて、少し安心できた気がします。"
     if role == "participant" and interaction == "complaint_response":
         if "discontent" in changed or "reassurance" in changed:

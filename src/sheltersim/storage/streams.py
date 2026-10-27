@@ -16,17 +16,21 @@ class TraceSpool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
         self.connection.execute(
-            "CREATE TABLE IF NOT EXISTS records (sequence INTEGER PRIMARY KEY, stream TEXT NOT NULL, minute INTEGER, agent TEXT, policy TEXT, trigger TEXT, choice REAL, payload TEXT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS records (sequence INTEGER PRIMARY KEY, stream TEXT "
+            "NOT NULL, minute INTEGER, agent TEXT, policy TEXT, trigger TEXT, choice REAL, "
+            "payload TEXT NOT NULL)"
         )
         self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS ordered_records ON records(stream, minute, agent, policy, trigger, choice, sequence)"
+            "CREATE INDEX IF NOT EXISTS ordered_records ON records(stream, minute, agent, "
+            "policy, trigger, choice, sequence)"
         )
         self.counts: dict[str, int] = {}
         self.pending = 0
 
     def append(self, stream: str, record: dict[str, Any]) -> None:
         self.connection.execute(
-            "INSERT INTO records(stream,minute,agent,policy,trigger,choice,payload) VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO records(stream,minute,agent,policy,trigger,choice,payload) "
+            "VALUES(?,?,?,?,?,?,?)",
             (
                 stream,
                 record.get("minute_index", 0),

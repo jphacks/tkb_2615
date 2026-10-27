@@ -217,7 +217,10 @@ def correct_synthetic_household_relationships(
                 "id": correction_source,
                 "title": "Operator-reviewed synthetic household relationships",
                 "source_kind": "operator",
-                "description": "Relationship links reviewed in a scenario preview; no real-person identity is accepted.",
+                "description": (
+                    "Relationship links reviewed in a scenario preview; no real-person identity "
+                    "is accepted."
+                ),
             }
         )
     changed_ids: set[str] = set()

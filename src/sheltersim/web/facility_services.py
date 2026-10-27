@@ -135,7 +135,8 @@ def facility_preview(workspace: Any, project_id: str, body: dict[str, Any]) -> d
     approval_blockers = list(draft.approval_blockers)
     if result.design.capacity_supported < request.evacuees:
         approval_blockers.append(
-            "Edited facility planning capacity is below the requested initial population; review capacity or population before approval."
+            "Edited facility planning capacity is below the requested initial population; "
+            "review capacity or population before approval."
         )
     preview_id = workspace._cache(
         {

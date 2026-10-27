@@ -442,7 +442,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"metre_2d"}),
             frozenset({GEOMETRY_OVERLAY_KEY}),
             False,
-            "Permanently move an idle facility within its existing zone; cross-zone transfer is unsupported.",
+            "Permanently move an idle facility within its existing zone; cross-zone transfer "
+            "is unsupported.",
         ),
         PrimitiveSpec(
             "transfer_equipment",
@@ -451,7 +452,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"metre_2d"}),
             frozenset({GEOMETRY_OVERLAY_KEY}),
             False,
-            "Permanently transfer an idle positioned facility between connected zones and move its service points.",
+            "Permanently transfer an idle positioned facility between connected zones and "
+            "move its service points.",
         ),
         PrimitiveSpec(
             "set_partition",
@@ -469,7 +471,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"boolean"}),
             frozenset({GEOMETRY_OVERLAY_KEY}),
             True,
-            "Temporarily close a route; active journeys replan and prior unrelated closures cannot be reopened.",
+            "Temporarily close a route; active journeys replan and prior unrelated closures "
+            "cannot be reopened.",
         ),
         PrimitiveSpec(
             "temporary_room_geometry",
@@ -505,7 +508,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"facility_unit"}),
             frozenset({"facility_capacity", SHARED_OPERATIONS_KEY}),
             False,
-            "Restore explicitly identified working units when the observed capacity still matches the repair precondition.",
+            "Restore explicitly identified working units when the observed capacity still "
+            "matches the repair precondition.",
         ),
         PrimitiveSpec(
             "staff_handoff",
@@ -514,7 +518,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"staff_member"}),
             frozenset({"staff_operations_v1", SHARED_OPERATIONS_KEY}),
             False,
-            "Reassign an on-site staff operation to a qualified replacement already at the work location.",
+            "Reassign an on-site staff operation to a qualified replacement already at the "
+            "work location.",
         ),
         PrimitiveSpec(
             "staff_task_order",
@@ -523,7 +528,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"staff_task_order"}),
             frozenset({"staff_operations_v1", SHARED_OPERATIONS_KEY}),
             False,
-            "Order one idle qualified worker to perform a registered task now, with routed travel and an applied completion receipt.",
+            "Order one idle qualified worker to perform a registered task now, with routed "
+            "travel and an applied completion receipt.",
         ),
         PrimitiveSpec(
             "deliver_resource",
@@ -613,7 +619,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"person_capacity"}),
             frozenset({"temporary_spaces_v1"}),
             True,
-            "Add approved population and sleeping capacity in a zone for a bounded interval; no unsurveyed floorplan position is created.",
+            "Add approved population and sleeping capacity in a zone for a bounded interval; "
+            "no unsurveyed floorplan position is created.",
         ),
         PrimitiveSpec(
             "water_outage",
@@ -652,7 +659,8 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             frozenset({"relative_ventilation_effectiveness_0_1"}),
             frozenset({ZONE_ENVIRONMENT_POLICY}),
             True,
-            "Temporarily set relative ventilation effectiveness; it is not an air-change measurement.",
+            "Temporarily set relative ventilation effectiveness; it is not an air-change "
+            "measurement.",
         ),
         PrimitiveSpec(
             "set_lighting",
@@ -987,7 +995,8 @@ def validate_effect_program(
                     or parameters.from_zone_id != world.facilities[target_id].zone_id
                 ):
                     raise ValueError(
-                        "precondition_failed: equipment target and source zone must match the selected facility"
+                        "precondition_failed: equipment target and source zone must match "
+                        "the selected facility"
                     )
             except ValueError as exc:
                 issues.append(f"{label} {exc}")
@@ -1167,7 +1176,8 @@ def validate_effect_program(
             unknown_admission_zones = set(parameters.admission_zone_ids) - set(world.zones)
             if target_id in parameters.admission_zone_ids or unknown_admission_zones:
                 issues.append(
-                    f"{label} alternate admission zones must be known and exclude its preferred zone"
+                    f"{label} alternate admission zones must be known and exclude its "
+                    "preferred zone"
                 )
             overlay_config = world.model_configs.get("geometry_overlay", {})
             if parameters.admission_zone_ids and (
@@ -1175,7 +1185,8 @@ def validate_effect_program(
                 or overlay_config.get("schema_version") not in {3, 4}
             ):
                 issues.append(
-                    f"{label} alternate physical room admission requires geometry_overlay schema_version=3 or 4"
+                    f"{label} alternate physical room admission requires geometry_overlay "
+                    "schema_version=3 or 4"
                 )
             if parameters.approach_route_id is not None:
                 if parameters.admission_zone_ids:
@@ -1273,7 +1284,8 @@ def validate_effect_program(
                 facility.working_units < parameters.restored_working_units <= facility.capacity
             ):
                 issues.append(
-                    f"{label} restored_working_units must increase capacity without exceeding installed units"
+                    f"{label} restored_working_units must increase capacity without "
+                    "exceeding installed units"
                 )
             if active_facility_outage(world, target_id) or has_active_facility_modifier(
                 world, target_id

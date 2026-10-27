@@ -811,8 +811,14 @@ def register_agents_social_policies() -> None:
             "parameters": {},
         },
         DISTANCE_PROXIMITY_POLICY_ID: {
-            "reference": "Assumption; no shelter contact-distance or proximity-frequency calibration supplied",
-            "formula": "physical same-zone positions; Euclidean distance <= max_distance_m; nearest pairs then stable Agent IDs; bounded pairs per sample",
+            "reference": (
+                "Assumption; no shelter contact-distance or proximity-frequency calibration "
+                "supplied"
+            ),
+            "formula": (
+                "physical same-zone positions; Euclidean distance <= max_distance_m; nearest "
+                "pairs then stable Agent IDs; bounded pairs per sample"
+            ),
             "assumption_source_id": PROXIMITY_CONTACT_SOURCE_ID,
             "parameters": {
                 "social_proximity.sample_interval_minutes": {
@@ -822,7 +828,10 @@ def register_agents_social_policies() -> None:
                     "upper": 60,
                     "source_id": PROXIMITY_CONTACT_SOURCE_ID,
                     "evidence_grade": "C",
-                    "applicability": "Synthetic sampling assumption; no observed shelter contact-frequency calibration",
+                    "applicability": (
+                        "Synthetic sampling assumption; no observed shelter contact-frequency "
+                        "calibration"
+                    ),
                 },
                 "social_proximity.max_distance_m": {
                     "unit": "metre",
@@ -831,7 +840,9 @@ def register_agents_social_policies() -> None:
                     "upper": 10.0,
                     "source_id": PROXIMITY_CONTACT_SOURCE_ID,
                     "evidence_grade": "C",
-                    "applicability": "Synthetic proximity threshold; not a measured social-interaction boundary",
+                    "applicability": (
+                        "Synthetic proximity threshold; not a measured social-interaction boundary"
+                    ),
                 },
                 "social_proximity.max_pairs_per_sample": {
                     "unit": "pair_count_per_sample",
@@ -840,7 +851,9 @@ def register_agents_social_policies() -> None:
                     "upper": 10_000,
                     "source_id": PROXIMITY_CONTACT_SOURCE_ID,
                     "evidence_grade": "C",
-                    "applicability": "Computational cap only; does not imply observed-contact prevalence",
+                    "applicability": (
+                        "Computational cap only; does not imply observed-contact prevalence"
+                    ),
                 },
             },
         },

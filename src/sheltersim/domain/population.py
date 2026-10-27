@@ -995,9 +995,10 @@ def _record_waiting_presence(world: WorldState, item: dict[str, Any]) -> None:
     transition = PresenceTransition(
         transition_id="presence-"
         + hashlib.sha256(
-            f"{item['event_id']}\0{agent_id}\0{('approaching' if 'approach_route_id' in item else 'waiting')}".encode(
-                "utf-8"
-            )
+            (
+                f"{item['event_id']}\0{agent_id}\0"
+                f"{('approaching' if 'approach_route_id' in item else 'waiting')}"
+            ).encode("utf-8")
         ).hexdigest()[:24],
         event_id=item["event_id"],
         agent_id=agent_id,

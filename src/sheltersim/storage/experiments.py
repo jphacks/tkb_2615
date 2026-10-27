@@ -165,7 +165,10 @@ class ExperimentStore:
             "execution_mode": "offline",
             "status": "configured_not_executed",
             "external_validation": False,
-            "limits": "Operator-provided aggregate observations. A fitting score does not establish empirical model validity.",
+            "limits": (
+                "Operator-provided aggregate observations. A fitting score does not establish "
+                "empirical model validity."
+            ),
         }
         if len(canonical(body).encode()) > 1024 * 1024 or safe_document(body) != body:
             raise StorageError("invalid_or_oversized_experiment")
@@ -250,7 +253,8 @@ class ExperimentStore:
         with index.connect() as db:
             index.ready(db, "main", reference.checkpoint_hash)
             row = db.execute(
-                "SELECT payload,payload_hash FROM records WHERE branch='main' AND kind='kpis' ORDER BY minute DESC,key DESC LIMIT 1"
+                "SELECT payload,payload_hash FROM records WHERE branch='main' AND "
+                "kind='kpis' ORDER BY minute DESC,key DESC LIMIT 1"
             ).fetchone()
         if row is None or digest(json.loads(row["payload"])) != row["payload_hash"]:
             raise StorageError("experiment_metric_evidence_missing_or_corrupt")
@@ -361,11 +365,17 @@ class ExperimentStore:
             "plan_hash": record["plan_hash"],
             "scores": scores,
             "candidate": candidate,
-            "selection_basis": "training_weighted_scaled_squared_error; holdout did not select candidate",
+            "selection_basis": (
+                "training_weighted_scaled_squared_error; holdout did not select candidate"
+            ),
             "status": "candidate_parameters_not_applied",
             "external_validation": False,
             "verified": False,
-            "limits": "Simulation/observation fit only. Scales, source applicability and structural uncertainty require domain review; no model certification or original Run mutation.",
+            "limits": (
+                "Simulation/observation fit only. Scales, source applicability and structural "
+                "uncertainty require domain review; no model certification or original Run "
+                "mutation."
+            ),
         }
         with self.store.transaction():
             self.store._write(self._path(project, experiment, "fit.json"), result, immutable=True)

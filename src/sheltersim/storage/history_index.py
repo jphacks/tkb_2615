@@ -138,7 +138,10 @@ def _virtual_utterance_example(
 
     if interaction == "reassurance_exchange":
         if reassurance_up and uncertainty_down:
-            example = "わかっていることを一緒に確かめたら、少し安心できた気がします。新しい案内も一緒に確認しましょう。"
+            example = (
+                "わかっていることを一緒に確かめたら、少し安心できた気がします。"
+                "新しい案内も一緒に確認しましょう。"
+            )
         elif stressed:
             example = "不安が強いときは、今わかっていることを一つずつ確認しましょう。"
         else:
@@ -289,7 +292,8 @@ class HistoryIndex:
             ),
         )
         db.execute(
-            "INSERT INTO generations VALUES(?,?,1) ON CONFLICT(branch,kind) DO UPDATE SET value=value+1",
+            "INSERT INTO generations VALUES(?,?,1) ON CONFLICT(branch,kind) DO UPDATE SET "
+            "value=value+1",
             (branch, kind),
         )
         db.executemany(
@@ -645,7 +649,8 @@ class HistoryIndex:
         with self.connect() as db:
             self.ready(db, branch, anchor)
             row = db.execute(
-                "SELECT minute,hash FROM checkpoints WHERE branch=? AND minute<=? ORDER BY minute DESC LIMIT 1",
+                "SELECT minute,hash FROM checkpoints WHERE branch=? AND minute<=? ORDER BY "
+                "minute DESC LIMIT 1",
                 (branch, minute),
             ).fetchone()
             return (row[0], row[1]) if row else None
@@ -705,7 +710,8 @@ class HistoryIndex:
         ):
             if identity:
                 where.append(
-                    "EXISTS(SELECT 1 FROM entities e WHERE e.branch=r.branch AND e.kind=r.kind AND e.key=r.key AND e.entity=?)"
+                    "EXISTS(SELECT 1 FROM entities e WHERE e.branch=r.branch AND "
+                    "e.kind=r.kind AND e.key=r.key AND e.entity=?)"
                 )
                 args.append(identity)
         for name, value in (
@@ -718,12 +724,14 @@ class HistoryIndex:
                 args.append(value)
         if query.event_id and query.kind != "causal":
             where.append(
-                "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind AND t.key=r.key AND t.token=?)"
+                "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind AND "
+                "t.key=r.key AND t.token=?)"
             )
             args.append("@event:" + query.event_id)
         for term in _terms(query.text or ""):
             where.append(
-                "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind AND t.key=r.key AND t.token=?)"
+                "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind AND "
+                "t.key=r.key AND t.token=?)"
             )
             args.append(term)
         graph = None
@@ -735,7 +743,8 @@ class HistoryIndex:
                 while frontier and len(visited) < 500:
                     current = frontier.pop(0)
                     links = db.execute(
-                        "SELECT event_id,cause FROM records WHERE branch=? AND kind='events' AND (event_id=? OR cause=?) LIMIT 501",
+                        "SELECT event_id,cause FROM records WHERE branch=? AND kind='events' "
+                        "AND (event_id=? OR cause=?) LIMIT 501",
                         (branch, current, current),
                     ).fetchall()
                     link_limit_hit = link_limit_hit or len(links) >= 501
@@ -747,7 +756,10 @@ class HistoryIndex:
                                 visited.add(other)
                                 frontier.append(other)
                 where.append(
-                    "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind AND t.key=r.key AND t.token IN ("
+                    (
+                        "EXISTS(SELECT 1 FROM tokens t WHERE t.branch=r.branch AND t.kind=r.kind "
+                        "AND t.key=r.key AND t.token IN ("
+                    )
                     + ",".join("?" for _ in visited)
                     + "))"
                 )
@@ -757,7 +769,8 @@ class HistoryIndex:
                     or bool(frontier)
                     or len(visited) >= 500,
                     "root_present": db.execute(
-                        "SELECT 1 FROM records WHERE branch=? AND kind='events' AND event_id=? LIMIT 1",
+                        "SELECT 1 FROM records WHERE branch=? AND kind='events' AND "
+                        "event_id=? LIMIT 1",
                         (branch, query.event_id),
                     ).fetchone()
                     is not None,
@@ -830,11 +843,17 @@ class HistoryIndex:
             "coverage": "persisted_index_records",
             "coverage_scope": "branch_kind_time_window_before_identity_and_text_filters",
             "completeness": "unknown",
-            "completeness_reason": "The index exposes persisted producer records but cannot certify that every domain event was produced or retained.",
+            "completeness_reason": (
+                "The index exposes persisted producer records but cannot certify that every "
+                "domain event was produced or retained."
+            ),
             "oldest_minute": min(indexed_minutes) if indexed_minutes else None,
             "newest_minute": max(indexed_minutes) if indexed_minutes else None,
             "retention_limit": None,
-            "retention_limit_reason": "No per-kind source eviction boundary is persisted; absence of records is not evidence that no event occurred.",
+            "retention_limit_reason": (
+                "No per-kind source eviction boundary is persisted; absence of records is not "
+                "evidence that no event occurred."
+            ),
             "requested_range": [query.start, query.end],
             "coverage_by_kind": coverage_by_kind,
             "first_indexed_checkpoint_minute": counts.get("first_indexed_checkpoint_minute"),
@@ -884,7 +903,10 @@ class HistoryIndex:
                 "status": "indexed_not_verified",
                 "branch_id": branch,
                 "checkpoint_hash": checkpoint.checkpoint_hash,
-                "limits": "Legacy actions/expired contacts absent from source cannot be reconstructed by an index.",
+                "limits": (
+                    "Legacy actions/expired contacts absent from source cannot be reconstructed "
+                    "by an index."
+                ),
             }
         finally:
             self.store.release_run(lease)
@@ -911,7 +933,8 @@ class HistoryIndex:
         with self.connect() as db:
             self.ready(db, branch, reference.checkpoint_hash)
             rows = db.execute(
-                "SELECT minute,hash,state_hash FROM checkpoints WHERE branch=? AND minute BETWEEN ? AND ? AND minute>? ORDER BY minute LIMIT ?",
+                "SELECT minute,hash,state_hash FROM checkpoints WHERE branch=? AND minute "
+                "BETWEEN ? AND ? AND minute>? ORDER BY minute LIMIT ?",
                 (branch, start, end, after[0] if after else -1, limit + 1),
             ).fetchall()
         selected = rows[:limit]
@@ -943,12 +966,15 @@ class HistoryIndex:
             self.ready(db, branch, reference.checkpoint_hash)
             if conversation_id:
                 rows = db.execute(
-                    "SELECT r.payload,r.payload_hash FROM entities e JOIN records r ON r.branch=e.branch AND r.kind=e.kind AND r.key=e.key WHERE e.branch=? AND e.kind='conversations' AND e.entity=? ORDER BY e.key DESC LIMIT ?",
+                    "SELECT r.payload,r.payload_hash FROM entities e JOIN records r ON "
+                    "r.branch=e.branch AND r.kind=e.kind AND r.key=e.key WHERE e.branch=? "
+                    "AND e.kind='conversations' AND e.entity=? ORDER BY e.key DESC LIMIT ?",
                     (branch, conversation_id, limit),
                 ).fetchall()
             else:
                 rows = db.execute(
-                    "SELECT payload,payload_hash FROM records WHERE branch=? AND kind='conversations' ORDER BY key DESC LIMIT ?",
+                    "SELECT payload,payload_hash FROM records WHERE branch=? AND "
+                    "kind='conversations' ORDER BY key DESC LIMIT ?",
                     (branch, limit),
                 ).fetchall()
         for row in rows:
