@@ -75,7 +75,6 @@ UNSORTED = frozenset(
         "test_research_models.py",
         "test_resource_ledger_state_check.py",
         "test_resource_service.py",
-        "test_resources.py",
         "test_results_chat.py",
         "test_resume_checkpoint_loads.py",
         "test_route_bottleneck.py",
