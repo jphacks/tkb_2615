@@ -1425,6 +1425,40 @@ def bare_request_handler() -> Callable[[Path], tuple[Any, list[int], dict[str, s
     return _bare_request_handler
 
 
+@pytest.fixture
+def full_trace_inspector(tmp_path: Path) -> Any:
+    """An Inspector over one finished Run (run-one) of all 100 people of scenario_100_agents
+    for two minutes at the full trace level, with a planned event whose raw detail must
+    not be returned.
+    """
+    from sheltersim.core.engine import TraceLevel
+    from sheltersim.experiments.runner import run_scenario
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.inspector import InspectorService
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["duration_minutes"] = 2
+    document["profiles"] = document["profiles"][:100]
+    document["zones"] = [
+        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
+        for zone in document["zones"]
+    ]
+    document["scheduled_events"] = [
+        {
+            "id": "planned-test",
+            "kind": "exogenous",
+            "due_minute": 0,
+            "priority": 0,
+            "sequence": 0,
+            "event_type": "unknown_test_event",
+            "payload": {"raw_detail": "must-not-be-returned"},
+        }
+    ]
+    scenario = ScenarioSpec.model_validate(document)
+    run_scenario(scenario, tmp_path / "run-one", trace_level=TraceLevel.FULL)
+    return InspectorService(tmp_path)
+
+
 def _make_event(
     event_id: str,
     *,

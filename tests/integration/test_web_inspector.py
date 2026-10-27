@@ -1,45 +1,22 @@
-"""Saved-run web inspector queries, privacy allowlists, and HTTP read-only gate."""
+"""Saved-run web inspector queries: profiles, agents, events, KPIs and the synthetic map,
+with bounded filters and Run IDs that cannot leave the runs folder.
+
+The allow-listed API dispatch, story cards and the read-only HTTP gate are checked in
+tests/e2e/test_web_inspector_http.py.
+"""
 
 from __future__ import annotations
 
 import json
-from io import BytesIO
-from pathlib import Path
 
 import pytest
 
-from sheltersim.core.engine import TraceLevel
-from sheltersim.experiments.runner import run_scenario
-from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.web.inspector import InspectorService, WebQueryError
-from sheltersim.web.server import _dispatch_api, _handler_for
-
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
 
 
 @pytest.fixture
-def inspector(tmp_path: Path) -> InspectorService:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["duration_minutes"] = 2
-    document["profiles"] = document["profiles"][:100]
-    document["zones"] = [
-        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
-        for zone in document["zones"]
-    ]
-    document["scheduled_events"] = [
-        {
-            "id": "planned-test",
-            "kind": "exogenous",
-            "due_minute": 0,
-            "priority": 0,
-            "sequence": 0,
-            "event_type": "unknown_test_event",
-            "payload": {"raw_detail": "must-not-be-returned"},
-        }
-    ]
-    scenario = ScenarioSpec.model_validate(document)
-    run_scenario(scenario, tmp_path / "run-one", trace_level=TraceLevel.FULL)
-    return InspectorService(tmp_path)
+def inspector(full_trace_inspector: InspectorService) -> InspectorService:
+    return full_trace_inspector
 
 
 def test_saved_run_supports_profiles_agent_events_kpis_and_synthetic_map(
@@ -77,37 +54,6 @@ def test_saved_run_supports_profiles_agent_events_kpis_and_synthetic_map(
     assert "input_text" not in json.dumps(audit)
 
 
-def test_agent_story_cards_link_only_recorded_states_decisions_and_events(
-    inspector: InspectorService,
-) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
-
-    stories = inspector.agent_stories(run_id, at_minute=2)
-    api_stories = _dispatch_api(
-        inspector,
-        f"/api/v1/runs/{run_id}/agent-stories",
-        {"at_minute": ["2"]},
-    )
-
-    assert stories == api_stories
-    assert stories["decision_trace_available"] is True
-    assert [item["criterion_id"] for item in stories["stories"]] == [
-        "support_need",
-        "mobility_support",
-        "family_context",
-    ]
-    assert all(item["selection_reason"] for item in stories["stories"])
-    assert all(len(item["history"]) <= 8 for item in stories["stories"])
-    assert all(item["dialogue"] is None for item in stories["stories"])
-    assert all(
-        inspector.event(run_id, event["event_id"])["records"]
-        for story in stories["stories"]
-        for event in story["event_references"]
-    )
-    with pytest.raises(WebQueryError, match="duration"):
-        inspector.agent_stories(run_id, at_minute=3)
-
-
 def test_query_filters_are_bounded_and_run_ids_cannot_escape_root(
     inspector: InspectorService,
 ) -> None:
@@ -123,45 +69,3 @@ def test_query_filters_are_bounded_and_run_ids_cannot_escape_root(
         inspector.zone_map(run_id, at_minute=99)
 
 
-def test_api_dispatch_is_allowlisted_and_reports_unknown_routes(
-    inspector: InspectorService,
-) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
-    result = _dispatch_api(
-        inspector,
-        f"/api/v1/runs/{run_id}/profiles",
-        {"limit": ["100"]},
-    )
-    encoded = json.dumps(result)
-    assert "must-not-be-returned" not in encoded
-    assert len(result["items"]) == 100
-    with pytest.raises(WebQueryError, match="unknown API"):
-        _dispatch_api(inspector, "/api/v1/runs/nope/mutate", {})
-
-
-def test_http_handler_serves_ui_and_rejects_mutating_requests(
-    inspector: InspectorService,
-) -> None:
-    handler_type = _handler_for(inspector)
-    handler = handler_type.__new__(handler_type)
-    handler.path = "/api/v1/runs/example?mutation=1"
-    handler.headers = {
-        "Origin": "",
-        "Host": "localhost",
-        "Sec-Fetch-Site": "same-origin",
-        "Content-Type": "application/json",
-    }
-    response = []
-    handler._json_response = lambda status, document: response.append((status, document))
-    handler.do_POST()
-    assert response == [(405, {"error": "inspector API is read-only"})]
-
-    static_response = handler_type.__new__(handler_type)
-    static_response.send_response = lambda status: response.append((status, "static"))
-    static_response.send_header = lambda *_args: None
-    static_response.end_headers = lambda: None
-    static_response.wfile = BytesIO()
-    static_response._static_response("/admin")
-    static_html = static_response.wfile.getvalue()
-    assert b'data-mode="admin"' in static_html
-    assert b'id="run-select"' in static_html
