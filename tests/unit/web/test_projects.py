@@ -1,9 +1,12 @@
 """Project API reads that need only a Branch pointer do not decode or load whole
-checkpoints.
+checkpoints; resuming a computation checks its range without loading history and fails
+closed on a corrupt head.
 
 The routes that run a computation over a saved Run are checked in
 tests/integration/test_pointer_only_reads.py and test_resume_checkpoint_loads.py.
 """
+
+from __future__ import annotations
 
 import pytest
 
@@ -27,3 +30,39 @@ def test_report_and_conversations_check_only_the_branch_pointer(
                 api.get(["p", "runs", "r", "branches", "missing", action], {})
     finally:
         api.close()
+
+
+def test_resume_range_is_still_checked_without_loading_history(
+    tmp_path, monkeypatch, saved_run_with_scenario
+):
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, scenario = saved_run_with_scenario(tmp_path)
+    api = ProjectAPI(store)
+    status = store.run("p", "r")["status"]
+    try:
+        for target in (0, scenario.duration_minutes + 1, "5"):
+            with pytest.raises(StorageError, match="uncomputed remaining range"):
+                api.submit("p", "r", "main", target)
+        with pytest.raises(StorageError):
+            api.submit("p", "r", "missing", 5)
+        assert store.run("p", "r")["status"] == status
+    finally:
+        api.close()
+
+
+def test_corrupt_head_still_fails_closed_in_the_worker(
+    tmp_path, monkeypatch, saved_run_with_scenario
+):
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, _ = saved_run_with_scenario(tmp_path)
+    head = store.branch_reference("p", "r", "main").checkpoint_hash
+    for chunk in (store._path("p", "runs", "r", "checkpoints") / "chunks").iterdir():
+        chunk.write_bytes(b"corrupt")
+    api = ProjectAPI(store)
+    try:
+        api.submit("p", "r", "main", 5)
+        api._pool.submit(lambda: None).result(timeout=60)
+    finally:
+        api.close()
+    assert store.run("p", "r")["status"] == "failed"
+    assert store.branch_reference("p", "r", "main").checkpoint_hash == head

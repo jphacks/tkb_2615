@@ -1,32 +1,18 @@
-"""Starting a computation decodes and validates the head checkpoint only once."""
+"""Starting a computation decodes and validates the head checkpoint only once.
 
-import json
+The range check and a corrupt head are checked in tests/unit/web/test_projects.py.
+"""
 
-import pytest
+
 
 from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.world import WorldState
-from sheltersim.experiments.branch import BranchRuntime
-from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import ProjectStore
 from sheltersim.web.projects import ProjectAPI
 
 
-def saved_run(tmp_path):
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    initial = BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    TimelineStore(store, "p", "r").record(initial)
-    return store, scenario
-
-
-def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch):
+def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_run_with_scenario):
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, _ = saved_run(tmp_path)
+    store, _ = saved_run_with_scenario(tmp_path)
     head = store.branch_reference("p", "r", "main").checkpoint_hash
     loads, validations = [], []
     load, validate = ProjectStore.load_checkpoint, Checkpoint._validate
@@ -53,35 +39,3 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch):
     # One decode with its validation, then one restore into the runtime.
     assert loads == [head]
     assert len(validations) == 2
-
-
-def test_resume_range_is_still_checked_without_loading_history(tmp_path, monkeypatch):
-    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, scenario = saved_run(tmp_path)
-    api = ProjectAPI(store)
-    status = store.run("p", "r")["status"]
-    try:
-        for target in (0, scenario.duration_minutes + 1, "5"):
-            with pytest.raises(StorageError, match="uncomputed remaining range"):
-                api.submit("p", "r", "main", target)
-        with pytest.raises(StorageError):
-            api.submit("p", "r", "missing", 5)
-        assert store.run("p", "r")["status"] == status
-    finally:
-        api.close()
-
-
-def test_corrupt_head_still_fails_closed_in_the_worker(tmp_path, monkeypatch):
-    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
-    store, _ = saved_run(tmp_path)
-    head = store.branch_reference("p", "r", "main").checkpoint_hash
-    for chunk in (store._path("p", "runs", "r", "checkpoints") / "chunks").iterdir():
-        chunk.write_bytes(b"corrupt")
-    api = ProjectAPI(store)
-    try:
-        api.submit("p", "r", "main", 5)
-        api._pool.submit(lambda: None).result(timeout=60)
-    finally:
-        api.close()
-    assert store.run("p", "r")["status"] == "failed"
-    assert store.branch_reference("p", "r", "main").checkpoint_hash == head

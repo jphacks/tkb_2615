@@ -1375,6 +1375,29 @@ def no_checkpoint_decode(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return decoded
 
 
+def _saved_run_with_scenario(tmp_path: Path) -> tuple[Any, Any]:
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+
+    store = ProjectStore(tmp_path)
+    store.create_project("p")
+    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("p", "r", scenario.id, 1)
+    initial = BranchRuntime.from_world(WorldState.from_scenario(scenario))
+    TimelineStore(store, "p", "r").record(initial)
+    return store, scenario
+
+
+@pytest.fixture
+def saved_run_with_scenario() -> Callable[[Path], tuple[Any, Any]]:
+    """Like saved_timeline, but return the store and the Scenario instead of the timeline."""
+    return _saved_run_with_scenario
+
+
 def _make_event(
     event_id: str,
     *,
