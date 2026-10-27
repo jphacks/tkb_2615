@@ -7,7 +7,6 @@ The editor itself is checked in tests/unit/experiments/test_scenario_editor.py.
 from __future__ import annotations
 
 import json
-import time
 from io import BytesIO
 
 from sheltersim.web.demo import DemoService
@@ -24,7 +23,9 @@ def _request(**overrides: object) -> dict[str, object]:
     }
 
 
-def test_frozen_scenario_restores_its_run_id_with_a_saved_job_checkpoint(tmp_path) -> None:
+def test_frozen_scenario_restores_its_run_id_with_a_saved_job_checkpoint(
+    tmp_path, wait_for_job
+) -> None:
     scenario_path = tmp_path / ".demo-scenarios" / "frozen.json"
     job_path = tmp_path / ".demo-jobs"
     demo = DemoService(scenario_storage_path=scenario_path)
@@ -33,13 +34,7 @@ def test_frozen_scenario_restores_its_run_id_with_a_saved_job_checkpoint(tmp_pat
     manager = DemoJobManager(demo, job_path, chunk_minutes=1)
     try:
         job = manager.submit("baseline", 1)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and manager.get(job["job_id"])["status"] not in {
-            "completed",
-            "failed",
-        }:
-            time.sleep(0.01)
-        assert manager.get(job["job_id"])["status"] == "completed"
+        wait_for_job(manager, job["job_id"], {"completed"})
     finally:
         manager.close()
 

@@ -1175,21 +1175,24 @@ def failure_day3_demo() -> Callable[..., Any]:
     return _failure_day3_demo
 
 
-def _wait_for_job(manager: Any, job_id: str, expected: set[str]) -> dict:
-    import time
+# Only stops a hung worker from hanging the run; a finished job never waits this long.
+JOB_HANG_SECONDS = 120
 
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        job = manager.get(job_id)
-        if job["status"] in expected:
-            return job
-        time.sleep(0.01)
-    pytest.fail(f"job {job_id} did not reach {sorted(expected)}: {manager.get(job_id)}")
+
+def _wait_for_job(manager: Any, job_id: str, expected: set[str]) -> dict:
+    # The manager runs jobs one at a time on a single worker, so a no-op queued now
+    # finishes only after every job submitted before it (#143: a 5-second polling
+    # deadline depended on how busy the machine was).
+    manager._executor.submit(lambda: None).result(timeout=JOB_HANG_SECONDS)
+    job = manager.get(job_id)
+    if job["status"] not in expected:
+        pytest.fail(f"job {job_id} finished as {job['status']}, not {sorted(expected)}: {job}")
+    return job
 
 
 @pytest.fixture
 def wait_for_job() -> Callable[[Any, str, set[str]], dict]:
-    """Wait up to five seconds for a demo job to reach one of the expected statuses."""
+    """Wait for the demo jobs submitted so far to finish, then require one of the statuses."""
     return _wait_for_job
 
 

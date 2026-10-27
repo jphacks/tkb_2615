@@ -174,8 +174,6 @@ def test_prepare_cli_warns_when_scenario_draft_falls_back(
 def test_project_report_exists_before_the_run_is_marked_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_benchmark_scenario
 ) -> None:
-    import time
-
     scenario = small_benchmark_scenario(30)
     store = ProjectStore(tmp_path)
     store.create_project("project")
@@ -199,10 +197,8 @@ def test_project_report_exists_before_the_run_is_marked_completed(
     api = ProjectAPI(store, recover=False)
     try:
         api.submit("project", "run", "main", 30)
-        for _ in range(600):
-            if store.run("project", "run")["status"] != "running":
-                break
-            time.sleep(0.1)
+        # The single worker finishes the run before this no-op (#143).
+        api._pool.submit(lambda: None).result(timeout=120)
     finally:
         api.close()
 

@@ -14,6 +14,10 @@ import pytest
 from sheltersim.web.demo import DemoError
 from sheltersim.web.jobs import DemoJobError, DemoJobManager
 
+# The events below are handshakes with the job worker. The timeout only ends a hung test;
+# the worker reaches each event in well under a second (#143).
+HANDSHAKE_SECONDS = 120
+
 
 def test_job_advances_in_chunks_and_saves_a_live_compute_checkpoint(
     tmp_path: Path, failure_day3_demo, wait_for_job
@@ -54,13 +58,13 @@ def test_branch_exclusivity_rejects_conflicting_jobs_and_mutations(
 
     def delayed(branch_id, branch, steps):
         entered.set()
-        assert release.wait(timeout=3)
+        assert release.wait(timeout=HANDSHAKE_SECONDS)
         advance(branch_id, branch, steps)
 
     demo._advance_branch = delayed  # type: ignore[method-assign]
     try:
         job = manager.submit("baseline", 8)
-        assert entered.wait(timeout=3)
+        assert entered.wait(timeout=HANDSHAKE_SECONDS)
         assert manager.submit("baseline", 8)["job_id"] == job["job_id"]
         with pytest.raises(DemoJobError, match="different active job"):
             manager.submit("baseline", 9)
@@ -84,13 +88,13 @@ def test_job_queue_has_a_configured_active_limit(
 
     def delayed(branch_id, branch, steps):
         entered.set()
-        assert release.wait(timeout=3)
+        assert release.wait(timeout=HANDSHAKE_SECONDS)
         advance(branch_id, branch, steps)
 
     demo._advance_branch = delayed  # type: ignore[method-assign]
     try:
         job = manager.submit("baseline", 8)
-        assert entered.wait(timeout=3)
+        assert entered.wait(timeout=HANDSHAKE_SECONDS)
         with pytest.raises(DemoJobError, match="queue is full"):
             manager.submit("staff-plus", 8)
         release.set()
@@ -111,13 +115,13 @@ def test_cancel_stops_at_a_saved_chunk_boundary(
 
     def delayed(branch_id, branch, steps):
         entered.set()
-        assert release.wait(timeout=3)
+        assert release.wait(timeout=HANDSHAKE_SECONDS)
         advance(branch_id, branch, steps)
 
     demo._advance_branch = delayed  # type: ignore[method-assign]
     try:
         job = manager.submit("baseline", 8)
-        assert entered.wait(timeout=3)
+        assert entered.wait(timeout=HANDSHAKE_SECONDS)
         assert manager.cancel(job["job_id"])["status"] == "cancelling"
         release.set()
         cancelled = wait_for_job(manager, job["job_id"], {"cancelled"})
