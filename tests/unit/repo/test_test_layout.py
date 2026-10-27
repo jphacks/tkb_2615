@@ -94,7 +94,6 @@ UNSORTED = frozenset(
         "test_region_water_outage_conditions.py",
         "test_replay_frames.py",
         "test_research_models.py",
-        "test_research_psychology_default.py",
         "test_resource_ledger_state_check.py",
         "test_resource_loss_without_operational_state.py",
         "test_resource_queue_regressions.py",
