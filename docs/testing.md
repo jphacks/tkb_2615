@@ -128,7 +128,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -203,7 +203,10 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_policy_parameter_overrides.py` | policies | 23 |  |  |  | 契約 | 生成 |  |
 | `test_policy_registry_full.py` | policies | 9 |  |  |  | 契約 | fixture |  |
 | `test_research_models.py` | policies | 18 | 2 |  |  |  | fixture |  |
-| `test_research_psychology_default.py` | policies | 10 | 1 | 1 |  | 契約 | 生成・fixture |  |
+| `unit/policies/test_registry.py` | policies | 9 |  |  |  | 契約 | 生成（実行なし）・fixture |  |
+| `integration/test_research_psychology.py` | policies |  | 1 |  |  | 契約 | 生成 |  |
+| `e2e/test_legacy_psychology_cli.py` | policies |  |  | 1 |  | 契約 | fixture |  |
+| `unit/experiments/test_comparison.py` | experiments | 1 |  |  |  | 結果 | なし |  |
 | `test_route_bottleneck.py` | policies | 13 |  |  |  | 結果 | fixture |  |
 | `test_social.py` | policies | 6 | 1 |  |  | 契約 | fixture |  |
 | `test_space.py` | policies | 7 |  |  |  |  | fixture |  |
@@ -284,8 +287,8 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | core | 5 | 34 | 13 | 0 | 3 | 1 |
 | domain | 29 | 189 | 17 | 1 | 10 | 8 |
 | events | 5 | 36 | 32 | 0 | 1 | 1 |
-| policies | 10 | 107 | 14 | 1 | 6 | 2 |
-| experiments | 18 | 90 | 20 | 1 | 10 | 1 |
+| policies | 12 | 106 | 14 | 1 | 5 | 2 |
+| experiments | 19 | 91 | 20 | 1 | 10 | 1 |
 | region | 4 | 22 | 3 | 0 | 2 | 2 |
 | llm | 14 | 134 | 15 | 3 | 3 | 1 |
 | storage | 6 | 29 | 14 | 0 | 2 | 0 |
@@ -293,9 +296,9 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
-| 計 | 116 | 702 | 231 | 20 | 55 | 18 |
+| 計 | 119 | 702 | 231 | 20 | 54 | 18 |
 
-953件のうち単体が702件（74%）、統合が231件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが52本、統合だけまたはe2eだけが8本で、残りの55本は範囲が混ざっています。
+953件のうち単体が702件（74%）、統合が231件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが54本、統合だけまたはe2eだけが10本で、残りの54本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
