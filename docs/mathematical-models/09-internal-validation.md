@@ -2,7 +2,7 @@
 
 ## テストで確認する性質
 
-追加検証は `tests/unit/policies/test_psychology.py`, `tests/unit/policies/test_social.py`, `tests/unit/policies/test_information.py`, `tests/unit/domain/test_information.py`, `tests/integration/test_research_psychology.py`, `tests/integration/test_information_spread.py`, `tests/test_sanitation_diagnostics.py` にあります。既存の挙動検査は行動、待ち行列、資源、移動、checkpoint、provenanceのテスト群で再利用します。
+追加検証は `tests/unit/policies/test_psychology.py`, `tests/unit/policies/test_social.py`, `tests/unit/policies/test_information.py`, `tests/unit/domain/test_information.py`, `tests/integration/test_research_psychology.py`, `tests/integration/test_information_spread.py`, `tests/unit/experiments/test_sanitation_diagnostics.py` にあります。既存の挙動検査は行動、待ち行列、資源、移動、checkpoint、provenanceのテスト群で再利用します。
 
 | 領域 | 期待性質 | 確認方法 |
 |---|---|---|
@@ -12,7 +12,7 @@
 | 情報 | 曝露/信念/共有/訂正を分離、信頼度付き非決定的受容、忘却・共有停止、同seed再現 | evidence-aware scenarioテスト |
 | 行動 | 適格候補のみsoftmax、確率和、極端値安定、同seed再現 | 既存behaviorテスト |
 | 施設/資源 | FIFO、capacity、完了イベント、在庫reserve/consume/release保存則 | 既存facility/resourceテスト |
-| 設備診断 | 稼働unitと初期/長期計画目安、利用回数の算術 | `tests/test_sanitation_diagnostics.py` |
+| 設備診断 | 稼働unitと初期/長期計画目安、利用回数の算術 | `tests/unit/experiments/test_sanitation_diagnostics.py` |
 
 本検証はソフトウェア内部の性質確認です。閾値0.7などは便宜的なシミュレーション指標で、臨床診断閾値ではありません。
 

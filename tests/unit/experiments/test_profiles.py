@@ -17,9 +17,9 @@ from sheltersim.experiments.profiles import (
 )
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
-INITIAL_PROFILES = Path(__file__).parents[1] / "fixtures" / "agents_initial.json"
-SMALL_PROFILES = Path(__file__).parents[1] / "fixtures" / "profiles_small.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
+INITIAL_PROFILES = Path(__file__).parents[3] / "fixtures" / "agents_initial.json"
+SMALL_PROFILES = Path(__file__).parents[3] / "fixtures" / "profiles_small.json"
 
 
 def test_same_seed_generates_same_complete_100_agent_profile_set() -> None:

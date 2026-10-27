@@ -1,4 +1,6 @@
-"""The trace level changes how much a Run writes, not the simulation state hash."""
+"""The trace level changes how much a Run writes, not the simulation state hash or the
+metrics and events a Run saves.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +9,13 @@ from pathlib import Path
 
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.world import WorldState
+from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.behavior import BehaviorDecisionRunner, WorldView
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
+SMALL_REPLAY = Path(__file__).parents[2] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_trace_level_changes_artifact_detail_not_simulation_hash(tmp_path: Path) -> None:
@@ -53,3 +57,21 @@ def test_trace_level_changes_artifact_detail_not_simulation_hash(tmp_path: Path)
     assert summary_decisions
     assert "candidates" not in json.loads(summary_decisions[0])
     assert "candidates" in json.loads(full_decisions[0])
+
+
+def test_same_seed_small_scenario_has_identical_canonical_outputs(tmp_path: Path) -> None:
+    scenario = ScenarioSpec.load(SMALL_REPLAY)
+    first = run_scenario(scenario, tmp_path / "first", trace_level=TraceLevel.OFF)
+    second = run_scenario(scenario, tmp_path / "second", trace_level=TraceLevel.SUMMARY)
+
+    assert first.canonical_json() == second.canonical_json()
+    for filename in ("metrics.csv", "events_realized.jsonl"):
+        assert (tmp_path / "first" / filename).read_bytes() == (
+            tmp_path / "second" / filename
+        ).read_bytes()
+    manifests = [
+        json.loads((tmp_path / name / "manifest.json").read_text(encoding="utf-8"))
+        for name in ("first", "second")
+    ]
+    assert manifests[0]["final_state_hash"] == manifests[1]["final_state_hash"]
+    assert manifests[0]["scenario_hash"] == manifests[1]["scenario_hash"]

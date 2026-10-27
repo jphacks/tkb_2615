@@ -1,4 +1,8 @@
-"""Check source metadata and keep every baseline value labeled as evidence or hypothesis."""
+"""Check source metadata and keep every baseline value labeled as evidence or hypothesis.
+
+That a Run writes the source IDs into its manifest and decision trace is checked in
+tests/unit/experiments/test_metrics.py.
+"""
 
 from __future__ import annotations
 
@@ -9,19 +13,17 @@ from pathlib import Path
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
-from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import InformationSpreadConfig
 from sheltersim.experiments.profiles import ProfileTemplate
-from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import PsychologyModelConfig, ScenarioSpec
-from sheltersim.inspection.traces import RunArtifactWriter, _decision_document
-from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
+from sheltersim.inspection.traces import RunArtifactWriter
+from sheltersim.llm.report import scenario_assumption_ids
 from sheltersim.llm.runtime import SocialRuntimeLimits, SupportPriorityLimits
-from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
+from sheltersim.policies.behavior import UtilityBehaviorPolicy
 from sheltersim.policies.social import SocialPropagationParameters
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 MANIFEST_PATH = ROOT / "fixtures" / "source-manifest.json"
 REGRESSION_CONTRACT_PATH = ROOT / "fixtures" / "regression-contract.json"
 BASELINE_PATH = ROOT / "fixtures" / "scenarios" / "baseline_100_7d.json"
@@ -205,83 +207,6 @@ def test_optional_and_runtime_assumptions_match_the_implemented_defaults() -> No
     assert zone_layout["grid_columns"] == 4
     assert zone_layout["x_step"] == 140
     assert zone_layout["y_step"] == 110
-
-
-def test_run_manifest_and_decision_trace_include_source_ids(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(BASELINE_PATH)
-    world = WorldState.from_scenario(scenario)
-    output = tmp_path / "run"
-    writer = RunArtifactWriter(scenario, output, trace_level=TraceLevel.OFF)
-    writer.write_initial(world, execution_mode="offline")
-    run_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    model_assumptions = run_manifest["model_assumptions"]
-
-    assert model_assumptions["behavior"]["source_id"] == "ASM-UTILITY-BEHAVIOR-V1"
-    assert model_assumptions["psychology"]["source_id"] == "ASM-H04-CAUSAL-STRESS-V1"
-    assert model_assumptions["staff_support"]["source_id"] == "ASM-STAFF-SUPPORT-LIFECYCLE-V1"
-    assert model_assumptions["toilet_service"]["source_id"] == "ASM-TOILET-SERVICE-DURATION-V1"
-    assert model_assumptions["social_propagation"]["source_id"] == "ASM-SOCIAL-PROPAGATION-V1"
-    assert (
-        model_assumptions["event_triggered_social_limits"]["source_id"]
-        == "ASM-EVENT-TRIGGERED-SOCIAL-LIMITS-V1"
-    )
-    assert (
-        model_assumptions["event_triggered_support_priority_limits"]["source_id"]
-        == "ASM-SUPPORT-PRIORITY-LIMITS-V1"
-    )
-    assert model_assumptions["zone_routing"]["source_id"] == "ASM-ZONE-ROUTING-V1"
-    assert model_assumptions["inspector_zone_projection"]["affects_simulation"] is False
-    assert model_assumptions["social_propagation"]["coefficients"] == {
-        key: value
-        for key, value in asdict(SocialPropagationParameters()).items()
-        if key != "source_id"
-    }
-    assumption_ids = {
-        item["source_id"]
-        for item in model_assumptions.values()
-        if item.get("source_type") == "assumption" and "source_id" in item
-    }
-    assert assumption_ids <= _ASSUMPTION_LABELS.keys()
-
-    proposal = UtilityBehaviorPolicy(temperature=0.2, decision_interval_minutes=60).propose(
-        WorldView.from_world(world), "A001", CounterRNG(world.seed)
-    )
-    trace = _decision_document(proposal, full=False)
-    assert trace["source_type"] == "assumption"
-    assert trace["source_id"] == "ASM-UTILITY-BEHAVIOR-V1"
-
-    priority_scenario = scenario.with_behavior_policy_variant("priority-rule-v1")
-    priority_world = WorldState.from_scenario(priority_scenario)
-    priority_writer = RunArtifactWriter(
-        priority_scenario, tmp_path / "priority-run", trace_level=TraceLevel.OFF
-    )
-    priority_writer.write_initial(priority_world, execution_mode="offline")
-    priority_manifest = json.loads(
-        (tmp_path / "priority-run" / "manifest.json").read_text(encoding="utf-8")
-    )
-    assert (
-        priority_manifest["model_assumptions"]["behavior"]["source_id"]
-        == "ASM-PRIORITY-RULE-BEHAVIOR-V1"
-    )
-    assert "ASM-PRIORITY-RULE-BEHAVIOR-V1" in scenario_assumption_ids(priority_scenario)
-
-    controller = OfflineSimulationController(world, writer)
-    route = controller.space.route("sleeping", "toilet", "A001")
-    assert route is not None
-    assert controller._schedule_travel(
-        agent_id="A001",
-        route=route,
-        purpose="toilet_request",
-        facility_id="toilet_1",
-        minute=0,
-        validate_state=False,
-    )
-    travel_event = next(
-        event
-        for event in world.event_queue.pending()
-        if event.event_type == "agent_travel_complete"
-    )
-    assert travel_event.provenance["source_id"] == "ASM-ZONE-ROUTING-V1"
 
 
 def test_packaged_failure_fixture_stays_in_sync_with_source_fixture() -> None:

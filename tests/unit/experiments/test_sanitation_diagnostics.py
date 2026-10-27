@@ -6,7 +6,7 @@ from pathlib import Path
 from sheltersim.experiments.sanitation_diagnostics import toilet_planning_diagnostic
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def test_toilet_planning_diagnostic_uses_working_units_and_never_changes_behavior() -> None:
