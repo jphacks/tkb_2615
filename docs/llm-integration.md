@@ -118,4 +118,11 @@ live連携testは標準testとは別で、`tests/live/test_live_api.py`にあり
 - 公式ドメイン検索：2 call分の枠
 - 機能の通し確認：12 call、2ドル
 
-実際の費用は、予約額よりずっと小さくなります。実行前に実効上限を確認し、その時点でのオーナー承認を得てください。offline test結果はtesting.mdを参照してください。
+実際の費用は、予約額よりずっと小さくなります。実行前に実効上限を確認し、その時点でのオーナー承認を得てください。
+
+`scripts/test-live-api.sh`は、2つの環境変数がそろっているかを確かめてから、`tests/live/test_live_api.py`を`-m live_api`で実行します。開発依存を入れた環境（`.venv`など）を有効にして使います。後ろに付けた引数はpytestに渡るので、`-k`で1件だけ実行したり、`--collect-only`でAPIを呼ばずに対象を確かめたりできます。
+
+~~~shell
+SHELTERSIM_ALLOW_LIVE_API_TESTS=1 scripts/test-live-api.sh -k opus_sonnet_and_haiku
+SHELTERSIM_ALLOW_LIVE_API_TESTS=1 scripts/test-live-api.sh --collect-only -q
+~~~offline test結果はtesting.mdを参照してください。

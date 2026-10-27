@@ -10,4 +10,5 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 2
 fi
 
-python -m pytest -m live_api tests/integration/test_live_api.py
+# Extra arguments go to pytest, e.g. -k to run one test or --collect-only to list them.
+python -m pytest -m live_api tests/live/test_live_api.py "$@"

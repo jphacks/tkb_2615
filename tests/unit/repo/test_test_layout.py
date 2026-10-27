@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 TESTS = Path(__file__).parents[2]
@@ -74,3 +75,16 @@ def test_paid_live_tests_are_exactly_the_files_in_tests_live() -> None:
     }
 
     assert marked == in_live == {"live/test_live_api.py"}
+
+
+def test_scripts_name_only_test_files_that_exist() -> None:
+    # scripts/test-live-api.sh kept the pre-#59 path and collected nothing (#146).
+    named = {
+        match
+        for path in (TESTS.parent / "scripts").iterdir()
+        if path.is_file()
+        for match in re.findall(r"tests/[\w/.-]+\.py", path.read_text(encoding="utf-8"))
+    }
+
+    assert named
+    assert sorted(name for name in named if not (TESTS.parent / name).is_file()) == []
