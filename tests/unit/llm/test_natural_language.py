@@ -1,5 +1,6 @@
 """Offline coverage for the Opus Event Compiler and its truthful fallback contract, and
-the offline typed DraftPlan parser, which never calls a provider or changes state.
+the offline typed DraftPlan parser, which never calls a provider or changes state and
+lets an explicit zone ID win over common words.
 
 The held-out evaluation compiles unseen Japanese prompts (fixtures/evaluation) with
 recorded replies and checks that each applied program moves the expected KPI.
@@ -1063,3 +1064,43 @@ def test_out_of_range_outage_count_names_units_not_evacuees() -> None:
     assert "停止するユニット" in message
     assert "避難者" not in message
 
+
+def parse_target(text):
+    return parse_natural_language(
+        ParseRequest(
+            text=text,
+            branch_id="main",
+            selected_minute=5,
+            scenario_summary=ScenarioSummary(
+                duration_minutes=60,
+                zones=[
+                    ZoneTarget(id="toilet", name="トイレ"),
+                    ZoneTarget(id="staff", name="スタッフ"),
+                    ZoneTarget(id="sleeping", name="避難スペース"),
+                ],
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "target"),
+    [
+        ("トイレを2基追加する zone_id: toilet", "toilet"),
+        ("スタッフを2人追加する zone_id: staff", "staff"),
+        ("避難スペースではなく zone_id: toilet にトイレを2基追加", "toilet"),
+    ],
+)
+def test_explicit_existing_zone_overrides_ambiguous_common_words(text, target):
+    result = parse_target(text)
+    assert result.status == "parsed"
+    assert result.draft_plan.effects[0].target_selector.target_id == target
+    assert result.draft_plan.effects[0].start_minute == 5
+
+
+def test_unknown_zone_stays_rejected_and_unqualified_text_requires_choice():
+    unknown = parse_target("トイレを2基追加する zone_id: missing")
+    assert unknown.status == "rejected"
+    assert unknown.issues[0].code == "unknown_target"
+    ambiguous = parse_target("トイレを2基追加する")
+    assert ambiguous.status == "clarification_required"

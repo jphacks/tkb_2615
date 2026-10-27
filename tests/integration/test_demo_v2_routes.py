@@ -1,11 +1,12 @@
-"""Offline routing and target-resolution regressions for the independent backup UI."""
+"""The independent backup UI (demo-v2) is served locally by the HTTP routes.
+
+Its zone target resolution is checked in tests/unit/llm/test_natural_language.py.
+"""
 
 from io import BytesIO
 
 import pytest
 
-from sheltersim.llm.natural_language import parse_natural_language
-from sheltersim.llm.schemas import ParseRequest, ScenarioSummary, ZoneTarget
 from sheltersim.web.demo import DemoService
 from sheltersim.web.inspector import InspectorService
 from sheltersim.web.server import _handler_for
@@ -44,42 +45,3 @@ def test_backup_assets_are_independent_and_served_locally(tmp_path, route, conte
         assert b"https://cdn" not in body
 
 
-def parse_target(text):
-    return parse_natural_language(
-        ParseRequest(
-            text=text,
-            branch_id="main",
-            selected_minute=5,
-            scenario_summary=ScenarioSummary(
-                duration_minutes=60,
-                zones=[
-                    ZoneTarget(id="toilet", name="トイレ"),
-                    ZoneTarget(id="staff", name="スタッフ"),
-                    ZoneTarget(id="sleeping", name="避難スペース"),
-                ],
-            ),
-        )
-    )
-
-
-@pytest.mark.parametrize(
-    ("text", "target"),
-    [
-        ("トイレを2基追加する zone_id: toilet", "toilet"),
-        ("スタッフを2人追加する zone_id: staff", "staff"),
-        ("避難スペースではなく zone_id: toilet にトイレを2基追加", "toilet"),
-    ],
-)
-def test_explicit_existing_zone_overrides_ambiguous_common_words(text, target):
-    result = parse_target(text)
-    assert result.status == "parsed"
-    assert result.draft_plan.effects[0].target_selector.target_id == target
-    assert result.draft_plan.effects[0].start_minute == 5
-
-
-def test_unknown_zone_stays_rejected_and_unqualified_text_requires_choice():
-    unknown = parse_target("トイレを2基追加する zone_id: missing")
-    assert unknown.status == "rejected"
-    assert unknown.issues[0].code == "unknown_target"
-    ambiguous = parse_target("トイレを2基追加する")
-    assert ambiguous.status == "clarification_required"
