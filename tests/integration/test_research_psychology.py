@@ -1,6 +1,9 @@
 """Runs with the research psychology models: a generated Scenario records the model,
 high distress recovers, and social synchrony combines with natural recovery.
 
+Recovery runs on a two-person fixture and, since #137, on the generated Scenario,
+where staff support lowers distress during event handling (#159).
+
 How the model is selected is checked in tests/unit/policies/test_registry.py, and
 the policies one tick at a time in tests/unit/policies/test_psychology.py.
 """
@@ -83,6 +86,44 @@ def test_full_runner_recovers_initially_high_agents_and_records_online_recovery(
     monitor = distress_monitor_summary(world.metric_state)
     assert monitor["completed_recovery_count"] == len(world.agents)
     assert monitor["mean_completed_recovery_minutes"] > 0
+
+
+# An hour lets every resident fall below the high-distress threshold.
+RECOVERY_MINUTES = 60
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#159: a fall below the threshold during event handling is not counted",
+)
+def test_full_runner_records_every_recovery_of_a_generated_scenario(
+    tmp_path: Path, generated_scenario
+) -> None:
+    # Unlike the fixture above, staff here walk to residents and their support lowers
+    # distress while events are handled, outside the psychology update (#137).
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = RECOVERY_MINUTES
+    document["model_configs"]["social_propagation"]["enabled"] = False
+    scenario = ScenarioSpec.model_validate(document)
+    threshold = scenario.model_configs["psychology"]["high_distress_threshold"]
+    world = WorldState.from_scenario(scenario)
+    initialize_simulator_extensions(world)
+    for agent in world.agents.values():
+        agent.stress = 0.8
+    artifacts = RunArtifactWriter(
+        scenario, tmp_path / "high-distress-recovery", trace_level=TraceLevel.OFF
+    )
+    artifacts.write_initial(world, execution_mode="offline")
+    controller = OfflineSimulationController(world, artifacts)
+
+    TickEngine(world, phase_handler=controller).run()
+    artifacts.finalize(world)
+
+    assert all(agent.stress < threshold for agent in world.agents.values())
+    monitor = distress_monitor_summary(world.metric_state)
+    assert monitor["ongoing_high_distress_episode_count"] == 0
+    assert monitor["completed_recovery_count"] == len(world.agents)
 
 
 def test_full_runner_combines_social_synchrony_with_natural_recovery(
