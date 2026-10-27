@@ -1,4 +1,6 @@
-"""Deterministic synthetic gym-map projections for the read-only Inspector."""
+"""Read-only Inspector projections: the deterministic synthetic gym map, and the demo
+timeline's event times, relations and agent support from saved artifacts.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +11,7 @@ from typing import Any
 
 from sheltersim.web.inspector import InspectorService
 
-LAYOUT = Path(__file__).parents[1] / "fixtures" / "layouts" / "gym_synthetic.json"
+LAYOUT = Path(__file__).parents[3] / "fixtures" / "layouts" / "gym_synthetic.json"
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -180,3 +182,50 @@ def test_facility_outage_and_queue_kpis_follow_the_selected_minute(tmp_path: Pat
         "toilet_active_users": 1,
         "toilet_working_units": 3,
     }
+
+
+def test_event_times_relations_and_agent_support_are_safe_projections(
+    demo_timeline_inspector: InspectorService,
+) -> None:
+    events = demo_timeline_inspector.events("demo-run")["items"]
+    planned = next(item for item in events if item["event_id"] == "planned-water")
+    realized = next(item for item in events if item["event_id"] == "realized-water")
+
+    assert (planned["created_minute"], planned["scheduled_minute"], planned["realized_minute"]) == (
+        None,
+        4,
+        None,
+    )
+    assert (
+        realized["created_minute"],
+        realized["scheduled_minute"],
+        realized["realized_minute"],
+    ) == (
+        2,
+        1,
+        3,
+    )
+    assert planned["related_agent_id"] == "A_001"
+    assert planned["related_zone_id"] == "sleeping"
+    assert planned["related_facility_id"] == "water_station_main"
+    assert "should-not-leak" not in json.dumps(events)
+    assert "payload" not in planned
+
+    initial = demo_timeline_inspector.agent("demo-run", "A_001", at_minute=0)
+    assert initial["state"]["stress"] is None
+
+    initial_map = demo_timeline_inspector.zone_map("demo-run", at_minute=0)
+    initial_point = next(item for item in initial_map["agents"] if item["id"] == "A_001")
+    assert initial_point["stress"] is None
+    assert initial_point["queue_wait_minutes"] is None
+
+    agent = demo_timeline_inspector.agent("demo-run", "A_001", at_minute=3)
+    assert agent["state"]["queue_kind"] == "water"
+    assert agent["state"]["queue_wait_minutes"] == 12
+    assert agent["state"]["support_status"] == "pending"
+    assert agent["state"]["support_wait_minutes"] == 7
+
+    map_data = demo_timeline_inspector.zone_map("demo-run", at_minute=3)
+    point = next(item for item in map_data["agents"] if item["id"] == "A_001")
+    assert point["support_status"] == "pending"
+    assert point["support_wait_minutes"] == 7

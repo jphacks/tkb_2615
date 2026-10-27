@@ -15,7 +15,7 @@ from sheltersim.llm.natural_language import compile_natural_language
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.schemas import FacilityTarget, ParseRequest, ScenarioSummary, ZoneTarget
 
-_SCRIPT = Path(__file__).parents[1] / "src" / "sheltersim" / "web" / "static" / "project-round3.js"
+_SCRIPT = Path(__file__).parents[3] / "src" / "sheltersim" / "web" / "static" / "project-round3.js"
 _NODE = shutil.which("node")
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="node is required to run the browser view")

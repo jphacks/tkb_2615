@@ -1,4 +1,9 @@
-"""Admin audit APIs and immutable live-branch snapshot contract."""
+"""Admin audit APIs and immutable live-branch snapshot contract.
+
+The filtered decision and event queries over HTTP are checked in
+tests/e2e/test_admin_audit_queries.py, and the admin page itself in
+tests/unit/web/test_static_index.py.
+"""
 
 from __future__ import annotations
 
@@ -9,33 +14,13 @@ from typing import Any
 
 import pytest
 
-from sheltersim.experiments.runner import run_scenario
-from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.web.demo import DemoError, DemoService
-from sheltersim.web.inspector import InspectorService, WebQueryError
-from sheltersim.web.server import _dispatch_api, _handler_for
-
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+from sheltersim.web.inspector import InspectorService
+from sheltersim.web.server import _handler_for
 
 
-@pytest.fixture
-def inspector(tmp_path: Path) -> InspectorService:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["id"] = "admin-audit-test"
-    document["duration_minutes"] = 2
-    document["profiles"] = document["profiles"][:4]
-    document["zones"] = [
-        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
-        for zone in document["zones"]
-    ]
-    document["scheduled_events"] = []
-    scenario = ScenarioSpec.model_validate(document)
-    run_scenario(scenario, tmp_path / "run-one")
-    return InspectorService(tmp_path)
-
-
-def _run_directory(inspector: InspectorService) -> Path:
-    return inspector.runs_directory / "run-one"
+def _run_directory(audit_inspector: InspectorService) -> Path:
+    return audit_inspector.runs_directory / "run-one"
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -45,117 +30,10 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
-def test_decision_query_is_filtered_bounded_and_projects_nested_state(
-    inspector: InspectorService,
-) -> None:
-    _write_jsonl(
-        _run_directory(inspector) / "decisions.jsonl",
-        [
-            {
-                "minute_index": 0,
-                "agent_id": "A001",
-                "action": "seek_help",
-                "trigger": "need threshold reached",
-                "target_id": "support-desk",
-                "api_key": "secret-value",
-                "prompt": "private prompt",
-                "observed_state": {
-                    "zone_id": "sleeping",
-                    "activity": "resting",
-                    "needs": {"hunger": 0.4, "private_note": "name@example.invalid"},
-                    "stress": 0.2,
-                    "private_note": "name@example.invalid",
-                },
-                "candidates": [
-                    {
-                        "action": "seek_help",
-                        "eligible": True,
-                        "probability": 1.0,
-                        "authorization": "secret-value",
-                    }
-                ],
-            },
-            {"minute_index": 1, "agent_id": "A002", "action": "move"},
-        ],
-    )
-
-    result = _dispatch_api(
-        inspector,
-        "/api/v1/runs/run-one/decisions",
-        {"agent_id": ["A001"], "at_minute": ["0"], "limit": ["1"]},
-    )
-    encoded = json.dumps(result)
-
-    assert result["total"] == 1
-    assert result["items"][0]["agent_id"] == "A001"
-    assert result["items"][0]["observed_state"]["needs"] == {"hunger": 0.4}
-    assert "private_note" not in encoded
-    assert "name@example.invalid" not in encoded
-    assert "secret-value" not in encoded
-    assert "private prompt" not in encoded
-    with pytest.raises(WebQueryError, match="limit"):
-        inspector.decisions("run-one", limit=201)
-
-
-def test_event_filters_return_source_and_cause_without_raw_payload(
-    inspector: InspectorService,
-) -> None:
-    path = _run_directory(inspector) / "events_planned.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "events": [
-                    {
-                        "id": "planned-a",
-                        "due_minute": 1,
-                        "event_type": "water_outage",
-                        "source_id": "staff-report",
-                        "causation_id": "event-parent",
-                        "payload": {
-                            "agent_id": "A001",
-                            "zone_id": "sleeping",
-                            "raw_text": "private prompt",
-                        },
-                        "provenance": {"branch_id": "branch-a"},
-                    },
-                    {
-                        "id": "planned-b",
-                        "due_minute": 1,
-                        "event_type": "water_outage",
-                        "payload": {"agent_id": "A002", "zone_id": "sleeping"},
-                        "provenance": {"branch_id": "branch-a"},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = _dispatch_api(
-        inspector,
-        "/api/v1/runs/run-one/events",
-        {
-            "status": ["planned"],
-            "agent_id": ["A001"],
-            "zone_id": ["sleeping"],
-            "branch_id": ["branch-a"],
-            "limit": ["10"],
-        },
-    )
-    assert [item["event_id"] for item in result["items"]] == ["planned-a"]
-    event = result["items"][0]
-    assert event["source_id"] == "staff-report"
-    assert event["causation_id"] == "event-parent"
-    assert "raw_text" not in json.dumps(event)
-    with pytest.raises(WebQueryError, match="agent_id"):
-        inspector.events("run-one", agent_id="../private")
-
-
 def test_llm_audit_and_branch_lineage_only_return_allowlisted_metadata(
-    inspector: InspectorService,
+    audit_inspector: InspectorService,
 ) -> None:
-    run_dir = _run_directory(inspector)
+    run_dir = _run_directory(audit_inspector)
     _write_jsonl(
         run_dir / "llm_calls.jsonl",
         [
@@ -225,8 +103,8 @@ def test_llm_audit_and_branch_lineage_only_return_allowlisted_metadata(
         encoding="utf-8",
     )
 
-    audit = inspector.audit("run-one")
-    lineage = inspector.branch_lineage("run-one")
+    audit = audit_inspector.audit("run-one")
+    lineage = audit_inspector.branch_lineage("run-one")
     encoded = json.dumps({"audit": audit, "lineage": lineage})
 
     assert audit["llm_calls"][0]["request_id"] == "req-test-1"
@@ -245,9 +123,9 @@ def test_llm_audit_and_branch_lineage_only_return_allowlisted_metadata(
 
 
 def test_overview_redacts_nested_private_fields_and_event_status_counts(
-    inspector: InspectorService,
+    audit_inspector: InspectorService,
 ) -> None:
-    run_dir = _run_directory(inspector)
+    run_dir = _run_directory(audit_inspector)
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["model_configs"] = {
@@ -294,8 +172,8 @@ def test_overview_redacts_nested_private_fields_and_event_status_counts(
         ],
     )
 
-    overview = inspector.overview("run-one")
-    events = inspector.events("run-one")
+    overview = audit_inspector.overview("run-one")
+    events = audit_inspector.events("run-one")
     encoded = json.dumps(overview)
 
     assert overview["manifest"]["model_configs"]["mode"] == "offline"
@@ -351,17 +229,3 @@ def test_demo_snapshot_is_frozen_detached_and_get_only(tmp_path: Path) -> None:
     handler.do_GET()
     assert response[-1][0] == 409
     assert demo.state() == before
-
-
-def test_admin_shell_has_keyboard_tabs_and_interactive_controls_are_demo_only() -> None:
-    root = Path(__file__).parents[1]
-    html = (root / "src/sheltersim/web/static/index.html").read_text(encoding="utf-8")
-    css = (root / "src/sheltersim/web/static/style.css").read_text(encoding="utf-8")
-
-    assert 'role="tablist"' in html
-    assert 'data-admin-tab="overview"' in html
-    assert 'data-admin-panel="decisions"' in html
-    assert 'id="admin-panel-world" role="tabpanel" aria-labelledby="tab-world" hidden' in html
-    assert 'id="admin-branch-snapshot"' in html
-    assert 'class="card demo-card demo-only"' in html
-    assert 'body[data-mode="admin"] .demo-only { display: none !important; }' in css

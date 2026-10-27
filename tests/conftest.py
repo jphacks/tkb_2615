@@ -14,6 +14,7 @@ import pytest
 SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
 SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
 BASELINE_100_7D = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
+FAILURE_DAY3 = Path(__file__).parents[1] / "fixtures" / "scenarios" / "failure_day3.json"
 
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
@@ -989,6 +990,373 @@ def windows_like(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(projects_module, "fcntl", None)
     monkeypatch.setattr(projects_module, "msvcrt", _fake_msvcrt(), raising=False)
     monkeypatch.delattr(os, "O_NOFOLLOW")
+
+
+@pytest.fixture
+def demo_timeline_inspector(tmp_path: Path) -> Any:
+    """An Inspector over one hand-written demo Run (demo-run): manifest, profiles, metrics,
+    events and decisions for a four-minute timeline with private fields to redact.
+    """
+    from sheltersim.web.inspector import InspectorService
+
+    run = tmp_path / "demo-run"
+    run.mkdir()
+    (run / "manifest.json").write_text(
+        json.dumps(
+            {
+                "scenario_id": "timeline-test",
+                "seed": 2026,
+                "duration_minutes": 10,
+                "final_minute": 4,
+                "run_status": "completed",
+                "execution_mode": "offline",
+                "branch_id": "main",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "agents_initial.json").write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "A_001",
+                        "group_id": "G1",
+                        "initial_zone_id": "sleeping",
+                        "mobility": "independent",
+                        "initial_needs": {"toilet_urgency": 0.2, "hunger": 0.1, "fatigue": 0.3},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "zones.json").write_text(
+        json.dumps(
+            {
+                "zones": [
+                    {
+                        "id": "sleeping",
+                        "name": "居住区",
+                        "capacity": 100,
+                        "display_x": 0.2,
+                        "display_y": 0.2,
+                    }
+                ],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "metrics.csv").write_text(
+        "minute_index,toilet_queue_length,stress_mean,stress_high_count,staff_busy_count,staff_load_ratio,staff_assigned_task_count,private_column\n"
+        "0,1,0.25,0,1,0.5,1,should-not-leak\n"
+        "2,3,0.75,2,2,1.0,4,should-not-leak\n",
+        encoding="utf-8",
+    )
+    (run / "operational_kpis.csv").write_text(
+        "minute_index,water_queue_length,meal_queue_length,water_ml_remaining,food_meal_units_remaining,private_column\n"
+        "0,2,1,9000,12,should-not-leak\n"
+        "2,4,3,7000,9,should-not-leak\n",
+        encoding="utf-8",
+    )
+    (run / "events_planned.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "id": "planned-water",
+                        "due_minute": 4,
+                        "priority": 0,
+                        "sequence": 1,
+                        "event_type": "water_delivery",
+                        "payload": {
+                            "agent_id": "A_001",
+                            "zone_id": "sleeping",
+                            "facility_id": "water_station_main",
+                            "narrative": "should-not-leak",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "events_realized.jsonl").write_text(
+        json.dumps(
+            {
+                "event": {
+                    "event_id": "realized-water",
+                    "due_minute": 1,
+                    "event_type": "water_outage",
+                    "payload": {
+                        "agent_id": "A_001",
+                        "zone_id": "sleeping",
+                        "facility_id": "water_station_main",
+                        "source_ids": ["should-not-leak"],
+                    },
+                    "provenance": {"branch_id": "main"},
+                },
+                "realized_minute": 3,
+                "created_minute": 2,
+                "status": "applied",
+                "reason": "test reason",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "agent_id": "A_001",
+                "minute_index": 2,
+                "action": "seek_help",
+                "selected_action": "seek_help",
+                "trigger": "support_request",
+                "observed_state": {
+                    "zone_id": "sleeping",
+                    "activity": "seeking_help",
+                    "stress": 0.8,
+                    "needs": {"toilet_urgency": 0.4, "hunger": 0.2, "fatigue": 0.1},
+                    "queue": {"kind": "water", "wait_minutes": 12},
+                    "support": {"status": "pending", "wait_minutes": 7, "reason": "private"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return InspectorService(tmp_path)
+
+
+@pytest.fixture
+def audit_inspector(tmp_path: Path) -> Any:
+    """An Inspector over one finished Run (run-one): four people of scenario_100_agents
+    for two minutes, without display coordinates or scheduled events.
+    """
+    from sheltersim.experiments.runner import run_scenario
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.inspector import InspectorService
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "admin-audit-test"
+    document["duration_minutes"] = 2
+    document["profiles"] = document["profiles"][:4]
+    document["zones"] = [
+        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
+        for zone in document["zones"]
+    ]
+    document["scheduled_events"] = []
+    scenario = ScenarioSpec.model_validate(document)
+    run_scenario(scenario, tmp_path / "run-one")
+    return InspectorService(tmp_path)
+
+
+def _failure_day3_demo(duration: int = 12, *, start: bool = True) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    if start:
+        demo.dispatch("start")
+    return demo
+
+
+@pytest.fixture
+def failure_day3_demo() -> Callable[..., Any]:
+    """Build a DemoService over failure_day3 without its events, 12 minutes long and
+    started by default.
+    """
+    return _failure_day3_demo
+
+
+def _wait_for_job(manager: Any, job_id: str, expected: set[str]) -> dict:
+    import time
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = manager.get(job_id)
+        if job["status"] in expected:
+            return job
+        time.sleep(0.01)
+    pytest.fail(f"job {job_id} did not reach {sorted(expected)}: {manager.get(job_id)}")
+
+
+@pytest.fixture
+def wait_for_job() -> Callable[[Any, str, set[str]], dict]:
+    """Wait up to five seconds for a demo job to reach one of the expected statuses."""
+    return _wait_for_job
+
+
+def _paused_small_replay_demo(duration_minutes: int = 12) -> Any:
+    from typing import get_args
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    return demo
+
+
+@pytest.fixture
+def paused_small_replay_demo() -> Callable[..., Any]:
+    """Build a DemoService over h00_small_replay without events, 12 minutes long by
+    default, started and paused on the baseline Branch.
+    """
+    return _paused_small_replay_demo
+
+
+MULTI_PLAN_PROVENANCE = {"compiler_kind": "offline_rule", "compiler_version": "a04-multi-test-v1"}
+
+
+def _multi_plan_effect(variant: int, *, start_minute: int = 0) -> Any:
+    from sheltersim.events.effects import TargetSelector, TimedAction
+
+    if variant == 1:
+        return TimedAction(
+            effect_id="effect-add-staff",
+            op="add_staff",
+            target_selector=TargetSelector(kind="zone", target_id="information_desk"),
+            start_minute=start_minute,
+            parameters={"count": 1},
+            units="staff_member",
+            source_id="A04-MULTI-TEST",
+            policy_dependencies=["staff_operations"],
+            reversible=False,
+        )
+    if variant == 2:
+        return TimedAction(
+            effect_id="effect-add-toilet",
+            op="add_toilet",
+            target_selector=TargetSelector(kind="zone", target_id="toilet"),
+            start_minute=start_minute,
+            parameters={"count": 1},
+            units="toilet_stall",
+            source_id="A04-MULTI-TEST",
+            policy_dependencies=["facility_capacity"],
+            reversible=False,
+        )
+    return TimedAction(
+        effect_id="effect-close-toilet",
+        op="set_facility_availability",
+        target_selector=TargetSelector(kind="facility", target_id="toilet_1"),
+        start_minute=start_minute,
+        end_minute=start_minute + 2,
+        parameters={"working_units": 0},
+        units="facility_unit",
+        source_id="A04-MULTI-TEST",
+        policy_dependencies=["facility_capacity"],
+        reversible=True,
+    )
+
+
+def _multi_plan_alternative(variant: int, *, start_minute: int = 0) -> Any:
+    from sheltersim.events.effects import SupportMode
+    from sheltersim.llm.schemas import DraftPlan
+
+    return DraftPlan(
+        program_id=f"a04-plan-{variant}",
+        narrative=f"Alternative {variant}",
+        source_text="Synthetic typed alternative",
+        simulation_start_minute=0,
+        effects=[_multi_plan_effect(variant, start_minute=start_minute)],
+        assumptions=[],
+        support_mode=SupportMode.COMPOSED,
+        compiler_provenance=MULTI_PLAN_PROVENANCE,
+        branch_id="baseline",
+        fork_at_minute=0,
+        ambiguities=[],
+        requires_confirmation=True,
+    )
+
+
+def _multi_plan_draft(demo: Any, *, variants: int = 3) -> Any:
+    import hashlib
+
+    from sheltersim.llm.schemas import MultiPlanDraft
+
+    state_hash = hashlib.sha256(
+        demo.branches["baseline"].runtime.world.canonical_json().encode("utf-8")
+    ).hexdigest()
+    return MultiPlanDraft(
+        schema_version=1,
+        branch_origin="baseline",
+        source_state_hash=state_hash,
+        fork_at_minute=0,
+        parser_provenance=MULTI_PLAN_PROVENANCE,
+        branches=[
+            {
+                "variant_id": f"alternative-{variant}",
+                "label": f"比較案 {variant}",
+                "plan": _multi_plan_alternative(variant),
+            }
+            for variant in range(1, variants + 1)
+        ],
+    )
+
+
+@pytest.fixture
+def multi_plan_draft() -> Callable[..., Any]:
+    """Build a MultiPlanDraft from the demo's baseline: up to three alternatives that add
+    a worker, add a toilet, or close toilet_1 for two minutes.
+    """
+    return _multi_plan_draft
+
+
+def _post_demo_json(
+    demo: Any,
+    tmp_path: Path,
+    route: str,
+    document: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    from io import BytesIO
+
+    from sheltersim.web.inspector import InspectorService
+    from sheltersim.web.server import _handler_for
+
+    raw = json.dumps(document).encode("utf-8")
+    handler_type = _handler_for(InspectorService(tmp_path), demo)
+    handler = handler_type.__new__(handler_type)
+    handler.path = route
+    handler.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json"}
+    handler.rfile = BytesIO(raw)
+    responses: list[tuple[int, dict[str, Any]]] = []
+    handler._json_response = lambda status, value: responses.append((status, value))
+    handler.do_POST()
+    return responses[0]
+
+
+@pytest.fixture
+def post_demo_json() -> Callable[..., tuple[int, dict[str, Any]]]:
+    """POST a JSON document to a demo HTTP route; return the status and the response."""
+    return _post_demo_json
+
+
+def _apply_multi_plan(demo: Any, plan: Any, key: str) -> dict[str, Any]:
+    from sheltersim.llm.schemas import MultiPlanApproval
+
+    approval = MultiPlanApproval.from_explicit_confirmation(plan)
+    return demo.apply_multi_plan_preview(
+        {
+            "source_branch_id": plan.branch_origin,
+            "approved_plan": approval.model_dump(mode="json"),
+            "idempotency_key": key,
+        }
+    )
+
+
+@pytest.fixture
+def apply_multi_plan() -> Callable[[Any, Any, str], dict[str, Any]]:
+    """Approve a MultiPlanDraft explicitly and apply it to the demo."""
+    return _apply_multi_plan
 
 
 def _make_event(
