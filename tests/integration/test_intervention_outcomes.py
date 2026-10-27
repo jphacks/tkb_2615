@@ -21,7 +21,13 @@ from sheltersim.domain.geometry_overlay import effective_geometry
 from sheltersim.domain.models import Activity
 from sheltersim.domain.movement import _segment_clear_of_polygon
 from sheltersim.domain.staff_dynamics import staff_dynamics_on_shift
-from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
+from sheltersim.events.effects import (
+    EffectProgram,
+    PlanAssumption,
+    SupportMode,
+    TargetSelector,
+    TimedAction,
+)
 from sheltersim.events.models import EventLogRecord, EventStatus
 from sheltersim.experiments.branch import BranchError, BranchRuntime
 from sheltersim.experiments.metrics import MetricSnapshot
@@ -59,14 +65,14 @@ def _action(
     )
 
 
-def _program(*effects: TimedAction) -> EffectProgram:
+def _program(*effects: TimedAction, assumptions: tuple[PlanAssumption, ...] = ()) -> EffectProgram:
     return EffectProgram(
         program_id="program-" + "-".join(effect.op for effect in effects),
         narrative=", ".join(effect.op for effect in effects),
         source_text=", ".join(effect.op for effect in effects),
         simulation_start_minute=min(effect.start_minute for effect in effects),
         effects=list(effects),
-        assumptions=[],
+        assumptions=list(assumptions),
         support_mode=SupportMode.NATIVE,
         compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
     )
@@ -790,14 +796,18 @@ def _trips_to(world: WorldState, facility_id: str, after: int) -> list[dict[str,
 def test_closing_the_route_into_the_toilets_stops_toilet_use_until_it_reopens(
     main_line, generated_scenario
 ) -> None:
-    program = _program(
-        _geometry_action(
-            "set_route_access",
-            TargetSelector(kind="route", target_id="route_corridor_toilet"),
-            {"accessible": False},
-            end_minute=OUTAGE_END_MINUTE,
-        )
+    assumption = PlanAssumption(
+        assumption_id="ASM-TEST-ROUTE-CLOSURE-V1",
+        description="The corridor door to the toilets is closed for cleaning.",
+        source_id="TEST-INTERVENTION-OUTCOME",
     )
+    closure = _geometry_action(
+        "set_route_access",
+        TargetSelector(kind="route", target_id="route_corridor_toilet"),
+        {"accessible": False},
+        end_minute=OUTAGE_END_MINUTE,
+    ).model_copy(update={"assumption_ids": [assumption.assumption_id]})
+    program = _program(closure, assumptions=(assumption,))
     # Someone already inside the toilet area may still finish a use.
     first = FORK_MINUTE + generated_scenario.model_configs["toilet_service"]["maximum_minutes"]
 
@@ -812,6 +822,62 @@ def test_closing_the_route_into_the_toilets_stops_toilet_use_until_it_reopens(
     assert _completed_between(main, "toilet_service_complete", **closed)
     assert not _completed_between(child, "toilet_service_complete", **closed)
     assert _kpis(child)["toilet_wait_total_minutes"] > _kpis(main)["toilet_wait_total_minutes"]
+    # The floor-plan history names the assumption behind the closure (#91).
+    history = child.model_state["geometry_overlay_v1"]["history"]
+    assert [row["status"] for row in history if row["op"] == "set_route_access"] == [
+        "applied",
+        "expired",
+    ]
+    assert all(
+        assumption.assumption_id in row["source_ids"]
+        for row in history
+        if row["op"] == "set_route_access"
+    )
+
+
+def test_closing_a_route_stops_a_worker_walking_on_it(main_line) -> None:
+    # Before #91 was fixed the worker walked on through the closed route.
+    start = _first_minute(main_line, "main", FORK_MINUTE, COMPARE_MINUTE, _idle("staff_001"))
+    _fork(main_line, "main", start, "walk", _program(_patrol_order("staff_001", start)))
+    _advance(main_line, "walk", COMPARE_MINUTE)
+
+    def walking(world: WorldState) -> bool:
+        record = world.model_state["staff_operations_v1"]["staff"]["staff_001"]
+        return record.get("phase") == "travel"
+
+    minute = _first_minute(main_line, "walk", start, COMPARE_MINUTE, walking)
+    record = main_line.seek("walk", minute).world.model_state["staff_operations_v1"]["staff"][
+        "staff_001"
+    ]
+    closure = _program(
+        _geometry_action(
+            "set_route_access",
+            TargetSelector(kind="route", target_id=record["route_edge_ids"][-1]),
+            {"accessible": False},
+            start_minute=minute,
+            end_minute=minute + FORK_MINUTE,
+        )
+    )
+    _fork(main_line, "walk", minute, "walk-closed", closure)
+
+    closed = _advance(main_line, "walk-closed", COMPARE_MINUTE)
+    kept = main_line.seek("walk", COMPARE_MINUTE).world
+
+    def patrols(world: WorldState) -> list[tuple[str, int]]:
+        return [
+            (row["status"], row["complete_minute"])
+            for row in world.model_state["staff_operations_v1"]["history"]
+            if row["task_id"] == record["task_id"]
+        ]
+
+    (route_event,) = _applied(closed, "effect_program_geometry", op="set_route_access")
+    assert patrols(closed) == [("interrupted", minute)]
+    assert route_event.event.event_id in next(
+        row["causation_event_ids"]
+        for row in closed.model_state["staff_operations_v1"]["history"]
+        if row["task_id"] == record["task_id"]
+    )
+    assert [status for status, _ in patrols(kept)] == ["completed"]
 
 
 def test_moving_a_toilet_closer_to_the_door_changes_where_people_walk(
