@@ -92,7 +92,6 @@ UNSORTED = frozenset(
         "test_replay_frames.py",
         "test_research_models.py",
         "test_resource_ledger_state_check.py",
-        "test_resource_queue_regressions.py",
         "test_resource_service.py",
         "test_resources.py",
         "test_results_chat.py",
