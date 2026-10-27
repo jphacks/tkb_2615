@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import AGENTS_INITIAL, PROFILES_SMALL, SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Mobility
@@ -16,10 +17,6 @@ from sheltersim.experiments.profiles import (
     select_representative_profiles,
 )
 from sheltersim.experiments.scenario import ScenarioSpec
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-INITIAL_PROFILES = Path(__file__).parents[3] / "fixtures" / "agents_initial.json"
-SMALL_PROFILES = Path(__file__).parents[3] / "fixtures" / "profiles_small.json"
 
 
 def test_same_seed_generates_same_complete_100_agent_profile_set() -> None:
@@ -48,8 +45,8 @@ def test_same_seed_generates_same_complete_100_agent_profile_set() -> None:
 
 
 def test_committed_agents_initial_artifact_has_all_referenced_synthetic_profiles() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
-    profiles = GeneratedProfileSet.load(INITIAL_PROFILES)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
+    profiles = GeneratedProfileSet.load(AGENTS_INITIAL)
 
     assert len(profiles.profiles) == profiles.manifest.profile_count == 100
     assert {profile.initial_zone_id for profile in profiles.profiles} <= {
@@ -60,7 +57,7 @@ def test_committed_agents_initial_artifact_has_all_referenced_synthetic_profiles
 
 
 def test_representative_profiles_use_stable_need_mobility_and_family_criteria() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
 
     selections = select_representative_profiles(scenario.profiles)
     repeat = select_representative_profiles(tuple(reversed(scenario.profiles)))
@@ -78,7 +75,7 @@ def test_representative_profiles_use_stable_need_mobility_and_family_criteria() 
 
 
 def test_small_profile_fixture_round_trips_as_a_readable_complete_preview() -> None:
-    profiles = GeneratedProfileSet.load(SMALL_PROFILES)
+    profiles = GeneratedProfileSet.load(PROFILES_SMALL)
 
     assert len(profiles.profiles) == 8
     assert profiles.preview().count('"id": "A') == 8
@@ -133,7 +130,7 @@ def test_manual_overrides_are_validated_and_recorded_in_generation_manifest() ->
 
 
 def test_generated_profiles_can_replace_scenario_profiles_with_embedded_manifest() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     profiles = SyntheticProfileGenerator().generate(
         count=12,
         seed=scenario.seed,

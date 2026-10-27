@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sheltersim.web.inspector import InspectorService
+from support.paths import GYM_LAYOUT
 
-LAYOUT = Path(__file__).parents[3] / "fixtures" / "layouts" / "gym_synthetic.json"
+from sheltersim.web.inspector import InspectorService
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -151,7 +151,7 @@ def test_map_shows_100_agents_at_their_recorded_zone_deterministically(
 
     first = service.zone_map("run-map", at_minute=10, selected_agent_id="A001")
     second = service.zone_map("run-map", at_minute=10, selected_agent_id="A001")
-    layout = json.loads(LAYOUT.read_text(encoding="utf-8"))
+    layout = json.loads(GYM_LAYOUT.read_text(encoding="utf-8"))
     polygon_by_zone = {item["zone_id"]: item["polygon"] for item in layout["zones"]}
 
     assert first == second

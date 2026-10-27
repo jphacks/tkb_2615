@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import BASELINE_100_7D, SCENARIO_100_AGENTS
 
 from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import StateInvariantError, WorldState
@@ -45,10 +45,6 @@ from sheltersim.policies.psychology import (
     sleep_debt_step,
 )
 from sheltersim.policies.registry import create_psychology
-
-ROOT = Path(__file__).parents[3]
-FIXTURE = ROOT / "fixtures" / "scenario_100_agents.json"
-BASELINE_100_7D = ROOT / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 @pytest.mark.parametrize("required_sleep_minutes", [420, 480, 600])
@@ -161,7 +157,7 @@ def test_recovery_rate_changes_decay_speed_and_nonfinite_values_are_rejected() -
 
 
 def test_personal_recovery_rates_allow_individual_decay_speeds() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["profiles"] = document["profiles"][:2]
     for profile in document["profiles"]:
         profile["initial_needs"] = {"toilet_urgency": 0.0, "hunger": 0.0, "fatigue": 0.0}
@@ -207,7 +203,7 @@ def test_daily_latent_distress_accumulates_final_acute_values_and_is_checkpointa
 
 
 def test_integrated_life_state_policy_uses_one_exact_recovery_path_and_trace() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["id"] = "integrated-life-state-research-test"
     document["duration_minutes"] = 5
     document["profiles"] = document["profiles"][:2]
@@ -269,7 +265,7 @@ def test_integrated_life_state_policy_uses_one_exact_recovery_path_and_trace() -
 
 
 def test_false_claim_pressure_reaches_uncertainty_stress_and_trace() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["id"] = "integrated-rumor-psychology-test"
     document["duration_minutes"] = 5
     document["profiles"] = document["profiles"][:2]
@@ -359,7 +355,7 @@ def test_psychology_trace_delta_fields_reconstruct_applied_stress_delta(
 
 
 def test_psychology_update_is_pure_bounded_and_keeps_trust_until_outcome_exists() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     agent = world.agents["A001"]
     agent.activity = Activity.RESTING
     agent.needs.toilet_urgency = 0.9995
@@ -390,7 +386,7 @@ def test_psychology_update_is_pure_bounded_and_keeps_trust_until_outcome_exists(
 
 
 def test_psychology_application_rejects_stale_or_duplicate_updates_atomically() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     update = AgentStateDelta(
         agent_id="A001",
         minute_index=0,

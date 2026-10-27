@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from support.paths import SCENARIO_100_AGENTS
+
 from sheltersim.contracts.workspace import HistoryQuery
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
@@ -24,11 +26,9 @@ from sheltersim.inspection.frames import social_event_records
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def make_world() -> WorldState:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 60
     document["scheduled_events"] = []
     document["profiles"] = document["profiles"][:2]

@@ -6,10 +6,11 @@ tests/unit/web/test_results_chat.py.
 
 from __future__ import annotations
 
+from support.paths import BASELINE_100_7D
+
 
 def test_project_chat_accepts_verbatim_string_evidence(tmp_path) -> None:
     import json
-    from pathlib import Path
 
     from sheltersim.core.world import WorldState
     from sheltersim.experiments.benchmark import build_benchmark_scenario
@@ -24,7 +25,7 @@ def test_project_chat_accepts_verbatim_string_evidence(tmp_path) -> None:
     from sheltersim.web.projects import ProjectAPI
     from sheltersim.web.results_chat import ResultsChatService
 
-    baseline = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
+    baseline = BASELINE_100_7D
     scenario = build_benchmark_scenario(
         ScenarioSpec.load(baseline), agent_count=10, seed=7, duration_minutes=30
     )

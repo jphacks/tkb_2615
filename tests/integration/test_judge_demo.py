@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
-from pathlib import Path
 from typing import Any
+
+from support.paths import DEMO_REPLAY
 
 from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
 from sheltersim.web.demo import DemoService
 from sheltersim.web.inspector import InspectorService
 from sheltersim.web.server import _handler_for
 
-ROOT = Path(__file__).parents[2]
-REPLAY_ROOT = ROOT / "fixtures" / "demo_replay"
-RUNS = REPLAY_ROOT / "runs"
+RUNS = DEMO_REPLAY / "runs"
 
 
 def _handler_response(handler: Any, method: str) -> tuple[int, bytes]:

@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY
 
 from sheltersim.contracts.api import BranchReference
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
@@ -21,8 +22,6 @@ from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import CheckpointArchive
 from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
-
-SMALL_REPLAY = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 try:
     import fcntl
@@ -221,7 +220,7 @@ def test_privacy_scalar_fast_path_still_rejects_nonfinite_numbers(value):
 def seed_store(tmp_path):
     store = ProjectStore(tmp_path)
     store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
     store.create_run("p", "run", scenario.id, 1)
     checkpoint = Checkpoint.capture(WorldState.from_scenario(scenario))
@@ -269,7 +268,7 @@ def _store_with_run(root: Path) -> ProjectStore:
 
     store = ProjectStore(root)
     store.create_project("project")
-    fixture = Path(__file__).resolve().parents[3] / "fixtures/scenarios/h00_small_replay.json"
+    fixture = SMALL_REPLAY
     scenario = ScenarioSpec.load(fixture)
     approved = digest(json.loads(scenario.canonical_json()))
     saved = store.save_scenario("project", scenario, approved_hash=approved)

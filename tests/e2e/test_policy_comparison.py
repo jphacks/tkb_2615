@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SMALL_REPLAY
 
 from sheltersim.__main__ import main
 from sheltersim.core.engine import TraceLevel
@@ -25,7 +26,7 @@ from sheltersim.experiments.scenario import ScenarioSpec
 def test_policy_comparison_requires_only_the_registered_variant_to_change(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    policy_fixture = Path(__file__).parents[2] / "fixtures/scenarios/h00_small_replay.json"
+    policy_fixture = SMALL_REPLAY
     document = json.loads(policy_fixture.read_text(encoding="utf-8"))
     document["duration_minutes"] = 240
     document["profiles"] = document["profiles"][:12]

@@ -9,10 +9,10 @@ plan is refused without changing the source.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
+from support.paths import BASELINE_100_7D
 
 from sheltersim.core.world import WorldState
 from sheltersim.events.effects import GuardExpression
@@ -29,8 +29,6 @@ from sheltersim.experiments.branch import (
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.schemas import ApprovedPlan, DraftPlan
 from sheltersim.web.demo import DemoError, DemoService
-
-BASELINE_100_7D = Path(__file__).parents[3] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 def test_route_edit_branches_are_atomic_reproducible_and_leave_source_unchanged(

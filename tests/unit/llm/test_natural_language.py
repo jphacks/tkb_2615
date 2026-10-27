@@ -11,10 +11,10 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 from datetime import date
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import FIXTURES, SCENARIO_100_AGENTS, SMALL_REPLAY
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.environment import (
@@ -61,12 +61,8 @@ from sheltersim.llm.schemas import (
     ZoneTarget,
 )
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-SMALL_SCENARIO = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 EVALUATION = json.loads(
-    (Path(__file__).parents[3] / "fixtures" / "evaluation" / "unseen_prompts_ja.json").read_text(
-        encoding="utf-8"
-    )
+    (FIXTURES / "evaluation" / "unseen_prompts_ja.json").read_text(encoding="utf-8")
 )
 EXPECTED_CATEGORIES = {
     "physical",
@@ -391,7 +387,7 @@ def test_invalid_model_target_is_rejected_without_mutating_world_state() -> None
     from sheltersim.experiments.scenario import ScenarioSpec
     from sheltersim.llm.natural_language import scenario_summary_from_world
 
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     world = WorldState.from_scenario(scenario)
     before = world.canonical_json()
     context = scenario_summary_from_world(world)
@@ -522,7 +518,7 @@ class _UnexpectedProvider:
 
 
 def _world() -> WorldState:
-    scenario = json.loads(SMALL_SCENARIO.read_text(encoding="utf-8"))
+    scenario = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     scenario["schema_version"] = 3
     scenario["duration_minutes"] = 14_400
     scenario["scheduled_events"] = [
@@ -983,7 +979,7 @@ def test_explicit_unknown_target_id_is_not_replaced_by_the_only_matching_kind() 
 
 
 def test_parser_does_not_mutate_world_rng_event_queue_or_branch_runtime() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     world = WorldState.from_scenario(scenario)
     runtime = BranchRuntime.from_world(world)
     original_world = world.canonical_json()

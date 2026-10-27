@@ -6,18 +6,18 @@ Serving it over HTTP is checked in tests/integration/test_judge_demo.py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+
+from support.paths import DEMO_REPLAY
 
 from sheltersim.experiments.comparison import compare_run_artifacts
 
-REPLAY_ROOT = Path(__file__).parents[3] / "fixtures" / "demo_replay"
-RUNS = REPLAY_ROOT / "runs"
+RUNS = DEMO_REPLAY / "runs"
 BASELINE = RUNS / "baseline"
 CANDIDATE = RUNS / "day4-toilet-outage"
 
 
 def test_packaged_day4_replay_is_a_paired_seven_day_branch() -> None:
-    comparison = json.loads((REPLAY_ROOT / "comparison.json").read_text(encoding="utf-8"))
+    comparison = json.loads((DEMO_REPLAY / "comparison.json").read_text(encoding="utf-8"))
     baseline_manifest = json.loads((BASELINE / "manifest.json").read_text(encoding="utf-8"))
     candidate_manifest = json.loads((CANDIDATE / "manifest.json").read_text(encoding="utf-8"))
     lineage = json.loads((CANDIDATE / "branch_lineage.json").read_text(encoding="utf-8"))

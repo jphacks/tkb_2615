@@ -6,9 +6,8 @@ tests/unit/events/test_queue.py.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ActiveTask, Activity
@@ -16,13 +15,11 @@ from sheltersim.events.handlers import EventDispatcher, FacilityOutageHandler
 from sheltersim.events.models import EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_due_events_use_minute_priority_then_sequence_and_leave_future_events_pending(
     make_event, record_handler
 ) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     handler = record_handler()
     dispatcher = EventDispatcher({"record": handler})
     events = (
@@ -47,7 +44,7 @@ def test_due_events_use_minute_priority_then_sequence_and_leave_future_events_pe
 def test_dispatch_is_reproducible_when_events_are_scheduled_in_different_input_order(
     make_event, record_handler
 ) -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     event_inputs = (
         make_event("E3", priority=0, sequence=3),
         make_event("E1", priority=0, sequence=1),
@@ -65,7 +62,7 @@ def test_dispatch_is_reproducible_when_events_are_scheduled_in_different_input_o
 
 
 def test_facility_outage_updates_working_capacity_once(make_event) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.schedule_event(
         make_event(
             "outage-1",
@@ -94,7 +91,7 @@ def test_facility_outage_updates_working_capacity_once(make_event) -> None:
 def test_invalid_outage_is_logged_without_partial_facility_mutation(
     facility_id: str, units_out: int, expected_detail: str, make_event
 ) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.schedule_event(
         make_event(
             f"bad-{facility_id}-{units_out}",
@@ -114,7 +111,7 @@ def test_invalid_outage_is_logged_without_partial_facility_mutation(
 
 
 def test_outage_below_active_occupancy_is_rejected_before_mutation(make_event) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     agent = world.agents["A001"]
     agent.activity = Activity.IN_SERVICE
     agent.target_id = "toilet_1"
@@ -159,7 +156,7 @@ def test_outage_below_active_occupancy_is_rejected_before_mutation(make_event) -
 
 
 def test_zero_outage_is_suppressed_and_unknown_handler_is_failed(make_event) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.schedule_event(
         make_event(
             "no-op-outage",

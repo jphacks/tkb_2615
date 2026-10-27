@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
@@ -31,11 +31,9 @@ from sheltersim.policies.social import (
     StressPropagationPolicy,
 )
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def _two_agent_world() -> WorldState:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 20
     document["scheduled_events"] = []
     document["profiles"] = document["profiles"][:2]

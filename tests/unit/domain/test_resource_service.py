@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SMALL_REPLAY, SOURCE_MANIFEST
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
@@ -37,8 +38,6 @@ from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
-
 
 def queue_and_start(
     world: WorldState,
@@ -59,7 +58,7 @@ def queue_and_start(
 def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_version(
     resource_service_scenario,
 ) -> None:
-    baseline = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    baseline = WorldState.from_scenario(ScenarioSpec.load(SMALL_REPLAY))
     baseline_json = baseline.canonical_json()
     baseline_doc_state = baseline.to_dict()
     assert baseline.schema_version == 5
@@ -105,11 +104,11 @@ def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_versi
 
 
 def test_resource_service_config_is_strict_and_opt_in_only() -> None:
-    baseline = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    baseline = WorldState.from_scenario(ScenarioSpec.load(SMALL_REPLAY))
     assert baseline.schema_version == 5
     assert baseline.agents["A001"].needs.hydration_need == 0.0
 
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["initial_stock"] = {
         "schema_version": 1,
@@ -201,8 +200,7 @@ def test_resource_request_requires_arrival_and_world_rejects_legacy_resource_slo
 
 
 def test_h02_test_inputs_match_assumption_manifest(resource_service_scenario) -> None:
-    root = Path(__file__).parents[3]
-    manifest = json.loads((root / "fixtures/source-manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
     scenario = resource_service_scenario()
     config = scenario.model_configs["resource_service"]
@@ -673,7 +671,7 @@ def test_behavior_view_exposes_resource_actions_only_for_opted_in_v6(
     from sheltersim.core.rng import CounterRNG
     from sheltersim.policies.behavior import ActionKind, UtilityBehaviorPolicy, WorldView
 
-    baseline = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    baseline = WorldState.from_scenario(ScenarioSpec.load(SMALL_REPLAY))
     baseline.agents["A001"].next_decision_at = 0
     old_view = WorldView.from_world(baseline)
     old_proposal = UtilityBehaviorPolicy().propose(old_view, "A001", CounterRNG(3))

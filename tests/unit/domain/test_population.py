@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support.paths import SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TickPhase, TraceLevel
@@ -36,8 +37,6 @@ from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import person_projection, world_frame
 from sheltersim.policies.behavior import ActionKind, WorldView
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def _departure(retry_count: int | None) -> ScheduledEvent:
@@ -438,7 +437,7 @@ def _approach_world() -> WorldState:
 
     The generator never makes approach routes; they are an operator input.
     """
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = 24
     document["scheduled_events"] = []

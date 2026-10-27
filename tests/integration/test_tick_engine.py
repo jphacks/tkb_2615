@@ -6,9 +6,8 @@ tests/unit/core/test_rng.py, test_engine.py and test_clock.py.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.engine import (
     TICK_PHASE_ORDER,
@@ -22,11 +21,9 @@ from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_tick_runs_phases_in_documented_order_and_advances_one_minute() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     observed: list[TickPhase] = []
 
     def record_phase(phase, state, minute, rng) -> None:
@@ -44,7 +41,7 @@ def test_tick_runs_phases_in_documented_order_and_advances_one_minute() -> None:
 def test_tick_validation_defers_immutable_event_history_audit_to_run_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     engine = TickEngine(world, phase_handler=lambda phase, state, minute, rng: None)
     original_validate = world.event_log.validate
     calls = 0
@@ -65,7 +62,7 @@ def test_tick_validation_defers_immutable_event_history_audit_to_run_boundary(
 
 
 def test_same_seed_and_phase_inputs_produce_same_canonical_state() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
 
     def run_once() -> str:
         world = WorldState.from_scenario(scenario)
@@ -82,7 +79,7 @@ def test_same_seed_and_phase_inputs_produce_same_canonical_state() -> None:
 
 
 def test_trace_levels_do_not_change_state_or_random_draws() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
 
     def run_with_trace(level: TraceLevel) -> tuple[str, list[TickTrace]]:
         world = WorldState.from_scenario(scenario)
@@ -115,7 +112,7 @@ def test_trace_levels_do_not_change_state_or_random_draws() -> None:
 
 
 def test_same_minute_event_chain_cannot_loop_inside_one_tick() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     dispatched: list[str] = []
 
     class RecordEvent:
@@ -156,7 +153,7 @@ def test_same_minute_event_chain_cannot_loop_inside_one_tick() -> None:
 
 @pytest.mark.long_simulation
 def test_10080_offline_ticks_complete_without_wall_clock() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     engine = TickEngine(world)
 
     result = engine.run(steps=10080)

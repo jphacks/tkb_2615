@@ -6,9 +6,9 @@ The CLI report is checked in tests/integration/test_service_capacity_cli.py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from support.paths import RESEARCH_OPERATIONAL_100_7D, SMALL_REPLAY, SOURCE_MANIFEST
 
 from sheltersim.experiments.initial_scenario import (
     InitialScenarioBuilder,
@@ -23,9 +23,6 @@ from sheltersim.experiments.service_capacity import (
     service_capacity_diagnostic,
 )
 
-ROOT = Path(__file__).parents[3]
-RESEARCH_FIXTURE = ROOT / "fixtures" / "scenarios" / "research_operational_100_7d.json"
-
 
 def _request(evacuees: int) -> InitialScenarioRequest:
     return InitialScenarioRequest(
@@ -35,9 +32,6 @@ def _request(evacuees: int) -> InitialScenarioRequest:
         duration_days=1,
         seed=7,
     )
-
-
-SMALL_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def _rows(scenario: ScenarioSpec) -> dict[str, dict]:
@@ -87,7 +81,7 @@ def test_toilets_out_of_service_are_structurally_short(generated_scenario_with) 
 
 
 def test_water_and_meal_are_not_modeled_without_resource_service() -> None:
-    rows = _rows(ScenarioSpec.load(SMALL_FIXTURE))
+    rows = _rows(ScenarioSpec.load(SMALL_REPLAY))
     assert rows["water"]["status"] == "not_modeled"
     assert rows["meal"]["status"] == "not_modeled"
     assert rows["water"]["warnings"] == rows["meal"]["warnings"] == []
@@ -136,7 +130,7 @@ def test_a_floor_plan_station_counts_as_one_unit_whatever_its_capacity(
 
 
 def test_research_fixture_water_is_far_beyond_one_station() -> None:
-    water = _rows(ScenarioSpec.load(RESEARCH_FIXTURE))["water"]
+    water = _rows(ScenarioSpec.load(RESEARCH_OPERATIONAL_100_7D))["water"]
     assert water["uses_per_person_day"] == pytest.approx(0.006 * 1440 / 0.25)
     assert water["status"] == "structurally_short"
     assert water["utilization"] > 10
@@ -155,7 +149,7 @@ def test_unknown_phase_is_rejected(generated_scenario) -> None:
 
 
 def test_capacity_planning_assumption_matches_the_manifest() -> None:
-    manifest = json.loads((ROOT / "fixtures" / "source-manifest.json").read_text("utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text("utf-8"))
     entry = next(
         item for item in manifest["assumptions"] if item["id"] == SERVICE_CAPACITY_SOURCE_ID
     )

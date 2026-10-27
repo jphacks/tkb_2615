@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.zones import ZoneConnection, ZoneGraph, ZoneNode
@@ -15,11 +16,9 @@ from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.space import SpaceRouter, ZoneRoute
 from sheltersim.web.demo import DemoService
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def fixture_graph() -> ZoneGraph:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     return ZoneGraph.from_states(world.zones, world.zone_edges)
 
 
@@ -65,7 +64,7 @@ def test_unconnected_zone_is_unreachable_and_unknown_zone_is_explicit_error() ->
 
 
 def test_closed_edge_changes_reachability() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     open_route = SpaceRouter(ZoneGraph.from_states(world.zones, world.zone_edges)).route(
         "sleeping", "toilet"
     )

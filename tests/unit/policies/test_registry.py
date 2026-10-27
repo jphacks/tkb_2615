@@ -10,9 +10,9 @@ and the CLI warning for a legacy model in tests/e2e/test_legacy_psychology_cli.p
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY, SOURCE_MANIFEST
 
 from sheltersim.contracts.policies import (
     CORE_MODEL_SUITE_MODELS,
@@ -37,9 +37,6 @@ from sheltersim.policies.psychology import (
     PsychologyParameters,
 )
 from sheltersim.policies.registry import create_psychology
-
-ROOT = Path(__file__).parents[3]
-SMALL_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_generated_scenarios_select_the_research_psychology_model(generated_scenario) -> None:
@@ -72,7 +69,7 @@ def test_generated_psychology_selection_is_recorded_in_provenance_and_manifest(
     )
     assert assumption["source_id"] == source_id
     assert assumption["value"] == {"policy_version": INTEGRATED_PSYCHOLOGY_POLICY_VERSION}
-    manifest = json.loads((ROOT / "fixtures" / "source-manifest.json").read_text("utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text("utf-8"))
     assert any(row["id"] == source_id for row in manifest["assumptions"])
 
 
@@ -91,7 +88,7 @@ def test_saved_scenarios_keep_their_legacy_psychology_selection(generated_scenar
     legacy = ScenarioSpec.model_validate(document)
     assert type(create_psychology(legacy.model_configs)) is LifeStatePsychologyPolicy
     # Inputs without a registry still resolve to the unchanged implicit default.
-    unregistered = ScenarioSpec.load(SMALL_FIXTURE)
+    unregistered = ScenarioSpec.load(SMALL_REPLAY)
     assert selected_models(unregistered.model_configs)["psychology"] == "causal-stress-v1"
 
 
@@ -116,7 +113,7 @@ def test_unknown_operator_cannot_be_imported():
 
 
 def test_alternative_is_pure_and_changes_the_operator():
-    scenario = ScenarioSpec.load(Path("fixtures/scenario_100_agents.json"))
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     world = WorldState.from_scenario(scenario)
     original = world.canonical_json()
     view = WorldView.from_world(world)
@@ -135,7 +132,7 @@ def test_alternative_is_pure_and_changes_the_operator():
 
 
 def test_incompatible_policy_checkpoint_is_rejected():
-    world = WorldState.from_scenario(ScenarioSpec.load("fixtures/scenario_100_agents.json"))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     checkpoint = Checkpoint.capture(world)
     incompatible_versions = {
         **checkpoint.model_versions,
@@ -148,7 +145,7 @@ def test_incompatible_policy_checkpoint_is_rejected():
 def _body_scenario(body_model: str) -> ScenarioSpec:
     from sheltersim.domain.body_state import canonical_body_config
 
-    document = ScenarioSpec.load("fixtures/scenario_100_agents.json").model_dump(mode="json")
+    document = ScenarioSpec.load(SCENARIO_100_AGENTS).model_dump(mode="json")
     document["model_configs"]["body_dynamics"] = canonical_body_config(None)
     document["model_configs"]["policy_registry"] = {
         "schema_version": 2,
@@ -246,7 +243,7 @@ def test_suite_v1_selector_keeps_its_original_model_map():
 
 
 def test_core_suite_is_checkpoint_signed_and_restorable():
-    document = ScenarioSpec.load("fixtures/scenario_100_agents.json").model_dump(mode="json")
+    document = ScenarioSpec.load(SCENARIO_100_AGENTS).model_dump(mode="json")
     document["model_configs"].pop("policy_registry", None)
     document["model_configs"] = install_default_model_suite(document["model_configs"])
     scenario = ScenarioSpec.model_validate(document)

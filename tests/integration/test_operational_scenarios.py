@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIOS
 
 from sheltersim.core.engine import TraceLevel
 from sheltersim.domain.resources import RESOURCE_LEDGER_KEY, validate_resource_ledger
@@ -22,12 +23,9 @@ from sheltersim.experiments.comparison import (
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
-ROOT = Path(__file__).parents[2]
-SCENARIO_DIR = ROOT / "fixtures" / "scenarios"
-
 
 def _load(name: str) -> ScenarioSpec:
-    return ScenarioSpec.load(SCENARIO_DIR / f"{name}.json")
+    return ScenarioSpec.load(SCENARIOS / f"{name}.json")
 
 
 def _short_scenario(name: str, *, initial_food: int | None = None) -> ScenarioSpec:

@@ -7,9 +7,9 @@ tests/integration/test_behavior_policy.py.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
 import pytest
+from support.paths import BASELINE_100_7D, SCENARIO_100_AGENTS
 
 from sheltersim.core.rng import CounterRNG, KeyedRandom
 from sheltersim.core.world import WorldState
@@ -29,12 +29,9 @@ from sheltersim.policies.behavior import (
     create_behavior_policy,
 )
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-BASELINE_100_7D = Path(__file__).parents[3] / "fixtures" / "scenarios" / "baseline_100_7d.json"
-
 
 def make_world() -> WorldState:
-    return WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    return WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
 
 
 def test_world_view_is_detached_read_only_and_canonical() -> None:

@@ -10,14 +10,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from support.paths import SCENARIO_100_AGENTS
+
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import ProviderResponse
 from sheltersim.llm.provider import LLMRouter
-
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 class ReviewProvider:
@@ -43,7 +43,7 @@ class ReviewProvider:
 
 
 def test_api_enabled_run_writes_usage_and_separate_opus_review(tmp_path: Path) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 1
     document["scheduled_events"] = []
     scenario = ScenarioSpec.model_validate(document)

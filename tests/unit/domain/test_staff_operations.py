@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY
 
 from sheltersim.contracts.workspace import HistoryQuery
 from sheltersim.core.checkpoint import Checkpoint
@@ -50,13 +51,9 @@ from sheltersim.policies.space import SpaceRouter
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-ROOT = Path(__file__).parents[3]
-FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
-SCENARIO_100_AGENTS = ROOT / "fixtures" / "scenario_100_agents.json"
-
 
 def _world(*, body_policy: bool = False) -> WorldState:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = 45
     document["model_configs"]["staff_operations"] = {}

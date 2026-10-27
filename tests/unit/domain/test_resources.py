@@ -12,10 +12,10 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import StateInvariantError, WorldState
@@ -33,9 +33,6 @@ from sheltersim.events.handlers import (
 from sheltersim.events.models import EventApplicationError, EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
-
-ROOT = Path(__file__).parents[3]
-SCENARIO_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def event(
@@ -71,7 +68,7 @@ def resource_dispatcher() -> EventDispatcher:
 def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
     scenario_with_stock,
 ) -> None:
-    old_fixture = ScenarioSpec.load(SCENARIO_FIXTURE)
+    old_fixture = ScenarioSpec.load(SMALL_REPLAY)
     assert old_fixture.schema_version == 3
     baseline_world = WorldState.from_scenario(old_fixture)
     assert baseline_world.resources == {}
@@ -165,7 +162,7 @@ def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis(
 
 
 def test_resource_scenario_v2_migration_and_v3_stock_rejections(scenario_with_stock) -> None:
-    source = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
+    source = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     assert source["schema_version"] == 2
     migrated = ScenarioSpec.from_json(json.dumps(source))
     assert migrated.schema_version == 3
@@ -453,7 +450,7 @@ SOURCE = "ASM-TEST-RESOURCE-OPERATION"
 
 
 def _world() -> WorldState:
-    document = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = 30
     document["scheduled_events"] = []

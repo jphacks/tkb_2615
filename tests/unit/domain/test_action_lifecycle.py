@@ -4,8 +4,9 @@ behavior action has a lifecycle terminal."""
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
+
+from support.paths import SMALL_REPLAY
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import (
@@ -17,11 +18,9 @@ from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, Sch
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import ActionKind
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
-
 
 def make_world() -> WorldState:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     scenario = ScenarioSpec.model_validate(document)
     return WorldState.from_scenario(scenario)

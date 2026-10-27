@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, usage_limits
 from sheltersim.llm.cache import ResponseTape
@@ -50,7 +51,7 @@ def test_live_pdf_reports_use_opus_and_reuse_saved_pdf(tmp_path, monkeypatch) ->
     monkeypatch.setenv("SHELTERSIM_LLM_TIMEOUT_SECONDS", "180")
     store = ProjectStore(tmp_path / "pdf-projects")
     store.create_project("pdf-live")
-    raw = json.loads(ScenarioSpec.load("fixtures/scenario_100_agents.json").canonical_json())
+    raw = json.loads(ScenarioSpec.load(SCENARIO_100_AGENTS).canonical_json())
     raw["duration_minutes"] = 180
     raw["scheduled_events"] = []
     raw["model_configs"]["toilet_service"] = {}
@@ -191,7 +192,6 @@ def test_live_scenario_intervention_runtime_review_and_results_question(
     import json
     import uuid
     from dataclasses import replace
-    from pathlib import Path
 
     from sheltersim.core.engine import TraceLevel
     from sheltersim.core.world import WorldState
@@ -243,7 +243,7 @@ def test_live_scenario_intervention_runtime_review_and_results_question(
         campaign_ledger=campaign,
     )
 
-    fixture = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
+    fixture = SCENARIO_100_AGENTS
     document = json.loads(fixture.read_text(encoding="utf-8"))
     document["id"] = f"live-feature-{run_tag}"
     document["duration_minutes"] = 30

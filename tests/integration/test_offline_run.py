@@ -11,16 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from support.paths import FAILURE_DAY3, REGRESSION_CONTRACT, SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
-ROOT = Path(__file__).parents[2]
-FAILURE_SCENARIO = ROOT / "fixtures" / "scenarios" / "failure_day3.json"
-H00_SMALL_REPLAY = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
-REGRESSION_CONTRACT = ROOT / "fixtures" / "regression-contract.json"
 EXPECTED_ARTIFACTS = {
     "manifest.json",
     "agents_initial.json",
@@ -37,7 +34,7 @@ EXPECTED_ARTIFACTS = {
 
 @pytest.mark.long_simulation
 def test_100_agents_seven_day_failure_scenario_runs_offline(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(FAILURE_SCENARIO)
+    scenario = ScenarioSpec.load(FAILURE_DAY3)
     output = tmp_path / "failure-day3-run"
 
     world = run_scenario(scenario, output, trace_level=TraceLevel.OFF)
@@ -95,7 +92,7 @@ def test_100_agents_seven_day_failure_scenario_runs_offline(tmp_path: Path) -> N
 
 
 def test_short_offline_run_has_repeatable_state_and_event_trace(tmp_path: Path) -> None:
-    document = json.loads(FAILURE_SCENARIO.read_text(encoding="utf-8"))
+    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
     document["id"] = "repeatability-check"
     document["duration_minutes"] = 30
     document["scheduled_events"] = []
@@ -125,7 +122,7 @@ def test_short_offline_run_has_repeatable_state_and_event_trace(tmp_path: Path) 
 def test_run_checkpoint_callback_captures_exact_midpoint_without_changing_run(
     tmp_path: Path,
 ) -> None:
-    scenario = ScenarioSpec.load(H00_SMALL_REPLAY).model_copy(
+    scenario = ScenarioSpec.load(SMALL_REPLAY).model_copy(
         update={"id": "checkpoint-callback-check"}
     )
     checkpoint_path = tmp_path / "midpoint.json"
@@ -157,7 +154,7 @@ def test_run_checkpoint_callback_captures_exact_midpoint_without_changing_run(
 
 def test_h00_small_replay_matches_pinned_state_events_and_provenance(tmp_path: Path) -> None:
     contract = json.loads(REGRESSION_CONTRACT.read_text(encoding="utf-8"))["small_replay"]
-    scenario = ScenarioSpec.load(H00_SMALL_REPLAY)
+    scenario = ScenarioSpec.load(SMALL_REPLAY)
     scenario_hash = hashlib.sha256(scenario.canonical_json().encode("utf-8")).hexdigest()
 
     assert scenario.id == contract["scenario_id"]

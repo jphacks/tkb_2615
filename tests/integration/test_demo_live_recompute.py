@@ -10,17 +10,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from support.paths import BASELINE_100_7D
+
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.web.demo import DemoService
 from sheltersim.web.jobs import DemoJobManager
-
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 def test_live_recompute_progress_and_noop_branch_checkpoint_are_reproducible(
     tmp_path: Path, wait_for_job
 ) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(BASELINE_100_7D.read_text(encoding="utf-8"))
     document["duration_minutes"] = 12
     document["scheduled_events"] = []
     demo = DemoService(ScenarioSpec.model_validate(document))

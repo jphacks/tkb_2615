@@ -12,6 +12,7 @@ import json
 from copy import deepcopy
 
 import pytest
+from support.paths import SOURCE_MANIFEST
 
 from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.contracts.spatial import SpatialConstraints
@@ -453,7 +454,7 @@ def test_generated_scenarios_announce_and_place_installed_facilities(generated_s
         ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
     )
     assert scenario.model_configs["geometry_overlay"] == {"schema_version": 4}
-    manifest = json.loads(open("fixtures/source-manifest.json", encoding="utf-8").read())
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     for source_id in (
         INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
         INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
