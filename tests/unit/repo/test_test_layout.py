@@ -61,7 +61,6 @@ UNSORTED = frozenset(
         "test_pdf_report.py",
         "test_performance_smoke.py",
         "test_pointer_only_reads.py",
-        "test_policy_parameter_overrides.py",
         "test_profiles.py",
         "test_project_store.py",
         "test_provenance.py",
