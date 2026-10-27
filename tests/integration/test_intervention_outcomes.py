@@ -15,7 +15,11 @@ from typing import Any
 
 import pytest
 
+from sheltersim.contracts.extensions import Point2D
 from sheltersim.core.world import WorldState
+from sheltersim.domain.geometry_overlay import effective_geometry
+from sheltersim.domain.models import Activity
+from sheltersim.domain.movement import _segment_clear_of_polygon
 from sheltersim.domain.staff_dynamics import staff_dynamics_on_shift
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
 from sheltersim.events.models import EventLogRecord, EventStatus
@@ -713,3 +717,275 @@ def test_a_temporary_space_is_opened_for_its_window(main_line) -> None:
         if record.status is EventStatus.APPLIED
     ]
     assert applied_ops.count("add_temporary_space") >= 2
+
+
+def _geometry_action(
+    op: str,
+    target: TargetSelector,
+    parameters: dict[str, Any],
+    *,
+    start_minute: int = FORK_MINUTE,
+    end_minute: int | None = None,
+) -> TimedAction:
+    return _action(
+        op,
+        target,
+        parameters,
+        units="boolean" if op == "set_route_access" else "metre_2d",
+        policy_dependencies=["geometry_overlay_v1"],
+        start_minute=start_minute,
+        end_minute=end_minute,
+    )
+
+
+def _facility_idle(facility_id: str) -> Callable[[WorldState], bool]:
+    def check(world: WorldState) -> bool:
+        facility = world.facilities[facility_id]
+        return not any(
+            (
+                facility.queue_agent_ids,
+                facility.active_agent_ids,
+                facility.resource_queue_agent_ids,
+                facility.resource_active_agent_ids,
+            )
+        )
+
+    return check
+
+
+def _trips_to(world: WorldState, facility_id: str, after: int) -> list[dict[str, Any]]:
+    return [
+        record.event.payload
+        for record in _applied(world, "agent_travel_complete", facility_id=facility_id)
+        if record.realized_minute > after
+    ]
+
+
+def test_closing_the_route_into_the_toilets_stops_toilet_use_until_it_reopens(
+    main_line, generated_scenario
+) -> None:
+    program = _program(
+        _geometry_action(
+            "set_route_access",
+            TargetSelector(kind="route", target_id="route_corridor_toilet"),
+            {"accessible": False},
+            end_minute=OUTAGE_END_MINUTE,
+        )
+    )
+    # Someone already inside the toilet area may still finish a use.
+    first = FORK_MINUTE + generated_scenario.model_configs["toilet_service"]["maximum_minutes"]
+
+    main, child = _fork_main(main_line, "route-closure", program)
+
+    assert _applied(child, "effect_program_geometry", op="set_route_access")
+    assert _applied(child, "effect_program_geometry_expire", op="set_route_access")
+    middle = (FORK_MINUTE + OUTAGE_END_MINUTE) // 2
+    assert main_line.seek("route-closure", middle).world.zone_edges["route_corridor_toilet"].closed
+    assert not child.zone_edges["route_corridor_toilet"].closed
+    closed = {"first": first, "last": OUTAGE_END_MINUTE}
+    assert _completed_between(main, "toilet_service_complete", **closed)
+    assert not _completed_between(child, "toilet_service_complete", **closed)
+    assert _kpis(child)["toilet_wait_total_minutes"] > _kpis(main)["toilet_wait_total_minutes"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#82: move_facility fails when it is applied, so the toilet stays put",
+)
+def test_moving_a_toilet_closer_to_the_door_changes_where_people_walk(
+    main_line, generated_scenario
+) -> None:
+    start = _first_minute(
+        main_line, "main", FORK_MINUTE, COMPARE_MINUTE, _facility_idle("toilet_01")
+    )
+    # Same toilet area, just inside the door instead of at the back wall.
+    old = generated_scenario.model_configs["facility_geometry"]["facility_points"]["toilet_01"]
+    point = {"x": old["x"], "y": 8.0}
+    program = _program(
+        _geometry_action(
+            "move_facility",
+            TargetSelector(kind="facility", target_id="toilet_01"),
+            {"point_m": point},
+            start_minute=start,
+        )
+    )
+
+    main, child = _fork_main(main_line, "move-toilet", program)
+
+    assert _applied(child, "effect_program_geometry", op="move_facility")
+    assert effective_geometry(child).facility_points["toilet_01"].model_dump() == point
+    assert effective_geometry(main).facility_points["toilet_01"].model_dump() == old
+    assert _completed_between(
+        child, "toilet_service_complete", start, COMPARE_MINUTE, facility_id="toilet_01"
+    )
+
+
+def test_bringing_a_toilet_into_the_sleeping_area_shortens_the_walk_to_it(main_line) -> None:
+    start = _first_minute(
+        main_line, "main", FORK_MINUTE, COMPARE_MINUTE, _facility_idle("toilet_01")
+    )
+    program = _program(
+        _geometry_action(
+            "transfer_equipment",
+            TargetSelector(kind="equipment", target_id="toilet_01"),
+            {
+                "schema_version": 1,
+                "equipment_id": "toilet_01",
+                "from_zone_id": "toilet",
+                "to_zone_id": "sleeping",
+                "point_m": {"x": 5.0, "y": 9.0},
+            },
+            start_minute=start,
+        )
+    )
+
+    main, child = _fork_main(main_line, "transfer-toilet", program)
+
+    assert _applied(child, "effect_program_geometry", op="transfer_equipment")
+    assert child.facilities["toilet_01"].zone_id == "sleeping"
+    assert _completed_between(
+        child, "toilet_service_complete", start, COMPARE_MINUTE, facility_id="toilet_01"
+    )
+    trips = _trips_to(child, "toilet_01", start)
+    assert all(trip["route_zone_ids"][-1] == "sleeping" for trip in trips)
+    assert any(
+        trip["route_zone_ids"] == ("sleeping", "sleeping") and trip["purpose"] == "toilet_request"
+        for trip in trips
+    ), "nobody in the sleeping area walked straight to the toilet"
+    assert sum(trip["travel_minutes"] for trip in trips) < sum(
+        trip["travel_minutes"] for trip in _trips_to(main, "toilet_01", start)
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#83: the water staff stay in the old area, so nobody serves the moved station",
+)
+def test_bringing_the_water_station_into_the_sleeping_area_keeps_water_served(
+    main_line, generated_scenario
+) -> None:
+    start = _first_minute(
+        main_line, "main", FORK_MINUTE, COMPARE_MINUTE, _facility_idle("water_station_main")
+    )
+    program = _program(
+        _geometry_action(
+            "transfer_equipment",
+            TargetSelector(kind="equipment", target_id="water_station_main"),
+            {
+                "schema_version": 1,
+                "equipment_id": "water_station_main",
+                "from_zone_id": "food",
+                "to_zone_id": "sleeping",
+                "point_m": {"x": 5.0, "y": 9.0},
+            },
+            start_minute=start,
+        )
+    )
+
+    main, child = _fork_main(main_line, "transfer-water", program)
+
+    assert _applied(child, "effect_program_geometry", op="transfer_equipment")
+    assert _completed_between(
+        child,
+        "resource_service_complete",
+        start,
+        COMPARE_MINUTE,
+        facility_id="water_station_main",
+    )
+    assert _kpis(child)["hydration_need_mean"] <= _kpis(main)["hydration_need_mean"]
+
+
+def _walks_through(
+    timeline: TimelineStore, branch_id: str, first: int, last: int, polygon: tuple[Point2D, ...]
+) -> bool:
+    """Whether a walk planned in first..last passes through polygon; read-only."""
+    for world in timeline.iter_worlds(branch_id, first, last):
+        for journey in world.model_state["movement_v1"]["journeys"].values():
+            points = [Point2D.model_validate(point) for point in journey.get("route_points", ())]
+            if any(
+                not _segment_clear_of_polygon(a, b, polygon, 0.0)
+                for a, b in zip(points, points[1:])
+            ):
+                return True
+    return False
+
+
+def test_people_walk_around_a_partition_while_it_stands(main_line) -> None:
+    # Between the toilet area's door and the toilets, leaving a gap by the wall.
+    polygon = [
+        {"x": 13.9, "y": 8.4},
+        {"x": 14.9, "y": 8.4},
+        {"x": 14.9, "y": 9.0},
+        {"x": 13.9, "y": 9.0},
+    ]
+    program = _program(
+        _geometry_action(
+            "set_partition",
+            TargetSelector(kind="zone", target_id="toilet"),
+            {"polygon_m": polygon},
+            end_minute=OUTAGE_END_MINUTE,
+        )
+    )
+
+    main, child = _fork_main(main_line, "partition", program)
+
+    assert _applied(child, "effect_program_geometry", op="set_partition")
+    assert _applied(child, "effect_program_geometry_expire", op="set_partition")
+    shape = tuple(Point2D.model_validate(point) for point in polygon)
+    standing = (FORK_MINUTE + 1, OUTAGE_END_MINUTE - 1)
+    assert _walks_through(main_line, "main", *standing, shape)
+    assert not _walks_through(main_line, "partition", *standing, shape)
+    assert len(_applied(child, "toilet_service_complete")) == len(
+        _applied(main, "toilet_service_complete")
+    ), "a partition beside the path should not stop anyone using the toilets"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#84: people walk to a temporary room's bed but do not sleep there",
+)
+def test_people_who_go_to_sleep_use_the_beds_of_a_temporary_room(main_line) -> None:
+    beds = [
+        {"x": 1.0, "y": 9.0},
+        {"x": 2.0, "y": 9.0},
+        {"x": 1.0, "y": 11.0},
+        {"x": 2.0, "y": 11.0},
+    ]
+    program = _program(
+        _geometry_action(
+            "temporary_room_geometry",
+            TargetSelector(kind="zone", target_id="sleeping"),
+            {
+                "schema_version": 1,
+                "room_id": "room_a",
+                "zone_id": "sleeping",
+                "polygon_m": [
+                    {"x": 0.5, "y": 8.0},
+                    {"x": 2.5, "y": 8.0},
+                    {"x": 2.5, "y": 12.0},
+                    {"x": 0.5, "y": 12.0},
+                ],
+                "people_capacity": 4,
+                "sleeping_capacity": 4,
+                "bed_points_m": beds,
+                "route_edge_ids": ["route_corridor_sleeping", "route_sleeping_corridor"],
+            },
+            end_minute=OUTAGE_END_MINUTE,
+        )
+    )
+
+    main, child = _fork_main(main_line, "temporary-room", program)
+
+    assert _applied(child, "effect_program_geometry", op="temporary_room_geometry")
+    assert _applied(child, "agent_travel_complete", purpose="sleep_bed")
+    sleeping_in_a_bed = 0
+    for world in main_line.iter_worlds("temporary-room", FORK_MINUTE + 1, OUTAGE_END_MINUTE - 1):
+        positions = world.model_state["movement_v1"]["positions"]
+        sleeping_in_a_bed += sum(
+            agent.activity is Activity.SLEEPING and positions[agent_id]["point"] in beds
+            for agent_id, agent in world.agents.items()
+        )
+    assert sleeping_in_a_bed > 0
