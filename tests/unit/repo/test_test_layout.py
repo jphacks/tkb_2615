@@ -45,7 +45,6 @@ UNSORTED = frozenset(
         "test_replay_frames.py",
         "test_results_chat.py",
         "test_resume_checkpoint_loads.py",
-        "test_smoke.py",
         "test_web_demo.py",
         "test_web_inspector.py",
         "test_web_routes.py",
