@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 from contextlib import contextmanager
 from contextvars import ContextVar
-from copy import deepcopy
 from typing import Any, Iterator, Literal
 
 from pydantic import Field, model_validator
@@ -1229,12 +1228,12 @@ def apply_geometry_change(world: Any, event: Any, *, expire: bool = False) -> No
     }
     if op in {"move_facility", "transfer_equipment"}:
         if op == "transfer_equipment":
-            parameters = EquipmentTransferParameters.model_validate(payload["parameters"])
-            world.facilities[target].zone_id = parameters.to_zone_id
-            point_m = parameters.point_m.model_dump(mode="json")
+            transfer = EquipmentTransferParameters.model_validate(payload["parameters"])
+            world.facilities[target].zone_id = transfer.to_zone_id
+            point = transfer.point_m
         else:
-            point_m = payload["parameters"]["point_m"]
-        state["facility_points"][target] = {"point_m": deepcopy(point_m), **common}
+            point = MoveFacilityParameters.model_validate(payload["parameters"]).point_m
+        state["facility_points"][target] = {"point_m": point.model_dump(mode="json"), **common}
     elif op == "set_partition":
         if expire:
             state["partitions"].pop(modifier, None)

@@ -37,13 +37,21 @@ def _validate_id(name: str, value: str | None, *, optional: bool = False) -> Non
 
 
 def _freeze_json(value: Any) -> Any:
-    if isinstance(value, dict):
+    # A Mapping may be a value frozen by another event; copy it like a dict.
+    if isinstance(value, Mapping):
         if any(not isinstance(key, str) for key in value):
             raise ValueError("event JSON object keys must be strings")
         return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_json(item) for item in value)
     return value
+
+
+def _json_default(value: Any) -> Any:
+    """Let json.dumps check values copied from another event's frozen payload."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def _thaw_json(value: Any) -> Any:
@@ -83,8 +91,8 @@ class ScheduledEvent:
         if not isinstance(self.payload, dict) or not isinstance(self.provenance, dict):
             raise ValueError("event payload and provenance must be objects")
         try:
-            dumps(self.payload, allow_nan=False)
-            dumps(self.provenance, allow_nan=False)
+            dumps(self.payload, allow_nan=False, default=_json_default)
+            dumps(self.provenance, allow_nan=False, default=_json_default)
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "event payload and provenance must contain finite JSON values"
