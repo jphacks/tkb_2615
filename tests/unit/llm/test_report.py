@@ -165,7 +165,7 @@ def test_schema_violation_falls_back_without_model_authored_text() -> None:
 
 
 def test_comparison_scope_rejects_other_scenario() -> None:
-    fixture = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+    fixture = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
     scenario = ScenarioSpec.model_validate_json(fixture.read_text(encoding="utf-8"))
 
     with pytest.raises(ValueError, match="scenario ID"):
