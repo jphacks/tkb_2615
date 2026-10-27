@@ -15,7 +15,12 @@ from sheltersim.contracts.workspace import UsageLimits
 from sheltersim.llm.accounting import AccountedProvider
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMSettings
-from sheltersim.llm.contracts import LLMProviderError, LLMStage, LLMTask, ProviderResponse
+from sheltersim.llm.contracts import (
+    LLMProviderError,
+    LLMStage,
+    LLMTask,
+    ProviderResponse,
+)
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.storage.projects import ProjectStore, StorageError
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
@@ -459,3 +464,22 @@ def test_search_output_over_one_pass_does_not_freeze_ledgers(
     assert router.complete(task) == '{"ok":true}'
     assert local.summary()["frozen"] is False
     assert campaign.summary()["frozen"] is False
+
+
+def test_stored_tape_reloads_and_never_writes_sensitive_text(tmp_path: Path) -> None:
+    from sheltersim.llm.accounting import StoredResponseTape
+
+    store = ProjectStore(tmp_path)
+    store.create_project("project")
+    path = store._path("project", "usage-tapes", "draft.json")
+    reply = ProviderResponse(text='{"ok":true}', model_id="m", input_tokens=1, output_tokens=1,
+                             elapsed_ms=0.0)
+
+    StoredResponseTape(store, path).put("key", reply)
+    assert StoredResponseTape(store, path).get("key") == reply
+
+    risky = StoredResponseTape(store, store._path("project", "usage-tapes", "risky.json"))
+    risky.put("key", ProviderResponse(text="call 03-1234-5678", model_id="m", input_tokens=1,
+                                      output_tokens=1, elapsed_ms=0.0))
+    assert risky.get("key") is not None  # still usable within this request
+    assert not store._path("project", "usage-tapes", "risky.json").exists()

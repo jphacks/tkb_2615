@@ -20,7 +20,7 @@ from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.traces import RunArtifactWriter, _decision_document
+from sheltersim.inspection.traces import RunArtifactWriter, _decision_document, _sanitize
 from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
 from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.social import SocialPropagationParameters
@@ -228,3 +228,23 @@ def test_run_manifest_and_decision_trace_include_source_ids(tmp_path: Path) -> N
         if event.event_type == "agent_travel_complete"
     )
     assert travel_event.provenance["source_id"] == "ASM-ZONE-ROUTING-V1"
+
+
+def test_artifact_sanitizer_preserves_usage_and_hides_secrets() -> None:
+    sanitized = _sanitize(
+        {
+            "input_tokens": 24,
+            "output_tokens": 3,
+            "estimated_cost_usd": 0.0001,
+            "access_token": "private",
+            "api_key": "private",
+        }
+    )
+
+    assert sanitized == {
+        "input_tokens": 24,
+        "output_tokens": 3,
+        "estimated_cost_usd": 0.0001,
+        "access_token": "[REDACTED]",
+        "api_key": "[REDACTED]",
+    }

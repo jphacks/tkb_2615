@@ -1,4 +1,9 @@
-"""Offline-mocked integration for runtime routing and post-run review artifacts."""
+"""A Run with the API enabled (mocked offline) writes LLM usage and a separate post-run
+review.
+
+That the artifact sanitizer keeps usage and hides secrets is checked in
+tests/unit/experiments/test_metrics.py.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +12,12 @@ from pathlib import Path
 
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.traces import _sanitize
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import ProviderResponse
 from sheltersim.llm.provider import LLMRouter
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 class ReviewProvider:
@@ -72,21 +76,3 @@ def test_api_enabled_run_writes_usage_and_separate_opus_review(tmp_path: Path) -
     assert world.canonical_json() == offline_world.canonical_json()
 
 
-def test_artifact_sanitizer_preserves_usage_and_hides_secrets() -> None:
-    sanitized = _sanitize(
-        {
-            "input_tokens": 24,
-            "output_tokens": 3,
-            "estimated_cost_usd": 0.0001,
-            "access_token": "private",
-            "api_key": "private",
-        }
-    )
-
-    assert sanitized == {
-        "input_tokens": 24,
-        "output_tokens": 3,
-        "estimated_cost_usd": 0.0001,
-        "access_token": "[REDACTED]",
-        "api_key": "[REDACTED]",
-    }

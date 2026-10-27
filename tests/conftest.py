@@ -13,6 +13,7 @@ import pytest
 
 SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
 SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+BASELINE_100_7D = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
@@ -912,6 +913,27 @@ def day4_plan() -> Callable[..., Any]:
     toilet and one added support worker, forking at Day 4 14:00 by default.
     """
     return _day4_plan
+
+
+def _small_benchmark_scenario(duration_minutes: int = 200) -> Any:
+    from sheltersim.experiments.benchmark import build_benchmark_scenario
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    # By minute 200 stressed synthetic Agents trigger support-priority and social tasks.
+    return build_benchmark_scenario(
+        ScenarioSpec.load(BASELINE_100_7D),
+        agent_count=30,
+        seed=7,
+        duration_minutes=duration_minutes,
+    )
+
+
+@pytest.fixture
+def small_benchmark_scenario() -> Callable[..., Any]:
+    """Build a 30-person, seed 7 benchmark Scenario from baseline_100_7d, 200 minutes by
+    default (long enough for stressed people to trigger support-priority and social tasks).
+    """
+    return _small_benchmark_scenario
 
 
 def _make_event(

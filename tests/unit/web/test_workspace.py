@@ -8,13 +8,21 @@ draft rather than pinned by ID.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from sheltersim.contracts.population import HouseholdCorrectionRequest
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.initial_scenario import InitialScenarioRequest
-from sheltersim.storage.projects import StorageError, digest
+from sheltersim.experiments.timeline import TimelineStore
+from sheltersim.llm.config import LLMMode, LLMSettings
+from sheltersim.llm.contracts import ProviderResponse
+from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.web.projects import ProjectAPI
 from sheltersim.web.workspace import ProjectWorkspace
 
 # Operator household shapes with no declared links. Generated minors then have
@@ -318,3 +326,101 @@ def test_project_preview_accepts_structured_form_without_free_text(ui_project_ap
     assert provenance["extraction_source"] == "structured_form"
     assert provenance["sha256"] == expected_source
     assert preview["llm_usage"]["api_request_count"] == 0
+
+
+def test_repeated_identical_preview_reuses_the_saved_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from sheltersim.region.models import RegionResearchResult
+    from sheltersim.web import workspace as workspace_module
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls = []
+
+    class ContractProvider:
+        """Return the task's own contract-shaped answer, as an accepted reply."""
+
+        def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+            del max_output_tokens, timeout_seconds
+            calls.append(task.prompt_version)
+            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
+                                    output_tokens=5, elapsed_ms=0.0)
+
+    real_router = workspace_module.accounted_router
+
+    def live_like_router(*args, **kwargs):
+        settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", budget_usd=10.0)
+        router = real_router(*args, **{**kwargs, "settings": settings})
+        router.provider.provider = ContractProvider()  # keep the real usage ledger
+        return router
+
+    monkeypatch.setattr(workspace_module, "accounted_router", live_like_router)
+    store = ProjectStore(tmp_path / "projects")
+    store.create_project("project")
+    api = ProjectAPI(store, recover=False)
+    monkeypatch.setattr(api.workspace.research, "research",
+                        lambda query, **_kwargs: RegionResearchResult(
+                            request=query, researched_at=datetime.now(UTC)))
+    body = {"text": "横浜市で地震が発生。避難者30人、期間は1日。"}
+    try:
+        first = api.workspace.preview("project", body)
+        second = api.workspace.preview("project", body)
+    finally:
+        api.close()
+
+    source = "extraction_source"
+    assert first["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
+    # Before stored tapes, the ledger refused this identical paid request.
+    assert second["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
+    assert second["llm_usage"]["api_request_count"] == 0
+    assert calls == ["region-scenario-extraction-v1"]
+
+
+def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_benchmark_scenario
+) -> None:
+    from sheltersim.web import workspace as workspace_module
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls = []
+
+    class AcceptedProvider:
+        def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+            del max_output_tokens, timeout_seconds
+            calls.append(task.prompt_version)
+            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
+                                    output_tokens=5, elapsed_ms=0.0)
+
+    real_router = workspace_module.accounted_router
+
+    def live_like_router(*args, **kwargs):
+        settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", budget_usd=10.0)
+        router = real_router(*args, **{**kwargs, "settings": settings})
+        router.provider.provider = AcceptedProvider()  # keep the real usage ledger
+        return router
+
+    monkeypatch.setattr(workspace_module, "accounted_router", live_like_router)
+    scenario = small_benchmark_scenario(30)
+    store = ProjectStore(tmp_path / "projects")
+    store.create_project("project")
+    saved = store.save_scenario("project", scenario,
+                                approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("project", "run", scenario.id, saved["scenario_version"])
+    TimelineStore(store, "project", "run").record(
+        BranchRuntime.from_world(WorldState.from_scenario(scenario))
+    )
+    api = ProjectAPI(store, recover=False)
+    body = {"minute": 0, "text": "information_desk ゾーンにスタッフを2人追加してください。"}
+    try:
+        first = api.workspace.intervention("project", "run", "main", dict(body))
+        calls_after_first = len(calls)
+        second = api.workspace.intervention("project", "run", "main", dict(body))
+    finally:
+        api.close()
+
+    assert calls_after_first >= 1 and first["fallback_used"] is False
+    # Before stored compiler tapes, the ledger refused this identical paid request.
+    assert second["fallback_used"] is False
+    assert len(calls) == calls_after_first
