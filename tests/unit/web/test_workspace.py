@@ -1,16 +1,21 @@
-"""The Project screen's household correction links unaccompanied minors to a parent.
+"""The Project screen's draft routes: the structured-form preview and household correction.
 
-Every draft comes from the same Scenario preview the screen uses
-(tests/conftest.py ui_project_api), so the people corrected here are generated
-ones, found in the draft rather than pinned by ID.
+Household correction links unaccompanied minors to a parent. Every draft comes
+from the same Scenario preview the screen uses (tests/conftest.py
+ui_project_api), so the people corrected here are generated ones, found in the
+draft rather than pinned by ID.
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from sheltersim.contracts.population import HouseholdCorrectionRequest
-from sheltersim.storage.projects import StorageError
+from sheltersim.experiments.initial_scenario import InitialScenarioRequest
+from sheltersim.storage.projects import StorageError, digest
+from sheltersim.web.workspace import ProjectWorkspace
 
 # Operator household shapes with no declared links. Generated minors then have
 # no guardian, which is the case the correction route exists for; the default
@@ -249,3 +254,67 @@ def test_household_correction_refuses_a_draft_without_recorded_blockers(
                 ),
             },
         )
+
+
+def test_preparation_edits_share_account_even_without_new_client_field(
+    project_store_at, tmp_path
+) -> None:
+    store = project_store_at(tmp_path)
+    workspace = SimpleNamespace(store=store)
+    first = ProjectWorkspace._preparation_account(workspace, "project")
+    assert ProjectWorkspace._preparation_account(SimpleNamespace(store=store), "project") == first
+    ProjectWorkspace._bind_preparation(workspace, "project", first, "approved-run")
+    assert ProjectWorkspace._preparation_account(workspace, "project") != first
+
+
+def test_project_preview_accepts_structured_form_without_free_text(ui_project_api) -> None:
+    request = InitialScenarioRequest(
+        municipality="Synthetic municipality",
+        disaster="earthquake",
+        evacuees=8,
+        duration_days=1,
+        seed=1,
+        model_parameter_overrides={
+            "body_dynamics.sleep_debt_stress_rate_by_agent.*": {"A001": 0.003},
+            "facility_queues.abandon_after_minutes_by_service.*": {"toilet": 60},
+            "zone_environment.baseline_by_zone.*": {
+                "sleeping": {"privacy_level": 0.2, "temperature_c": 30.0}
+            },
+        },
+        evacuation_selection={"age_band_multipliers": {"child": 0, "adult": 1, "older_adult": 0}},
+        field_origins={
+            "municipality": "user",
+            "disaster": "user",
+            "evacuees": "user",
+            "duration_days": "user",
+        },
+    )
+
+    preview = _preview(ui_project_api, request.model_dump(mode="json"))
+
+    scenario = preview["scenario"]
+    assert scenario["model_configs"]["facility_queues"]["abandon_after_minutes_by_service"] == {
+        "toilet": 60
+    }
+    assert scenario["model_configs"]["body_dynamics"]["sleep_debt_stress_rate_by_agent"] == {
+        "A001": 0.003
+    }
+    assert scenario["model_configs"]["zone_environment"]["baseline_by_zone"]["sleeping"] == {
+        "ventilation_effectiveness": 0.7,
+        "lighting_level": 0.5,
+        "privacy_level": 0.2,
+        "temperature_c": 30.0,
+    }
+    overrides = preview["request"]["model_parameter_overrides"]
+    assert overrides["facility_queues.abandon_after_minutes_by_service.*"] == {"toilet": 60}
+    assert overrides["body_dynamics.sleep_debt_stress_rate_by_agent.*"] == {"A001": 0.003}
+    assert overrides["zone_environment.baseline_by_zone.*"] == {
+        "sleeping": {"privacy_level": 0.2, "temperature_c": 30.0}
+    }
+    provenance = scenario["provenance"]["scenario_input"]
+    normalized_request = InitialScenarioRequest.model_validate(preview["request"])
+    expected_source = digest(normalized_request.model_dump(mode="json"))
+    assert preview["can_start"] is True
+    assert provenance["extraction_source"] == "structured_form"
+    assert provenance["sha256"] == expected_source
+    assert preview["llm_usage"]["api_request_count"] == 0
