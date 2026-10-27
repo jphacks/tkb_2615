@@ -194,6 +194,39 @@ def ui_project_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
 
 @pytest.fixture
+def project_store_at() -> Callable[[Path], Any]:
+    """Open a ProjectStore at a folder, with an empty project named "project"."""
+
+    def open_store(root: Path) -> Any:
+        from sheltersim.storage.projects import ProjectStore
+
+        store = ProjectStore(root)
+        store.create_project("project")
+        return store
+
+    return open_store
+
+
+class _CountingProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, **_kwargs: object) -> Any:
+        from sheltersim.llm.contracts import ProviderResponse
+
+        self.calls += 1
+        return ProviderResponse(
+            text='{"ok":true}', model_id="fake", input_tokens=5, output_tokens=3, elapsed_ms=0
+        )
+
+
+@pytest.fixture
+def counting_provider() -> _CountingProvider:
+    """A fake LLM provider that answers {"ok":true} and counts its calls."""
+    return _CountingProvider()
+
+
+@pytest.fixture
 def generated_request() -> Callable[..., dict[str, Any]]:
     """The structured form of GENERATED_SCENARIO_REQUEST with some fields changed."""
     return _generated_request
