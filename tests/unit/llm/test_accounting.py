@@ -19,6 +19,7 @@ from sheltersim.llm.contracts import (
     LLMProviderError,
     LLMStage,
     LLMTask,
+    ProviderCitation,
     ProviderResponse,
 )
 from sheltersim.llm.provider import LLMRouter
@@ -518,3 +519,36 @@ def test_each_live_model_check_run_fits_its_call_and_budget_caps(live_model_chec
             ("intervention", settings.sonnet_model, "recorded"),
         ]
         assert router.spent_usd <= settings.budget_usd
+
+
+class _SourceSearchProvider:
+    """Answer the official-domain search with one cited government page."""
+
+    def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+        del task, max_output_tokens, timeout_seconds
+        return ProviderResponse(
+            text='{"status":"candidate_sources_found","notes":[]}',
+            model_id=model_id,
+            input_tokens=2000,
+            output_tokens=120,
+            elapsed_ms=0,
+            web_search_requests=1,
+            citations=(ProviderCitation(url="https://www.city.sumida.lg.jp/", title="墨田区"),),
+        )
+
+
+def test_each_live_source_search_run_fits_its_own_allowance(
+    live_source_search_check, tmp_path: Path
+):
+    # Like the live model check, the search check reserved on one fixed account, so its
+    # 2-call cap covered every run on the machine (#152).
+    for run in ("first", "second", "third"):
+        _, router, task, campaign = live_source_search_check(
+            LLMSettings(api_key="mock-key"), tmp_path / f"{run}.json", _SourceSearchProvider()
+        )
+
+        router.complete(task)
+
+        assert [record.outcome for record in router.records] == ["recorded"]
+        assert router.records[-1].web_search_requests == 1
+    assert campaign.summary()["totals"]["calls"] == 3
