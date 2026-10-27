@@ -1127,6 +1127,29 @@ def demo_timeline_inspector(tmp_path: Path) -> Any:
     return InspectorService(tmp_path)
 
 
+@pytest.fixture
+def audit_inspector(tmp_path: Path) -> Any:
+    """An Inspector over one finished Run (run-one): four people of scenario_100_agents
+    for two minutes, without display coordinates or scheduled events.
+    """
+    from sheltersim.experiments.runner import run_scenario
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.inspector import InspectorService
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "admin-audit-test"
+    document["duration_minutes"] = 2
+    document["profiles"] = document["profiles"][:4]
+    document["zones"] = [
+        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
+        for zone in document["zones"]
+    ]
+    document["scheduled_events"] = []
+    scenario = ScenarioSpec.model_validate(document)
+    run_scenario(scenario, tmp_path / "run-one")
+    return InspectorService(tmp_path)
+
+
 def _make_event(
     event_id: str,
     *,
