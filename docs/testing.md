@@ -128,7 +128,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -162,7 +162,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_engine.py` | core | 4 | 6 |  |  | 契約 | fixture | long_simulation |
 | `test_per_tick_history_validation.py` | core | 3 | 6 |  |  |  | 生成 |  |
 | `test_state.py` | core | 20 |  |  |  | 契約 | fixture |  |
-| `unit/core/test_world.py` | core | 4 |  |  |  | 契約 | 生成（実行なし） |  |
+| `unit/core/test_world.py` | core | 7 |  |  |  | 契約 | 生成（実行なし） |  |
 | `test_action_lifecycle.py` | domain | 3 |  |  |  |  | fixture |  |
 | `test_ambient_demand_effects.py` | domain | 10 |  |  | 4 | 契約 | fixture |  |
 | `test_care_lifecycle.py` | domain | 16 | 1 |  | 11 | 契約 | 生成・fixture |  |
@@ -176,13 +176,14 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `integration/test_geometry_config_cache.py` | domain |  | 1 |  |  | 契約 | 生成 |  |
 | `test_installed_facility_announcement.py` | domain | 5 | 3 |  |  | 結果 | 生成 |  |
 | `test_operational_events.py` | domain | 15 |  |  | 12 | 契約 | fixture |  |
-| `unit/domain/test_movement.py` | domain | 5 |  |  |  |  | 生成（実行なし） |  |
+| `unit/domain/test_movement.py` | domain | 6 |  |  |  |  | 生成（実行なし） |  |
 | `integration/test_physical_queues.py` | domain |  | 1 |  |  | 結果 | 生成 | long_simulation |
 | `test_population_demand_integration.py` | domain | 9 |  |  | 9 | 契約 | fixture＋図面 |  |
 | `integration/test_queue_service.py` | domain |  | 1 |  |  | 結果 | 生成 | long_simulation |
 | `test_resource_ledger_state_check.py` | domain | 6 |  |  |  | 契約 | fixture |  |
 | `integration/test_resource_loss.py` | domain |  | 1 |  |  | 契約 | 生成 |  |
-| `test_resource_queue_regressions.py` | domain | 8 | 1 |  |  |  | 生成 | long_simulation |
+| `integration/test_entered_stock.py` | domain |  | 1 |  |  |  | 生成 | long_simulation |
+| `unit/domain/test_queueing.py` | domain | 4 |  |  |  |  | 生成（実行なし） |  |
 | `test_resource_service.py` | domain | 23 | 4 |  | 5 | 契約 | fixture |  |
 | `test_resources.py` | domain | 8 |  | 1 | 3 | 結果・契約 | fixture |  |
 | `test_staff.py` | domain | 9 |  |  | 2 | 結果 | fixture |  |
@@ -285,8 +286,8 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 | 担当 | ファイル | 単体 | 統合 | e2e | 範囲が混ざるファイル | 生成Scenarioを実行するファイル |
 |---|---|---|---|---|---|---|
-| core | 5 | 36 | 13 | 0 | 3 | 1 |
-| domain | 30 | 187 | 17 | 1 | 7 | 8 |
+| core | 5 | 39 | 13 | 0 | 3 | 1 |
+| domain | 31 | 184 | 17 | 1 | 6 | 8 |
 | events | 5 | 36 | 32 | 0 | 1 | 1 |
 | policies | 12 | 106 | 14 | 1 | 5 | 2 |
 | experiments | 19 | 91 | 20 | 1 | 10 | 1 |
@@ -297,9 +298,9 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 22 | 2 | 0 | 1 | 1 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
-| 計 | 120 | 702 | 231 | 20 | 51 | 18 |
+| 計 | 121 | 702 | 231 | 20 | 50 | 18 |
 
-953件のうち単体が702件（74%）、統合が231件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが55本、統合だけまたはe2eだけが13本で、残りの51本は範囲が混ざっています。
+953件のうち単体が702件（74%）、統合が231件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが56本、統合だけまたはe2eだけが14本で、残りの50本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 

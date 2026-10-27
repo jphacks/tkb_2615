@@ -10,6 +10,7 @@ import pytest
 
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.operational import OPERATIONAL_EVENTS_KEY
+from sheltersim.domain.resource_service import SERVICE_STATE_KEY
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 
 
@@ -76,3 +77,49 @@ def test_the_per_tick_check_still_requires_state_for_operational_events(
 
     with pytest.raises(StateInvariantError, match="operational_events_v1"):
         world.validate(validate_event_history=False)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [("travel_scheduled", "in_room_route_available"), ("rejected", "room_route_blocked")],
+)
+def test_in_room_request_outcomes_pass_state_validation(
+    generated_scenario, outcome: str, reason: str
+) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    initialize_simulator_extensions(world)
+    station = next(item for item in world.facilities.values() if item.kind == "water_station")
+    agent_id = sorted(world.agents)[0]
+    world.model_state[SERVICE_STATE_KEY]["request_history"].append(
+        {
+            "minute": 0,
+            "agent_id": agent_id,
+            "action": "fetch_water",
+            "outcome": outcome,
+            "reason": reason,
+            "facility_id": station.id,
+            "origin_zone_id": station.zone_id,
+            "detail": None,
+        }
+    )
+    world.validate()
+
+
+def test_in_room_reasons_still_require_their_own_outcome(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    initialize_simulator_extensions(world)
+    station = next(item for item in world.facilities.values() if item.kind == "water_station")
+    world.model_state[SERVICE_STATE_KEY]["request_history"].append(
+        {
+            "minute": 0,
+            "agent_id": sorted(world.agents)[0],
+            "action": "fetch_water",
+            "outcome": "queued",
+            "reason": "in_room_route_available",
+            "facility_id": station.id,
+            "origin_zone_id": station.zone_id,
+            "detail": None,
+        }
+    )
+    with pytest.raises(StateInvariantError, match="outcome is inconsistent"):
+        world.validate()
