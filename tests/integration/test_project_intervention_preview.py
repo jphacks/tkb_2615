@@ -1,4 +1,10 @@
-"""A Project's intervention preview sends a running generated Scenario to Opus.
+"""A Project's intervention preview sends a running generated Scenario to Opus, and
+an approved preview forks the Branch without changing it.
+
+The preview-and-apply tests are the Project screen's counterparts of the demo's
+tests/integration/test_nl_demo.py and tests/e2e/test_nl_demo_branching.py (#137);
+their text is read by the offline rules, as in
+tests/e2e/test_project_scenario_to_results.py.
 
 The compiler's own contract (repair, fallback, redaction, stop policy) is
 checked in tests/unit/llm/test_natural_language.py.
@@ -141,3 +147,112 @@ def test_project_preview_returns_the_stop_reason_as_a_conflict(
 
     assert raised.value.code == "intervention_compiler_unavailable"
     assert "429" in str(raised.value)
+
+
+# The main Branch is computed to COMPUTED_UNTIL; previews pick an earlier minute
+# between its saved Checkpoints (every 30 minutes), as the screen's time slider does.
+COMPUTED_UNTIL = 90
+PREVIEW_MINUTE = 40
+ARRIVALS = "避難スペースに避難者を10人追加"
+MAIN = ["project", "runs", "run", "branches", "main"]
+
+
+@pytest.fixture
+def project_api(tmp_path, generated_scenario, monkeypatch):
+    """The Project API over a generated Scenario Run computed to COMPUTED_UNTIL, offline."""
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, _ = _mid_run_project(tmp_path, generated_scenario, COMPUTED_UNTIL)
+    api = ProjectAPI(store, recover=False)
+    try:
+        yield api
+    finally:
+        api.close()
+
+
+def _saved_state(api: ProjectAPI) -> tuple[str, str]:
+    """The main Branch's saved head and its state at PREVIEW_MINUTE."""
+    timeline = TimelineStore(api.store, "project", "run")
+    return (
+        api.store.load_branch("project", "run", "main")[1].to_json(),
+        digest(timeline.seek("main", PREVIEW_MINUTE).world.to_dict()),
+    )
+
+
+def _preview(api: ProjectAPI, body: dict) -> dict:
+    return api.post([*MAIN, "intervention-preview"], {"minute": PREVIEW_MINUTE, **body})
+
+
+def _apply(api: ProjectAPI, preview: dict, child_id: str, **overrides) -> dict:
+    return api.post(
+        [*MAIN, "intervention-apply"],
+        {
+            "preview_id": preview["preview_id"],
+            "approved_program_hash": preview["approved_program_hash"],
+            "approved": True,
+            "child_id": child_id,
+            **overrides,
+        },
+    )
+
+
+def test_project_preview_changes_neither_the_branch_nor_its_history(project_api) -> None:
+    before = _saved_state(project_api)
+
+    preview = _preview(project_api, {"text": ARRIVALS})
+
+    assert preview["status"] == "compiled"
+    assert preview["can_apply"] is True
+    assert _saved_state(project_api) == before
+
+
+def test_project_apply_forks_at_a_past_minute_and_leaves_the_source_unchanged(
+    project_api,
+) -> None:
+    before = _saved_state(project_api)
+    preview = _preview(project_api, {"text": ARRIVALS})
+
+    _apply(project_api, preview, "arrivals")
+
+    reference = project_api.store.branch_reference("project", "run", "arrivals")
+    assert (reference.parent_branch_id, reference.fork_minute) == ("main", PREVIEW_MINUTE)
+    assert reference.computed_until == PREVIEW_MINUTE
+    assert _saved_state(project_api) == before
+    child = TimelineStore(project_api.store, "project", "run").seek("arrivals", PREVIEW_MINUTE)
+    assert child.runtime_state["fork_origin"]["state_hash"] == before[1]
+    assert any(
+        event.provenance.get("effect_program_v1", {}).get("op") == "add_evacuees"
+        for event in child.world.event_queue.pending()
+    )
+
+    # A second approval of the same plan cannot reuse the Branch name.
+    again = _preview(project_api, {"text": ARRIVALS})
+    with pytest.raises(StorageError, match="child branch already exists"):
+        _apply(project_api, again, "arrivals")
+    assert _saved_state(project_api) == before
+
+
+def test_project_apply_needs_an_applicable_preview_its_hash_and_approval(
+    project_api, add_toilets_program
+) -> None:
+    before = _saved_state(project_api)
+    blocked_program = add_toilets_program(start_minute=PREVIEW_MINUTE).model_dump(mode="json")
+    blocked_program["effects"][0]["target_selector"]["target_id"] = "no-such-area"
+    blocked = _preview(project_api, {"program": blocked_program})
+    assert blocked["can_apply"] is False
+    assert blocked["validation_issues"]
+    with pytest.raises(StorageError, match="does not match validated preview"):
+        _apply(project_api, blocked, "blocked")
+
+    preview = _preview(project_api, {"text": ARRIVALS})
+    with pytest.raises(StorageError, match="does not match validated preview"):
+        _apply(project_api, preview, "wrong-hash", approved_program_hash="0" * 64)
+    with pytest.raises(StorageError, match="explicit human approval"):
+        _apply(project_api, preview, "not-approved", approved=False)
+
+    text_only = _preview(project_api, {"text": "空を飛ぶ"})
+    assert text_only["status"] == "not_simulatable"
+    assert "preview_id" not in text_only
+    assert _saved_state(project_api) == before
+    assert [branch["branch_id"] for branch in project_api.store.branches("project", "run")] == [
+        "main"
+    ]
