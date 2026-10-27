@@ -15,7 +15,7 @@ ruff format --check .
 
 ### 並列実行
 
-開発依存にはpytest-xdistが含まれます。複数CPUで並列に実行するには`-n auto`を付けます。`pyproject.toml`で`--dist worksteal`を指定しているので、手の空いたworkerが残りのテストを引き取り、長いテストが最後にまとまっても全体が延びにくくなっています（`-n`なしでは効果はありません）。
+開発依存にはpytest-xdistが含まれます。複数CPUで並列に実行するには`-n auto`を付けます。`pyproject.toml`で`--dist worksteal`を指定しているので、手の空いたworkerが残りのテストを引き取り、長いテストが最後にまとまっても全体が延びにくくなっています（`-n`なしでは効果はありません）。worksteal は、集めたテストを順に連続した塊に分けて各workerへ配ります。`tests/conftest.py`の`pytest_collection_modifyitems`が、`long_simulation`の印のテストを各塊の先頭に1本ずつ置くので、長時間テストは最初から並んで走ります（印のテストがないとき、またはworkerが1つのときは並びを変えません）。2026-10-27に Ryzen 7 9800X3D で計ると、全件は約163秒から約144秒になりました。長時間テストを先頭にまとめると、1つのworkerに集まって約197秒、`--dist load`にするとモジュール単位の準備を作り直して約420秒と、どちらも遅くなりました。
 
 ~~~shell
 SHELTERSIM_LLM_MODE=offline python -m pytest -n auto

@@ -239,3 +239,27 @@ def generated_scenario_with_split_queues(generated_scenario):
         {"id": "toilet_staff_01", "zone_id": zones["toilet_01"], "skills": ["toilet_service"]}
     )
     return ScenarioSpec.model_validate(document)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Give each parallel worker one long simulation to start with.
+
+    pytest-xdist's worksteal scheduler hands each worker a contiguous block of the
+    collected items and lets idle workers steal from the end of other blocks. When
+    the long simulations sit together, one worker runs them back to back while the
+    others finish early; putting one at the head of each block starts them all at once.
+    Every worker collects in this same order, so the blocks still agree.
+    """
+    workers = getattr(config, "workerinput", {}).get("workercount", 1)
+    long_runs = [item for item in items if item.get_closest_marker("long_simulation")]
+    if workers < 2 or not long_runs:
+        return
+    rest = [item for item in items if item.get_closest_marker("long_simulation") is None]
+    size = len(items) // workers
+    ordered: list[pytest.Item] = []
+    for index in range(workers):
+        block = rest[: size - (1 if index < len(long_runs) else 0)] if index < workers - 1 else rest
+        rest = rest[len(block) :]
+        ordered.extend(long_runs[index : index + 1] + block)
+    ordered.extend(long_runs[workers:])
+    items[:] = ordered
