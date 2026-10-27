@@ -149,6 +149,7 @@ def test_in_room_route_keeps_a_start_that_rounds_onto_a_door_node() -> None:
     assert checked
 
 
+@pytest.mark.long_simulation
 def test_generated_scenario_with_entered_stock_completes_a_day(tmp_path) -> None:
     # Before the fixes this Run stopped at minute 495 (stale stall) and, once that
     # was fixed, at minute 512 (in-room request reason rejected by validation).

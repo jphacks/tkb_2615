@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import statistics
 
+import pytest
+
 from sheltersim.core.world import WorldState
 from sheltersim.domain.movement import (
     MOVEMENT_STATE_KEY,
@@ -95,6 +97,7 @@ def test_head_without_a_reachable_slot_still_waits() -> None:
     assert progress_physical_queue_positions(world, station.id, resource=True, minute=0)
 
 
+@pytest.mark.long_simulation
 def test_staffed_water_station_serves_a_queue_longer_than_its_room(tmp_path) -> None:
     # Before the fix the 17th person in this 1.8 m wide room had no slot, the head
     # was never served and everyone ended the day at hydration need 1.0.

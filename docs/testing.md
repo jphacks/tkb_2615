@@ -25,6 +25,8 @@ Ryzen 5 5625U（WSL2、12スレッド）での全件（640 passed、3 skipped）
 
 2026-10-27に`develop`（`64f7059`）を別のPC（Ryzen 7 9800X3D、WSL2、16スレッド）で実行すると、全件（896 passed、4 skipped）は`-n auto`で約2分でした。直列は計測していません。このPCで最も長いテストは約100秒（`test_one_meal_station_keeps_up_with_one_hundred_people`と`test_100_agents_seven_day_failure_scenario_runs_offline`）でした。
 
+`long_simulation`の印は、7日間のsimulationを実行するテストと、1件で30秒以上（直列）かかるテストに付けます。今は、7日間のテストが4件と、生成Scenarioを1日分実行するテストが4件の計8件です。手動実行のCIでは、`オフラインCI`（`.github/workflows/ci.yml`）がこれらを除き、`長時間simulation回帰`（`.github/workflows/long-regression.yml`）の`long`がこれらだけを実行します。印のない`pytest`は全件を実行します。2026-10-27に同じPC（Ryzen 7 9800X3D）で計ると、`-n auto`で全件が約2分20秒、`-m "not long_simulation"`が約1分40秒でした。
+
 tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、状態保存先（XDG_STATE_HOME）、LLM cache（SHELTERSIM_LLM_CACHE_PATH）を一時directoryに向けます。並列workerがこれらを共有せず、開発者のrunsやPC全体の利用記録にも書き込みません。test内でこれらを設定した場合はその値が優先されます。live_api testは、実費をPC全体の利用記録に残すため対象外です。
 
 ## 移管時の検証記録
@@ -76,6 +78,8 @@ demo-v2の地図描画は、`tests/test_installed_facility_rendering.py`が確�
 1. 先に`git mv`だけのcommitを作り、内容の変更は次のcommitにします。履歴をたどれるようにするためです。
 2. 範囲が混ざるファイルは、移すときに範囲ごとに分けます。
 3. `tests/unit/repo/test_test_layout.py`の`UNSORTED`から、そのファイル名を消します。
+
+`long_simulation`の印を付けるだけの変更では、ファイルを移しません。
 
 `tests/unit/repo/test_test_layout.py`は、`tests/`直下への新しいファイルの追加、決まった場所以外のテストファイル、`tests/live/`以外での`live_api`の印を見つけると失敗します。
 
@@ -170,12 +174,12 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_geometry_config_cache.py` | domain | 3 | 1 |  |  | 契約 | 生成 |  |
 | `test_installed_facility_announcement.py` | domain | 5 | 3 |  |  | 結果 | 生成 |  |
 | `test_operational_events.py` | domain | 15 |  |  | 12 | 契約 | fixture |  |
-| `test_physical_queue_overflow.py` | domain | 2 | 1 |  |  | 結果 | 生成 |  |
+| `test_physical_queue_overflow.py` | domain | 2 | 1 |  |  | 結果 | 生成 | long_simulation |
 | `test_population_demand_integration.py` | domain | 9 |  |  | 9 | 契約 | fixture＋図面 |  |
-| `test_queue_service_while_repositioning.py` | domain | 3 | 1 |  |  | 結果 | 生成 |  |
+| `test_queue_service_while_repositioning.py` | domain | 3 | 1 |  |  | 結果 | 生成 | long_simulation |
 | `test_resource_ledger_state_check.py` | domain | 6 |  |  |  | 契約 | fixture |  |
 | `test_resource_loss_without_operational_state.py` | domain | 2 | 1 |  |  | 契約 | 生成 |  |
-| `test_resource_queue_regressions.py` | domain | 8 | 1 |  |  |  | 生成 |  |
+| `test_resource_queue_regressions.py` | domain | 8 | 1 |  |  |  | 生成 | long_simulation |
 | `test_resource_service.py` | domain | 23 | 4 |  | 5 | 契約 | fixture |  |
 | `test_resources.py` | domain | 8 |  | 1 | 3 | 結果・契約 | fixture |  |
 | `test_staff.py` | domain | 9 |  |  | 2 | 結果 | fixture |  |
@@ -217,7 +221,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_imported_plan_route_revision.py` | region | 1 |  |  |  | 契約 | なし |  |
 | `test_region_providers.py` | region | 7 |  |  |  | 契約 | なし |  |
 | `test_region_water_outage_conditions.py` | region | 1 | 1 |  |  |  | 生成 |  |
-| `test_standard_provisioning.py` | region | 13 | 2 |  |  | 結果 | 生成 |  |
+| `test_standard_provisioning.py` | region | 13 | 2 |  |  | 結果 | 生成 | long_simulation |
 | `live/test_live_api.py` | llm | — | — | — | — | 結果・契約 | fixture | live_api |
 | `test_adaptive_event_eval.py` | llm | 22 |  |  | 12 | 契約 | fixture |  |
 | `test_complex_interactions.py` | llm | 9 |  |  | 4 | 契約 | fixture |  |
@@ -307,7 +311,7 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない**（#58で足した共通fixtureの検査`test_generated_scenario_fixture.py`と、#60で足した介入の結果テストを除く）。 Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
 6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58で共通fixtureを用意。既存の4本を移すのは#88で扱います。
 7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58で対応済み（`generated_small`を追加）
-8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58で小規模な生成Scenarioの共通fixtureを用意済み。既存の遅いテストはそのままです。
+8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58で小規模な生成Scenarioの共通fixtureを用意済み。既存の遅いテストのうち、1件で30秒以上（直列）かかる4件（上の3件と`test_default_generated_scenario_serves_water_and_meals`）に`long_simulation`の印を付けました。
 9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59で置き場所と名前の決まりを作り、ライブテストを`tests/live/`へ移しました。既存ファイルの改名は、移すときに行います。
 
 ## 確認できていないこと
