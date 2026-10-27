@@ -1,4 +1,7 @@
-"""Planning check that toilet, water and meal units can serve their daily demand."""
+"""Planning check that toilet, water and meal units can serve their daily demand.
+
+The CLI report is checked in tests/integration/test_service_capacity_cli.py.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from sheltersim.__main__ import main
 from sheltersim.experiments.initial_scenario import (
     InitialScenarioBuilder,
     InitialScenarioRequest,
@@ -21,26 +23,21 @@ from sheltersim.experiments.service_capacity import (
     service_capacity_diagnostic,
 )
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 RESEARCH_FIXTURE = ROOT / "fixtures" / "scenarios" / "research_operational_100_7d.json"
 
 
-def _request(evacuees: int, **overrides: object) -> InitialScenarioRequest:
+def _request(evacuees: int) -> InitialScenarioRequest:
     return InitialScenarioRequest(
         municipality="Synthetic municipality",
         disaster="earthquake",
         evacuees=evacuees,
         duration_days=1,
         seed=7,
-        **overrides,
     )
 
 
 SMALL_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
-
-
-def _generated(evacuees: int) -> ScenarioSpec:
-    return InitialScenarioBuilder().build(_request(evacuees)).scenario
 
 
 def _rows(scenario: ScenarioSpec) -> dict[str, dict]:
@@ -62,6 +59,8 @@ def test_required_units_fit_the_daily_work_in_the_target_load() -> None:
 
 @pytest.mark.parametrize("evacuees", [10, 30, 100, 300])
 def test_default_generated_scenarios_have_no_capacity_warnings(evacuees: int) -> None:
+    # This checks the generator's own defaults and warnings across sizes, so it
+    # builds drafts directly rather than through the shared preview.
     draft = InitialScenarioBuilder().build(_request(evacuees))
     report = service_capacity_diagnostic(draft.scenario)
     assert report["warnings"] == []
@@ -73,14 +72,13 @@ def test_default_generated_scenarios_have_no_capacity_warnings(evacuees: int) ->
     assert not any("休みなく" in warning or "一度も" in warning for warning in draft.warnings)
 
 
-def test_toilets_out_of_service_are_structurally_short() -> None:
+def test_toilets_out_of_service_are_structurally_short(generated_scenario_with) -> None:
     def keep_three_toilets(document: dict) -> None:
         toilets = [item for item in document["facilities"] if item["kind"] == "toilet"]
         for item in toilets[3:]:
             item["working_units"] = 0
 
-    draft = InitialScenarioBuilder().build(_request(100))
-    toilet = _rows(_with(draft.scenario, keep_three_toilets))["toilet"]
+    toilet = _rows(_with(generated_scenario_with(evacuees=100), keep_three_toilets))["toilet"]
     # 100 people x 5 uses x 6 minutes = 3,000 minutes against 3 units x 960 minutes.
     assert toilet["status"] == "structurally_short"
     assert toilet["utilization"] == pytest.approx(3000 / (3 * 960))
@@ -95,24 +93,24 @@ def test_water_and_meal_are_not_modeled_without_resource_service() -> None:
     assert rows["water"]["warnings"] == rows["meal"]["warnings"] == []
 
 
-def test_stations_without_staff_in_their_zone_never_start() -> None:
+def test_stations_without_staff_in_their_zone_never_start(generated_scenario_with) -> None:
     def move_station_staff_away(document: dict) -> None:
         for member in document["staff"]:
             member["zone_id"] = "staff"
 
-    rows = _rows(_with(_generated(30), move_station_staff_away))
+    rows = _rows(_with(generated_scenario_with(evacuees=30), move_station_staff_away))
     assert rows["water"]["status"] == rows["meal"]["status"] == "no_staff"
     assert rows["water"]["serving_units"] == 0
     assert any("給水は一度も始まりません" in warning for warning in rows["water"]["warnings"])
 
 
-def test_serving_units_are_limited_by_skilled_staff_in_the_zone() -> None:
+def test_serving_units_are_limited_by_skilled_staff_in_the_zone(generated_scenario_with) -> None:
     def keep_one_station_staff(document: dict) -> None:
         station_staff = [member for member in document["staff"] if member["zone_id"] == "food"]
         for member in station_staff[1:]:
             member["zone_id"] = "staff"
 
-    water = _rows(_with(_generated(30), keep_one_station_staff))["water"]
+    water = _rows(_with(generated_scenario_with(evacuees=30), keep_one_station_staff))["water"]
     assert water["units"] == 2
     assert water["serving_units"] == 1
     # Generated coefficients: 0.001/minute growth, relief 0.35, action threshold 0.25.
@@ -123,7 +121,9 @@ def test_serving_units_are_limited_by_skilled_staff_in_the_zone() -> None:
     assert water["required_units"] == 2
 
 
-def test_a_floor_plan_station_counts_as_one_unit_whatever_its_capacity() -> None:
+def test_a_floor_plan_station_counts_as_one_unit_whatever_its_capacity(
+    generated_scenario,
+) -> None:
     # physical_service_capacity serves one person at a time per surveyed point.
     def enlarge_main_station(document: dict) -> None:
         station = next(
@@ -131,7 +131,8 @@ def test_a_floor_plan_station_counts_as_one_unit_whatever_its_capacity() -> None
         )
         station["capacity"] = 3
 
-    assert _rows(_with(_generated(30), enlarge_main_station))["water"]["units"] == 2
+    stations = sum(item.kind == "water_station" for item in generated_scenario.facilities)
+    assert _rows(_with(generated_scenario, enlarge_main_station))["water"]["units"] == stations
 
 
 def test_research_fixture_water_is_far_beyond_one_station() -> None:
@@ -141,17 +142,16 @@ def test_research_fixture_water_is_far_beyond_one_station() -> None:
     assert water["utilization"] > 10
 
 
-def test_diagnostic_does_not_change_the_scenario() -> None:
-    scenario = _generated(30)
+def test_diagnostic_does_not_change_the_scenario(generated_scenario) -> None:
+    scenario = generated_scenario
     before = scenario.canonical_json()
     service_capacity_diagnostic(scenario)
     assert scenario.canonical_json() == before
 
 
-def test_unknown_phase_is_rejected() -> None:
-    scenario = InitialScenarioBuilder().build(_request(10)).scenario
+def test_unknown_phase_is_rejected(generated_scenario) -> None:
     with pytest.raises(ValueError, match="phase"):
-        service_capacity_diagnostic(scenario, phase="weekly")
+        service_capacity_diagnostic(generated_scenario, phase="weekly")
 
 
 def test_capacity_planning_assumption_matches_the_manifest() -> None:
@@ -163,16 +163,3 @@ def test_capacity_planning_assumption_matches_the_manifest() -> None:
     assert entry["values"]["target_utilization"] == TARGET_UTILIZATION
     assert entry["values"]["toilet_uses_per_person_day"] == 5
     assert entry["context_sources"] == ["SRC-CAO-TOILET-GUIDELINE-2024-12"]
-
-
-def test_cli_prints_the_capacity_report(tmp_path, capsys) -> None:
-    path = tmp_path / "scenario.json"
-    path.write_text(_generated(100).canonical_json())
-    assert main(["service-capacity-diagnostic", "--scenario", str(path)]) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["source_id"] == SERVICE_CAPACITY_SOURCE_ID
-    assert {row["service"]: row["status"] for row in report["services"]} == {
-        "toilet": "ok",
-        "water": "ok",
-        "meal": "ok",
-    }
