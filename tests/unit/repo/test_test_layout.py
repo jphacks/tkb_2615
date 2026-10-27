@@ -29,7 +29,6 @@ SCOPE_DIRECTORIES = ("integration", "e2e", "live")
 # remove it here; never add to this list.
 UNSORTED = frozenset(
     {
-        "test_adaptive_event_eval.py",
         "test_admin_audit.py",
         "test_checkpoint_save_regressions.py",
         "test_demo_jobs.py",
