@@ -79,10 +79,6 @@ def test_event_log_rebuilds_bounded_indexes_from_immutable_records(make_event) -
     event_log = EventLog(_records=[outage, failed_recovery, care])
 
     assert event_log.max_sequence == 5
-    assert event_log.applied_facility_event_ids("toilet_1") == frozenset(
-        {"outage-history"}
-    )
-    assert event_log.completed_support_kinds("A001") == frozenset(
-        {"medication_support"}
-    )
+    assert event_log.applied_facility_event_ids("toilet_1") == frozenset({"outage-history"})
+    assert event_log.completed_support_kinds("A001") == frozenset({"medication_support"})
     assert event_log.completed_support_kinds("A002") == frozenset()
