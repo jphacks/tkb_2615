@@ -128,7 +128,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`。範囲が混ざっていたものは、単体と統合に分けました）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -217,7 +217,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_generated_scenario_fixture.py` | experiments | 2 | 1 |  |  | 契約 | 生成 |  |
 | `test_household_correction.py` | experiments | 5 |  |  |  | 契約 | 生成（実行なし） |  |
 | `test_metrics.py` | experiments | 3 | 1 |  | 1 | 結果・契約 | fixture |  |
-| `test_model_evaluation.py` | experiments | 12 |  |  |  | 契約 | fixture・生成（実行なし） |  |
+| `unit/experiments/test_validation.py` | experiments | 12 |  |  |  | 契約 | fixture・生成（実行なし） |  |
 | `test_operational_scenarios.py` | experiments | 1 | 3 |  |  | 結果 | fixture | long_simulation |
 | `test_performance_smoke.py` | experiments | 1 | 1 |  |  | 契約 | fixture |  |
 | `test_profiles.py` | experiments | 8 |  |  |  | 契約 | fixture |  |
