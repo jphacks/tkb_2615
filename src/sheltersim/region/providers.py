@@ -682,7 +682,9 @@ class EStatProvider:
         period_code: str | None = None,
         category_codes: dict[str, str] | None = None,
     ) -> tuple[dict[str, Any], ...]:
-        """Fetch only the table, area, period, and dimensions explicitly selected by the operator."""
+        """Fetch only the table, area, period, and dimensions explicitly selected by the
+        operator.
+        """
         if not self.app_id:
             return ()
         if not table_id.strip() or not area_code.strip():

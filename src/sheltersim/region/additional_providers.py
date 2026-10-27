@@ -852,6 +852,7 @@ class JmaForecastProvider:
                 last_modified=snapshot.last_modified,
             )
             if request.target_date and request.target_date not in valid_dates:
+                valid_text = ", ".join(sorted(item.isoformat() for item in valid_dates)) or "none"
                 return (
                     source,
                     (),
@@ -859,10 +860,7 @@ class JmaForecastProvider:
                         data_kind="weather",
                         status="out_of_scope",
                         source_id=source_id,
-                        applicability=(
-                            "JMA forecast valid dates: "
-                            f"{', '.join(sorted(item.isoformat() for item in valid_dates)) or 'none'}"
-                        ),
+                        applicability=f"JMA forecast valid dates: {valid_text}",
                         message="指定日の気象庁予報は提供範囲外です。長期の気象条件は不明として扱います。",
                     ),
                 )

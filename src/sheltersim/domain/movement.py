@@ -1171,7 +1171,9 @@ def agent_is_at_facility_service_point(
 def physical_service_capacity(
     world: WorldState, facility_id: str, configured: int, queue_id: str | None = None
 ) -> int:
-    """A single surveyed point reserves one physical service place until per-unit geometry exists."""
+    """A single surveyed point reserves one physical service place until per-unit
+    geometry exists.
+    """
     if queue_id is not None:
         from sheltersim.domain.facility_queues import point_for_queue
 

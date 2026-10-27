@@ -294,7 +294,9 @@ class OperationalConditions(RegionModel):
         dict[str, dict[str, object]],
         tuple[str, ...],
     ]:
-        """Compile supported conditions only; unsupported or unknown values stay visible as blockers."""
+        """Compile supported conditions only; unsupported or unknown values stay visible
+        as blockers.
+        """
         facility_by_id = {item.id: item for item in facilities}
         staff_ids = {item.id for item in staff}
         blockers: list[str] = []

@@ -316,7 +316,9 @@ class ProjectStore:
             try:
                 if fcntl is not None:
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:  # Windows: lock the first byte without waiting; the lock ends when the FD closes.
+                else:
+                    # Windows: lock the first byte without waiting; the lock ends when the
+                    # FD closes.
                     if os.fstat(descriptor).st_size == 0:
                         os.write(descriptor, b"\0")
                     os.lseek(descriptor, 0, os.SEEK_SET)

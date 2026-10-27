@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS entity_time ON entities(branch,kind,entity,minute,key
 CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key);
 CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
 PRAGMA user_version=1;
-"""
+"""  # noqa: E501
 
 
 def cursor_encode(value: dict[str, Any]) -> str:
