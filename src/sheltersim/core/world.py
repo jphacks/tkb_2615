@@ -45,7 +45,7 @@ from sheltersim.domain.models import (
 from sheltersim.domain.operational import (
     OPERATIONAL_EVENTS_KEY,
     create_operational_events_state,
-    uses_operational_events,
+    operational_events_enabled,
     validate_operational_events_state,
 )
 from sheltersim.domain.psychological_state import (
@@ -209,7 +209,7 @@ class WorldState:
                 "queue_stall_history": [],
                 "stall_state": {},
             }
-        if uses_operational_events(scenario.scheduled_events):
+        if operational_events_enabled(scenario.model_configs, scenario.scheduled_events):
             world.model_state[OPERATIONAL_EVENTS_KEY] = create_operational_events_state(
                 scenario.scheduled_events, set(world.staff)
             )
