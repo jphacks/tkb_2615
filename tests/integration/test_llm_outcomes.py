@@ -1,4 +1,9 @@
-"""Offline checks that rule fallbacks are counted and surfaced, never reported as clean runs."""
+"""Offline checks that rule fallbacks are counted and surfaced in Run manifests, Project
+status and reports, never reported as clean runs.
+
+The outcome summary itself is checked in tests/unit/llm/test_outcomes.py, and the CLI
+warnings in tests/e2e/test_cli_run.py.
+"""
 
 from __future__ import annotations
 
@@ -9,20 +14,15 @@ import pytest
 
 from sheltersim import cli
 from sheltersim.core.world import WorldState
-from sheltersim.experiments.benchmark import build_benchmark_scenario
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.runner import run_scenario
-from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import LLMAllowanceError, ProviderResponse
-from sheltersim.llm.outcomes import fallback_warning, summarize_call_outcomes
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.storage.projects import ProjectStore, digest
 from sheltersim.web.projects import ProjectAPI
-
-BASELINE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 class AcceptingProvider:
@@ -47,13 +47,6 @@ class DeniedAllowanceProvider:
         raise LLMAllowanceError("usage_allowance_denied:usage_limit_exceeded")
 
 
-def _scenario(duration_minutes: int = 200) -> ScenarioSpec:
-    # By minute 200 stressed synthetic Agents trigger support-priority and social tasks.
-    return build_benchmark_scenario(
-        ScenarioSpec.load(BASELINE), agent_count=30, seed=7, duration_minutes=duration_minutes
-    )
-
-
 def _router(provider, *, max_api_calls: int = 1_000) -> LLMRouter:
     settings = LLMSettings(
         mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=max_api_calls, budget_usd=1.0
@@ -65,79 +58,20 @@ def _manifest(run_directory: Path) -> dict[str, object]:
     return json.loads((run_directory / "manifest.json").read_text(encoding="utf-8"))
 
 
-def _record(
-    index: int,
-    outcome: str,
-    *,
-    fallback: bool,
-    error_kind: str | None = None,
-    prompt_version: str = "support-priority-v1",
-) -> dict[str, object]:
-    return {
-        "call_index": index,
-        "outcome": outcome,
-        "fallback_used": fallback,
-        "error_kind": error_kind,
-        "prompt_version": prompt_version,
-    }
+class TruncatedProvider:
+    """Reply with cut-off JSON, as a response stopped at max_tokens would."""
+
+    def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
+        del max_output_tokens, timeout_seconds
+        return ProviderResponse(text='{"profiles":[{"profile_index":0,', model_id=model_id,
+                                input_tokens=10, output_tokens=5, elapsed_ms=0.0)
 
 
-def test_summary_classifies_every_status() -> None:
-    assert summarize_call_outcomes([])["status"] == "not_requested"
-    offline = [_record(0, "offline", fallback=True)]
-    assert summarize_call_outcomes(offline)["status"] == "offline_rules"
-    assert (
-        summarize_call_outcomes(
-            [_record(0, "recorded", fallback=False), _record(1, "cache_hit", fallback=False)]
-        )["status"]
-        == "all_accepted"
-    )
-    assert (
-        summarize_call_outcomes([_record(0, "shared_allowance_unavailable", fallback=True)])[
-            "status"
-        ]
-        == "all_fallback"
-    )
-
-
-def test_summary_counts_caps_and_validation_failures_as_fallbacks() -> None:
-    summary = summarize_call_outcomes(
-        [
-            _record(0, "invalid_output", fallback=True, error_kind="schema_validation_failed"),
-            _record(1, "recorded", fallback=False),
-            _record(
-                2,
-                "max_api_calls",
-                fallback=True,
-                error_kind="max_api_calls",
-                prompt_version="event-triggered-social-v2",
-            ),
-            _record(3, "max_api_calls", fallback=True, error_kind="max_api_calls"),
-        ]
-    )
-
-    assert summary["status"] == "degraded"
-    assert summary["accepted_count"] == 1
-    assert summary["fallback_count"] == 3
-    assert summary["fallback_by_reason"] == {"invalid_output": 1, "max_api_calls": 2}
-    assert summary["fallback_by_error_kind"] == {
-        "max_api_calls": 2,
-        "schema_validation_failed": 1,
-    }
-    assert summary["fallback_by_prompt_version"] == {
-        "event-triggered-social-v2": 1,
-        "support-priority-v1": 2,
-    }
-    assert summary["first_fallback_call_index"] == 0
-    warning = fallback_warning(summary)
-    assert warning is not None and "3 of 4" in warning and "max_api_calls: 2" in warning
-    clean = summarize_call_outcomes([_record(0, "recorded", fallback=False)])
-    assert fallback_warning(clean) is None
-
-
-def test_capped_run_manifest_reports_degraded_fallbacks(tmp_path: Path) -> None:
+def test_capped_run_manifest_reports_degraded_fallbacks(
+    tmp_path: Path, small_benchmark_scenario
+) -> None:
     router = _router(AcceptingProvider(), max_api_calls=3)
-    run_scenario(_scenario(), tmp_path / "run", llm_router=router)
+    run_scenario(small_benchmark_scenario(), tmp_path / "run", llm_router=router)
 
     usage = _manifest(tmp_path / "run")["llm_usage"]
     outcomes = usage["outcomes"]
@@ -148,8 +82,14 @@ def test_capped_run_manifest_reports_degraded_fallbacks(tmp_path: Path) -> None:
     assert usage["failures"] == outcomes["fallback_count"]
 
 
-def test_denied_allowance_run_manifest_reports_all_fallback(tmp_path: Path) -> None:
-    run_scenario(_scenario(), tmp_path / "run", llm_router=_router(DeniedAllowanceProvider()))
+def test_denied_allowance_run_manifest_reports_all_fallback(
+    tmp_path: Path, small_benchmark_scenario
+) -> None:
+    run_scenario(
+        small_benchmark_scenario(),
+        tmp_path / "run",
+        llm_router=_router(DeniedAllowanceProvider()),
+    )
 
     usage = _manifest(tmp_path / "run")["llm_usage"]
     assert usage["api_request_count"] == 0
@@ -158,61 +98,20 @@ def test_denied_allowance_run_manifest_reports_all_fallback(tmp_path: Path) -> N
     assert usage["failures"] == usage["outcomes"]["call_count"] > 0
 
 
-def test_offline_run_manifest_has_no_requested_tasks(tmp_path: Path) -> None:
-    run_scenario(_scenario(), tmp_path / "run")
+def test_offline_run_manifest_has_no_requested_tasks(
+    tmp_path: Path, small_benchmark_scenario
+) -> None:
+    run_scenario(small_benchmark_scenario(), tmp_path / "run")
 
     usage = _manifest(tmp_path / "run")["llm_usage"]
     assert usage["outcomes"]["status"] == "not_requested"
     assert usage["failures"] == 0
 
 
-def _frozen_scenario(tmp_path: Path) -> Path:
-    source = tmp_path / "scenario.json"
-    source.write_text(_scenario().canonical_json(), encoding="utf-8")
-    frozen = tmp_path / "approved.json"
-    arguments = ["prepare", "--scenario", str(source), "--freeze", "--output", str(frozen)]
-    assert cli.main(arguments) == 0
-    return frozen
-
-
-def test_cli_run_prints_status_and_warns_on_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_project_branch_llm_status_reads_head_checkpoint_records(
+    tmp_path: Path, small_benchmark_scenario
 ) -> None:
-    monkeypatch.setenv("SHELTERSIM_PROJECTS_DIR", str(tmp_path / "projects"))
-    frozen = _frozen_scenario(tmp_path)
-    capsys.readouterr()
-    monkeypatch.setattr(
-        cli, "_cli_accounted_router", lambda *_args, **_kwargs: _router(DeniedAllowanceProvider())
-    )
-
-    assert cli.main(["run", "--scenario", str(frozen), "--output", str(tmp_path / "run")]) == 0
-
-    captured = capsys.readouterr()
-    assert json.loads(captured.out)["llm_status"]["status"] == "all_fallback"
-    assert "warning: LLM fallback:" in captured.err
-    assert "shared_allowance_unavailable" in captured.err
-
-
-def test_cli_offline_run_does_not_warn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("SHELTERSIM_PROJECTS_DIR", str(tmp_path / "projects"))
-    frozen = _frozen_scenario(tmp_path)
-    capsys.readouterr()
-
-    assert (
-        cli.main(["run", "--offline", "--scenario", str(frozen), "--output", str(tmp_path / "run")])
-        == 0
-    )
-
-    captured = capsys.readouterr()
-    assert json.loads(captured.out)["llm_status"]["status"] == "not_requested"
-    # The fixture selects no psychology model, so only the legacy-model notice may appear.
-    assert [line for line in captured.err.splitlines() if "legacy model" not in line] == []
-
-
-def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path) -> None:
-    scenario = _scenario()
+    scenario = small_benchmark_scenario()
     store = ProjectStore(tmp_path)
     store.create_project("project")
     saved = store.save_scenario(
@@ -239,20 +138,14 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(tmp_path: Path)
     assert store.branch_reference("project", "run", "main").checkpoint_hash == head_before
 
 
-class TruncatedProvider:
-    """Reply with cut-off JSON, as a response stopped at max_tokens would."""
-
-    def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
-        del max_output_tokens, timeout_seconds
-        return ProviderResponse(text='{"profiles":[{"profile_index":0,', model_id=model_id,
-                                input_tokens=10, output_tokens=5, elapsed_ms=0.0)
-
-
 def test_prepare_cli_warns_when_scenario_draft_falls_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    small_benchmark_scenario,
 ) -> None:
     source = tmp_path / "scenario.json"
-    source.write_text(_scenario(30).canonical_json(), encoding="utf-8")
+    source.write_text(small_benchmark_scenario(30).canonical_json(), encoding="utf-8")
     monkeypatch.setattr(cli, "_cli_accounted_router",
                         lambda *_args, **_kwargs: _router(TruncatedProvider()))
     arguments = ["prepare", "--scenario", str(source), "--generate-scenario",
@@ -266,23 +159,12 @@ def test_prepare_cli_warns_when_scenario_draft_falls_back(
     assert "warning: LLM fallback:" in captured.err and "invalid_output" in captured.err
 
 
-def test_scenario_text_parse_warns_on_rule_fallback() -> None:
-    from sheltersim.llm.region_prepare import parse_scenario_text
-
-    parsed = parse_scenario_text("横浜市で地震が発生。避難者30人、期間は1日。",
-                                 router=_router(TruncatedProvider()))
-
-    assert parsed.source == "rules_fallback"
-    assert "AIの入力整理を利用できず、明示された値のみを使用します。" in parsed.warnings
-    assert parsed.request is not None  # explicitly stated values remain usable
-
-
 def test_project_report_exists_before_the_run_is_marked_completed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_benchmark_scenario
 ) -> None:
     import time
 
-    scenario = _scenario(30)
+    scenario = small_benchmark_scenario(30)
     store = ProjectStore(tmp_path)
     store.create_project("project")
     saved = store.save_scenario("project", scenario,
@@ -316,125 +198,8 @@ def test_project_report_exists_before_the_run_is_marked_completed(
     assert report_present_at_completion == [True]
 
 
-def test_stored_tape_reloads_and_never_writes_sensitive_text(tmp_path: Path) -> None:
-    from sheltersim.llm.accounting import StoredResponseTape
-
-    store = ProjectStore(tmp_path)
-    store.create_project("project")
-    path = store._path("project", "usage-tapes", "draft.json")
-    reply = ProviderResponse(text='{"ok":true}', model_id="m", input_tokens=1, output_tokens=1,
-                             elapsed_ms=0.0)
-
-    StoredResponseTape(store, path).put("key", reply)
-    assert StoredResponseTape(store, path).get("key") == reply
-
-    risky = StoredResponseTape(store, store._path("project", "usage-tapes", "risky.json"))
-    risky.put("key", ProviderResponse(text="call 03-1234-5678", model_id="m", input_tokens=1,
-                                      output_tokens=1, elapsed_ms=0.0))
-    assert risky.get("key") is not None  # still usable within this request
-    assert not store._path("project", "usage-tapes", "risky.json").exists()
-
-
-def test_repeated_identical_preview_reuses_the_saved_reply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from datetime import UTC, datetime
-
-    from sheltersim.region.models import RegionResearchResult
-    from sheltersim.web import workspace as workspace_module
-
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    calls = []
-
-    class ContractProvider:
-        """Return the task's own contract-shaped answer, as an accepted reply."""
-
-        def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
-            del max_output_tokens, timeout_seconds
-            calls.append(task.prompt_version)
-            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
-                                    output_tokens=5, elapsed_ms=0.0)
-
-    real_router = workspace_module.accounted_router
-
-    def live_like_router(*args, **kwargs):
-        settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", budget_usd=10.0)
-        router = real_router(*args, **{**kwargs, "settings": settings})
-        router.provider.provider = ContractProvider()  # keep the real usage ledger
-        return router
-
-    monkeypatch.setattr(workspace_module, "accounted_router", live_like_router)
-    store = ProjectStore(tmp_path / "projects")
-    store.create_project("project")
-    api = ProjectAPI(store, recover=False)
-    monkeypatch.setattr(api.workspace.research, "research",
-                        lambda query, **_kwargs: RegionResearchResult(
-                            request=query, researched_at=datetime.now(UTC)))
-    body = {"text": "横浜市で地震が発生。避難者30人、期間は1日。"}
-    try:
-        first = api.workspace.preview("project", body)
-        second = api.workspace.preview("project", body)
-    finally:
-        api.close()
-
-    source = "extraction_source"
-    assert first["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
-    # Before stored tapes, the ledger refused this identical paid request.
-    assert second["scenario"]["provenance"]["scenario_input"][source] == "prepare_llm"
-    assert second["llm_usage"]["api_request_count"] == 0
-    assert calls == ["region-scenario-extraction-v1"]
-
-
-def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from sheltersim.web import workspace as workspace_module
-
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    calls = []
-
-    class AcceptedProvider:
-        def complete(self, *, model_id, task, max_output_tokens, timeout_seconds):
-            del max_output_tokens, timeout_seconds
-            calls.append(task.prompt_version)
-            return ProviderResponse(text=task.fallback_text, model_id=model_id, input_tokens=10,
-                                    output_tokens=5, elapsed_ms=0.0)
-
-    real_router = workspace_module.accounted_router
-
-    def live_like_router(*args, **kwargs):
-        settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", budget_usd=10.0)
-        router = real_router(*args, **{**kwargs, "settings": settings})
-        router.provider.provider = AcceptedProvider()  # keep the real usage ledger
-        return router
-
-    monkeypatch.setattr(workspace_module, "accounted_router", live_like_router)
-    scenario = _scenario(30)
-    store = ProjectStore(tmp_path / "projects")
-    store.create_project("project")
-    saved = store.save_scenario("project", scenario,
-                                approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("project", "run", scenario.id, saved["scenario_version"])
-    TimelineStore(store, "project", "run").record(
-        BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    )
-    api = ProjectAPI(store, recover=False)
-    body = {"minute": 0, "text": "information_desk ゾーンにスタッフを2人追加してください。"}
-    try:
-        first = api.workspace.intervention("project", "run", "main", dict(body))
-        calls_after_first = len(calls)
-        second = api.workspace.intervention("project", "run", "main", dict(body))
-    finally:
-        api.close()
-
-    assert calls_after_first >= 1 and first["fallback_used"] is False
-    # Before stored compiler tapes, the ledger refused this identical paid request.
-    assert second["fallback_used"] is False
-    assert len(calls) == calls_after_first
-
-
 def test_runtime_calls_leave_the_review_its_allowance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, small_benchmark_scenario
 ) -> None:
     from sheltersim.llm.accounting import (
         ANALYSIS_RESERVED_CALLS,
@@ -454,7 +219,7 @@ def test_runtime_calls_leave_the_review_its_allowance(
         AcceptingProvider(), ledger, settings, "runtime", "main",
         campaign_ledger=task_campaign_ledger(store)), tape=ResponseTape())
 
-    run_scenario(_scenario(200), tmp_path / "run", llm_router=router)
+    run_scenario(small_benchmark_scenario(200), tmp_path / "run", llm_router=router)
 
     runtime = [record for record in router.records if record.stage == "runtime"]
     review = [record for record in router.records if record.stage == "review"]
