@@ -29,7 +29,6 @@ SCOPE_DIRECTORIES = ("integration", "e2e", "live")
 # remove it here; never add to this list.
 UNSORTED = frozenset(
     {
-        "test_pdf_report.py",
     }
 )
 
