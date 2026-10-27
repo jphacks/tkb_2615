@@ -14,7 +14,7 @@ from sheltersim.llm.contracts import LLMStage, ProviderResponse
 from sheltersim.llm.prepare import generate_scenario_draft
 from sheltersim.llm.provider import LLMRouter
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 class FakeProvider:
