@@ -428,12 +428,12 @@ class WorldState:
                     or record["reason"] not in known_reasons
                 ):
                     raise StateInvariantError("resource queue stall state is invalid")
-                facility = self.facilities[facility_id]
-                if (
-                    facility.kind not in ("water_station", "meal_distribution")
-                    or not facility.resource_queue_agent_ids
-                    or facility.resource_queue_agent_ids[0] != record["agent_id"]
-                ):
+                from sheltersim.domain.facility_queues import queue_head_agent_ids
+
+                # A facility with independent queues has one head per queue (#118).
+                if self.facilities[facility_id].kind not in (
+                    "water_station", "meal_distribution"
+                ) or record["agent_id"] not in queue_head_agent_ids(self, facility_id):
                     raise StateInvariantError(
                         "resource queue stall must describe the current facility queue head"
                     )

@@ -10,7 +10,7 @@ import pytest
 
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.operational import OPERATIONAL_EVENTS_KEY
-from sheltersim.domain.resource_service import SERVICE_STATE_KEY
+from sheltersim.domain.resource_service import SERVICE_STATE_KEY, ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 
 
@@ -123,3 +123,30 @@ def test_in_room_reasons_still_require_their_own_outcome(generated_scenario) -> 
     )
     with pytest.raises(StateInvariantError, match="outcome is inconsistent"):
         world.validate()
+
+
+@pytest.mark.parametrize(("agent_id", "valid"), [("A003", True), ("A002", False)])
+def test_a_resource_stall_may_name_the_head_of_any_independent_queue(
+    generated_scenario_with_split_queues, place_three_at_facility, agent_id, valid
+) -> None:
+    # The station runs on a TickEngine in tests/integration/test_facility_queues.py
+    # (test_independent_water_queues_wait_for_room_when_the_station_serves_one, #118).
+    world = WorldState.from_scenario(generated_scenario_with_split_queues)
+    place_three_at_facility(world, "water_station_main")
+    service = ResourceServiceManager(world)
+    for person, queue_id in (
+        ("A001", "water_station_main-left-fifo"),
+        ("A002", "water_station_main-left-fifo"),
+        ("A003", "water_station_main-right-fifo"),
+    ):
+        service.request(person, "water_station_main", queue_id=queue_id)
+    world.model_state[SERVICE_STATE_KEY]["stall_state"]["water_station_main"] = {
+        "agent_id": agent_id,
+        "reason": "capacity",
+    }
+
+    if valid:
+        world.validate()
+    else:
+        with pytest.raises(StateInvariantError, match="current facility queue head"):
+            world.validate()

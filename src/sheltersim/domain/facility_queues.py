@@ -237,6 +237,18 @@ def facility_has_independent_queues(world: WorldState, facility_id: str) -> bool
     )
 
 
+def queue_head_agent_ids(world: WorldState, facility_id: str) -> set[str]:
+    """The Agents first in line at a facility: one per independent queue, else the shared head."""
+    state = world.model_state.get(FACILITY_QUEUES_STATE_KEY)
+    if facility_has_independent_queues(world, facility_id):
+        return {
+            state["requests"][row["queued_request_ids"][0]]["agent_id"]
+            for row in state["queues"].values()
+            if row["facility_id"] == facility_id and row["queued_request_ids"]
+        }
+    return set(world.facilities[facility_id].resource_queue_agent_ids[:1])
+
+
 def request_for_task(world: WorldState, task_id: str) -> dict[str, Any] | None:
     state = world.model_state.get(FACILITY_QUEUES_STATE_KEY)
     request = state.get("requests", {}).get(task_id) if isinstance(state, dict) else None
