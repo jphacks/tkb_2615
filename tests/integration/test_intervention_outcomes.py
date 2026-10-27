@@ -989,3 +989,122 @@ def test_people_who_go_to_sleep_use_the_beds_of_a_temporary_room(main_line) -> N
             for agent_id, agent in world.agents.items()
         )
     assert sleeping_in_a_bed > 0
+
+
+def _environment_action(op: str, parameters: dict[str, Any], units: str) -> TimedAction:
+    return _action(
+        op,
+        TargetSelector(kind="zone", target_id="sleeping"),
+        parameters,
+        units=units,
+        policy_dependencies=["zone_environment_v1"],
+        end_minute=OUTAGE_END_MINUTE,
+    )
+
+
+def _environment_branch(
+    main_line: TimelineStore, branch_id: str, action: TimedAction
+) -> tuple[WorldState, WorldState]:
+    """Fork with one sleeping-area condition and compare both lines as it expires.
+
+    A condition changes how people's state builds up while it lasts, so the
+    lines are compared at its end, before the difference fades.
+    """
+    _fork(main_line, "main", FORK_MINUTE, branch_id, _program(action))
+    child = _advance(main_line, branch_id, OUTAGE_END_MINUTE)
+    main = main_line.seek("main", OUTAGE_END_MINUTE).world
+    started = _applied(child, "effect_program_environment", op=action.op, zone_id="sleeping")
+    assert [record.realized_minute for record in started] == [FORK_MINUTE]
+    # Still in effect: its expiry is due at this minute and not yet applied.
+    (modifier,) = child.model_state["zone_environment_v1"]["modifiers"].values()
+    assert (modifier["op"], modifier["end_minute"]) == (action.op, OUTAGE_END_MINUTE)
+    return main, child
+
+
+def _mean_need(world: WorldState, name: str) -> float:
+    return sum(getattr(agent.needs, name) for agent in world.agents.values()) / len(world.agents)
+
+
+def _mean_body(world: WorldState, name: str) -> float:
+    body = world.model_state["body_state_v1"]["agents"]
+    return sum(body[agent_id][name] for agent_id in world.agents) / len(world.agents)
+
+
+def test_noise_in_the_sleeping_area_leaves_people_more_tired(main_line) -> None:
+    main, child = _environment_branch(
+        main_line,
+        "noise",
+        _environment_action("set_ambient_noise", {"level": 1.0}, "normalized_noise_0_1"),
+    )
+
+    assert _mean_need(child, "fatigue") > _mean_need(main, "fatigue")
+
+
+def test_bright_light_in_the_sleeping_area_leaves_people_more_tired(main_line) -> None:
+    main, child = _environment_branch(
+        main_line,
+        "lighting",
+        _environment_action("set_lighting", {"level": 1.0}, "normalized_lighting_0_1"),
+    )
+
+    assert _mean_need(child, "fatigue") > _mean_need(main, "fatigue")
+
+
+def test_poor_ventilation_in_the_sleeping_area_raises_hygiene_needs(main_line) -> None:
+    main, child = _environment_branch(
+        main_line,
+        "ventilation",
+        _environment_action(
+            "set_ventilation", {"effectiveness": 0.0}, "relative_ventilation_effectiveness_0_1"
+        ),
+    )
+
+    assert _mean_body(child, "hygiene_need") > _mean_body(main, "hygiene_need")
+
+
+def test_no_privacy_in_the_sleeping_area_raises_discontent(main_line) -> None:
+    main, child = _environment_branch(
+        main_line,
+        "privacy",
+        _environment_action("set_privacy", {"level": 0.0}, "normalized_privacy_0_1"),
+    )
+
+    assert _mean_body(child, "discontent") > _mean_body(main, "discontent")
+
+
+def test_heat_in_the_sleeping_area_raises_stress(main_line) -> None:
+    main, child = _environment_branch(
+        main_line,
+        "temperature",
+        _environment_action("set_temperature", {"temperature_c": 35.0}, "celsius"),
+    )
+
+    assert _kpis(child)["stress_mean"] > _kpis(main)["stress_mean"]
+
+
+def test_encouraging_rest_in_the_sleeping_area_lengthens_rests_and_relieves_fatigue(
+    main_line,
+) -> None:
+    # Toilet visits rarely start from the sleeping area in this Scenario, so a
+    # toilet multiplier there changes no choice; rest is often a choice there.
+    main, child = _environment_branch(
+        main_line,
+        "encourage-rest",
+        _environment_action(
+            "modify_demand_rate",
+            {"action": "rest", "probability_multiplier": 2.0, "duration_multiplier": 2.0},
+            "relative_action_rate",
+        ),
+    )
+
+    def mean_rest_minutes(world: WorldState) -> float:
+        rests = [
+            record.event.payload["duration_minutes"]
+            for record in _applied(world, "agent_action_lifecycle", action="rest")
+            if record.event.payload["transition"] != "started"
+            and record.event.payload["start_minute"] >= FORK_MINUTE
+        ]
+        return sum(rests) / len(rests)
+
+    assert mean_rest_minutes(child) > mean_rest_minutes(main)
+    assert _mean_need(child, "fatigue") < _mean_need(main, "fatigue")
