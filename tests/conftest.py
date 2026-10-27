@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
+SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
 
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
@@ -428,6 +429,52 @@ def resource_service_scenario() -> Callable[..., Any]:
     warehouse-h02; the arguments change the stock, capacities, staff and duration.
     """
     return _resource_service_scenario
+
+
+def _single_agent_awareness_scenario(initial_known_facility_ids: list[str]) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "facility-awareness-toilet-integration"
+    document["duration_minutes"] = 180
+    document["scheduled_events"] = []
+    document["profiles"] = document["profiles"][:1]
+    profile = document["profiles"][0]
+    profile["initial_zone_id"] = "sleeping"
+    profile["initial_needs"] = {
+        "toilet_urgency": 0.65,
+        "hunger": 0.45,
+        "fatigue": 0.25,
+    }
+    document["model_configs"]["psychology"] = {
+        "natural_recovery_rate_per_minute": 0.01,
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+    }
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "mean-reverting-life-state-v1",
+    }
+    document["model_configs"]["facility_awareness"] = {
+        "schema_version": 1,
+        "initial_known_facility_ids": initial_known_facility_ids,
+        "discover_co_located_facilities_on_arrival": True,
+        "source_type": "assumption",
+        "source_id": "ASM-FACILITY-ENTRY-ORIENTATION-V1",
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def single_agent_awareness_scenario() -> Callable[[list[str]], Any]:
+    """Build a 180-minute scenario_100_agents with only A001, in the sleeping area.
+
+    A001 needs the toilet, the Scenario opts into facility_awareness, and A001
+    starts knowing only the facilities given; it discovers the others it reaches.
+    """
+    return _single_agent_awareness_scenario
 
 
 def _make_event(

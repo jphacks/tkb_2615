@@ -2,6 +2,10 @@
 
 That they then use those facilities while the simulation runs is checked in
 tests/integration/test_facility_orientation.py.
+
+What one Agent knows can also be set in the Scenario (facility_awareness); that
+this knowledge decides whether its toilet need is served is checked in
+tests/integration/test_facility_awareness.py.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from sheltersim.domain.agent_dynamics import (
     ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
     ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
     ORIENTATION_FACILITY_SOURCE_ID,
+    agent_knows_facility,
     canonical_agent_dynamics_config,
 )
 from sheltersim.domain.simulator_state import (
@@ -82,3 +87,43 @@ def test_oriented_state_restores_from_a_checkpoint(generated_scenario) -> None:
 def test_agent_dynamics_config_rejects_unsupported_values(raw) -> None:
     with pytest.raises(ValueError, match="agent_dynamics"):
         canonical_agent_dynamics_config(raw)
+
+
+def test_facility_knowledge_is_independent_of_psychology_selection(
+    single_agent_awareness_scenario
+) -> None:
+    known_sets = []
+    for psychology in ("mean-reverting-life-state-v1", "mean-reverting-distress-v1"):
+        document = single_agent_awareness_scenario(["toilet_1"]).model_dump(mode="json")
+        document["model_configs"]["policy_registry"]["psychology"] = psychology
+        world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
+        known_sets.append(
+            world.model_state["agent_dynamics_v1"]["agents"]["A001"]["known_facility_ids"]
+        )
+        assert agent_knows_facility(world, "A001", "toilet_1")
+        assert not agent_knows_facility(world, "A001", "toilet_2")
+    assert known_sets[0] == known_sets[1] == ["toilet_1"]
+
+
+def test_awareness_config_is_versioned_and_checkpoint_safe(single_agent_awareness_scenario) -> None:
+    scenario = single_agent_awareness_scenario(["toilet_1"])
+    world = WorldState.from_scenario(scenario)
+    restored = WorldState.from_dict(world.to_dict())
+    assert restored.model_state["agent_dynamics_v1"] == world.model_state["agent_dynamics_v1"]
+    assert agent_knows_facility(restored, "A001", "toilet_1")
+    assert not agent_knows_facility(restored, "A001", "toilet_2")
+    assert "operator:facility_awareness" in simulator_signatures(scenario.model_configs)
+
+
+def test_unknown_initial_facility_id_is_rejected(single_agent_awareness_scenario) -> None:
+    with pytest.raises(ValueError, match="unknown facilities"):
+        single_agent_awareness_scenario(["facility-not-in-scenario"])
+
+
+def test_legacy_scenario_without_awareness_keeps_prior_global_knowledge(
+    single_agent_awareness_scenario
+) -> None:
+    document = single_agent_awareness_scenario([]).model_dump(mode="json")
+    document["model_configs"].pop("facility_awareness")
+    world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
+    assert agent_knows_facility(world, "A001", "toilet_1")
