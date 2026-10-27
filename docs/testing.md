@@ -89,6 +89,7 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 - 名前に、不具合名（例：`resource_loss_without_operational_state`）、開発の回の名前（例：`round2_common_services`）、`regressions`を使いません。不具合の再発防止テストはその機能のファイルに足し、守るべき振る舞いを関数名に書き、Issue番号をdocstringかコメントに書きます。
 - ブラウザー用の静的ファイル（JavaScript、HTML）を確かめる単体は、Pythonのモジュール名がないので`tests/unit/web/test_static_<ファイル名>.py`にします。例：`demo-v2.js`なら`test_static_demo_v2.py`。
 - 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/conftest.py`のfixtureにします（`pyproject.toml`の`pythonpath`に`tests`を入れているのは、結果を残すplugin `tests/results_log.py`を読み込むためです。テストの準備を置くモジュールには使いません）（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
+- 背景で動くjob（`DemoJobManager`、`ProjectAPI`）の終わりは、実時間の短い期限で状態を読み続けて待ちません。CPUが混むと期限を超えて失敗するためです（#143）。どちらもworkerが1つなので、`wait_for_job`のfixture（`DemoJobManager`）か、`api._pool.submit(lambda: None).result(timeout=120)`（`ProjectAPI`）で、それまでのjobが終わるのを待ってから状態を確かめます。`timeout`は止まったときにテストを終わらせるためだけのものです。
 - 何を確かめるか（結果・契約・画面）は、ディレクトリにも印にもしません。実行の選び分けに使わない印は、付け忘れても気づけず、すぐ実態とずれるためです。確かめる振る舞いを関数名に書き、全体は地図の「目的」欄で把握します。
 
 ### 時刻を手で動かすテスト

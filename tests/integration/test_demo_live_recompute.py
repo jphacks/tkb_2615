@@ -8,10 +8,7 @@ tests/unit/policies/test_psychology.py and test_behavior.py.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
-
-import pytest
 
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.web.demo import DemoService
@@ -20,18 +17,8 @@ from sheltersim.web.jobs import DemoJobManager
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
-def _wait_for_completion(manager: DemoJobManager, job_id: str) -> dict:
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        job = manager.get(job_id)
-        if job["status"] in {"completed", "failed", "cancelled", "interrupted"}:
-            return job
-        time.sleep(0.01)
-    pytest.fail(f"job {job_id} did not complete: {manager.get(job_id)}")
-
-
 def test_live_recompute_progress_and_noop_branch_checkpoint_are_reproducible(
-    tmp_path: Path,
+    tmp_path: Path, wait_for_job
 ) -> None:
     document = json.loads(FIXTURE.read_text(encoding="utf-8"))
     document["duration_minutes"] = 12
@@ -57,9 +44,8 @@ def test_live_recompute_progress_and_noop_branch_checkpoint_are_reproducible(
             "run_id": demo.state()["run_id"],
         }
 
-        baseline = _wait_for_completion(manager, baseline_job["job_id"])
-        replay = _wait_for_completion(manager, replay_job["job_id"])
-        assert baseline["status"] == replay["status"] == "completed"
+        baseline = wait_for_job(manager, baseline_job["job_id"], {"completed"})
+        replay = wait_for_job(manager, replay_job["job_id"], {"completed"})
         assert baseline["percent"] == replay["percent"] == 100
 
         baseline_branch = demo.branches["baseline"]
