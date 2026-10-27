@@ -1174,7 +1174,7 @@ def _schedule_departure_retry(world: WorldState, event: ScheduledEvent) -> None:
     if due >= world.duration_minutes:
         raise EventSuppressed("departure could not complete before the scenario ended")
     retry = event.provenance.get("population_retry", {})
-    retry_count = retry.get("count", 0) if isinstance(retry, dict) else 0
+    retry_count = retry.get("count", 0) if isinstance(retry, Mapping) else 0
     if not isinstance(retry_count, int) or retry_count >= 1440:
         raise EventSuppressed("departure reached the bounded deferral limit")
     sequence = world.allocate_event_sequence()
@@ -1186,7 +1186,7 @@ def _schedule_departure_retry(world: WorldState, event: ScheduledEvent) -> None:
         "population_retry": {"count": retry_count + 1},
     }
     compiler = provenance.get("effect_program_v1")
-    if isinstance(compiler, dict):
+    if isinstance(compiler, Mapping):
         program_id = compiler.get("program_id")
         effect_id = compiler.get("effect_id")
         program_state = world.model_state.get("effect_program_v1", {})

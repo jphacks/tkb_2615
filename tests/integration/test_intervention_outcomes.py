@@ -584,11 +584,6 @@ def test_handing_off_a_patrol_frees_the_original_worker_sooner(
     assert next_support_by_staff_001(handed) < next_support_by_staff_001(kept)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="#76: a delayed delivery stops the simulation when it arrives",
-)
 def test_delaying_a_water_delivery_keeps_people_thirsty_longer(
     tmp_path, generated_scenario_with
 ) -> None:
@@ -655,11 +650,6 @@ def test_arriving_evacuees_raise_toilet_and_water_demand(main_line) -> None:
     assert _kpis(child)["water_ml_remaining"] < _kpis(main)["water_ml_remaining"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#78: a departure deferred for a busy person fails, so nobody leaves",
-)
 def test_departing_evacuees_lower_toilet_demand(main_line) -> None:
     program = _program(
         _action(
@@ -824,11 +814,6 @@ def test_closing_the_route_into_the_toilets_stops_toilet_use_until_it_reopens(
     assert _kpis(child)["toilet_wait_total_minutes"] > _kpis(main)["toilet_wait_total_minutes"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#82: move_facility fails when it is applied, so the toilet stays put",
-)
 def test_moving_a_toilet_closer_to_the_door_changes_where_people_walk(
     main_line, generated_scenario
 ) -> None:
