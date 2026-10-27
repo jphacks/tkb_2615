@@ -353,6 +353,83 @@ def scenario_with_stock() -> Callable[..., Any]:
     return _scenario_with_stock
 
 
+def _resource_service_scenario(
+    *,
+    duration: int = 12,
+    water_ml: int = 1000,
+    food_units: int = 4,
+    water_capacity: int = 1,
+    meal_capacity: int = 1,
+    water_working: int | None = None,
+    water_staff_count: int = 1,
+    meal_staff: bool = True,
+    service_minutes: int = 2,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    document["facilities"].extend(
+        [
+            {
+                "id": "water_station_1",
+                "kind": "water_station",
+                "zone_id": "toilet",
+                "capacity": water_capacity,
+                "working_units": water_capacity if water_working is None else water_working,
+            },
+            {
+                "id": "meal_distribution_1",
+                "kind": "meal_distribution",
+                "zone_id": "toilet",
+                "capacity": meal_capacity,
+                "working_units": meal_capacity,
+            },
+        ]
+    )
+    for index in range(water_staff_count):
+        document["staff"].append(
+            {"id": f"S-WATER-{index + 1}", "zone_id": "toilet", "skills": ["water_service"]}
+        )
+    if meal_staff:
+        document["staff"].append({"id": "S-MEAL", "zone_id": "toilet", "skills": ["meal_service"]})
+    document["initial_stock"] = {
+        "schema_version": 1,
+        "warehouse_id": "warehouse-h02",
+        "zone_id": "toilet",
+        "water_ml": water_ml,
+        "food_meal_units": food_units,
+        "source_ids": ["ASM-H02-TEST-INITIAL-STOCK-V1"] if water_ml or food_units else [],
+    }
+    document["model_configs"]["resource_service"] = {
+        "schema_version": 1,
+        "policy_version": "resource-service-v1",
+        "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
+        "source_type": "assumption",
+        "service_minutes": service_minutes,
+        "water_ml_per_service": 250,
+        "food_meal_units_per_service": 1,
+        "hydration_growth_per_minute": 0.02,
+        "hydration_action_threshold": 0.25,
+        "hunger_action_threshold": 0.70,
+        "hydration_relief": 0.35,
+        "hunger_relief": 0.50,
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def resource_service_scenario() -> Callable[..., Any]:
+    """Build h00_small_replay with a staffed water station and meal point in the toilet zone.
+
+    The Scenario opts into resource_service and starts with water and meals in
+    warehouse-h02; the arguments change the stock, capacities, staff and duration.
+    """
+    return _resource_service_scenario
+
+
 def _make_event(
     event_id: str,
     *,
