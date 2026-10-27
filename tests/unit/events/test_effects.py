@@ -32,7 +32,16 @@ ROOM = {
 }
 
 
-def _program(program_id: str, op: str, parameters: dict[str, Any], units: str) -> EffectProgram:
+def _program(
+    program_id: str,
+    op: str,
+    parameters: dict[str, Any],
+    units: str,
+    *,
+    target: TargetSelector | None = None,
+    policy: str | None = None,
+    end_minute: int | None = 300,
+) -> EffectProgram:
     return EffectProgram(
         program_id=program_id,
         narrative=op,
@@ -42,18 +51,21 @@ def _program(program_id: str, op: str, parameters: dict[str, Any], units: str) -
             TimedAction(
                 effect_id=f"{op}-1",
                 op=op,
-                target_selector=TargetSelector(kind="zone", target_id="sleeping"),
+                target_selector=target or TargetSelector(kind="zone", target_id="sleeping"),
                 start_minute=120,
-                end_minute=300,
+                end_minute=end_minute,
                 parameters=parameters,
                 units=units,
                 source_id="TEST-EFFECTS",
                 policy_dependencies=[
-                    "geometry_overlay_v1"
-                    if op == "temporary_room_geometry"
-                    else "temporary_spaces_v1"
+                    policy
+                    or (
+                        "geometry_overlay_v1"
+                        if op == "temporary_room_geometry"
+                        else "temporary_spaces_v1"
+                    )
                 ],
-                reversible=True,
+                reversible=end_minute is not None,
             )
         ],
         assumptions=[],
@@ -105,3 +117,29 @@ def test_scheduled_temporary_space_counts_toward_the_zone_capacity_bound(
     assert "temporary person capacity exceeds the 1000-person per-zone bound" in (
         validate_effect_program(world, one_more)
     )
+
+
+def test_a_staff_role_change_is_scheduled_with_its_new_skills(generated_scenario) -> None:
+    # Scheduling used to fail with AttributeError before the Branch existed (#72).
+    world = WorldState.from_scenario(generated_scenario)
+    program = _program(
+        "support-role",
+        "set_staff_role",
+        {"skills": ["support", "water_service"]},
+        "staff_role",
+        target=TargetSelector(kind="staff", target_id="staff_002"),
+        policy="staff_operations_v1",
+        end_minute=None,
+    )
+    assert validate_effect_program(world, program) == ()
+
+    schedule_effect_program(world, program)
+
+    (start,) = [
+        event
+        for event in world.event_queue.pending()
+        if event.payload.get("op") == "set_staff_role"
+    ]
+    assert start.event_type == "effect_program_structure"
+    assert (start.due_minute, start.payload["staff_id"]) == (120, "staff_002")
+    assert list(start.payload["skills"]) == ["support", "water_service"]
