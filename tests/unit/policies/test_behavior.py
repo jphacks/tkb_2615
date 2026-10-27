@@ -30,6 +30,7 @@ from sheltersim.policies.behavior import (
 )
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
+BASELINE_100_7D = Path(__file__).parents[3] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 def make_world() -> WorldState:
@@ -254,3 +255,11 @@ def test_support_candidates_are_suppressed_for_open_request_and_cooldown(
     assert next(
         item for item in eligible_proposal.candidates if item.action is ActionKind.SEEK_HELP
     ).eligible
+
+
+def test_behavior_refuses_a_view_without_its_required_audit_hash() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(BASELINE_100_7D))
+    view = WorldView.from_world(world, include_state_hash=False)
+
+    with pytest.raises(ValueError, match="require a WorldView with a state hash"):
+        UtilityBehaviorPolicy().propose(view, next(iter(world.agents)), CounterRNG(world.seed))

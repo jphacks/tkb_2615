@@ -48,6 +48,7 @@ from sheltersim.policies.registry import create_psychology
 
 ROOT = Path(__file__).parents[3]
 FIXTURE = ROOT / "fixtures" / "scenario_100_agents.json"
+BASELINE_100_7D = ROOT / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 @pytest.mark.parametrize("required_sleep_minutes", [420, 480, 600])
@@ -510,3 +511,18 @@ def test_scenario_psychology_coefficients_are_validated_and_source_tagged(
 
     with pytest.raises(ValidationError):
         causal_stress_scenario(stress_pressure=0.251)
+
+
+def test_psychology_view_skips_audit_hash_without_changing_inputs() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(BASELINE_100_7D))
+    before = world.canonical_json()
+    hashed = WorldView.from_world(world)
+    psychology_view = WorldView.from_world(world, include_state_hash=False)
+
+    assert hashed.state_hash is not None
+    assert psychology_view.state_hash is None
+    assert psychology_view.agents == hashed.agents
+    assert psychology_view.facilities == hashed.facilities
+    policy = SimplePsychologyPolicy()
+    assert policy.explain_update(hashed, 0) == policy.explain_update(psychology_view, 0)
+    assert world.canonical_json() == before

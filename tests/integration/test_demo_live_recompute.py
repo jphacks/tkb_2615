@@ -1,4 +1,9 @@
-"""Focused response-time and replay-safety regressions for the local demo."""
+"""Live recompute in the local demo reports progress, and a no-op Branch checkpoint
+replays the same.
+
+The audit-hash shortcuts the policies take for the demo are checked in
+tests/unit/policies/test_psychology.py and test_behavior.py.
+"""
 
 from __future__ import annotations
 
@@ -8,15 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from sheltersim.core.rng import CounterRNG
-from sheltersim.core.world import WorldState
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
-from sheltersim.policies.psychology import SimplePsychologyPolicy
 from sheltersim.web.demo import DemoService
 from sheltersim.web.jobs import DemoJobManager
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
+FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
 
 
 def _wait_for_completion(manager: DemoJobManager, job_id: str) -> dict:
@@ -27,29 +28,6 @@ def _wait_for_completion(manager: DemoJobManager, job_id: str) -> dict:
             return job
         time.sleep(0.01)
     pytest.fail(f"job {job_id} did not complete: {manager.get(job_id)}")
-
-
-def test_psychology_view_skips_audit_hash_without_changing_inputs() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
-    before = world.canonical_json()
-    hashed = WorldView.from_world(world)
-    psychology_view = WorldView.from_world(world, include_state_hash=False)
-
-    assert hashed.state_hash is not None
-    assert psychology_view.state_hash is None
-    assert psychology_view.agents == hashed.agents
-    assert psychology_view.facilities == hashed.facilities
-    policy = SimplePsychologyPolicy()
-    assert policy.explain_update(hashed, 0) == policy.explain_update(psychology_view, 0)
-    assert world.canonical_json() == before
-
-
-def test_behavior_refuses_a_view_without_its_required_audit_hash() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
-    view = WorldView.from_world(world, include_state_hash=False)
-
-    with pytest.raises(ValueError, match="require a WorldView with a state hash"):
-        UtilityBehaviorPolicy().propose(view, next(iter(world.agents)), CounterRNG(world.seed))
 
 
 def test_live_recompute_progress_and_noop_branch_checkpoint_are_reproducible(
