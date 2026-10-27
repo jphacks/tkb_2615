@@ -97,3 +97,24 @@ def test_scenario_loader_rejects_unversioned_structural_fields() -> None:
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         ScenarioSpec.from_json(json.dumps(document))
+
+
+def test_scenario_rejects_reused_event_sequence() -> None:
+    scenario_json = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    scenario_json["scheduled_events"] = [
+        {
+            "id": "planned-1",
+            "due_minute": 1,
+            "sequence": 0,
+            "event_type": "facility_outage",
+        },
+        {
+            "id": "planned-2",
+            "due_minute": 2,
+            "sequence": 0,
+            "event_type": "facility_outage",
+        },
+    ]
+
+    with pytest.raises(ValidationError, match="duplicate IDs in scheduled event sequences"):
+        ScenarioSpec.model_validate(scenario_json)

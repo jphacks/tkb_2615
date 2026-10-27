@@ -306,6 +306,49 @@ def place_three_at_facility() -> Callable[[Any, str], None]:
     return place
 
 
+def _make_event(
+    event_id: str,
+    *,
+    due_minute: int = 0,
+    priority: int = 0,
+    sequence: int = 0,
+    event_type: str = "record",
+    payload: dict[str, object] | None = None,
+    kind: Any = None,
+) -> Any:
+    from sheltersim.events.models import EventKind, ScheduledEvent
+
+    return ScheduledEvent(
+        event_id=event_id,
+        kind=EventKind.EXOGENOUS if kind is None else kind,
+        due_minute=due_minute,
+        priority=priority,
+        sequence=sequence,
+        event_type=event_type,
+        payload=payload or {},
+    )
+
+
+@pytest.fixture
+def make_event() -> Callable[..., Any]:
+    """Build a ScheduledEvent: exogenous "record", due at minute 0, priority and sequence 0."""
+    return _make_event
+
+
+class _RecordHandler:
+    def __init__(self) -> None:
+        self.applied: list[str] = []
+
+    def apply(self, world: Any, event: Any) -> None:
+        self.applied.append(event.event_id)
+
+
+@pytest.fixture
+def record_handler() -> type[_RecordHandler]:
+    """Make an event handler that changes nothing and lists the ids it applies, in order."""
+    return _RecordHandler
+
+
 @pytest.fixture
 def live_checkpoint_world() -> Any:
     """failure_day3 at minute 0 with every kind of runtime state a Checkpoint must keep.

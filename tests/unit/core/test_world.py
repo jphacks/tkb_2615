@@ -16,6 +16,7 @@ from sheltersim.domain.models import Activity
 from sheltersim.domain.operational import OPERATIONAL_EVENTS_KEY
 from sheltersim.domain.resource_service import SERVICE_STATE_KEY, ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
+from sheltersim.events.handlers import EventDispatcher
 from sheltersim.experiments.scenario import ScenarioSpec
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
@@ -263,3 +264,20 @@ def test_world_state_v5_rejects_old_versions_and_unknown_fields() -> None:
     extended = dict(document, unexpected_contract_field=True)
     with pytest.raises(StateInvariantError, match="fields do not match"):
         WorldState.from_dict(extended)
+
+
+def test_world_state_schema_two_serializes_pending_queue_and_realized_log_separately(
+    make_event, record_handler
+) -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world.schedule_event(make_event("pending", due_minute=3, sequence=0))
+    world.schedule_event(make_event("realized", sequence=1))
+    EventDispatcher({"record": record_handler()}).dispatch_due(world, 0)
+
+    serialized = json.loads(world.canonical_json())
+
+    assert world.schema_version == serialized["schema_version"] == 5
+    assert [event["event_id"] for event in serialized["event_queue"]] == ["pending"]
+    assert [record["event"]["event_id"] for record in serialized["event_log"]] == ["realized"]
+    assert serialized["event_log"][0]["status"] == "applied"
+    world.validate()
