@@ -16,7 +16,7 @@
 
 ## 実装値の分類
 
-主要な仮定は `fixtures/source-manifest.json` の `assumptions` にモデル版・対象・値または実装参照・校正状況と一緒に記録します。CI の `tests/test_provenance.py` は心理係数を `PsychologyParameters` と、行動・トイレ値を実装および ScenarioSpec と照合します。コードが参照する仮定ID・出典IDが台帳にあるかは `tests/unit/repo/test_source_manifest.py` が確かめ、まだ台帳にないIDの一覧も持っています（[テストと検証](testing.md#出典台帳と根拠idの整合)）。
+主要な仮定は `fixtures/source-manifest.json` の `assumptions` にモデル版・対象・値または実装参照・校正状況と一緒に記録します。CI の `tests/unit/repo/test_provenance.py` は心理係数を `PsychologyParameters` と、行動・トイレ値を実装および ScenarioSpec と照合します。コードが参照する仮定ID・出典IDが台帳にあるかは `tests/unit/repo/test_source_manifest.py` が確かめ、まだ台帳にないIDの一覧も持っています（[テストと検証](testing.md#出典台帳と根拠idの整合)）。
 
 | 対象 | 現在の扱い |
 |---|---|
@@ -48,7 +48,7 @@
 
 - 同一の固定 ScenarioSpec・seed・policy version は同じ canonical state、event trace、KPI を生成することをテストします。
 - 施設故障、待ち列、サービス、復旧は状態不変条件・イベント provenance・メトリクスを検証します。
-- `tests/test_provenance.py` は全主要係数、fixture/model/event source ID、policy trace、Run manifestの有効値を台帳に照合します。
+- `tests/unit/repo/test_provenance.py` は全主要係数、fixture/model/event source ID、policy traceの有効値を台帳に照合します。Run manifestと判断traceに出典IDが入ることは `tests/unit/experiments/test_metrics.py` が確かめます。
 - H02 resource-service係数とテスト初期stock/stall reasonは対応するmanifest entryと照合し、enabled runのmanifestと`resource_service.json`にもversion/sourceを記録します。これは設定・実装整合性の検査であり、校正検証ではありません。
 - 変更前後の仮説比較は複数 seed を用い、平均とばらつきを記録します。単一 seed の結果は記述的な例であり、因果効果や統計的優位性とは呼びません。
 - A08 policy comparison は同じseed/Scenario inputsでpolicy variantだけを替え、action count、KPI、記録済み事前decision needsを比較します。支援ニーズ上位quartileと移動支援フラグのcohortは、Agentごとの記録need平均を等重みで集計します。これは分単位の未充足時間でも、妥当性確認済みの公平性指標でもありません。結果はシミュレーション内部の記述的比較です。
