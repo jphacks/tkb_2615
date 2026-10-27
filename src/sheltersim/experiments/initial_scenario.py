@@ -965,13 +965,19 @@ class InitialScenarioBuilder:
 
         # v4 also places facilities installed during a Run on the floor plan.
         model_configs["geometry_overlay"] = {"schema_version": 4}
+        # The only extension this adds beyond the configs above is temporary_spaces_v1,
+        # so an operator can approve add_temporary_space (#80). Saved Scenarios
+        # without it keep running without that state.
+        model_configs["simulator_extensions"] = {"enabled": True}
+        from sheltersim.domain.temporary_spaces import TEMPORARY_SPACES_SOURCE_ID
         for source_id, title in ((BODY_SOURCE_ID, "Experimental life-state feedback"),
                                  (STAFF_OPERATIONS_SOURCE_ID, "Experimental staff operations"),
                                  (MOVEMENT_SOURCE_ID, "Experimental spatial movement"),
                                  (TEMPORARY_ROOM_BED_SOURCE_ID, "Exclusive temporary sleeping places"),
                                  (TEMPORARY_ROOM_INTAKE_SOURCE_ID, "Physical temporary room intake"),
                                  (INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
-                                  "Floor-plan placement of installed facilities")):
+                                  "Floor-plan placement of installed facilities"),
+                                 (TEMPORARY_SPACES_SOURCE_ID, "Zone-only temporary capacity")):
             if not any(source["id"] == source_id for source in provenance["sources"]):
                 provenance["sources"].append({"id": source_id, "title": title,
                     "source_kind": "assumption", "description": "Installed synthetic coefficients; not empirically calibrated."})
