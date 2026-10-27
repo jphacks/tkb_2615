@@ -1,11 +1,22 @@
-"""A registered model state changes only as a whole, and a Checkpoint refuses a changed version."""
+"""Checkpoint capture, save and load, and the versions and hashes it refuses.
+
+That a Run resumed from a Checkpoint continues exactly as the uninterrupted Run
+is checked in tests/integration/test_checkpoint_resume.py.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from sheltersim.core.checkpoint import Checkpoint, CheckpointError, CheckpointSchedule
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.metrics import MetricsRecorder
+from sheltersim.experiments.scenario import ScenarioSpec
+
+FAILURE_DAY3 = Path(__file__).parents[3] / "fixtures" / "scenarios" / "failure_day3.json"
 SMALL_REPLAY = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
@@ -75,3 +86,128 @@ def test_registered_state_proposals_are_atomic_and_versions_fail_closed(
     )
     with pytest.raises(CheckpointError, match="migration"):
         checkpoint.restore_world()
+
+
+def test_paired_restore_constructs_one_validated_detached_world(monkeypatch) -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(FAILURE_DAY3))
+    metrics = MetricsRecorder()
+    metrics.capture(world, minute=0)
+    checkpoint = Checkpoint.capture(world, metrics=metrics)
+    original = WorldState.from_dict.__func__
+    calls = []
+
+    def restore(cls, document):
+        calls.append(document["minute_index"])
+        return original(cls, document)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(restore))
+    restored_world, restored_metrics = checkpoint.restore_state()
+    assert calls == [0]
+    assert restored_world.canonical_json() == world.canonical_json()
+    assert restored_metrics.to_dict() == metrics.to_dict()
+    restored_world.metric_state["test_only"] = 1.0
+    restored_metrics.snapshots.clear()
+    again_world, again_metrics = checkpoint.restore_state()
+    assert "test_only" not in again_world.metric_state
+    assert again_metrics.to_dict() == metrics.to_dict()
+
+
+def test_checkpoint_has_independent_schema_and_captures_every_runtime_state(
+    tmp_path: Path, live_checkpoint_world
+) -> None:
+    world = live_checkpoint_world
+    metrics = MetricsRecorder()
+    metrics.capture(world, minute=0)
+    CheckpointSchedule(interval_minutes=30)
+
+    checkpoint = Checkpoint.capture(
+        world,
+        metrics=metrics,
+        runtime_state={"decision_tape_cursor": 7, "policy_state": {"recent": ["x"]}},
+    )
+    path = tmp_path / "minute-0.checkpoint.json"
+    checkpoint.save(path)
+    restored_checkpoint = Checkpoint.load(path)
+    restored = restored_checkpoint.restore_world(
+        expected_model_versions=restored_checkpoint.model_versions
+    )
+
+    assert checkpoint.schema_version == restored_checkpoint.schema_version == 1
+    assert checkpoint.world_state_schema_version == world.schema_version == 5
+    assert restored.canonical_json() == world.canonical_json()
+    assert restored.event_queue.pending() == world.event_queue.pending()
+    assert restored.event_log.records == world.event_log.records
+    assert restored.active_tasks == world.active_tasks
+    assert restored.rng_state == world.rng_state
+    assert restored.model_state == world.model_state
+    assert restored_checkpoint.runtime_state == {
+        "decision_tape_cursor": 7,
+        "policy_state": {"recent": ["x"]},
+    }
+    assert restored_checkpoint.restore_metrics().to_dict() == metrics.to_dict()
+
+
+def test_checkpoint_fails_closed_for_versions_corruption_and_model_mismatch(
+    live_checkpoint_world,
+) -> None:
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    document = checkpoint.to_dict()
+
+    old_checkpoint = dict(document, schema_version=2)
+    with pytest.raises(CheckpointError, match="checkpoint schema"):
+        Checkpoint.from_dict(old_checkpoint)
+
+    extended_checkpoint = dict(document, unexpected_contract_field=True)
+    with pytest.raises(CheckpointError, match="fields do not match"):
+        Checkpoint.from_dict(extended_checkpoint)
+
+    corrupted = json.loads(checkpoint.to_json())
+    corrupted["world_state"]["resources"]["water"] = 500
+    with pytest.raises(CheckpointError, match="hash mismatch"):
+        Checkpoint.from_dict(corrupted)
+
+    wrong_world_version = dict(document, world_state_schema_version=4)
+    with pytest.raises(CheckpointError, match="WorldState schema version"):
+        Checkpoint.from_dict(wrong_world_version)
+
+    with pytest.raises(CheckpointError, match="model versions"):
+        checkpoint.restore_world(expected_model_versions={"behavior": "unexpected"})
+
+
+def test_capture_hashes_once_and_later_reads_still_detect_mutation(
+    monkeypatch, live_checkpoint_world
+) -> None:
+    import sheltersim.core.checkpoint as module
+
+    world_digests, body_digests = [], []
+    original = module._digest
+
+    def digest(value):
+        if isinstance(value, dict) and "event_log" in value:
+            world_digests.append(1)
+        if isinstance(value, dict) and "world_state" in value:
+            body_digests.append(1)
+        return original(value)
+
+    monkeypatch.setattr(module, "_digest", digest)
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    assert (len(world_digests), len(body_digests)) == (1, 1)
+    monkeypatch.undo()
+
+    checkpoint.runtime_state["unexpected"] = 1
+    with pytest.raises(CheckpointError, match="^checkpoint integrity hash mismatch"):
+        checkpoint.to_dict()
+    del checkpoint.runtime_state["unexpected"]
+    checkpoint.world_state["resources"]["water"] = 500
+    with pytest.raises(CheckpointError, match="WorldState integrity hash mismatch"):
+        checkpoint.to_dict()
+
+
+def test_checkpoint_cadence_is_configurable_and_defaults_to_thirty_minutes() -> None:
+    schedule = CheckpointSchedule()
+
+    assert schedule.interval_minutes == 30
+    assert schedule.should_capture(0)
+    assert schedule.should_capture(60)
+    assert not schedule.should_capture(59)
+    assert CheckpointSchedule(10).should_capture(20)
