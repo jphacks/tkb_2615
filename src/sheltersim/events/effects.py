@@ -1670,7 +1670,7 @@ def schedule_effect_program(
                     "modifier_id": _modifier_id(program.program_id, effect.effect_id),
                     "op": effect.op,
                     "staff_id": target_id,
-                    "skills": parameters.skills,
+                    "skills": parameters["skills"],
                 },
                 phase="start",
             )
@@ -2882,6 +2882,7 @@ def validate_effect_program_state(
                 "facility_repair": "effect_program_structure",
                 "staff_handoff": "effect_program_structure",
                 "staff_task_order": "effect_program_structure",
+                "set_staff_role": "effect_program_structure",
                 "deliver_resource": "resource_delivery",
                 "modify_supply_schedule": "delivery_delayed",
                 "set_staff_availability": "staff_unavailable",

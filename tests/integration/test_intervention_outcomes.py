@@ -463,11 +463,6 @@ def test_a_staff_absence_shows_in_the_support_wait_reasons(staff_absence) -> Non
     assert sum(_kpis(child)[name] for name in reasons) > sum(_kpis(main)[name] for name in reasons)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="#72: set_staff_role fails while the program is scheduled",
-)
 def test_giving_a_water_worker_the_support_role_shortens_support_waits(main_line) -> None:
     program = _program(
         _action(
