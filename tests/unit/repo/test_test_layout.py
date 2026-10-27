@@ -31,7 +31,6 @@ UNSORTED = frozenset(
     {
         "test_nl_demo_ui.py",
         "test_pdf_report.py",
-        "test_web_demo.py",
     }
 )
 
