@@ -1,3 +1,6 @@
+"""An Agent's open action ends only through a matching applied event, and every
+behavior action has a lifecycle terminal."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +17,7 @@ from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, Sch
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import ActionKind
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def make_world() -> WorldState:
