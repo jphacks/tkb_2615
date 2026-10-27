@@ -10,13 +10,13 @@
 
 | 機構/接続 | 確認方法 | 結果・限界 |
 |---|---|---|
-| 心理平均回帰・自然回復 | `test_research_models.py` の解析解、刻み一致、high-state recovery、online monitor | 一定外力の理論解と実装一致を確認。全体の固定点・結合Jacobianは未解析 |
+| 心理平均回帰・自然回復 | `unit/policies/test_psychology.py` の解析解・刻み一致、`integration/test_research_psychology.py` のhigh-state recovery、`unit/domain/test_distress_monitor.py` のonline monitor | 一定外力の理論解と実装一致を確認。全体の固定点・結合Jacobianは未解析 |
 | 睡眠負債 | `sleep_debt_step` を420/480/600分の反復日でテスト | 休息/睡眠を分離し、必要時間に等しい睡眠で一日差分0。fallbackと範囲検証も確認。睡眠時刻・臨床係数は未検証 |
 | need → 行動 → service → need | `unit/domain/test_action_lifecycle.py`, `unit/domain/test_resource_service.py`, `integration/test_resource_service.py`, `integration/test_facility_queues.py`, `test_research_models.py` | event完了でneedが設定量だけ減る。normalized needと物理単位の変換は未校正 |
-| 行動選択 | `tests/test_agents.py`, behavior policy tests, 15分intervalのcandidate Run | 適格候補・確率・乱数再現はテスト済み。長期の行動頻度と必須行動の無期限延期は全組合せ未検証 |
+| 行動選択 | `tests/unit/policies/test_behavior.py`, behavior policy tests, 15分intervalのcandidate Run | 適格候補・確率・乱数再現はテスト済み。長期の行動頻度と必須行動の無期限延期は全組合せ未検証 |
 | queue/service/staff | lifecycle、timeout、resource、facility、staff tests | capacityとservice eventの分離は確認。稼働能力が十分な条件と不足条件を揃えた感度は未完了 |
-| 感情伝播 | `test_research_models.py` とsocial tests | 正方向/鎮静方向/接触なしゼロ/Traceを確認。接触ネットワーク・率は仮定 |
-| 噂・訂正 → 心理 | `test_information_spread.py`, `test_research_models.py` | belief/訂正/uncertainty pressureが分離され、訂正受容なしの安心は加えない。拡散全体の複数seed統合結果は未完了 |
+| 感情伝播 | `unit/policies/test_social.py` | 正方向/鎮静方向/接触なしゼロ/Traceを確認。接触ネットワーク・率は仮定 |
+| 噂・訂正 → 心理 | `integration/test_information_spread.py`, `unit/policies/test_information.py`, `unit/policies/test_psychology.py`, `unit/domain/test_information.py` | belief/訂正/uncertainty pressureが分離され、訂正受容なしの安心は加えない。拡散全体の複数seed統合結果は未完了 |
 | staff増員 → queue → psychology | staff/facility/psychology個別テスト | 各機構はあるが、同一Scenarioの因果追跡付き増員AB比較は本実施では未完了 |
 
 ## Level 4: 統合Scenario

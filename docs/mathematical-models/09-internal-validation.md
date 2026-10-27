@@ -2,7 +2,7 @@
 
 ## テストで確認する性質
 
-追加検証は `tests/test_research_models.py`, `tests/test_information_spread.py`, `tests/test_sanitation_diagnostics.py` にあります。既存の挙動検査は行動、待ち行列、資源、移動、checkpoint、provenanceのテスト群で再利用します。
+追加検証は `tests/unit/policies/test_psychology.py`, `tests/unit/policies/test_social.py`, `tests/unit/policies/test_information.py`, `tests/unit/domain/test_information.py`, `tests/integration/test_research_psychology.py`, `tests/integration/test_information_spread.py`, `tests/test_sanitation_diagnostics.py` にあります。既存の挙動検査は行動、待ち行列、資源、移動、checkpoint、provenanceのテスト群で再利用します。
 
 | 領域 | 期待性質 | 確認方法 |
 |---|---|---|
