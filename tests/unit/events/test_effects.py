@@ -674,3 +674,37 @@ def test_h03_policy_dependencies_are_required_for_staff_availability() -> None:
     issues = validate_effect_program(world, _program(action))
 
     assert any("requires operational_events_v1" in issue for issue in issues)
+
+
+@pytest.mark.parametrize("duration_days", [0.25, 1, 3])
+@pytest.mark.parametrize(
+    ("op", "target", "parameters", "units", "policies"),
+    [
+        (
+            "water_outage",
+            TargetSelector(kind="facility", target_id="water_station_main"),
+            {"outage": True},
+            "water_supply",
+            ["operational_events_v1", "resource_service_v1"],
+        ),
+        (
+            "set_staff_availability",
+            TargetSelector(kind="staff", target_id="staff_001"),
+            {"available": False},
+            "staff_member",
+            ["operational_events_v1"],
+        ),
+    ],
+)
+def test_generated_scenarios_shorter_than_four_days_accept_outages_and_absences(
+    generated_scenario_with, duration_days, op, target, parameters, units, policies
+) -> None:
+    # Before #65 only Scenarios long enough to plan a delivery (day 4 on) had the
+    # operational state these need. They run on the shared Scenario in
+    # tests/integration/test_intervention_outcomes.py.
+    world = WorldState.from_scenario(generated_scenario_with(duration_days=duration_days))
+    program = _one_effect_program(f"short-{op}", op, parameters, units, target=target)
+    effect = program.effects[0].model_copy(update={"policy_dependencies": policies})
+    program = program.model_copy(update={"effects": [effect]})
+
+    assert validate_effect_program(world, program) == ()

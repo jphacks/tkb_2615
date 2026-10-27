@@ -54,7 +54,10 @@ def test_a_pending_loss_passes_the_per_tick_check_without_operational_state(
     generated_scenario_with,
 ) -> None:
     loss = {"kind": "resource_loss", "resource_id": "water_ml", "quantity": 1_000, "due_minute": 20}
-    world = WorldState.from_scenario(_scheduled(generated_scenario_with, loss))
+    scenario = _scheduled(generated_scenario_with, loss)
+    # Generated Scenarios opt into the state since #65; one saved before that did not.
+    del scenario.model_configs["operational_events"]
+    world = WorldState.from_scenario(scenario)
     initialize_simulator_extensions(world)
 
     assert OPERATIONAL_EVENTS_KEY not in world.model_state
@@ -150,3 +153,16 @@ def test_a_resource_stall_may_name_the_head_of_any_independent_queue(
     else:
         with pytest.raises(StateInvariantError, match="current facility queue head"):
             world.validate()
+
+
+def test_a_scenario_that_opts_into_operational_events_keeps_their_state(
+    generated_scenario,
+) -> None:
+    # Generated Scenarios opt in without planning a delivery (#65).
+    assert generated_scenario.model_configs["operational_events"] == {"enabled": True}
+    world = WorldState.from_scenario(generated_scenario)
+    assert set(world.model_state[OPERATIONAL_EVENTS_KEY]["staff_status"]) == set(world.staff)
+    del world.model_state[OPERATIONAL_EVENTS_KEY]
+
+    with pytest.raises(StateInvariantError, match="requires operational_events_v1 state"):
+        world.validate()

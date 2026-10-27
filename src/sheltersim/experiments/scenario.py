@@ -387,6 +387,9 @@ class ScenarioSpec(ContractModel):
             and behavior_source_id != _BEHAVIOR_POLICY_SOURCE_IDS[behavior_variant]
         ):
             raise ValueError("behavior policy source_id must match its registered variant")
+        from sheltersim.domain.operational import operational_events_enabled
+
+        operational_events_enabled(self.model_configs, ())
         zone_environment_config: ScenarioZoneEnvironmentConfig | None = None
         if "zone_environment" in self.model_configs:
             try:

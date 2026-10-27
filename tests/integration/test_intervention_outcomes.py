@@ -235,12 +235,9 @@ def test_a_toilet_outage_leaves_toilet_needs_unmet(main_line, generated_scenario
 
 
 def test_a_water_outage_stops_water_service_and_leaves_people_thirsty(
-    tmp_path, generated_scenario_with
+    main_line, generated_scenario
 ) -> None:
-    # Only Scenarios long enough to schedule a supply delivery (4 days or more)
-    # accept a water outage today; shorter ones reject it before the Branch
-    # exists (#65). The comparison still covers only the first 6 hours.
-    scenario = generated_scenario_with(duration_days=4)
+    # Before #65 only Scenarios of four days or more accepted a water outage.
     program = _program(
         _action(
             "water_outage",
@@ -251,9 +248,9 @@ def test_a_water_outage_stops_water_service_and_leaves_people_thirsty(
             end_minute=OUTAGE_END_MINUTE,
         )
     )
-    first = FORK_MINUTE + scenario.model_configs["resource_service"]["service_minutes"]
+    first = FORK_MINUTE + generated_scenario.model_configs["resource_service"]["service_minutes"]
 
-    main, child = _main_and_child(tmp_path, scenario, program)
+    main, child = _fork_main(main_line, "water-outage", program)
 
     assert _applied(child, "water_outage")
     assert _applied(child, "water_restored")
@@ -408,15 +405,11 @@ def test_added_toilets_shorten_toilet_waits_while_a_toilet_is_broken(
 
 
 @pytest.fixture(scope="module")
-def staff_absence(tmp_path_factory, generated_previews) -> tuple[WorldState, WorldState]:
+def staff_absence(main_line) -> tuple[WorldState, WorldState]:
     """The only support worker is away from minute 60 to 300.
 
-    Only Scenarios long enough to schedule a supply delivery accept a staff
-    absence today (#65), so this uses four days and compares the first 6 hours.
+    Before #65 only Scenarios of four days or more accepted a staff absence.
     """
-    scenario = ScenarioSpec.model_validate(
-        copy.deepcopy(generated_previews(duration_days=4)["scenario"])
-    )
     program = _program(
         _action(
             "set_staff_availability",
@@ -427,7 +420,7 @@ def staff_absence(tmp_path_factory, generated_previews) -> tuple[WorldState, Wor
             end_minute=OUTAGE_END_MINUTE,
         )
     )
-    return _main_and_child(tmp_path_factory.mktemp("staff-absence"), scenario, program)
+    return _fork_main(main_line, "staff-absence", program)
 
 
 def test_a_staff_absence_stops_support_and_lets_requests_time_out(staff_absence) -> None:

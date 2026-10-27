@@ -37,6 +37,23 @@ def uses_operational_events(events: Any) -> bool:
     )
 
 
+def operational_events_enabled(configs: dict[str, Any], events: Any) -> bool:
+    """Return whether a Scenario keeps operational_events_v1 state.
+
+    Planning an H03 event opts in, and so does model_configs.operational_events,
+    which generated Scenarios set so that a water outage or staff absence can be
+    approved before any delivery is planned (#65).
+    """
+    config = configs.get("operational_events")
+    if config is not None and (
+        not isinstance(config, dict)
+        or set(config) != {"enabled"}
+        or type(config["enabled"]) is not bool
+    ):
+        raise ValueError("operational_events config must be {'enabled': bool}")
+    return (config is not None and config["enabled"]) or uses_operational_events(events)
+
+
 def create_operational_events_state(events: Any, staff_ids: set[str]) -> dict[str, Any]:
     """Create canonical operational state from validated scenario events."""
     shipments = {
@@ -138,6 +155,8 @@ def validate_operational_events_state(
         in_flight_event.due_minute > world.minute_index or in_flight_event not in pending_events
     ):
         raise ValueError("in-flight operational event must be pending and due")
+    if state is None and operational_events_enabled(world.model_configs, ()):
+        raise ValueError("model_configs.operational_events requires operational_events_v1 state")
     if not validate_event_history:
         # Match the state creation and the full check: plain ledger events such as
         # resource_loss run without operational state.

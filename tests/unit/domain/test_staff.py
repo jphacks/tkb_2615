@@ -38,10 +38,9 @@ FIRST_LEG = "route_sleeping_corridor"
 
 
 def test_waiting_for_an_absent_worker_counts_as_waiting_for_someone_not_working(
-    generated_scenario_with,
+    generated_scenario,
 ) -> None:
-    # Only Scenarios of four days or more hold staff absences (#65).
-    world = WorldState.from_scenario(generated_scenario_with(duration_days=4))
+    world = WorldState.from_scenario(generated_scenario)
     # staff_001 is the only support worker. Marking them away stands in for an
     # applied absence event, so the state checks that compare it with the event
     # history are skipped; test_a_staff_absence_shows_in_the_support_wait_reasons

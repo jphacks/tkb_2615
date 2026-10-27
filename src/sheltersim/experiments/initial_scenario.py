@@ -969,6 +969,9 @@ class InitialScenarioBuilder:
         # so an operator can approve add_temporary_space (#80). Saved Scenarios
         # without it keep running without that state.
         model_configs["simulator_extensions"] = {"enabled": True}
+        # Water outages and staff absences need operational_events_v1, which a
+        # Scenario otherwise has only once a delivery is planned (day 4 on) (#65).
+        model_configs["operational_events"] = {"enabled": True}
         from sheltersim.domain.temporary_spaces import TEMPORARY_SPACES_SOURCE_ID
         for source_id, title in ((BODY_SOURCE_ID, "Experimental life-state feedback"),
                                  (STAFF_OPERATIONS_SOURCE_ID, "Experimental staff operations"),
