@@ -11,6 +11,14 @@ ruff check .
 ruff format --check .
 ~~~
 
+`ruff check .`と`ruff format --check .`は指摘なしで通ります（既存の指摘は#139の一括整形で片付けました）。変更後もこの2つが通る状態を保ちます。1行100桁を超える文字列は、文言を変えずに、隣り合う文字列リテラルの連結に分けて書きます。分けると値が変わる複数行の文字列（SQLiteの表定義など）だけ、閉じる引用符の行に`# noqa: E501`を付けます。
+
+一括整形のcommitは`.git-blame-ignore-revs`に登録してあります。手元の`git blame`で整形前の変更をたどるには、一度だけ次を設定します。GitHubのblame表示はこのファイルを自動で使います。
+
+~~~shell
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+~~~
+
 標準pytestには長時間simulation testも含まれます。live API testはSHELTERSIM_ALLOW_LIVE_API_TESTSとANTHROPIC_API_KEYの両方を明示した場合だけ対象です。通常のCIではlive gateを設定しないでください。
 
 ### 並列実行
@@ -38,7 +46,7 @@ tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、�
 - ruff check . は既存指摘1,906件: E501 1,758、E701 71、E702 40、I001 28、F401 6、F841 3。
 - ruff format --check . は130個のPython fileを整形対象、87個は整形済みと報告しました。
 
-これらのrepository全体のstyle指摘は文書整理以前から存在します。文書整理ではsource/testの動作を変更していません。GitHub Actionsはdispatchしていません。二つのworkflowは手動実行のままです。
+これらのrepository全体のstyle指摘は文書整理以前から存在し、#139の一括整形で解消しました。文書整理ではsource/testの動作を変更していません。GitHub Actionsはdispatchしていません。二つのworkflowは手動実行のままです。
 
 ## 主なテスト範囲
 
