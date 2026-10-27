@@ -643,9 +643,12 @@ def _add_toilets_program(count: int = 2, *, start_minute: int) -> Any:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def add_toilets_program() -> Callable[..., Any]:
-    """Build an EffectProgram that adds count toilets (2 by default) to the toilet zone."""
+    """Build an EffectProgram that adds count toilets (2 by default) to the toilet zone.
+
+    Session-scoped so module-scoped Runs can use it; each call builds a new program.
+    """
     return _add_toilets_program
 
 

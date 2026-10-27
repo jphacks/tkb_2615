@@ -1,11 +1,17 @@
 """Offline PDF export acceptance, grounding, persistence and failure boundaries.
 
+Most tests use report_saved_run, a 12-person fixture Run whose capacity Branch adds a
+toilet with a Branch command the Project screen does not use. The tests at the end
+report a Run of the shared generated Scenario whose Branch adds toilets with an
+approved EffectProgram, as the Project screen does (#137).
+
 The problem window is checked in tests/unit/web/test_pdf_report.py, and the PDF download
 over HTTP in tests/e2e/test_pdf_download.py.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -14,11 +20,15 @@ import pypdfium2
 import pytest
 from pypdf import PdfReader
 
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.branch import BranchRuntime
+from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.accounting import usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.pdf_analysis import generate_analysis, validate_analysis
 from sheltersim.llm.provider import LLMRouter
-from sheltersim.storage.projects import ProjectStore, StorageError
+from sheltersim.storage.projects import ProjectStore, StorageError, digest
 from sheltersim.storage.usage import UsageLedger
 from sheltersim.web.pdf_render import render_pdf
 from sheltersim.web.pdf_report import analysis_facts, collect_report, problem_window
@@ -314,3 +324,105 @@ def test_missing_metrics_and_sparse_history_are_explicit(saved_run, report_route
     pdf = render_pdf(data, generate_analysis(facts, report_router()), facts)
     text = "\n".join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
     assert "未取得" in text and "途中結果" in text and "20分" in text
+
+
+# One hour, checkpointed every 10 minutes; the Branch adds toilets at minute 10.
+GENERATED_DURATION_DAYS = 1 / 24
+GENERATED_END = 60
+FORK_MINUTE = 10
+ADDED_TOILETS = 2
+
+
+@pytest.fixture(scope="module")
+def generated_saved_run(tmp_path_factory, generated_previews, add_toilets_program):
+    """A ProjectAPI over Run r of the generated Scenario with a Branch that adds toilets.
+
+    Shared by the module: reports only read the Run, which the first test checks.
+    """
+    preview = generated_previews(duration_days=GENERATED_DURATION_DAYS)
+    scenario = ScenarioSpec.model_validate(copy.deepcopy(preview["scenario"]))
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+        store = ProjectStore(tmp_path_factory.mktemp("generated-report") / "projects")
+        store.create_project("p")
+        store.save_scenario(
+            "p", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+        )
+        store.create_run("p", "r", scenario.id, 1)
+        timeline = TimelineStore(store, "p", "r")
+        timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+        timeline.advance("main", GENERATED_END, checkpoint_interval=10)
+        program = add_toilets_program(ADDED_TOILETS, start_minute=FORK_MINUTE)
+        timeline.fork(
+            "main",
+            FORK_MINUTE,
+            "capacity",
+            program=program,
+            approved_program_hash=digest(program.model_dump(mode="json")),
+        )
+        timeline.advance("capacity", GENERATED_END)
+        api = ProjectAPI(store)
+        try:
+            yield api
+        finally:
+            api.close()
+
+
+def test_effect_program_intervention_is_reported_with_deltas_and_read_only_checkpoints(
+    generated_saved_run,
+):
+    api = generated_saved_run
+    before = {
+        key: api.store.load_branch("p", "r", key)[1].to_json() for key in ("main", "capacity")
+    }
+
+    report = collect_report(api, "p", "r", ["main", "capacity"], GENERATED_END)
+
+    assert report["paired"] and report["range"] == [FORK_MINUTE, GENERATED_END]
+    (intervention,) = report["branches"][1]["interventions"]
+    assert intervention["operator"] == "add_toilet"
+    assert intervention["status"] == "applied"
+    assert intervention["realized_minute"] == FORK_MINUTE
+    assert intervention["details"]["zone_id"] == "toilet"
+    assert analysis_facts(report)["B1.I0"]["operator"] == "add_toilet"
+    for metric, item in report["differences"][0]["metrics"].items():
+        assert item["delta"] == (
+            report["branches"][1]["final"][metric] - report["branches"][0]["final"][metric]
+        )
+    for key, checkpoint in before.items():
+        assert api.store.load_branch("p", "r", key)[1].to_json() == checkpoint
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=KeyError,
+    reason="#160: the report keeps only some payload keys, and count is not one of them",
+)
+def test_effect_program_intervention_reports_how_many_toilets_were_added(generated_saved_run):
+    report = collect_report(generated_saved_run, "p", "r", ["main", "capacity"], GENERATED_END)
+
+    (intervention,) = report["branches"][1]["interventions"]
+    assert intervention["details"]["count"] == ADDED_TOILETS
+    assert analysis_facts(report)["B1.I0"]["parameters"]["count"] == ADDED_TOILETS
+
+
+def test_pdf_of_a_generated_run_with_an_effect_program_renders_every_section(
+    generated_saved_run, report_router
+):
+    data = collect_report(generated_saved_run, "p", "r", ["main", "capacity"], GENERATED_END)
+    facts = analysis_facts(data)
+    pdf = render_pdf(data, generate_analysis(facts, report_router()), facts)
+    reader = PdfReader(BytesIO(pdf))
+    assert 5 <= len(reader.pages) <= 7
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    for heading in (
+        "エグゼクティブサマリー",
+        "シミュレーション条件",
+        "結果分析",
+        "介入と比較",
+        "AI分析",
+        "限界と今後",
+    ):
+        assert heading in text
+    assert "優先案" in text and "代替案" in text
+    assert "表示対象外" not in text and "\ufffd" not in text and "■" not in text
