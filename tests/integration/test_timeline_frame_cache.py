@@ -1,28 +1,16 @@
-"""Frames cached by the checkpoint writer must equal reconstructed frames."""
+"""Frames cached by the checkpoint writer must equal reconstructed frames.
+
+That the cache stays within the storage capacity is checked in
+tests/unit/storage/test_frames.py.
+"""
 
 import gzip
 import json
 
 import pytest
 
-from sheltersim.core.world import WorldState
-from sheltersim.experiments.branch import BranchRuntime
-from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.inspection.frames import world_frame
 from sheltersim.storage.frames import FrameCache
-from sheltersim.storage.projects import ProjectStore, digest
-
-
-def saved_timeline(tmp_path):
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    return store, timeline
 
 
 def reconstructed(timeline, branch_id, minute):
@@ -36,7 +24,7 @@ def files(store):
     return sorted((str(p), p.stat().st_mtime_ns) for p in store.root.rglob("*") if p.is_file())
 
 
-def test_saved_boundaries_are_served_from_the_writer_cache(tmp_path, monkeypatch):
+def test_saved_boundaries_are_served_from_the_writer_cache(tmp_path, monkeypatch, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 60)
     expected = {minute: reconstructed(timeline, "main", minute) for minute in (0, 30, 60)}
@@ -54,7 +42,7 @@ def test_saved_boundaries_are_served_from_the_writer_cache(tmp_path, monkeypatch
     assert files(store) == before
 
 
-def test_unsaved_minutes_and_unusable_entries_fall_back_to_reconstruction(tmp_path):
+def test_unsaved_minutes_and_unusable_entries_fall_back_to_reconstruction(tmp_path, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 30)
     reference = store.branch_reference("p", "r", "main")
@@ -72,7 +60,7 @@ def test_unsaved_minutes_and_unusable_entries_fall_back_to_reconstruction(tmp_pa
     assert not path.exists()
 
 
-def test_fork_point_frame_is_cached_for_the_child(tmp_path, monkeypatch):
+def test_fork_point_frame_is_cached_for_the_child(tmp_path, monkeypatch, saved_timeline):
     _, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 30)
     timeline.fork("main", 13, "child")
@@ -82,7 +70,7 @@ def test_fork_point_frame_is_cached_for_the_child(tmp_path, monkeypatch):
     assert expected["branch_id"] == "child"
 
 
-def test_cache_write_failure_keeps_the_durable_checkpoint(tmp_path, monkeypatch):
+def test_cache_write_failure_keeps_the_durable_checkpoint(tmp_path, monkeypatch, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
 
     def full(*_args, **_kwargs):
@@ -93,13 +81,3 @@ def test_cache_write_failure_keeps_the_durable_checkpoint(tmp_path, monkeypatch)
     assert store.branch_reference("p", "r", "main").computed_until == 30
     monkeypatch.undo()
     assert timeline.frame("main", 30) == reconstructed(timeline, "main", 30)
-
-
-def test_cache_respects_storage_capacity(tmp_path):
-    store, timeline = saved_timeline(tmp_path)
-    reference = store.branch_reference("p", "r", "main")
-    cache = FrameCache(store, "p", "r")
-    cache._file(reference.checkpoint_hash).unlink()
-    store.max_bytes = store.usage()["bytes"] + 1
-    assert cache.put(reference.checkpoint_hash, {"minute": 0}) is False
-    assert cache.get(reference.checkpoint_hash) is None

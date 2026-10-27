@@ -936,6 +936,61 @@ def small_benchmark_scenario() -> Callable[..., Any]:
     return _small_benchmark_scenario
 
 
+def _saved_timeline(tmp_path: Path) -> tuple[Any, Any]:
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+
+    store = ProjectStore(tmp_path)
+    store.create_project("p")
+    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("p", "r", scenario.id, 1)
+    timeline = TimelineStore(store, "p", "r")
+    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    return store, timeline
+
+
+@pytest.fixture
+def saved_timeline() -> Callable[[Path], tuple[Any, Any]]:
+    """Open a store at a folder with project p, Run r of scenario_100_agents and its
+    first Checkpoint recorded; return the store and the Run's TimelineStore.
+    """
+    return _saved_timeline
+
+
+def _fake_msvcrt() -> Any:
+    import fcntl
+    import struct
+    import types
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        kind = fcntl.F_UNLCK if mode == 0 else fcntl.F_WRLCK
+        try:
+            lock = struct.pack("hh4xqqi4x", kind, os.SEEK_CUR, 0, size, 0)
+            fcntl.fcntl(fd, fcntl.F_OFD_SETLK, lock)
+        except OSError as exc:
+            raise PermissionError(13, "locked") from exc
+
+    return types.SimpleNamespace(LK_LOCK=1, LK_NBLCK=2, LK_UNLCK=0, locking=locking)
+
+
+@pytest.fixture
+def windows_like(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make project storage see Windows: no fcntl, msvcrt locks, and no os.O_NOFOLLOW.
+
+    The msvcrt locks are Linux open-file-description locks, so a test using this needs
+    them (fcntl.F_OFD_SETLK).
+    """
+    import sheltersim.storage.projects as projects_module
+
+    monkeypatch.setattr(projects_module, "fcntl", None)
+    monkeypatch.setattr(projects_module, "msvcrt", _fake_msvcrt(), raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW")
+
+
 def _make_event(
     event_id: str,
     *,
