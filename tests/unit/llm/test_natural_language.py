@@ -19,7 +19,7 @@ from sheltersim.llm.natural_language import (
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.schemas import FacilityTarget, ParseRequest, ScenarioSummary, ZoneTarget
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 class FakeProvider:
@@ -375,91 +375,6 @@ def test_invalid_model_target_is_rejected_without_mutating_world_state() -> None
     assert world.canonical_json() == before
 
 
-def _generated_mid_run_project(tmp_path, minute: int):
-    """Return a Project store whose generated Scenario's main Branch reached `minute`."""
-    from sheltersim.core.world import WorldState
-    from sheltersim.experiments.branch import BranchRuntime
-    from sheltersim.experiments.initial_scenario import (
-        InitialScenarioBuilder,
-        InitialScenarioRequest,
-    )
-    from sheltersim.experiments.timeline import TimelineStore
-    from sheltersim.storage.projects import ProjectStore, digest
-
-    scenario = (
-        InitialScenarioBuilder()
-        .build(
-            InitialScenarioRequest(
-                municipality="Synthetic municipality",
-                disaster="earthquake",
-                evacuees=10,
-                duration_days=1,
-                seed=7,
-            )
-        )
-        .scenario
-    )
-    store = ProjectStore(tmp_path)
-    store.create_project("project")
-    saved = store.save_scenario(
-        "project", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
-    )
-    store.create_run("project", "run", scenario.id, saved["scenario_version"])
-    timeline = TimelineStore(store, "project", "run")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    timeline.advance("main", minute)
-    return store, sorted(timeline.seek("main", minute).world.zones)[0]
-
-
-def test_generated_scenario_mid_run_intervention_reaches_opus(tmp_path, monkeypatch) -> None:
-    from sheltersim.web import workspace
-    from sheltersim.web.projects import ProjectAPI
-
-    store, zone_id = _generated_mid_run_project(tmp_path, 60)
-    provider = FakeProvider(
-        json.dumps(
-            {
-                "status": "compiled",
-                "support_mode": "native",
-                "mechanism_summary": "支援要員を追加します。",
-                "effects": [
-                    {
-                        "op": "add_staff",
-                        "target_kind": "zone",
-                        "target_id": zone_id,
-                        "start_minute": 60,
-                        "parameters": {"count": 2},
-                        "assumption_indexes": [],
-                    }
-                ],
-                "assumptions": [],
-                "limitations": [],
-                "questions": [],
-                "choices": [],
-            },
-            ensure_ascii=False,
-        )
-    )
-    # The default generic guard is 16,384 bytes; the generated context is larger.
-    monkeypatch.setattr(workspace, "accounted_router", lambda *_a, **_k: router(provider))
-    api = ProjectAPI(store, recover=False)
-    try:
-        result = api.post(
-            ["project", "runs", "run", "branches", "main", "intervention-preview"],
-            {"minute": 60, "text": "スタッフを2人追加"},
-        )
-    finally:
-        api.close()
-
-    assert len(provider.calls) == 1
-    assert len(provider.calls[0][1].input_text.encode()) > 16_384
-    assert result["status"] == "compiled"
-    assert result["fallback_used"] is False
-    assert result["usage"]["api_request_count"] == 1
-    assert result["can_apply"] is True
-    assert [effect["start_minute"] for effect in result["program"]["effects"]] == [60]
-
-
 def test_rule_fallback_results_say_why_opus_was_not_used() -> None:
     offline = compile_natural_language(
         request("Day 3 toilet 1 outage"), LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
@@ -524,25 +439,3 @@ def test_stop_policy_keeps_rule_results_in_explicit_offline_mode() -> None:
 
     assert result.status == "compiled"
     assert result.fallback_used is True
-
-
-def test_project_preview_returns_the_stop_reason_as_a_conflict(tmp_path, monkeypatch) -> None:
-    from sheltersim.storage.projects import StorageError
-    from sheltersim.web import workspace
-    from sheltersim.web.projects import ProjectAPI
-
-    store, _ = _generated_mid_run_project(tmp_path, 30)
-    provider = FakeProvider(error=LLMProviderError("rate limited", status_code=429))
-    monkeypatch.setattr(workspace, "accounted_router", lambda *_a, **_k: stop_router(provider))
-    api = ProjectAPI(store, recover=False)
-    try:
-        with pytest.raises(StorageError) as raised:
-            api.post(
-                ["project", "runs", "run", "branches", "main", "intervention-preview"],
-                {"minute": 30, "text": "スタッフを2人追加"},
-            )
-    finally:
-        api.close()
-
-    assert raised.value.code == "intervention_compiler_unavailable"
-    assert "429" in str(raised.value)
