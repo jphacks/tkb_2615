@@ -7,17 +7,16 @@ its registry set by hand.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+
+from support.paths import SMALL_REPLAY
 
 from sheltersim.__main__ import main
 from sheltersim.experiments.comparison import compare_run_sets, render_comparison_markdown
 from sheltersim.experiments.scenario import ScenarioSpec
 
-SMALL_FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenarios" / "h00_small_replay.json"
-
 
 def test_cli_reports_and_warns_about_a_legacy_psychology_model(tmp_path, capsys) -> None:
-    legacy_document = ScenarioSpec.load(SMALL_FIXTURE).model_dump(mode="json")
+    legacy_document = ScenarioSpec.load(SMALL_REPLAY).model_dump(mode="json")
     legacy_document["model_configs"]["policy_registry"] = {
         "schema_version": 2,
         "psychology": "causal-stress-v1",

@@ -5,10 +5,10 @@ stories that never render model-authored claims.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.cache import ResponseTape
@@ -168,7 +168,7 @@ def test_schema_violation_falls_back_without_model_authored_text() -> None:
 
 
 def test_comparison_scope_rejects_other_scenario() -> None:
-    fixture = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
+    fixture = SCENARIO_100_AGENTS
     scenario = ScenarioSpec.model_validate_json(fixture.read_text(encoding="utf-8"))
 
     with pytest.raises(ValueError, match="scenario ID"):

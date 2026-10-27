@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.__main__ import main
 from sheltersim.core.engine import TraceLevel
@@ -19,11 +20,9 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
 
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
-
 
 def make_scenario_file(path: Path) -> Path:
-    scenario_data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    scenario_data = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     scenario_data["scheduled_events"] = [
         {
             "id": "planned-facility-failure",

@@ -11,6 +11,14 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from support.paths import (
+    BASELINE_100_7D,
+    FAILURE_DAY3,
+    REGRESSION_CONTRACT,
+    SMALL_REPLAY,
+    SOURCE_MANIFEST,
+)
+
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import WorldState
@@ -24,14 +32,10 @@ from sheltersim.policies.behavior import UtilityBehaviorPolicy
 from sheltersim.policies.social import SocialPropagationParameters
 
 ROOT = Path(__file__).parents[3]
-MANIFEST_PATH = ROOT / "fixtures" / "source-manifest.json"
-REGRESSION_CONTRACT_PATH = ROOT / "fixtures" / "regression-contract.json"
-BASELINE_PATH = ROOT / "fixtures" / "scenarios" / "baseline_100_7d.json"
-FAILURE_PATH = ROOT / "fixtures" / "scenarios" / "failure_day3.json"
 
 
 def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     allowed_types = set(manifest["source_type_values"])
     sources = manifest["sources"]
     assumptions = manifest["assumptions"]
@@ -115,7 +119,7 @@ def test_source_manifest_is_versioned_and_points_to_primary_sources() -> None:
 
 
 def test_psychology_behavior_and_profile_hypotheses_match_the_manifest() -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
     legacy_psychology = assumptions["ASM-SIMPLE-PSYCHOLOGY-RATES-V1"]
     psychology = assumptions["ASM-H04-CAUSAL-STRESS-V1"]
@@ -148,7 +152,7 @@ def test_psychology_behavior_and_profile_hypotheses_match_the_manifest() -> None
     )
     assert priority_behavior["calibration_status"] == "uncalibrated deterministic rule alternative"
 
-    baseline = ScenarioSpec.load(BASELINE_PATH)
+    baseline = ScenarioSpec.load(BASELINE_100_7D)
     generation = baseline.provenance["profile_generation"]
     template = ProfileTemplate.model_validate(generation["template"])
     values = profiles["values"]
@@ -166,7 +170,7 @@ def test_psychology_behavior_and_profile_hypotheses_match_the_manifest() -> None
 
 
 def test_optional_and_runtime_assumptions_match_the_implemented_defaults() -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
     social = assumptions["ASM-SOCIAL-PROPAGATION-V1"]["values"]
     information = assumptions["ASM-INFORMATION-SPREAD-V1"]["values"]
@@ -210,18 +214,18 @@ def test_optional_and_runtime_assumptions_match_the_implemented_defaults() -> No
 
 
 def test_packaged_failure_fixture_stays_in_sync_with_source_fixture() -> None:
-    source = FAILURE_PATH.read_bytes()
+    source = FAILURE_DAY3.read_bytes()
     packaged = ROOT / "src" / "sheltersim" / "web" / "examples" / "failure_day3.json"
     assert packaged.read_bytes() == source
 
 
 def test_scenario_models_and_failure_events_are_explicitly_hypothetical() -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
     toilet_assumption = assumptions["ASM-TOILET-SERVICE-DURATION-V1"]
     outage_assumption = assumptions["ASM-DAY3-TOILET-OUTAGE-V1"]
-    baseline = ScenarioSpec.load(BASELINE_PATH)
-    failure = ScenarioSpec.load(FAILURE_PATH)
+    baseline = ScenarioSpec.load(BASELINE_100_7D)
+    failure = ScenarioSpec.load(FAILURE_DAY3)
 
     assert baseline.model_configs["toilet_service"]["source_type"] == "assumption"
     for config_name, assumption_id in (
@@ -254,8 +258,8 @@ def test_scenario_models_and_failure_events_are_explicitly_hypothetical() -> Non
 def test_h00_baseline_contract_freezes_seed_models_and_source_categories(
     tmp_path: Path,
 ) -> None:
-    contract = json.loads(REGRESSION_CONTRACT_PATH.read_text(encoding="utf-8"))["baseline_100_7d"]
-    baseline = ScenarioSpec.load(BASELINE_PATH)
+    contract = json.loads(REGRESSION_CONTRACT.read_text(encoding="utf-8"))["baseline_100_7d"]
+    baseline = ScenarioSpec.load(BASELINE_100_7D)
     scenario_hash = hashlib.sha256(baseline.canonical_json().encode("utf-8")).hexdigest()
     model_configs_hash = hashlib.sha256(
         json.dumps(
@@ -308,11 +312,11 @@ def test_h00_baseline_contract_freezes_seed_models_and_source_categories(
 
 
 def test_h00_small_replay_event_has_its_own_assumption_record() -> None:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text(encoding="utf-8"))
     assumption = {item["id"]: item for item in manifest["assumptions"]}[
         "ASM-H00-REGRESSION-OUTAGE-V1"
     ]
-    scenario = ScenarioSpec.load(ROOT / "fixtures" / "scenarios" / "h00_small_replay.json")
+    scenario = ScenarioSpec.load(SMALL_REPLAY)
     event = scenario.scheduled_events[0]
 
     assert assumption["target"] == "fixtures/scenarios/h00_small_replay.json:scheduled_events"

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SMALL_REPLAY
 
 from sheltersim.contracts.population import PersonContext
 from sheltersim.core.checkpoint import Checkpoint
@@ -29,8 +30,6 @@ from sheltersim.events.handlers import EventDispatcher, StaffSupportCompletionHa
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import person_projection, world_frame
 from sheltersim.region.population import PopulationConditionInput
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_operator_care_need_rates_flow_through_preview_context_into_runtime(
@@ -80,7 +79,7 @@ def test_operator_care_need_rates_reject_invalid_probability_or_kind(
 
 
 def make_world() -> WorldState:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     scenario = ScenarioSpec.model_validate(document)
     world = WorldState.from_scenario(scenario)

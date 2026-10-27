@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity, AgentState
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_agent_rejects_multiple_exclusive_activities() -> None:
-    agent = next(iter(WorldState.from_scenario(ScenarioSpec.load(FIXTURE)).agents.values()))
+    agent = next(
+        iter(WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS)).agents.values())
+    )
 
     with pytest.raises(ValueError, match="multiple exclusive activities"):
         AgentState(
@@ -25,7 +24,7 @@ def test_agent_rejects_multiple_exclusive_activities() -> None:
 
 
 def test_agent_rejects_invalid_next_decision_time() -> None:
-    agent = WorldState.from_scenario(ScenarioSpec.load(FIXTURE)).agents["A001"]
+    agent = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS)).agents["A001"]
 
     with pytest.raises(ValueError, match="next_decision_at"):
         AgentState(

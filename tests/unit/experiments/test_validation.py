@@ -1,6 +1,7 @@
 """Scientific-comparison checks prepared for final #122 execution."""
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.validation import (
@@ -31,7 +32,7 @@ def test_paired_inputs_and_seeds_are_required():
 
 
 def test_empirical_dataset_cannot_apply_to_unmatched_region():
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     dataset = {
         "id": "region-specific",
         "applicability": {"municipality_code": "13107"},

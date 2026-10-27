@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+
+from support.paths import SMALL_REPLAY
 
 from sheltersim.contracts.operations import StaffSupportContinuityReceipt
 from sheltersim.core.checkpoint import Checkpoint
@@ -34,8 +35,6 @@ from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, Sch
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import world_frame
 from sheltersim.policies.space import SpaceRouter
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_pre_cause_type_continuity_receipt_remains_valid() -> None:
@@ -83,7 +82,7 @@ def _demand_world() -> WorldState:
     sanitation and task coefficients, so this stays on a hand-built world. Arrivals
     on a generated Scenario are run in tests/integration/test_intervention_outcomes.py.
     """
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = 24
     document["scheduled_events"] = []

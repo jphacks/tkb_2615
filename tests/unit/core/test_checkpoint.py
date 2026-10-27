@@ -10,14 +10,12 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import FAILURE_DAY3, SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError, CheckpointSchedule
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
-
-FAILURE_DAY3 = Path(__file__).parents[3] / "fixtures" / "scenarios" / "failure_day3.json"
-SMALL_REPLAY = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_registered_state_proposals_are_atomic_and_versions_fail_closed(

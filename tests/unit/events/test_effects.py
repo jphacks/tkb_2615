@@ -12,10 +12,10 @@ tests/unit/experiments/test_runner.py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
+from support.paths import SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
@@ -53,8 +53,6 @@ from sheltersim.experiments.branch import (
 )
 from sheltersim.experiments.scenario import ScenarioSpec
 
-ROOT = Path(__file__).parents[3]
-SMALL_SCENARIO = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 SOURCE_ID = "ASM-H18-EFFECT-TEST-V1"
 
 ROOM = {
@@ -188,7 +186,7 @@ def test_a_staff_role_change_is_scheduled_with_its_new_skills(generated_scenario
 
 
 def _world(*, operational: bool = False, resource_service: bool = False) -> WorldState:
-    document = json.loads(SMALL_SCENARIO.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = 45
     document["scheduled_events"] = []

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SMALL_REPLAY
 
 from sheltersim.contracts.operations import StaffSupportContinuityReceipt
 from sheltersim.contracts.workspace import HistoryQuery
@@ -57,8 +58,6 @@ from sheltersim.policies.psychology import (
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-ROOT = Path(__file__).parents[3]
-SMALL_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 H03_SOURCE = "ASM-H03-OPERATIONAL-EVENTS-V1"
 
 
@@ -94,7 +93,7 @@ def _scenario(
     initial_water: int = 1000,
     staff_ids: tuple[str, ...] | None = None,
 ) -> ScenarioSpec:
-    document = json.loads(SMALL_FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["duration_minutes"] = duration
     document["scheduled_events"] = events
@@ -1017,7 +1016,7 @@ def test_support_timeout_suppression_and_recreation_after_absence() -> None:
 
 
 def test_invalid_operational_payload_is_atomic_and_v5_baseline_has_no_h03_state() -> None:
-    baseline = WorldState.from_scenario(ScenarioSpec.load(SMALL_FIXTURE))
+    baseline = WorldState.from_scenario(ScenarioSpec.load(SMALL_REPLAY))
     assert baseline.schema_version == 5
     assert OPERATIONAL_EVENTS_KEY not in baseline.model_state
 

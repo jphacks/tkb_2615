@@ -11,6 +11,8 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from support.paths import BASELINE_100_7D, SCENARIO_100_AGENTS
+
 from sheltersim.core.engine import TraceLevel
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
@@ -25,12 +27,9 @@ from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
 from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.social import SocialPropagationParameters
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-BASELINE_PATH = Path(__file__).parents[3] / "fixtures" / "scenarios" / "baseline_100_7d.json"
-
 
 def load_scenario() -> ScenarioSpec:
-    return ScenarioSpec.load(FIXTURE)
+    return ScenarioSpec.load(SCENARIO_100_AGENTS)
 
 
 def test_metric_snapshot_reports_values_and_source_ids_without_mutation() -> None:
@@ -154,7 +153,7 @@ def test_artifact_writer_emits_required_files_and_redacts_sensitive_fields(
 
 
 def test_run_manifest_and_decision_trace_include_source_ids(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(BASELINE_PATH)
+    scenario = ScenarioSpec.load(BASELINE_100_7D)
     world = WorldState.from_scenario(scenario)
     output = tmp_path / "run"
     writer = RunArtifactWriter(scenario, output, trace_level=TraceLevel.OFF)

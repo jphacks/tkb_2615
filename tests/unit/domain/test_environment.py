@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from support.paths import FIXTURES, SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.rng import CounterRNG
@@ -45,8 +45,6 @@ from sheltersim.llm.schemas import ParseRequest
 from sheltersim.policies.behavior import ActionKind, UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.psychology import Activity, SimplePsychologyPolicy
 
-ROOT = Path(__file__).parents[3]
-SMALL_SCENARIO = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 ENVIRONMENT_SOURCE = "ASM-H19-ZONE-ENVIRONMENT-V1"
 
 
@@ -57,7 +55,7 @@ def _world(
     temperature_model: str | None = None,
     formula_models: dict[str, str] | None = None,
 ) -> WorldState:
-    document = json.loads(SMALL_SCENARIO.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["schema_version"] = 3
     document["scheduled_events"] = []
     if environment:
@@ -360,7 +358,7 @@ def test_invalid_environment_programs_fail_preflight_without_world_mutation() ->
 
 
 def test_environment_coefficients_are_editable_and_written_as_assumptions() -> None:
-    document = json.loads(SMALL_SCENARIO.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     config = ScenarioZoneEnvironmentConfig(noise_rest_efficiency_loss=0.8)
     document["schema_version"] = 3
     document["model_configs"]["zone_environment"] = config.model_dump(mode="json")
@@ -401,9 +399,7 @@ class _RecordedCompilerProvider:
 
 
 H19_COMPILER_CASES = json.loads(
-    (ROOT / "fixtures" / "evaluation" / "h19_unseen_environment_cases.json").read_text(
-        encoding="utf-8"
-    )
+    (FIXTURES / "evaluation" / "h19_unseen_environment_cases.json").read_text(encoding="utf-8")
 )
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
@@ -45,7 +46,7 @@ def test_checkpoint_section_reads_only_selected_chunks(
 
 def test_compressed_checkpoint_retains_hash_and_reuses_chunks(tmp_path):
     checkpoint = Checkpoint.capture(
-        WorldState.from_scenario(ScenarioSpec.load("fixtures/scenario_100_agents.json"))
+        WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     )
     archive = CheckpointArchive(tmp_path)
     manifest = archive.encode(checkpoint)

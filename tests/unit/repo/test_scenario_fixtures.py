@@ -6,11 +6,10 @@ Runs of them are checked in tests/integration/test_operational_scenarios.py.
 
 from __future__ import annotations
 
-from pathlib import Path
+from support.paths import SCENARIOS
 
 from sheltersim.experiments.scenario import ScenarioSpec
 
-SCENARIO_DIR = Path(__file__).parents[3] / "fixtures" / "scenarios"
 SCENARIO_NAMES = (
     "baseline_multi_operational",
     "multi_operational",
@@ -22,7 +21,7 @@ SCENARIO_NAMES = (
 
 
 def _load(name: str) -> ScenarioSpec:
-    return ScenarioSpec.load(SCENARIO_DIR / f"{name}.json")
+    return ScenarioSpec.load(SCENARIOS / f"{name}.json")
 
 
 def test_h05_scenarios_freeze_profiles_seed_capacity_and_provenance() -> None:

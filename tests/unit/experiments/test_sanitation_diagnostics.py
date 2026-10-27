@@ -1,16 +1,15 @@
 """Planning benchmark checks for the toilet-capacity command."""
 
 import json
-from pathlib import Path
+
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.experiments.sanitation_diagnostics import toilet_planning_diagnostic
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_toilet_planning_diagnostic_uses_working_units_and_never_changes_behavior() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["facilities"] = [
         {
             "id": "toilet-a",

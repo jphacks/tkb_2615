@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
@@ -25,9 +26,6 @@ from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
-
-ROOT = Path(__file__).parents[2]
-FIXTURE = ROOT / "fixtures" / "scenario_100_agents.json"
 
 
 @pytest.fixture
@@ -200,7 +198,7 @@ def test_trace_level_does_not_change_information_state_and_default_run_stays_off
 
     # A generated Scenario always configures information_spread, so the default
     # stays a fixture Scenario without the setting.
-    baseline_document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    baseline_document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     baseline_document["id"] = "information-disabled-baseline"
     baseline_document["duration_minutes"] = 2
     baseline_document["scheduled_events"] = []

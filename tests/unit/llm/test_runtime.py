@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
@@ -33,8 +34,6 @@ from sheltersim.llm.config import LLMMode, LLMSettings, ModelPrice
 from sheltersim.llm.contracts import ProviderResponse
 from sheltersim.llm.provider import LLMRouter
 from sheltersim.llm.runtime import EventTriggeredSocialPolicy, SocialRuntimeLimits
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 class TypedProvider:
@@ -75,7 +74,7 @@ class TypedProvider:
 
 
 def scenario(*, information: bool = False) -> ScenarioSpec:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 600
     document["scheduled_events"] = []
     document["profiles"] = document["profiles"][:4]
@@ -542,7 +541,7 @@ class FakeProvider:
 
 
 def social_trigger_scenario() -> ScenarioSpec:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 600
     document["scheduled_events"] = []
     document["profiles"] = document["profiles"][:3]

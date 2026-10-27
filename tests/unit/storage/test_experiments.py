@@ -6,10 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SMALL_REPLAY
 
 from sheltersim.storage.projects import ProjectStore, digest
-
-SMALL_REPLAY = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def test_experiment_plan_and_cell_preparation_never_launch_or_construct_live_provider(

@@ -6,9 +6,8 @@ tests/unit/events/test_handlers.py.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.events.handlers import EventDispatcher
@@ -16,13 +15,11 @@ from sheltersim.events.models import EventLogRecord, EventStatus
 from sheltersim.events.queue import DuplicateEventError, EventLog
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_duplicate_event_id_or_sequence_is_rejected_and_realized_event_is_idempotent(
     make_event, record_handler
 ) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     event = make_event("repeat", sequence=0)
     world.schedule_event(event)
 

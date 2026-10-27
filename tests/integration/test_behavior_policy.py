@@ -15,6 +15,8 @@ import copy
 import json
 from pathlib import Path
 
+from support.paths import SCENARIO_100_AGENTS
+
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.world import WorldState
 from sheltersim.domain.movement import MOVEMENT_STATE_KEY
@@ -24,11 +26,11 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import _MetricSink
 from sheltersim.inspection.traces import RunArtifactWriter
 
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_priority_policy_checkpoint_noop_fork_replays_with_same_variant(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(FIXTURE).with_behavior_policy_variant("priority-rule-v1")
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS).with_behavior_policy_variant(
+        "priority-rule-v1"
+    )
     root = BranchRuntime.from_world(WorldState.from_scenario(scenario), branch_id="source")
     checkpoint = root.checkpoint()
     uninterrupted = BranchRuntime.from_checkpoint(checkpoint, branch_id="continued")

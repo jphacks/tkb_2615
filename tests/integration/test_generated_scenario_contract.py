@@ -9,11 +9,10 @@ import hashlib
 import json
 from pathlib import Path
 
+from support.paths import REGRESSION_CONTRACT
+
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
-
-ROOT = Path(__file__).parents[2]
-REGRESSION_CONTRACT = ROOT / "fixtures" / "regression-contract.json"
 
 
 def _sha256(text: str) -> str:

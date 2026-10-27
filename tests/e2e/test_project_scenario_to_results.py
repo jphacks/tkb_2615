@@ -15,17 +15,15 @@ import threading
 import time
 from collections.abc import Iterator
 from http.server import HTTPServer
-from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
 import pytest
+from support.paths import REGRESSION_CONTRACT
 
 from sheltersim.web.inspector import InspectorService
 from sheltersim.web.server import _handler_for
 
-ROOT = Path(__file__).parents[2]
-REGRESSION_CONTRACT = ROOT / "fixtures" / "regression-contract.json"
 FORK_MINUTE = 60
 COMPARE_MINUTE = 360
 

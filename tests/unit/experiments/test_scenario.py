@@ -7,14 +7,13 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_100_agent_scenario_loads_and_saves_canonical_json(tmp_path: Path) -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     saved = tmp_path / "scenario.json"
 
     scenario.save(saved)
@@ -27,17 +26,17 @@ def test_100_agent_scenario_loads_and_saves_canonical_json(tmp_path: Path) -> No
 
 
 def test_scenario_canonical_json_ignores_collection_input_order() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     for key in ("zones", "zone_edges", "facilities", "staff", "profiles", "scheduled_events"):
         document[key].reverse()
 
     reordered = ScenarioSpec.model_validate(document)
 
-    assert reordered.canonical_json() == ScenarioSpec.load(FIXTURE).canonical_json()
+    assert reordered.canonical_json() == ScenarioSpec.load(SCENARIO_100_AGENTS).canonical_json()
 
 
 def test_scenario_rejects_unknown_zone_references() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["profiles"][0]["initial_zone_id"] = "missing-zone"
 
     with pytest.raises(ValidationError, match="unknown zone"):
@@ -45,7 +44,7 @@ def test_scenario_rejects_unknown_zone_references() -> None:
 
 
 def test_scenario_rejects_negative_facility_capacity() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["facilities"][0]["capacity"] = -1
 
     with pytest.raises(ValidationError, match="greater than or equal to 0"):
@@ -53,7 +52,7 @@ def test_scenario_rejects_negative_facility_capacity() -> None:
 
 
 def test_scenario_rejects_duplicate_profile_ids() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["profiles"][1]["id"] = document["profiles"][0]["id"]
 
     with pytest.raises(ValidationError, match="duplicate IDs in profiles"):
@@ -61,7 +60,7 @@ def test_scenario_rejects_duplicate_profile_ids() -> None:
 
 
 def test_scenario_rejects_need_values_outside_the_normalized_range() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["profiles"][0]["initial_needs"]["hunger"] = 1.1
 
     with pytest.raises(ValidationError, match="less than or equal to 1"):
@@ -69,7 +68,7 @@ def test_scenario_rejects_need_values_outside_the_normalized_range() -> None:
 
 
 def test_scenario_json_loader_upgrades_version_one_through_v2_to_v3() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["schema_version"] = 1
     for profile in document["profiles"]:
         profile.pop("initial_needs", None)
@@ -84,7 +83,7 @@ def test_scenario_json_loader_upgrades_version_one_through_v2_to_v3() -> None:
 
 @pytest.mark.parametrize("schema_version", [0, 4])
 def test_scenario_loader_rejects_unsupported_schema_versions(schema_version: int) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["schema_version"] = schema_version
 
     with pytest.raises(ValidationError, match="schema_version"):
@@ -92,7 +91,7 @@ def test_scenario_loader_rejects_unsupported_schema_versions(schema_version: int
 
 
 def test_scenario_loader_rejects_unversioned_structural_fields() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["unexpected_contract_field"] = "must be versioned before acceptance"
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
@@ -100,7 +99,7 @@ def test_scenario_loader_rejects_unversioned_structural_fields() -> None:
 
 
 def test_scenario_rejects_reused_event_sequence() -> None:
-    scenario_json = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    scenario_json = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     scenario_json["scheduled_events"] = [
         {
             "id": "planned-1",

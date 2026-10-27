@@ -9,11 +9,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+
+from support.paths import AGENTS_INITIAL
 
 from sheltersim.__main__ import main
-
-INITIAL_PROFILES = Path(__file__).parents[2] / "fixtures" / "agents_initial.json"
 
 
 def test_cli_without_command_displays_help(capsys) -> None:
@@ -33,7 +32,7 @@ def test_module_entrypoint_shows_version() -> None:
 
 
 def test_profiles_preview_cli_displays_all_generated_agents(capsys) -> None:
-    assert main(["profiles-preview", str(INITIAL_PROFILES)]) == 0
+    assert main(["profiles-preview", str(AGENTS_INITIAL)]) == 0
 
     document = json.loads(capsys.readouterr().out)
     assert len(document["profiles"]) == 100

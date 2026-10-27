@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.cache import ResponseTape
@@ -13,8 +13,6 @@ from sheltersim.llm.config import LLMMode, LLMSettings, ModelPrice
 from sheltersim.llm.contracts import LLMStage, ProviderResponse
 from sheltersim.llm.prepare import generate_scenario_draft
 from sheltersim.llm.provider import LLMRouter
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 class FakeProvider:
@@ -37,7 +35,7 @@ class FakeProvider:
 
 
 def tiny_scenario() -> ScenarioSpec:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["id"] = "prepare-fixture"
     document["duration_minutes"] = 20
     document["profiles"] = document["profiles"][:2]

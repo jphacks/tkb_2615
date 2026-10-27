@@ -15,18 +15,18 @@ import copy
 import json
 from pathlib import Path
 
+from support.paths import SCENARIO_100_AGENTS
+
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
-
 
 def test_enabled_policy_is_checkpointable_and_writes_compact_contact_trace(
     tmp_path: Path,
 ) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["duration_minutes"] = 3
     document["scheduled_events"] = []
     document["profiles"] = document["profiles"][:2]

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
@@ -19,11 +18,9 @@ from sheltersim.events.handlers import (
 from sheltersim.events.models import EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
-
 
 def make_world() -> WorldState:
-    return WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    return WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
 
 
 def test_toilet_service_is_fifo_capacity_bounded_and_wait_is_derived() -> None:

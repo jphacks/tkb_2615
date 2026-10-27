@@ -14,8 +14,9 @@ import json
 import re
 from pathlib import Path
 
+from support.paths import SOURCE_MANIFEST
+
 ROOT = Path(__file__).parents[3]
-SOURCE_MANIFEST = ROOT / "fixtures" / "source-manifest.json"
 EVIDENCE_ID = re.compile(r"\b(?:ASM|SRC)-[A-Z0-9]+(?:-[A-Z0-9]+)*(?![-A-Z0-9])")
 
 # Gaps found on 2026-10-27 (#61). Remove an ID once the manifest records it.

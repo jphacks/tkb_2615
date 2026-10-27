@@ -9,6 +9,8 @@ import json
 import math
 from pathlib import Path
 
+from support.paths import BASELINE_100_7D
+
 from sheltersim.core.engine import TraceLevel
 from sheltersim.experiments.benchmark import (
     benchmark_document,
@@ -18,11 +20,9 @@ from sheltersim.experiments.benchmark import (
 )
 from sheltersim.experiments.scenario import ScenarioSpec
 
-BASE_SCENARIO = Path(__file__).parents[2] / "fixtures" / "scenarios" / "baseline_100_7d.json"
-
 
 def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path: Path) -> None:
-    base = ScenarioSpec.load(BASE_SCENARIO)
+    base = ScenarioSpec.load(BASELINE_100_7D)
     first_scenario = build_benchmark_scenario(
         base,
         agent_count=30,
@@ -58,7 +58,7 @@ def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path
     assert math.isfinite(result["events_per_tick"])
 
     report = benchmark_document(
-        scenario_source=str(BASE_SCENARIO),
+        scenario_source=str(BASELINE_100_7D),
         duration_minutes=20,
         trace_level=TraceLevel.OFF,
         runs=[result],

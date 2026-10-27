@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.world import WorldState
@@ -24,8 +25,6 @@ from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
-
-FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 def test_generated_research_scenario_runs_and_records_its_model(
@@ -41,7 +40,7 @@ def test_generated_research_scenario_runs_and_records_its_model(
 def test_full_runner_recovers_initially_high_agents_and_records_online_recovery(
     tmp_path: Path,
 ) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["id"] = "integrated-high-distress-recovery"
     document["duration_minutes"] = 15
     document["profiles"] = document["profiles"][:2]

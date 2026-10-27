@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
+
+from support.paths import SOURCE_MANIFEST
 
 from sheltersim.experiments.initial_scenario import (
     InitialScenarioBuilder,
@@ -21,8 +22,6 @@ from sheltersim.region.facility import (
     SYNTHETIC_STAFFING_SOURCE_ID,
     SYNTHETIC_TOILET_SOURCE_ID,
 )
-
-ROOT = Path(__file__).parents[3]
 
 
 def _request(**scheduled: object) -> InitialScenarioRequest:
@@ -155,7 +154,7 @@ def test_entered_inventory_is_never_replaced() -> None:
 
 
 def test_provisioning_assumptions_and_sources_are_registered() -> None:
-    manifest = json.loads((ROOT / "fixtures" / "source-manifest.json").read_text("utf-8"))
+    manifest = json.loads(SOURCE_MANIFEST.read_text("utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
     sources = {item["id"] for item in manifest["sources"]}
     for source_id in (

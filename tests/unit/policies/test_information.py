@@ -8,10 +8,10 @@ tests/integration/test_information_spread.py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import StateInvariantError, WorldState
@@ -20,8 +20,6 @@ from sheltersim.domain.models import InformationSpreadConfig
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.information import InformationSpreadPolicy
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def test_information_config_is_strict_and_off_by_default() -> None:
@@ -34,7 +32,7 @@ def test_information_config_is_strict_and_off_by_default() -> None:
     with pytest.raises(ValueError, match="max_contacts_per_agent"):
         InformationSpreadConfig.from_mapping({"max_contacts_per_agent": 17})
 
-    baseline_world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    baseline_world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     proposal = UtilityBehaviorPolicy().propose(
         WorldView.from_world(baseline_world), "A001", CounterRNG(baseline_world.seed)
     )
@@ -71,7 +69,7 @@ def test_transmission_probability_depends_on_trust_and_contact_duration(
 def test_scenario_rejects_information_events_without_opt_in_or_causal_correction(
     information_spread_scenario,
 ) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
     document["scheduled_events"] = [
         {
             "id": "rumor-event",

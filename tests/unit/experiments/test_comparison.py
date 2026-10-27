@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
@@ -26,8 +27,6 @@ from sheltersim.experiments.comparison import (
 )
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def test_comparison_markdown_has_no_warning_for_the_research_model() -> None:
@@ -45,7 +44,9 @@ def test_comparison_markdown_has_no_warning_for_the_research_model() -> None:
 
 
 def test_noop_branch_report_has_zero_divergence() -> None:
-    parent = BranchRuntime.from_world(WorldState.from_scenario(ScenarioSpec.load(FIXTURE)))
+    parent = BranchRuntime.from_world(
+        WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+    )
     parent.metrics.capture(parent.world, minute=0)
     left = parent.fork("left")
     right = parent.fork("right")
@@ -60,7 +61,9 @@ def test_noop_branch_report_has_zero_divergence() -> None:
 
 
 def test_intervention_report_explains_first_kpi_and_state_difference() -> None:
-    parent = BranchRuntime.from_world(WorldState.from_scenario(ScenarioSpec.load(FIXTURE)))
+    parent = BranchRuntime.from_world(
+        WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+    )
     baseline = parent.fork("baseline")
     candidate = parent.fork("candidate")
     baseline.metrics.capture(baseline.world, minute=0)
@@ -94,7 +97,7 @@ def test_paired_seed_summary_reports_distribution_without_causal_claim() -> None
 
 def test_run_sets_reject_duplicate_or_unpaired_seeds(tmp_path: Path) -> None:
     scenario = ScenarioSpec.model_validate(
-        json.loads(FIXTURE.read_text(encoding="utf-8")) | {"duration_minutes": 3}
+        json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8")) | {"duration_minutes": 3}
     )
     world = WorldState.from_scenario(scenario)
     writer = RunArtifactWriter(scenario, tmp_path / "run")
@@ -105,7 +108,7 @@ def test_run_sets_reject_duplicate_or_unpaired_seeds(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="duplicate seed"):
         compare_run_sets([tmp_path / "run", tmp_path / "run"], [tmp_path / "run"])
     other_scenario = ScenarioSpec.model_validate(
-        json.loads(FIXTURE.read_text(encoding="utf-8"))
+        json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
         | {"duration_minutes": 3, "seed": scenario.seed + 1}
     )
     other_world = WorldState.from_scenario(other_scenario)

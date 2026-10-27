@@ -7,9 +7,9 @@ tests/integration/test_resource_loss.py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.models import Activity
@@ -18,8 +18,6 @@ from sheltersim.domain.resource_service import SERVICE_STATE_KEY, ResourceServic
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.events.handlers import EventDispatcher
 from sheltersim.experiments.scenario import ScenarioSpec
-
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def _water_request(agent_id: str) -> dict[str, object]:
@@ -177,7 +175,7 @@ def test_a_scenario_that_opts_into_operational_events_keeps_their_state(
 
 
 def test_world_rejects_duplicate_queue_membership() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.agents["A001"].activity = Activity.QUEUED
     world.facilities["toilet_1"].queue_agent_ids.append("A001")
     world.facilities["toilet_2"].queue_agent_ids.append("A001")
@@ -187,7 +185,7 @@ def test_world_rejects_duplicate_queue_membership() -> None:
 
 
 def test_world_rejects_duplicate_entries_in_one_queue() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.agents["A001"].activity = Activity.QUEUED
     world.facilities["toilet_1"].queue_agent_ids.extend(("A001", "A001"))
 
@@ -196,7 +194,7 @@ def test_world_rejects_duplicate_entries_in_one_queue() -> None:
 
 
 def test_world_rejects_agent_with_unknown_zone() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.agents["A001"].zone_id = "missing-zone"
 
     with pytest.raises(StateInvariantError, match="unknown zone"):
@@ -204,7 +202,7 @@ def test_world_rejects_agent_with_unknown_zone() -> None:
 
 
 def test_world_canonical_json_is_stable() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     world_a = WorldState.from_scenario(scenario)
     world_b = WorldState.from_scenario(scenario)
 
@@ -212,7 +210,7 @@ def test_world_canonical_json_is_stable() -> None:
 
 
 def test_initial_world_preserves_scenario_graph_and_model_config() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
 
     world = WorldState.from_scenario(scenario)
 
@@ -221,7 +219,7 @@ def test_initial_world_preserves_scenario_graph_and_model_config() -> None:
 
 
 def test_initial_world_owns_its_mutable_model_config_copy() -> None:
-    scenario = ScenarioSpec.load(FIXTURE)
+    scenario = ScenarioSpec.load(SCENARIO_100_AGENTS)
     world = WorldState.from_scenario(scenario)
 
     world.model_configs["behavior"]["mode"] = "changed-in-world"
@@ -230,7 +228,7 @@ def test_initial_world_owns_its_mutable_model_config_copy() -> None:
 
 
 def test_initial_needs_copy_into_mutable_agent_state_and_serialize_separately() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     agent = world.agents["A001"]
     initial_hunger = agent.profile.initial_needs.hunger
 
@@ -246,7 +244,7 @@ def test_initial_needs_copy_into_mutable_agent_state_and_serialize_separately() 
 
 
 def test_world_rejects_mutated_need_state_outside_the_normalized_range() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.agents["A001"].needs.fatigue = -0.01
 
     with pytest.raises(StateInvariantError, match="invalid need levels"):
@@ -254,7 +252,7 @@ def test_world_rejects_mutated_need_state_outside_the_normalized_range() -> None
 
 
 def test_world_state_v5_rejects_old_versions_and_unknown_fields() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     document = world.to_dict()
 
     old_version = dict(document, schema_version=4)
@@ -269,7 +267,7 @@ def test_world_state_v5_rejects_old_versions_and_unknown_fields() -> None:
 def test_world_state_schema_two_serializes_pending_queue_and_realized_log_separately(
     make_event, record_handler
 ) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     world.schedule_event(make_event("pending", due_minute=3, sequence=0))
     world.schedule_event(make_event("realized", sequence=1))
     EventDispatcher({"record": record_handler()}).dispatch_due(world, 0)
@@ -284,7 +282,7 @@ def test_world_state_schema_two_serializes_pending_queue_and_realized_log_separa
 
 
 def test_world_state_v5_serializes_bounded_psychology_and_decision_time() -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     agent = world.agents["A001"]
     agent.stress = 0.35
     agent.trust = 0.72
@@ -304,7 +302,7 @@ def test_world_state_v5_serializes_bounded_psychology_and_decision_time() -> Non
     [("stress", -0.1), ("stress", 1.1), ("trust", float("nan"))],
 )
 def test_world_rejects_psychology_values_outside_zero_to_one(field: str, value: float) -> None:
-    world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     setattr(world.agents["A001"], field, value)
 
     with pytest.raises(StateInvariantError, match=f"invalid {field}"):

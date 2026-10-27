@@ -9,12 +9,11 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim import cli
 from sheltersim.__main__ import main
 from sheltersim.llm.contracts import LLMAllowanceError
-
-SCENARIO_100_AGENTS = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 class DeniedAllowanceProvider:

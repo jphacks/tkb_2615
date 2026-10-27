@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TickPhase, TraceLevel
@@ -320,11 +321,10 @@ def test_support_wait_reasons_distinguish_unattempted_and_rejected_assignment(
 
 
 # Assignment, cooldown, fairness and saved state are checked on the 100-person fixture.
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def make_world() -> WorldState:
-    return WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
+    return WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
 
 
 def test_staff_does_not_double_book_and_worldstate_v5_round_trips_assigned_work() -> None:
@@ -414,7 +414,7 @@ def test_unassigned_request_times_out_and_cannot_be_reopened_during_cooldown() -
 
 
 def test_request_at_end_of_scenario_is_recorded_unresolved_without_a_stranded_timeout() -> None:
-    document = ScenarioSpec.load(FIXTURE).model_dump(mode="json")
+    document = ScenarioSpec.load(SCENARIO_100_AGENTS).model_dump(mode="json")
     document["duration_minutes"] = 1
     document["scheduled_events"] = []
     world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
@@ -483,7 +483,7 @@ def test_fairness_aging_promotes_old_request_ahead_of_new_urgent_request() -> No
 
 
 def test_fairness_delay_must_precede_support_request_timeout() -> None:
-    document = ScenarioSpec.load(FIXTURE).model_dump(mode="json")
+    document = ScenarioSpec.load(SCENARIO_100_AGENTS).model_dump(mode="json")
     staff_config = document["model_configs"].setdefault("staff", {})
     staff_config["unresolved_after_minutes"] = 20
     staff_config["support_fairness_minutes"] = 21

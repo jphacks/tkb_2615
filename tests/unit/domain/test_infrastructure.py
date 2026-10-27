@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from support.paths import SMALL_REPLAY
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import StateInvariantError, WorldState
@@ -30,8 +30,6 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import PsychologyParameters, SimplePsychologyPolicy
 
-ROOT = Path(__file__).parents[3]
-SMALL_SCENARIO = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 SOURCE_ID = "SCN-A03-TEST"
 
 
@@ -63,7 +61,7 @@ def _scenario(
     heat_rate: float = 0.001,
     cold_rate: float = 0.001,
 ) -> ScenarioSpec:
-    document = json.loads(SMALL_SCENARIO.read_text(encoding="utf-8"))
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
     document["id"] = "a03-infrastructure-test"
     document["schema_version"] = 3
     document["duration_minutes"] = duration
@@ -558,7 +556,7 @@ def test_compound_supply_outage_and_heat_chain_survives_checkpoint_restore() -> 
 
 
 def test_infrastructure_config_is_strict_and_legacy_scenario_hash_is_unchanged() -> None:
-    base = ScenarioSpec.load(SMALL_SCENARIO)
+    base = ScenarioSpec.load(SMALL_REPLAY)
     document = base.model_dump(mode="json")
     legacy = ScenarioSpec.model_validate(document)
     assert legacy.canonical_json() == base.canonical_json()
