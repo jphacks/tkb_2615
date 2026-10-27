@@ -11,6 +11,9 @@ from typing import Any
 
 import pytest
 
+# Writes each run's results under .test-results/ (tests/results_log.py, #136).
+pytest_plugins = ["results_log"]
+
 SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
 SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
 BASELINE_100_7D = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
