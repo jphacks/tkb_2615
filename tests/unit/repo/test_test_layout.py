@@ -86,7 +86,6 @@ UNSORTED = frozenset(
         "test_project_store.py",
         "test_provenance.py",
         "test_region_providers.py",
-        "test_region_water_outage_conditions.py",
         "test_replay_frames.py",
         "test_research_models.py",
         "test_resource_ledger_state_check.py",
