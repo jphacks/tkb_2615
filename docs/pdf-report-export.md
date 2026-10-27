@@ -77,7 +77,8 @@ API・意味検証の失敗後に利用者が再試行した場合は、独立�
 
 ```bash
 pip install -e '.[dev,llm]'
-SHELTERSIM_LLM_MODE=offline pytest tests/test_pdf_report.py
+SHELTERSIM_LLM_MODE=offline pytest tests/integration/test_pdf_report.py \
+  tests/unit/web/test_pdf_report.py tests/e2e/test_pdf_download.py
 ```
 
 テストは有料APIを使わず、実際に計算した合成Scenarioとテスト用Providerを使用します。

@@ -1,4 +1,9 @@
-"""Typed offline browser demo lifecycle, branching and API boundary tests."""
+"""The offline browser demo pauses, forks, intervenes, rewinds and compares, and its HTTP
+mutations stay separate from the read-only saved-run API.
+
+The command schema and the packaged scenario are checked in tests/unit/web/test_demo.py,
+and the story review route in tests/e2e/test_web_demo_story_review.py.
+"""
 
 from __future__ import annotations
 
@@ -8,24 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.llm.config import LLMMode, LLMSettings
-from sheltersim.llm.provider import LLMRouter
 from sheltersim.web.demo import DemoError, DemoService
 from sheltersim.web.inspector import InspectorService
 from sheltersim.web.server import _handler_for
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "failure_day3.json"
-
 
 @pytest.fixture
-def demo() -> DemoService:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["duration_minutes"] = 8
-    document["scheduled_events"] = [
-        {**event, "due_minute": 2} for event in document["scheduled_events"]
-    ]
-    return DemoService(ScenarioSpec.model_validate(document))
+def demo(day3_demo: DemoService) -> DemoService:
+    return day3_demo
 
 
 def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoService) -> None:
@@ -120,18 +115,6 @@ def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoSer
     assert "source_ids_json" not in json.dumps(comparison)
 
 
-def test_demo_command_schema_and_state_transitions_are_strict(demo: DemoService) -> None:
-    with pytest.raises(DemoError, match="start the demo"):
-        demo.dispatch("pause", {"branch_id": "baseline"})
-    demo.dispatch("start")
-    with pytest.raises(DemoError, match="unsupported"):
-        demo.dispatch("advance", {"branch_id": "baseline", "steps": 1, "unexpected": True})
-    with pytest.raises(DemoError, match="integer"):
-        demo.dispatch("advance", {"branch_id": "baseline", "steps": True})
-    with pytest.raises(DemoError, match="must be paused"):
-        demo.dispatch("command", {"branch_id": "baseline", "command": {}})
-
-
 def test_demo_http_mutations_are_separate_from_read_only_saved_run_api(tmp_path: Path) -> None:
     handler_type = _handler_for(InspectorService(tmp_path), DemoService())
     handler = handler_type.__new__(handler_type)
@@ -150,41 +133,3 @@ def test_demo_http_mutations_are_separate_from_read_only_saved_run_api(tmp_path:
     assert response == [(405, {"error": "inspector API is read-only"})]
 
 
-def test_explicit_story_review_route_is_offline_and_does_not_mutate_branches(
-    demo: DemoService, tmp_path: Path
-) -> None:
-    demo.dispatch("start")
-    demo.dispatch("pause", {"branch_id": "baseline"})
-    demo.dispatch("fork", {"branch_id": "baseline", "new_branch_id": "candidate"})
-    for branch_id in ("baseline", "candidate"):
-        demo.dispatch("resume", {"branch_id": branch_id})
-        demo.dispatch("advance", {"branch_id": branch_id, "steps": 8})
-    demo._story_router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
-    before_review = demo.state()
-
-    handler_type = _handler_for(InspectorService(tmp_path), demo)
-    handler = handler_type.__new__(handler_type)
-    request = json.dumps(
-        {"baseline_branch_id": "baseline", "candidate_branch_id": "candidate"}
-    ).encode()
-    responses: list[tuple[int, dict]] = []
-    handler.path = "/api/v1/demo/story-review"
-    handler.headers = {"Content-Length": str(len(request)), "Content-Type": "application/json"}
-    handler.rfile = BytesIO(request)
-    handler._json_response = lambda status, document: responses.append((status, document))
-    handler.do_POST()
-
-    assert responses[0][0] == 200
-    assert responses[0][1]["card"]["mode"] == "offline"
-    assert responses[0][1]["review_status"] == "rule_fallback"
-    assert responses[0][1]["usage"]["api_request_count"] == 0
-    assert demo.state() == before_review
-
-
-def test_packaged_demo_scenario_is_the_offline_day3_fixture() -> None:
-    from sheltersim.web.demo import load_demo_scenario
-
-    scenario = load_demo_scenario()
-    assert scenario.id == "failure_day3"
-    assert len(scenario.profiles) == 100
-    assert {event.due_minute for event in scenario.scheduled_events} == {2880}

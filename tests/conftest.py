@@ -1359,6 +1359,318 @@ def apply_multi_plan() -> Callable[[Any, Any, str], dict[str, Any]]:
     return _apply_multi_plan
 
 
+@pytest.fixture
+def no_checkpoint_decode(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the hash of every checkpoint ProjectStore loads from now on."""
+    from sheltersim.storage.projects import ProjectStore
+
+    decoded = []
+    original = ProjectStore.load_checkpoint
+
+    def load(self, project_id, run_id, checkpoint_hash):
+        decoded.append(checkpoint_hash)
+        return original(self, project_id, run_id, checkpoint_hash)
+
+    monkeypatch.setattr(ProjectStore, "load_checkpoint", load)
+    return decoded
+
+
+def _saved_run_with_scenario(tmp_path: Path) -> tuple[Any, Any]:
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+
+    store = ProjectStore(tmp_path)
+    store.create_project("p")
+    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
+    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("p", "r", scenario.id, 1)
+    initial = BranchRuntime.from_world(WorldState.from_scenario(scenario))
+    TimelineStore(store, "p", "r").record(initial)
+    return store, scenario
+
+
+@pytest.fixture
+def saved_run_with_scenario() -> Callable[[Path], tuple[Any, Any]]:
+    """Like saved_timeline, but return the store and the Scenario instead of the timeline."""
+    return _saved_run_with_scenario
+
+
+def _bare_request_handler(tmp_path: Path) -> tuple[Any, list[int], dict[str, str], Any]:
+    from io import BytesIO
+
+    from sheltersim.web.demo import DemoService
+    from sheltersim.web.inspector import InspectorService
+    from sheltersim.web.server import _handler_for
+
+    handler_type = _handler_for(InspectorService(tmp_path), DemoService())
+    handler = handler_type.__new__(handler_type)
+    statuses: list[int] = []
+    headers: dict[str, str] = {}
+    output = BytesIO()
+    handler.send_response = statuses.append
+    handler.send_header = lambda name, value: headers.__setitem__(name, value)
+    handler.end_headers = lambda: None
+    handler.wfile = output
+    return handler, statuses, headers, output
+
+
+@pytest.fixture
+def bare_request_handler() -> Callable[[Path], tuple[Any, list[int], dict[str, str], Any]]:
+    """Make a web request handler without a socket; return it with the statuses, headers and
+    body it writes.
+    """
+    return _bare_request_handler
+
+
+@pytest.fixture
+def full_trace_inspector(tmp_path: Path) -> Any:
+    """An Inspector over one finished Run (run-one) of all 100 people of scenario_100_agents
+    for two minutes at the full trace level, with a planned event whose raw detail must
+    not be returned.
+    """
+    from sheltersim.core.engine import TraceLevel
+    from sheltersim.experiments.runner import run_scenario
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.inspector import InspectorService
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["duration_minutes"] = 2
+    document["profiles"] = document["profiles"][:100]
+    document["zones"] = [
+        {key: value for key, value in zone.items() if key not in {"display_x", "display_y"}}
+        for zone in document["zones"]
+    ]
+    document["scheduled_events"] = [
+        {
+            "id": "planned-test",
+            "kind": "exogenous",
+            "due_minute": 0,
+            "priority": 0,
+            "sequence": 0,
+            "event_type": "unknown_test_event",
+            "payload": {"raw_detail": "must-not-be-returned"},
+        }
+    ]
+    scenario = ScenarioSpec.model_validate(document)
+    run_scenario(scenario, tmp_path / "run-one", trace_level=TraceLevel.FULL)
+    return InspectorService(tmp_path)
+
+
+@pytest.fixture
+def day3_demo() -> Any:
+    """A DemoService over failure_day3, eight minutes long, with its events due at minute 2."""
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
+    document["duration_minutes"] = 8
+    document["scheduled_events"] = [
+        {**event, "due_minute": 2} for event in document["scheduled_events"]
+    ]
+    return DemoService(ScenarioSpec.model_validate(document))
+
+
+def _paused_offline_compiler_demo(duration_minutes: int = 20) -> Any:
+    from typing import get_args
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    demo.compiler_router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    return demo
+
+
+@pytest.fixture
+def paused_offline_compiler_demo() -> Callable[..., Any]:
+    """Build a DemoService over h00_small_replay without events, 20 minutes long by default,
+    with an offline Event Compiler, started and paused on the baseline Branch.
+    """
+    return _paused_offline_compiler_demo
+
+
+def _nl_interpret_preview(demo: Any, tmp_path: Path, selected_minute: int = 5) -> dict[str, Any]:
+    status, response = _post_demo_json(
+        demo,
+        tmp_path,
+        "/api/v1/nl/interpret",
+        {
+            "text": "toilet_1 outage",
+            "branch_id": "baseline",
+            "selected_minute": selected_minute,
+        },
+    )
+    assert status == 200
+    assert response["result"]["status"] == "compiled"
+    assert response["result"]["fallback_used"] is True
+    assert response["validation"]["valid"] is True
+    return response
+
+
+@pytest.fixture
+def nl_interpret_preview() -> Callable[..., dict[str, Any]]:
+    """Post "toilet_1 outage" to the natural-language interpret route for the baseline and
+    check that the offline rule compiled a valid plan.
+    """
+    return _nl_interpret_preview
+
+
+@pytest.fixture
+def report_saved_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """A ProjectAPI over Run r of 12 people for 40 minutes, checkpointed every 10 minutes,
+    with a no-op fork and a fork at minute 10 that adds a toilet of capacity 3.
+    """
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import AddToiletCommand, BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+    from sheltersim.web.projects import ProjectAPI
+
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    source = json.loads(ScenarioSpec.load("fixtures/scenario_100_agents.json").canonical_json())
+    source["duration_minutes"] = 40
+    source["profiles"] = source["profiles"][:12]
+    source["scheduled_events"] = []
+    source["model_configs"]["toilet_service"] = {}
+    scenario = ScenarioSpec.model_validate(source)
+    store = ProjectStore(tmp_path / "projects")
+    store.create_project("p")
+    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
+    store.create_run("p", "r", scenario.id, 1)
+    timeline = TimelineStore(store, "p", "r")
+    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    timeline.advance("main", 40, checkpoint_interval=10)
+    timeline.fork("main", 10, "noop")
+    timeline.advance("noop", 40)
+    source_runtime = timeline.seek("main", 10)
+    child = source_runtime.fork("capacity")
+    child.runtime_state["fork_origin"] = {
+        "branch_id": "main",
+        "minute": 10,
+        "state_hash": digest(source_runtime.world.to_dict()),
+        "checkpoint_hash": source_runtime.checkpoint().checkpoint_hash,
+    }
+    child.apply(AddToiletCommand("extra", "toilet", capacity=3))
+    timeline.record(child, fork_minute=10)
+    timeline.advance("capacity", 40)
+    api = ProjectAPI(store)
+    try:
+        yield api
+    finally:
+        api.close()
+
+
+def _prose_document() -> dict[str, Any]:
+    return {
+        "executive": [
+            {
+                "text": "待機と支援需要を合わせて確認することで、"
+                "運営上の着眼点を整理できる可能性があります。",
+                "refs": ["B0.toilet_queue_length"],
+            }
+        ],
+        "interpretation": [
+            {
+                "text": "待機の継続には処理能力だけでなく、"
+                "需要の集中が関係している可能性があります。",
+                "refs": ["B0.window.toilet_queue_length"],
+            }
+        ],
+        "hypotheses": [
+            {
+                "text": "待機と支援需要の重なりが運営上の負担につながる可能性があります。",
+                "refs": ["B0.unresolved_support_request_count", "B0.toilet_queue_length"],
+            }
+        ],
+        "proposals": [
+            {
+                "text": "優先的に、需要の時間帯と設備容量をそろえた比較条件で、"
+                "追加検証することを検討してください。",
+                "refs": ["B0.toilet_queue_length"],
+            },
+            {
+                "text": "代替案として、担当者の配置条件を変えて、"
+                "待機と支援の推移を比較することを検討してください。",
+                "refs": ["B0.unresolved_support_request_count"],
+            },
+        ],
+        "limitations": [
+            {
+                "text": "現地の集計データとの照合と、異なる条件での反復検証が必要です。",
+                "refs": ["L"],
+            }
+        ],
+    }
+
+
+@pytest.fixture
+def prose_document() -> Callable[[], dict[str, Any]]:
+    """A grounded report analysis that cites only allow-listed evidence."""
+    return _prose_document
+
+
+class _ReportProvider:
+    def __init__(self, *, error=False):
+        self.calls = 0
+        self.error = error
+        self.prompts = []
+
+    def complete(self, *, model_id, task, **_kwargs):
+        from sheltersim.llm.contracts import LLMProviderError, ProviderResponse
+
+        self.calls += 1
+        self.prompts.append(task.input_text)
+        if self.error:
+            raise LLMProviderError("Anthropic API request failed; HTTP 429", status_code=429)
+        return ProviderResponse(
+            json.dumps(_prose_document(), ensure_ascii=False), model_id, 200, 500, 1
+        )
+
+
+@pytest.fixture
+def report_provider() -> type[_ReportProvider]:
+    """Make a fake Opus provider that answers prose_document, or fails with HTTP 429."""
+    return _ReportProvider
+
+
+def _report_router(provider=None, **kwargs):
+    from sheltersim.llm.cache import ResponseTape
+    from sheltersim.llm.config import LLMMode, LLMSettings
+    from sheltersim.llm.provider import LLMRouter
+
+    settings = LLMSettings(mode=LLMMode.RECORD, api_key="test-only", **kwargs)
+    return LLMRouter(settings, provider=provider or _ReportProvider(), tape=ResponseTape())
+
+
+@pytest.fixture
+def report_router() -> Callable[..., Any]:
+    """Make a recording LLMRouter for report analysis (report_provider by default)."""
+    return _report_router
+
+
+def _install_report_router(api, monkeypatch, provider=None):
+    router = _report_router(provider)
+    monkeypatch.setattr(api.workspace, "analysis_router", lambda *_a, **_kw: router)
+    return router
+
+
+@pytest.fixture
+def install_report_router() -> Callable[..., Any]:
+    """Make a Project workspace use report_router for its analysis; return the router."""
+    return _install_report_router
+
+
 def _make_event(
     event_id: str,
     *,

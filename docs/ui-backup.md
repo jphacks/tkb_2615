@@ -82,8 +82,11 @@ SHELTERSIM_LLM_MODE=record SHELTERSIM_LLM_ERROR_POLICY=stop \
 
 ```sh
 SHELTERSIM_LLM_MODE=offline PYTHONPATH=src python -m pytest \
-  tests/test_web_routes.py tests/integration/test_demo_v2_routes.py tests/test_web_demo.py \
-  tests/unit/storage/test_projects.py tests/test_results_chat.py
+  tests/integration/test_web_routes.py tests/unit/web/test_server.py \
+  tests/integration/test_demo_v2_routes.py \
+  tests/integration/test_web_demo.py tests/unit/web/test_demo.py \
+  tests/e2e/test_web_demo_story_review.py tests/unit/storage/test_projects.py \
+  tests/unit/web/test_results_chat.py tests/integration/test_results_chat.py
 ```
 
 ブラウザーE2Eは `scripts/test_demo_v2.cjs` を参照してください。Playwrightを含むNode環境とChromeを使用し、上記offlineサーバーを起動してから実行します。実API・一時Projectでシナリオ→承認→計算→シーク→介入→分岐→比較→レポート→質問を確認し、1440×900 / 1920×1080の各画面スクリーンショットを出力します。生成データ・画像はGitに登録しません。
