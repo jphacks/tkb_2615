@@ -1,4 +1,8 @@
-"""KPI snapshots, run artifacts, sanitization, and observation neutrality."""
+"""KPI snapshots, run artifacts, and sanitization.
+
+That the trace level changes only artifact detail over a Run is checked in
+tests/integration/test_trace_level.py.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import csv
 import json
 from pathlib import Path
 
-from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
+from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import WorldState
 from sheltersim.domain.staff import StaffService
 from sheltersim.events.handlers import EventDispatcher
@@ -14,9 +18,8 @@ from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.metrics import MetricSnapshot
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
-from sheltersim.policies.behavior import BehaviorDecisionRunner, WorldView
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def load_scenario() -> ScenarioSpec:
@@ -143,42 +146,3 @@ def test_artifact_writer_emits_required_files_and_redacts_sensitive_fields(
     assert "email-event" in metric_rows[0]["source_ids_json"]
 
 
-def test_trace_level_changes_artifact_detail_not_simulation_hash(tmp_path: Path) -> None:
-    scenario = load_scenario()
-
-    def run(level: TraceLevel) -> tuple[str, list[str]]:
-        world = WorldState.from_scenario(scenario)
-        output_directory = tmp_path / level.value
-        artifacts = RunArtifactWriter(scenario, output_directory, trace_level=level)
-        artifacts.write_initial(world)
-        policy_runner = BehaviorDecisionRunner()
-
-        def observe(phase, state, minute, rng) -> None:
-            if phase is TickPhase.PROPOSE_ACTIONS:
-                for proposal in policy_runner.propose_due(WorldView.from_world(state), rng):
-                    artifacts.record_decision(proposal)
-            if phase is TickPhase.COLLECT_METRICS:
-                artifacts.capture_metric(state, minute=minute)
-
-        traces: list[object] = []
-        engine = TickEngine(
-            world,
-            phase_handler=observe,
-            trace_level=level,
-            trace_sink=traces.append if level is not TraceLevel.OFF else None,
-        )
-        engine.run(steps=2)
-        final_state = world.canonical_json()
-        artifacts.finalize(world)
-        decisions = (output_directory / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-        return final_state, decisions
-
-    off_state, off_decisions = run(TraceLevel.OFF)
-    summary_state, summary_decisions = run(TraceLevel.SUMMARY)
-    full_state, full_decisions = run(TraceLevel.FULL)
-
-    assert off_state == summary_state == full_state
-    assert off_decisions == []
-    assert summary_decisions
-    assert "candidates" not in json.loads(summary_decisions[0])
-    assert "candidates" in json.loads(full_decisions[0])
