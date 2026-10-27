@@ -1,4 +1,8 @@
-"""Opt-in, evidence-linked information diffusion and inquiry behavior tests."""
+"""Opt-in, evidence-linked information diffusion and inquiry behavior in full Runs.
+
+The configuration, the transmission probability and the checks on saved state are
+tested in tests/unit/policies/test_information.py.
+"""
 
 from __future__ import annotations
 
@@ -6,176 +10,22 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TraceLevel
-from sheltersim.core.rng import CounterRNG
-from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
-from sheltersim.domain.models import InformationSpreadConfig
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.report import _ASSUMPTION_LABELS, scenario_assumption_ids
-from sheltersim.policies.behavior import UtilityBehaviorPolicy, WorldView
-from sheltersim.policies.information import InformationSpreadPolicy
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "fixtures" / "scenario_100_agents.json"
 
 
-def _information_config(**overrides: object) -> dict[str, object]:
-    values: dict[str, object] = {
-        "enabled": True,
-        "max_contacts_per_agent": 16,
-        "minimum_contact_minutes": 1,
-        "contact_duration_scale_minutes": 1,
-        "base_transmission_probability": 1.0,
-        "correction_transmission_multiplier": 1.0,
-        "trust_sensitivity": 0.0,
-        "family_contact_multiplier": 1.0,
-        "adjacent_zone_contact_multiplier": 1.0,
-        "query_pressure_per_claim": 0.5,
-        "query_pressure_decay_per_minute": 0.0,
-        "query_pressure_relief_per_correction": 0.5,
-        "query_threshold": 0.5,
-        "query_utility_weight": 4.0,
-    }
-    values.update(overrides)
-    return values
-
-
-def _scenario(
-    *,
-    duration: int = 6,
-    profile_count: int = 2,
-    truth_status: str = "unknown",
-    correction: bool = True,
-    config: dict[str, object] | None = None,
-) -> ScenarioSpec:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["id"] = "information-spread-test"
-    document["duration_minutes"] = duration
-    document["scheduled_events"] = [
-        {
-            "id": "rumor-event",
-            "kind": "exogenous",
-            "due_minute": 0,
-            "priority": 0,
-            "sequence": 10,
-            "event_type": "information_rumor",
-            "payload": {
-                "message_id": "claim-water-1",
-                "truth_status": truth_status,
-                "origin_agent_id": "A001",
-            },
-            "source_id": "scenario-rumor-source",
-        }
-    ]
-    if correction:
-        document["scheduled_events"].append(
-            {
-                "id": "correction-event",
-                "kind": "exogenous",
-                "due_minute": 3,
-                "priority": 0,
-                "sequence": 11,
-                "event_type": "information_correction",
-                "payload": {
-                    "message_id": "claim-water-1",
-                    "zone_id": "sleeping",
-                    "belief": "rejected" if truth_status == "false" else "verified",
-                },
-                "source_id": "staff-notice-source",
-                "causation_id": "rumor-event",
-            }
-        )
-    document["profiles"] = document["profiles"][:profile_count]
-    for profile in document["profiles"]:
-        profile["support_need"] = 0.0
-        profile["initial_needs"] = {
-            "toilet_urgency": 0.0,
-            "hunger": 0.0,
-            "fatigue": 0.0,
-        }
-    document["model_configs"]["information_spread"] = config or _information_config()
-    document["model_configs"].setdefault("behavior", {})["temperature"] = 0.01
-    return ScenarioSpec.model_validate(document)
-
-
-def test_information_config_is_strict_and_off_by_default() -> None:
-    config = InformationSpreadConfig.from_mapping()
-
-    assert not config.enabled
-    assert config.provenance()["source_id"] == "ASM-INFORMATION-SPREAD-V1"
-    with pytest.raises(ValueError, match="unknown information_spread settings"):
-        InformationSpreadConfig.from_mapping({"enabled": True, "free_text": "unsafe"})
-    with pytest.raises(ValueError, match="max_contacts_per_agent"):
-        InformationSpreadConfig.from_mapping({"max_contacts_per_agent": 17})
-
-    baseline_world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
-    proposal = UtilityBehaviorPolicy().propose(
-        WorldView.from_world(baseline_world), "A001", CounterRNG(baseline_world.seed)
-    )
-    help_candidate = next(
-        candidate for candidate in proposal.candidates if candidate.action.value == "seek_help"
-    )
-    assert help_candidate.trigger == (
-        "support_need>=0.25 and maximum need/stress>=0.50 "
-        "and no_open_support_request and support_cooldown_elapsed"
-    )
-
-
-def test_transmission_probability_depends_on_trust_and_contact_duration() -> None:
-    config = InformationSpreadConfig.from_mapping(
-        _information_config(
-            base_transmission_probability=0.5,
-            trust_sensitivity=1.0,
-            contact_duration_scale_minutes=5,
-        )
-    )
-    policy = InformationSpreadPolicy(config)
-
-    low_trust = policy._transmission_probability(0.0, "same_zone", 5, correction=False)
-    short_trusted_contact = policy._transmission_probability(1.0, "same_zone", 1, correction=False)
-    long_trusted_contact = policy._transmission_probability(1.0, "same_zone", 5, correction=False)
-
-    assert low_trust == 0.0
-    assert short_trusted_contact == 0.2
-    assert long_trusted_contact == 1.0
-
-
-def test_scenario_rejects_information_events_without_opt_in_or_causal_correction() -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["scheduled_events"] = [
-        {
-            "id": "rumor-event",
-            "due_minute": 0,
-            "sequence": 1,
-            "event_type": "information_rumor",
-            "payload": {
-                "message_id": "claim-1",
-                "truth_status": "true",
-                "origin_agent_id": "A001",
-            },
-            "source_id": "scenario-source",
-        }
-    ]
-
-    with pytest.raises(ValidationError, match="requires enabled information_spread"):
-        ScenarioSpec.model_validate(document)
-
-    scenario = _scenario(truth_status="true")
-    changed = scenario.model_dump(mode="json")
-    changed["scheduled_events"][1]["causation_id"] = "other-event"
-    with pytest.raises(ValidationError, match="causally reference an earlier rumor"):
-        ScenarioSpec.model_validate(changed)
-
-
 def test_rumor_spreads_only_through_local_contacts_and_correction_resolves_truth(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_scenario
 ) -> None:
-    scenario = _scenario(duration=2, profile_count=4, correction=False)
+    scenario = information_spread_scenario(duration=2, profile_count=4, correction=False)
     document = scenario.model_dump(mode="json")
     document["profiles"][2]["initial_zone_id"] = "corridor"
     document["profiles"][2]["group_id"] = "G003"
@@ -209,7 +59,7 @@ def test_rumor_spreads_only_through_local_contacts_and_correction_resolves_truth
     assert adjacent_contact["message_source_id"] == "scenario-rumor-source"
     assert adjacent_contact["causation_id"] == "rumor-event"
 
-    correction_scenario = _scenario(duration=6, profile_count=2)
+    correction_scenario = information_spread_scenario(duration=6, profile_count=2)
     corrected = run_scenario(
         correction_scenario,
         tmp_path / "correction-full",
@@ -287,9 +137,9 @@ def test_rumor_spreads_only_through_local_contacts_and_correction_resolves_truth
 
 
 def test_trace_level_does_not_change_information_state_and_default_run_stays_off(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_scenario
 ) -> None:
-    scenario = _scenario(duration=6, correction=False)
+    scenario = information_spread_scenario(duration=6, correction=False)
     traced = run_scenario(scenario, tmp_path / "traced", trace_level=TraceLevel.FULL)
     untraced = run_scenario(scenario, tmp_path / "untraced", trace_level=TraceLevel.OFF)
     assert traced.canonical_json() == untraced.canonical_json()
@@ -317,17 +167,11 @@ def test_trace_level_does_not_change_information_state_and_default_run_stays_off
     )
 
 
-def test_world_rejects_invalid_persisted_information_state() -> None:
-    world = WorldState.from_scenario(_scenario())
-    world.model_state[INFORMATION_SPREAD_STATE_KEY]["query_pressure"]["A001"] = 1.1
-
-    with pytest.raises(StateInvariantError, match="query pressure"):
-        world.validate()
-
-
-def test_false_rumor_is_rejected_by_a_causal_correction(tmp_path: Path) -> None:
+def test_false_rumor_is_rejected_by_a_causal_correction(
+    tmp_path: Path, information_spread_scenario
+) -> None:
     world = run_scenario(
-        _scenario(duration=4, truth_status="false"),
+        information_spread_scenario(duration=4, truth_status="false"),
         tmp_path / "false-rumor",
         trace_level=TraceLevel.OFF,
     )
@@ -339,8 +183,12 @@ def test_false_rumor_is_rejected_by_a_causal_correction(tmp_path: Path) -> None:
     )
 
 
-def test_false_rumor_flows_through_integrated_psychology_trace(tmp_path: Path) -> None:
-    document = _scenario(duration=3, correction=False, truth_status="false").model_dump(mode="json")
+def test_false_rumor_flows_through_integrated_psychology_trace(
+    tmp_path: Path, information_spread_scenario
+) -> None:
+    document = information_spread_scenario(
+        duration=3, correction=False, truth_status="false"
+    ).model_dump(mode="json")
     document["model_configs"]["psychology"] = {
         "natural_recovery_rate_per_minute": 0.01,
         "baseline_distress_by_agent": {},
@@ -384,16 +232,16 @@ def test_false_rumor_flows_through_integrated_psychology_trace(tmp_path: Path) -
 
 
 def test_accepted_correction_reduces_integrated_false_belief_pressure(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_config, information_spread_scenario
 ) -> None:
     traced_scenarios: dict[str, dict[int, dict[str, object]]] = {}
     corrected_world = None
     for name, correction in (("rumor-only", False), ("rumor-corrected", True)):
-        document = _scenario(
+        document = information_spread_scenario(
             duration=5,
             correction=correction,
             truth_status="false",
-            config=_information_config(
+            config=information_spread_config(
                 max_contacts_per_agent=0,
                 rumor_belief_probability=1.0,
                 rumor_trust_sensitivity=0.0,
@@ -447,16 +295,16 @@ def test_accepted_correction_reduces_integrated_false_belief_pressure(
 
 
 def test_refused_correction_does_not_relieve_integrated_uncertainty(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_config, information_spread_scenario
 ) -> None:
     outcomes: dict[str, dict[int, dict[str, object]]] = {}
     refused_world = None
     for name, correction in (("rumor-only", False), ("rumor-refused", True)):
-        document = _scenario(
+        document = information_spread_scenario(
             duration=5,
             correction=correction,
             truth_status="false",
-            config=_information_config(
+            config=information_spread_config(
                 max_contacts_per_agent=0,
                 rumor_belief_probability=1.0,
                 rumor_trust_sensitivity=0.0,
@@ -519,13 +367,13 @@ def test_refused_correction_does_not_relieve_integrated_uncertainty(
 
 
 def test_evidence_aware_correction_tracks_exposure_and_probabilistic_acceptance(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_config, information_spread_scenario
 ) -> None:
-    scenario = _scenario(
+    scenario = information_spread_scenario(
         duration=6,
         profile_count=100,
         truth_status="false",
-        config=_information_config(
+        config=information_spread_config(
             correction_acceptance_probability=0.5,
             correction_trust_sensitivity=0.0,
             correction_source_sensitivity=0.0,
@@ -563,13 +411,13 @@ def test_evidence_aware_correction_tracks_exposure_and_probabilistic_acceptance(
 
 
 def test_cumulative_correction_acceptance_does_not_reapply_a_later_refused_event(
-    tmp_path: Path,
+    tmp_path: Path, information_spread_config, information_spread_scenario
 ) -> None:
-    scenario = _scenario(
+    scenario = information_spread_scenario(
         duration=7,
         profile_count=2,
         truth_status="false",
-        config=_information_config(
+        config=information_spread_config(
             correction_acceptance_probability=0.5,
             correction_trust_sensitivity=0.0,
             correction_source_sensitivity=0.5,

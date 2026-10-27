@@ -1,4 +1,4 @@
-"""Zone routing, explicit travel time, closure, and policy injection tests."""
+"""Zone routing, explicit travel time, closure, capacity, provenance and policy injection tests."""
 
 from __future__ import annotations
 
@@ -8,10 +8,14 @@ import pytest
 
 from sheltersim.core.world import WorldState
 from sheltersim.domain.zones import ZoneConnection, ZoneGraph, ZoneNode
+from sheltersim.events.models import EventKind, ScheduledEvent
+from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.space import SpaceRouter, ZoneRoute
+from sheltersim.web.demo import DemoService
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def fixture_graph() -> ZoneGraph:
@@ -145,3 +149,106 @@ def test_equal_duration_routes_use_stable_edge_id_tiebreaking() -> None:
     assert route_a == route_b
     assert route_a is not None
     assert route_a.edge_ids == ("a_a_b", "b_b_c")
+
+
+def test_route_policy_uses_an_open_alternative_when_an_edge_is_at_capacity() -> None:
+    zones = {zone_id: ZoneNode(zone_id, zone_id) for zone_id in ("start", "hall", "desk", "end")}
+    graph = ZoneGraph(
+        zones=zones,
+        edges=(
+            ZoneConnection("start-hall", "start", "hall", 1, max_agents_in_transit=1),
+            ZoneConnection("hall-end", "hall", "end", 1),
+            ZoneConnection("start-desk", "start", "desk", 4),
+            ZoneConnection("desk-end", "desk", "end", 4),
+        ),
+    )
+    router = SpaceRouter(graph)
+
+    route = router.route("start", "end", edge_loads={"start-hall": 1})
+
+    assert route is not None
+    assert route.edge_ids == ("start-desk", "desk-end")
+    assert route.travel_minutes == 8
+
+
+def test_capacity_block_is_recorded_with_route_and_assumption_provenance(
+    tmp_path: Path, small_replay_scenario
+) -> None:
+    scenario = small_replay_scenario()
+    world = WorldState.from_scenario(scenario)
+    world.model_configs["layout_routing"] = {
+        "schema_version": 1,
+        "source_type": "assumption",
+        "source_id": "ASM-A05-ROUTE-EDIT-V1",
+        "max_agents_in_transit_by_edge": {"corridor_toilet": 1},
+    }
+    world.validate()
+    active_travel = ScheduledEvent(
+        event_id="active-route-test",
+        kind=EventKind.COMPLETION,
+        due_minute=5,
+        priority=0,
+        sequence=100,
+        event_type="agent_travel_complete",
+        payload={"route_edge_ids": ["sleeping_corridor", "corridor_toilet"]},
+        source_id="active-route-test",
+    )
+    world.event_queue.schedule(active_travel)
+    controller = OfflineSimulationController(
+        world,
+        RunArtifactWriter(scenario, tmp_path / "run"),
+    )
+
+    route = controller._route("sleeping", "toilet", "A001")
+
+    assert route is None
+    wait_record = world.event_log.records[-1]
+    assert wait_record.event.event_type == "zone_edge_capacity_wait"
+    assert wait_record.event.payload["edge_id"] == "corridor_toilet"
+    assert wait_record.event.provenance["source_id"] == "ASM-A05-ROUTE-EDIT-V1"
+
+
+def test_travel_time_only_route_edit_keeps_route_assumption_provenance(
+    tmp_path: Path, small_replay_scenario
+) -> None:
+    scenario = small_replay_scenario()
+    demo = DemoService(scenario)
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    result = demo.dispatch(
+        "layout-branch",
+        {
+            "source_branch_id": "baseline",
+            "idempotency_key": "route-time-provenance",
+            "commands": [
+                {
+                    "kind": "set_zone_edge",
+                    "edge_id": "corridor_toilet",
+                    "travel_minutes": 8,
+                    "closed": False,
+                    "max_agents_in_transit": None,
+                }
+            ],
+        },
+    )
+    world = demo.branches[result["branch_id"]].runtime.world
+    assert world.model_configs["layout_routing"]["max_agents_in_transit_by_edge"] == {}
+    controller = OfflineSimulationController(
+        world,
+        RunArtifactWriter(scenario, tmp_path / "route-provenance"),
+    )
+    route = controller._route("sleeping", "toilet", "A001")
+    assert route is not None
+
+    assert controller._schedule_travel(
+        agent_id="A001",
+        route=route,
+        purpose="toilet_request",
+        facility_id="toilet_1",
+        minute=0,
+    )
+
+    travel_event = next(
+        item for item in world.event_queue.pending() if item.event_type == "agent_travel_complete"
+    )
+    assert travel_event.provenance["source_id"] == "ASM-A05-ROUTE-EDIT-V1"

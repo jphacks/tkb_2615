@@ -1,29 +1,37 @@
-"""Deterministic and bounded contact-based stress propagation tests."""
+"""Deterministic and bounded contact-based stress propagation tests.
+
+A full Run with the policy enabled is checked in
+tests/integration/test_stress_propagation.py.
+"""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 
-from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.engine import TraceLevel
+import pytest
+
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
-from sheltersim.domain.models import Activity, Mobility
-from sheltersim.experiments.runner import run_scenario
+from sheltersim.domain.models import (
+    Activity,
+    Mobility,
+)
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import AgentView, NeedView, WorldView
 from sheltersim.policies.psychology import (
     AgentStateDelta,
     SimplePsychologyPolicy,
 )
+from sheltersim.policies.registry import create_social
 from sheltersim.policies.social import (
     SocialPropagationParameters,
     StressPropagationPolicy,
 )
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def _two_agent_world() -> WorldState:
@@ -209,50 +217,107 @@ def test_coefficients_are_bounded_and_provenance_is_explicit() -> None:
     assert provenance["coefficients"]["stress_spread_per_minute"] == 0.01
 
 
-def test_enabled_policy_is_checkpointable_and_writes_compact_contact_trace(
-    tmp_path: Path,
+def test_bosse_operator_is_bidirectional_bounded_and_independent_of_mapping_order(
+    research_psychology_scenario, stress_delta
 ) -> None:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["duration_minutes"] = 3
-    document["scheduled_events"] = []
-    document["profiles"] = document["profiles"][:2]
-    document["model_configs"]["social_propagation"] = {
-        "enabled": True,
-        "max_contacts_per_agent": 1,
-        "minimum_contact_minutes": 1,
-        "stress_spread_per_minute": 0.01,
-        "natural_recovery_per_minute": 0.001,
-        "cooldown_minutes": 5,
+    world = WorldState.from_scenario(research_psychology_scenario(social=True))
+    ordered = sorted(world.agents)
+    world.agents[ordered[0]].stress = 0.1
+    world.agents[ordered[1]].stress = 0.9
+    view = WorldView.from_world(world)
+    reversed_view = replace(view, agents=dict(reversed(list(view.agents.items()))))
+    policy = create_social(world.model_configs)
+    assert policy.parameters.natural_recovery_per_minute == 0.0
+    deltas = tuple(stress_delta(agent_id, 0, view.agents[agent_id].stress) for agent_id in ordered)
+
+    first = policy.update(view, deltas, CounterRNG(world.seed), zone_neighbors={})
+    reversed_result = policy.update(
+        reversed_view, deltas, CounterRNG(world.seed), zone_neighbors={}
+    )
+    assert first == reversed_result
+    after = {delta.agent_id: delta.stress for delta in first.deltas}
+    assert after[ordered[0]] > view.agents[ordered[0]].stress
+    assert after[ordered[1]] < view.agents[ordered[1]].stress
+    assert all(0.0 <= value <= 1.0 for value in after.values())
+    assert all(abs(item.stress_contribution) <= 0.25 for item in first.contacts)
+
+
+def test_bosse_operator_has_no_effect_without_a_local_contact_and_caps_each_tick(
+    research_psychology_scenario, stress_delta
+) -> None:
+    world = WorldState.from_scenario(research_psychology_scenario(social=True))
+    original = WorldView.from_world(world)
+    ordered = sorted(original.agents)
+    isolated_agents = {
+        agent_id: replace(
+            original.agents[agent_id],
+            group_id=None,
+            zone_id=f"isolated-{index}",
+            stress=0.2 + 0.6 * index,
+        )
+        for index, agent_id in enumerate(ordered)
     }
-    scenario = ScenarioSpec.model_validate(document)
+    view = replace(original, agents=isolated_agents)
+    policy = create_social(world.model_configs)
+    deltas = tuple(stress_delta(agent_id, 0, view.agents[agent_id].stress) for agent_id in ordered)
+    no_contact = policy.update(view, deltas, CounterRNG(5), zone_neighbors={})
+    assert no_contact.contacts == ()
+    assert no_contact.deltas == deltas
 
-    world = run_scenario(scenario, tmp_path / "social-run")
-    untraced_world = run_scenario(
-        scenario,
-        tmp_path / "social-run-off-trace",
-        trace_level=TraceLevel.OFF,
+    equal_stress_view = replace(
+        original,
+        agents={agent_id: replace(original.agents[agent_id], stress=0.6) for agent_id in ordered},
+    )
+    equal_stress_deltas = tuple(stress_delta(agent_id, 0, 0.6) for agent_id in ordered)
+    equal_state = policy.update(
+        equal_stress_view,
+        equal_stress_deltas,
+        CounterRNG(5),
+        zone_neighbors={},
+    )
+    assert all(delta.stress == pytest.approx(0.6) for delta in equal_state.deltas)
+
+    together = WorldState.from_scenario(research_psychology_scenario(social=True))
+    ids = sorted(together.agents)
+    together.agents[ids[0]].stress = 0.0
+    together.agents[ids[1]].stress = 1.0
+    contact_view = WorldView.from_world(together)
+    contact_deltas = tuple(
+        stress_delta(agent_id, 0, contact_view.agents[agent_id].stress) for agent_id in ids
+    )
+    bounded = policy.update(contact_view, contact_deltas, CounterRNG(6), zone_neighbors={})
+    assert all(
+        abs(row.stress - contact_view.agents[row.agent_id].stress) <= 0.05 for row in bounded.deltas
     )
 
-    assert world.schema_version == 5
-    assert world.canonical_json() == untraced_world.canonical_json()
-    assert world.model_state["social_propagation_v1"]["schema_version"] == 1
-    restored = Checkpoint.capture(world).restore_world()
-    assert restored.model_state == world.model_state
-    assert restored.canonical_json() == world.canonical_json()
-    manifest = json.loads((tmp_path / "social-run" / "manifest.json").read_text())
-    assert (
-        manifest["model_assumptions"]["social_propagation"]["source_id"]
-        == "ASM-SOCIAL-PROPAGATION-V1"
-    )
-    traces = [
-        json.loads(line)
-        for line in (tmp_path / "social-run" / "social_contacts.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert len(traces) == 3
-    assert all(item["selected_contact_count"] <= 2 for item in traces)
-    assert all(len(item["contacts"]) <= 20 for item in traces)
-    assert (tmp_path / "social-run-off-trace" / "social_contacts.jsonl").read_text(
-        encoding="utf-8"
-    ) == ""
+
+def test_bosse_trace_matches_normalized_weighted_synchrony_formula(
+    research_psychology_scenario, stress_delta
+) -> None:
+    world = WorldState.from_scenario(research_psychology_scenario(social=True))
+    ids = sorted(world.agents)
+    world.agents[ids[0]].stress = 0.15
+    world.agents[ids[1]].stress = 0.85
+    view = WorldView.from_world(world)
+    policy = create_social(world.model_configs)
+    deltas = tuple(stress_delta(agent_id, 0, view.agents[agent_id].stress) for agent_id in ids)
+    result = policy.update(view, deltas, CounterRNG(19), zone_neighbors={})
+    by_recipient: dict[str, list[object]] = {}
+    for item in result.contacts:
+        by_recipient.setdefault(item.recipient_id, []).append(item)
+    for contacts in by_recipient.values():
+        total_weight = math.fsum(item.influence_weight for item in contacts)
+        if total_weight == 0.0:
+            assert all(item.stress_contribution == 0.0 for item in contacts)
+            continue
+        gamma = min(1.0, policy.parameters.stress_spread_per_minute * total_weight)
+        assert all(item.aggregate_rate == pytest.approx(gamma) for item in contacts)
+        for item in contacts:
+            raw = gamma * item.influence_weight / total_weight * item.stress_difference
+            assert item.pre_pair_cap_contribution == pytest.approx(raw)
+            assert item.pair_cap_contribution == pytest.approx(
+                max(
+                    -policy.parameters.max_pair_stress_increase,
+                    min(policy.parameters.max_pair_stress_increase, raw),
+                )
+            )

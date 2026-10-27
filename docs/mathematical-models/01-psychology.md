@@ -76,6 +76,6 @@ D_i(d+1)=\operatorname{clip}_{[0,1]}\{\mu_i+\phi_i(D_i(d)-\mu_i)+\theta_A(\bar A
 
 ## 内部検証
 
-`tests/test_research_models.py` は無刺激回帰、回復率差、刻み幅整合性、持続負荷平衡、範囲と有限値、統合版の睡眠負債と平均回帰の共存、睡眠stress回復の二重計上防止、情報圧力から不確実性/急性状態への経路、Traceの寄与再構成を確認します。`distress_monitor_v1` 相当のオンライン集計は急性状態を変更せず、閾値以上の連続時間・回復回数を少数の数値指標としてcheckpoint可能なmetric stateに記録します。
+`tests/unit/policies/test_psychology.py` と `tests/integration/test_research_psychology.py` は無刺激回帰、回復率差、刻み幅整合性、持続負荷平衡、範囲と有限値、統合版の睡眠負債と平均回帰の共存、睡眠stress回復の二重計上防止、情報圧力から不確実性/急性状態への経路、Traceの寄与再構成を確認します。`distress_monitor_v1` 相当のオンライン集計は急性状態を変更せず、閾値以上の連続時間・回復回数を少数の数値指標としてcheckpoint可能なmetric stateに記録します。
 
 内部テストは数式実装やプログラム上の一貫性を確認するもので、日本の避難所での外部妥当性は示しません。全係数は未校正です。0.70はソフトウェア指標で、臨床閾値ではありません。

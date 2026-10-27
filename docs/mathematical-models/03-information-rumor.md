@@ -44,4 +44,4 @@ Traceには対象Agent、event minute、message ID、rumor origin event ID、bel
 
 集計では現在の誤信念Agent数・Agent-message数、過去に誤信念を保持したAgent数、訂正曝露/受容者数、現在/過去の忘却者数を分けます。忘却後に残る数値的なbelief_strengthは履歴として保持されますが、現在の誤信念には数えません。
 
-`tests/test_information_spread.py` と `tests/test_research_models.py` はlegacy挙動、誤情報訂正、曝露と受容の分離、受容者/非受容者、忘却後集計、schema移行、誤信念から不確実性・心理状態へ入る経路、同seed再現を確認します。接触・信頼・受容・忘却係数は未校正仮定です。曝露率や受容率を現実の避難所の予測と解釈しません。
+`tests/integration/test_information_spread.py`・`tests/unit/policies/test_information.py` と `tests/unit/policies/test_psychology.py`・`tests/unit/domain/test_information.py` はlegacy挙動、誤情報訂正、曝露と受容の分離、受容者/非受容者、忘却後集計、schema移行、誤信念から不確実性・心理状態へ入る経路、同seed再現を確認します。接触・信頼・受容・忘却係数は未校正仮定です。曝露率や受容率を現実の避難所の予測と解釈しません。

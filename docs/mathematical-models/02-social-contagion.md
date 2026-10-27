@@ -39,4 +39,4 @@ r_i^{agg}=\operatorname{clip}_{[-c_i,c_i]}\left(\sum_{j\in C_i}r_{ji}^{pair}\rig
 
 ## 内部検証と限界
 
-`tests/test_research_models.py` は高い状態から低い状態への上昇、逆方向の鎮静、無接触時の差分0、Agent mapping順の不変、上限、Traceと正規化式の一致を検査します。表出性・接触・感受性係数や接触抽出確率は未校正です。増幅bias項は実装していません。
+`tests/unit/policies/test_social.py` は高い状態から低い状態への上昇、逆方向の鎮静、無接触時の差分0、Agent mapping順の不変、上限、Traceと正規化式の一致を検査します。表出性・接触・感受性係数や接触抽出確率は未校正です。増幅bias項は実装していません。

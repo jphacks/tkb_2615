@@ -511,6 +511,286 @@ def add_toilets_program() -> Callable[..., Any]:
     return _add_toilets_program
 
 
+def _research_psychology_scenario(*, duration: int = 20, social: bool = False) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "research-model-test"
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    document["profiles"] = document["profiles"][:2]
+    for profile in document["profiles"]:
+        profile["initial_needs"] = {
+            "toilet_urgency": 0.0,
+            "hunger": 0.0,
+            "fatigue": 0.0,
+        }
+    document["model_configs"]["psychology"] = {
+        "natural_recovery_rate_per_minute": 0.02,
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+    }
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "mean-reverting-distress-v1",
+    }
+    if social:
+        document["model_configs"]["social_propagation"] = {
+            "enabled": True,
+            "max_contacts_per_agent": 1,
+            "minimum_contact_minutes": 1,
+            "stress_spread_per_minute": 0.2,
+            "natural_recovery_per_minute": 0.0,
+            "cooldown_minutes": 5,
+            "max_pair_stress_increase": 0.25,
+            "max_agent_stress_increase_per_minute": 0.05,
+            "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+        }
+        document["model_configs"]["policy_registry"]["social"] = (
+            "expressiveness-channel-openness-v1"
+        )
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def research_psychology_scenario() -> Callable[..., Any]:
+    """Build a two-person scenario_100_agents with mean-reverting distress and no needs.
+
+    With social=True it also enables the research social operator (Bosse et al.
+    affect contagion, expressiveness-channel-openness-v1).
+    """
+    return _research_psychology_scenario
+
+
+def _stress_delta(agent_id: str, minute: int, stress: float) -> Any:
+    from sheltersim.policies.psychology import AgentStateDelta
+
+    return AgentStateDelta(
+        agent_id=agent_id,
+        minute_index=minute,
+        toilet_urgency=0.0,
+        hunger=0.0,
+        fatigue=0.0,
+        stress=stress,
+        trust=0.5,
+    )
+
+
+@pytest.fixture
+def stress_delta() -> Callable[[str, int, float], Any]:
+    """Build a psychology update that sets only stress (needs 0, trust 0.5)."""
+    return _stress_delta
+
+
+def _causal_stress_scenario(
+    *,
+    agent_count: int = 2,
+    duration: int = 20,
+    stress_pressure: float = 0.1,
+    queued_stress: float = 0.01,
+    support_wait_stress: float = 0.02,
+    social_enabled: bool = False,
+    with_service: bool = True,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    profiles = [
+        {
+            "schema_version": 2,
+            "id": f"A{index:03}",
+            "group_id": "G01",
+            "initial_zone_id": "main",
+            "support_need": 0.8,
+            "stress_sensitivity": 1.0,
+            "initial_needs": {"toilet_urgency": 0.8, "hunger": 0.9, "fatigue": 0.2},
+            "rng_key": f"profile:A{index:03}",
+        }
+        for index in range(1, agent_count + 1)
+    ]
+    config = {
+        "psychology": {
+            "stress_pressure": stress_pressure,
+            "queued_stress": queued_stress,
+            "support_wait_stress": support_wait_stress,
+        },
+        "behavior": {"decision_interval_minutes": 5},
+        "staff": {"support_task_minutes": 5, "unresolved_after_minutes": 10},
+        "social_propagation": {
+            "enabled": social_enabled,
+            "max_contacts_per_agent": 1,
+            "minimum_contact_minutes": 1,
+            "stress_spread_per_minute": 0.01,
+            "natural_recovery_per_minute": 0.0,
+            "cooldown_minutes": 1,
+            "max_pair_stress_increase": 0.05,
+            "max_agent_stress_increase_per_minute": 0.05,
+        },
+    }
+    document = {
+        "schema_version": 3,
+        "id": "causal-stress-test",
+        "duration_minutes": duration,
+        "seed": 23,
+        "zones": [{"id": "main", "name": "Main", "capacity": 10}],
+        "profiles": profiles,
+        "model_configs": config,
+    }
+    if with_service:
+        document["facilities"] = [
+            {"id": "toilet-1", "kind": "toilet", "zone_id": "main", "capacity": 1}
+        ]
+        document["staff"] = [{"id": "staff-1", "zone_id": "main", "skills": ["support"]}]
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def causal_stress_scenario() -> Callable[..., Any]:
+    """Build a one-zone Scenario where needy residents queue for one toilet and one worker.
+
+    The psychology coefficients for need pressure, queueing and support waits can be
+    changed; with_service=False drops the toilet and the worker.
+    """
+    return _causal_stress_scenario
+
+
+def _information_spread_config(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "enabled": True,
+        "max_contacts_per_agent": 16,
+        "minimum_contact_minutes": 1,
+        "contact_duration_scale_minutes": 1,
+        "base_transmission_probability": 1.0,
+        "correction_transmission_multiplier": 1.0,
+        "trust_sensitivity": 0.0,
+        "family_contact_multiplier": 1.0,
+        "adjacent_zone_contact_multiplier": 1.0,
+        "query_pressure_per_claim": 0.5,
+        "query_pressure_decay_per_minute": 0.0,
+        "query_pressure_relief_per_correction": 0.5,
+        "query_threshold": 0.5,
+        "query_utility_weight": 4.0,
+    }
+    values.update(overrides)
+    return values
+
+
+@pytest.fixture
+def information_spread_config() -> Callable[..., dict[str, object]]:
+    """An enabled information_spread config where every contact passes a claim on.
+
+    Keyword arguments replace single coefficients.
+    """
+    return _information_spread_config
+
+
+def _information_spread_scenario(
+    *,
+    duration: int = 6,
+    profile_count: int = 2,
+    truth_status: str = "unknown",
+    correction: bool = True,
+    config: dict[str, object] | None = None,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "information-spread-test"
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = [
+        {
+            "id": "rumor-event",
+            "kind": "exogenous",
+            "due_minute": 0,
+            "priority": 0,
+            "sequence": 10,
+            "event_type": "information_rumor",
+            "payload": {
+                "message_id": "claim-water-1",
+                "truth_status": truth_status,
+                "origin_agent_id": "A001",
+            },
+            "source_id": "scenario-rumor-source",
+        }
+    ]
+    if correction:
+        document["scheduled_events"].append(
+            {
+                "id": "correction-event",
+                "kind": "exogenous",
+                "due_minute": 3,
+                "priority": 0,
+                "sequence": 11,
+                "event_type": "information_correction",
+                "payload": {
+                    "message_id": "claim-water-1",
+                    "zone_id": "sleeping",
+                    "belief": "rejected" if truth_status == "false" else "verified",
+                },
+                "source_id": "staff-notice-source",
+                "causation_id": "rumor-event",
+            }
+        )
+    document["profiles"] = document["profiles"][:profile_count]
+    for profile in document["profiles"]:
+        profile["support_need"] = 0.0
+        profile["initial_needs"] = {
+            "toilet_urgency": 0.0,
+            "hunger": 0.0,
+            "fatigue": 0.0,
+        }
+    document["model_configs"]["information_spread"] = config or _information_spread_config()
+    document["model_configs"].setdefault("behavior", {})["temperature"] = 0.01
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def information_spread_scenario() -> Callable[..., Any]:
+    """Build scenario_100_agents with a rumor from A001 at minute 0 and, by default, a
+    staff correction in the sleeping area at minute 3.
+
+    Residents have no needs, so information is the only thing that drives inquiries.
+    """
+    return _information_spread_scenario
+
+
+def _small_replay_scenario(duration_minutes: int = 30) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    return ScenarioSpec.from_json(json.dumps(document))
+
+
+@pytest.fixture
+def small_replay_scenario() -> Callable[..., Any]:
+    """Build h00_small_replay without its scheduled events, 30 minutes long by default."""
+    return _small_replay_scenario
+
+
+def _route_edit_command(
+    *,
+    edge_id: str = "corridor_toilet",
+    travel_minutes: int = 8,
+    max_agents_in_transit: int | None = 1,
+) -> dict[str, object]:
+    return {
+        "kind": "set_zone_edge",
+        "edge_id": edge_id,
+        "travel_minutes": travel_minutes,
+        "closed": False,
+        "max_agents_in_transit": max_agents_in_transit,
+    }
+
+
+@pytest.fixture
+def route_edit_command() -> Callable[..., dict[str, object]]:
+    """A layout Branch command that sets corridor_toilet to 8 minutes for one person at a time."""
+    return _route_edit_command
+
+
 def _make_event(
     event_id: str,
     *,
