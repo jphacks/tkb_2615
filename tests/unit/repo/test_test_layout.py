@@ -72,7 +72,6 @@ UNSORTED = frozenset(
         "test_llm_runtime.py",
         "test_map_layout.py",
         "test_metrics.py",
-        "test_model_evaluation.py",
         "test_multi_plan.py",
         "test_nl_demo_ui.py",
         "test_nl_parser.py",
