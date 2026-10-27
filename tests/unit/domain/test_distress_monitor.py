@@ -56,3 +56,37 @@ def test_empty_monitor_has_defined_zero_summary() -> None:
     assert summary["ongoing_high_distress_episode_count"] == 0
     assert summary["mean_completed_episode_duration_minutes"] == 0.0
     assert summary["end_high_distress_agent_share"] == 0.0
+
+
+def test_online_distress_monitor_tracks_high_runs_recovery_and_reascent() -> None:
+    metrics: dict[str, float] = {}
+    record_distress_monitor_tick(
+        metrics,
+        previous_by_agent={"A001": 0.8},
+        current_by_agent={"A001": 0.85},
+        threshold=0.7,
+    )
+    record_distress_monitor_tick(
+        metrics,
+        previous_by_agent={"A001": 0.85},
+        current_by_agent={"A001": 0.9},
+        threshold=0.7,
+    )
+    record_distress_monitor_tick(
+        metrics,
+        previous_by_agent={"A001": 0.9},
+        current_by_agent={"A001": 0.3},
+        threshold=0.7,
+    )
+    record_distress_monitor_tick(
+        metrics,
+        previous_by_agent={"A001": 0.3},
+        current_by_agent={"A001": 0.8},
+        threshold=0.7,
+    )
+    summary = distress_monitor_summary(metrics)
+    assert summary["high_distress_episode_count"] == 2
+    assert summary["high_distress_reascent_count"] == 1
+    assert summary["longest_high_distress_run_minutes"] == 2
+    assert summary["completed_recovery_count"] == 1
+    assert summary["mean_completed_recovery_minutes"] == 2.0

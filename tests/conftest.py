@@ -511,6 +511,79 @@ def add_toilets_program() -> Callable[..., Any]:
     return _add_toilets_program
 
 
+def _research_psychology_scenario(*, duration: int = 20, social: bool = False) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "research-model-test"
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    document["profiles"] = document["profiles"][:2]
+    for profile in document["profiles"]:
+        profile["initial_needs"] = {
+            "toilet_urgency": 0.0,
+            "hunger": 0.0,
+            "fatigue": 0.0,
+        }
+    document["model_configs"]["psychology"] = {
+        "natural_recovery_rate_per_minute": 0.02,
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+    }
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "mean-reverting-distress-v1",
+    }
+    if social:
+        document["model_configs"]["social_propagation"] = {
+            "enabled": True,
+            "max_contacts_per_agent": 1,
+            "minimum_contact_minutes": 1,
+            "stress_spread_per_minute": 0.2,
+            "natural_recovery_per_minute": 0.0,
+            "cooldown_minutes": 5,
+            "max_pair_stress_increase": 0.25,
+            "max_agent_stress_increase_per_minute": 0.05,
+            "source_id": "ASM-BOSSE-AFFECT-CONTAGION-V1",
+        }
+        document["model_configs"]["policy_registry"]["social"] = (
+            "expressiveness-channel-openness-v1"
+        )
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def research_psychology_scenario() -> Callable[..., Any]:
+    """Build a two-person scenario_100_agents with mean-reverting distress and no needs.
+
+    With social=True it also enables the research social operator (Bosse et al.
+    affect contagion, expressiveness-channel-openness-v1).
+    """
+    return _research_psychology_scenario
+
+
+def _stress_delta(agent_id: str, minute: int, stress: float) -> Any:
+    from sheltersim.policies.psychology import AgentStateDelta
+
+    return AgentStateDelta(
+        agent_id=agent_id,
+        minute_index=minute,
+        toilet_urgency=0.0,
+        hunger=0.0,
+        fatigue=0.0,
+        stress=stress,
+        trust=0.5,
+    )
+
+
+@pytest.fixture
+def stress_delta() -> Callable[[str, int, float], Any]:
+    """Build a psychology update that sets only stress (needs 0, trust 0.5)."""
+    return _stress_delta
+
+
 def _make_event(
     event_id: str,
     *,
