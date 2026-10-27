@@ -1,5 +1,11 @@
-"""Batched observational playback must match individual Timeline/compare reads."""
+"""Batched observational playback must match individual Timeline/compare reads.
 
+On a Run of the shared generated Scenario, replayed while people walk on the floor
+plan, as the Project screen plays a Run back. Until #137 this replayed the first
+minutes of h00_small_replay, which has neither a floor plan nor facility awareness.
+"""
+
+import copy
 import json
 from types import SimpleNamespace
 
@@ -13,19 +19,27 @@ from sheltersim.storage.projects import ProjectStore, StorageError, digest
 from sheltersim.web.replay import replay_frames
 from sheltersim.web.workspace import ProjectWorkspace
 
+FORK = 22
+# People walk on the floor plan in every minute from FORK to COMPUTED.
+COMPUTED = 30
 
-@pytest.fixture
-def replay(tmp_path):
-    scenario = ScenarioSpec.load("fixtures/scenarios/h00_small_replay.json")
-    store = ProjectStore(tmp_path)
+
+@pytest.fixture(scope="module")
+def replay(tmp_path_factory, generated_scenario_preview):
+    """A main line and a child forked at FORK, both computed to COMPUTED.
+
+    Shared by the module: replay_frames only reads, and the first test checks that.
+    """
+    scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
+    store = ProjectStore(tmp_path_factory.mktemp("replay"))
     store.create_project("p")
     store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
     store.create_run("p", "r", scenario.id, 1)
     timeline = TimelineStore(store, "p", "r")
     timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
-    timeline.advance("main", 8)
-    timeline.fork("main", 2, "child")
-    timeline.advance("child", 8)
+    timeline.advance("main", COMPUTED)
+    timeline.fork("main", FORK, "child")
+    timeline.advance("child", COMPUTED)
     return store, timeline, ProjectWorkspace(SimpleNamespace(store=store))
 
 
@@ -33,28 +47,31 @@ def replay(tmp_path):
 def test_batch_matches_exact_reads_and_keeps_heads(replay, ids):
     store, timeline, workspace = replay
     heads = {key: store.load_branch("p", "r", key)[1].to_json() for key in ids}
-    batch = replay_frames(store, workspace, "p", "r", ids, 2, 7)
+    batch = replay_frames(store, workspace, "p", "r", ids, FORK, FORK + 5)
     assert len(batch["samples"]) == 6
-    for minute, frame in enumerate(batch["samples"], 2):
+    for minute, frame in enumerate(batch["samples"], FORK):
         expected = (
             timeline.frame("main", minute)
             if len(ids) == 1
             else workspace.comparison("p", "r", ids, minute)
         )
         assert frame == expected
+        for branch_frame in [frame] if len(ids) == 1 else frame["frames"]:
+            assert {agent["position_kind"] for agent in branch_frame["agents"]} == {"physical"}
+            assert any(agent["edge_id"] for agent in branch_frame["agents"])
     assert {key: store.load_branch("p", "r", key)[1].to_json() for key in ids} == heads
 
 
 @pytest.mark.parametrize(
     ("ids", "start", "end"),
     [
-        (["main"], 0, 8),
+        (["main"], FORK - 2, FORK + 6),
         (["main"], -1, 1),
-        (["main"], 2, 1),
-        (["main"], 7, 9),
-        (["main", "child"], 1, 4),
-        (["main", "main"], 2, 4),
-        (["main", "child", "third"], 2, 4),
+        (["main"], FORK, FORK - 1),
+        (["main"], COMPUTED - 1, COMPUTED + 1),
+        (["main", "child"], FORK - 1, FORK + 2),
+        (["main", "main"], FORK, FORK + 2),
+        (["main", "child", "third"], FORK, FORK + 2),
         (["main"], True, 3),
     ],
 )
@@ -84,7 +101,7 @@ def test_batch_rejects_a_head_changed_during_read(replay, monkeypatch):
     monkeypatch.setattr(store, "branch_reference", changing)
     monkeypatch.setattr(TimelineStore, "iter_worlds", changed_after_replay)
     with pytest.raises(StorageError, match="heads changed"):
-        replay_frames(store, workspace, "p", "r", ["main"], 2, 3)
+        replay_frames(store, workspace, "p", "r", ["main"], FORK, FORK + 1)
 
 
 def test_range_http_adapter_and_parameter_validation(replay):
@@ -94,8 +111,10 @@ def test_range_http_adapter_and_parameter_validation(replay):
     api = ProjectAPI(store, recover=False)
     parts = ["p", "runs", "r", "replay-frames"]
     try:
-        result = api.get(parts, {"branch_ids": ["main"], "start": ["2"], "end": ["3"]})
-        assert [frame["minute"] for frame in result["samples"]] == [2, 3]
+        result = api.get(
+            parts, {"branch_ids": ["main"], "start": [str(FORK)], "end": [str(FORK + 1)]}
+        )
+        assert [frame["minute"] for frame in result["samples"]] == [FORK, FORK + 1]
         for query in (
             {"branch_ids": ["main"], "start": ["2", "3"], "end": ["4"]},
             {"branch_ids": ["main"], "start": ["2.5"], "end": ["4"]},
@@ -111,11 +130,11 @@ def test_checkpoint_only_batch_does_not_initialize_a_controller(replay, monkeypa
     import sheltersim.experiments.timeline as module
 
     store, timeline, workspace = replay
-    expected = timeline.frame("main", 0)
+    expected = timeline.frame("main", COMPUTED)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("an exact checkpoint read must not initialize policies")
 
     monkeypatch.setattr(module, "OfflineSimulationController", unexpected)
-    batch = replay_frames(store, workspace, "p", "r", ["main"], 0, 0)
+    batch = replay_frames(store, workspace, "p", "r", ["main"], COMPUTED, COMPUTED)
     assert batch["samples"] == [expected]
