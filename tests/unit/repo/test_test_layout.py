@@ -25,13 +25,6 @@ UNIT_OWNERS = frozenset(
 )
 SCOPE_DIRECTORIES = ("integration", "e2e", "live")
 
-# Files written before the layout existed. Move one when you change it and
-# remove it here; never add to this list.
-UNSORTED = frozenset(
-    {
-    }
-)
-
 
 def _test_files() -> list[Path]:
     return sorted(TESTS.rglob("test_*.py"))
@@ -47,18 +40,13 @@ def _uses_live_marker(path: Path) -> bool:
     )
 
 
-def test_no_new_test_file_is_added_to_the_top_level() -> None:
+def test_no_test_file_is_at_the_top_level() -> None:
+    # The files written before the layout existed were all sorted in #126.
     top_level = {path.name for path in TESTS.glob("test_*.py")}
 
-    assert top_level - UNSORTED == set(), (
+    assert top_level == set(), (
         "put new tests in tests/unit/<owner>/, tests/integration/ or tests/e2e/"
     )
-
-
-def test_the_unsorted_list_names_only_files_still_at_the_top_level() -> None:
-    top_level = {path.name for path in TESTS.glob("test_*.py")}
-
-    assert UNSORTED - top_level == set(), "remove moved files from UNSORTED"
 
 
 def test_test_files_live_only_in_the_scope_directories() -> None:
