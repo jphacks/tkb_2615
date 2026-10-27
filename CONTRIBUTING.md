@@ -30,7 +30,7 @@ ruff format --check .
 ## 変更時の基本
 
 - 動作や互換性を変えたら回帰テストを追加します。
-- テストは[テストの置き場所と名前](docs/testing.md#テストの置き場所と名前)に従い、`tests/unit/<担当>/`、`tests/integration/`、`tests/e2e/`に置きます。`tests/`直下にファイルを足さず、直下の既存ファイルは変更するときに移します。
+- テストは[テストの置き場所と名前](docs/testing.md#テストの置き場所と名前)に従い、`tests/unit/<担当>/`、`tests/integration/`、`tests/e2e/`に置きます。有料APIを呼ぶテストは`tests/live/`にだけ置きます。`tests/`直下にはテストファイルを置きません（`tests/unit/repo/test_test_layout.py`が確かめます）。
 - 該当する仕様文書も同じPull Requestで更新します。
 - モデルやデータ契約を変えるときは、出典、単位、上限、仮定、版を記録します。
 - シミュレーションコアから外部接続を分離します。Providerの出力はスキーマと意味検証を通します。
