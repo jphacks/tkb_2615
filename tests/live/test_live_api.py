@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import replace
 
 import pytest
 
@@ -152,40 +151,11 @@ def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(
     assert all(record.cache_hit for record in replay.records)
 
 
-def test_live_official_domain_search_returns_only_verifiable_source_candidates(tmp_path) -> None:
-    from sheltersim.region.models import RegionResearchRequest
-    from sheltersim.region.research import _official_source_search_task
-
-    # Two calls of allowance: a web-search call reserves output for two sampling passes.
-    settings = replace(
-        LLMSettings.from_env(),
-        mode="record",
-        max_api_calls=2,
-        max_input_tokens=4096,
-        max_output_tokens=256,
-        max_concurrency=1,
-        timeout_seconds=120,
-        budget_usd=10,
-        cache_path=tmp_path / "source-search-tape.json",
-    )
-    store = runtime_usage_store()
-    store.create_project("runtime-accounts", _internal=True)
-    local = UsageLedger(store, "runtime-accounts", "live-source-search-stream-qa")
-    local.create(usage_limits(settings))
-    campaign = task_campaign_ledger(store)
-    router = LLMRouter(settings)
-    router.provider = AccountedProvider(
-        router.provider,
-        local,
-        settings,
-        "live_official_source_search",
-        branch_id=None,
-        campaign_ledger=campaign,
-    )
-    task = _official_source_search_task(
-        RegionResearchRequest(
-            municipality_query="墨田区", selected_municipality_name="墨田区", disaster="earthquake"
-        )
+def test_live_official_domain_search_returns_only_verifiable_source_candidates(
+    tmp_path, live_source_search_check
+) -> None:
+    settings, router, task, campaign = live_source_search_check(
+        LLMSettings.from_env(), tmp_path / "source-search-tape.json"
     )
 
     output = router.complete(task)

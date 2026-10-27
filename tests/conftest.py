@@ -295,6 +295,67 @@ def _live_model_check(settings: Any, cache_path: Path, provider: Any = None) -> 
     return settings, router, tasks, store
 
 
+def _live_source_search_check(settings: Any, cache_path: Path, provider: Any = None) -> tuple:
+    import uuid
+    from dataclasses import replace
+
+    from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, usage_limits
+    from sheltersim.llm.provider import LLMRouter
+    from sheltersim.region.models import RegionResearchRequest
+    from sheltersim.region.research import _official_source_search_task
+    from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
+
+    # Two calls of allowance: a web-search call reserves output for two sampling passes.
+    settings = replace(
+        settings,
+        mode="record",
+        max_api_calls=2,
+        max_input_tokens=4096,
+        max_output_tokens=256,
+        max_concurrency=1,
+        timeout_seconds=120,
+        budget_usd=10,
+        cache_path=cache_path,
+    )
+    store = runtime_usage_store()
+    store.create_project("runtime-accounts", _internal=True)
+    # Each run gets its own account, as in _live_model_check. Every run sends the same
+    # request with a fresh tape, and an account refuses a request key it already holds a
+    # receipt for (usage_receipt_exists), so a fixed account let only the first run pass
+    # (#152). Its receipts would also make the 2-call cap cover every run on the machine.
+    local = UsageLedger(
+        store, "runtime-accounts", f"live-source-search-stream-qa-{uuid.uuid4().hex}"
+    )
+    local.create(usage_limits(settings))
+    campaign = task_campaign_ledger(store)
+    router = LLMRouter(settings)
+    router.provider = AccountedProvider(
+        provider or router.provider,
+        local,
+        settings,
+        "live_official_source_search",
+        branch_id=None,
+        campaign_ledger=campaign,
+    )
+    task = _official_source_search_task(
+        RegionResearchRequest(
+            municipality_query="墨田区", selected_municipality_name="墨田区", disaster="earthquake"
+        )
+    )
+    return settings, router, task, campaign
+
+
+@pytest.fixture
+def live_source_search_check() -> Callable[..., tuple]:
+    """Build the live official-domain search check: settings, accounted router, task.
+
+    Call it like live_model_check. It returns (settings, router, task, campaign ledger).
+    tests/live/test_live_api.py runs it against the real API; tests/unit/llm/
+    test_accounting.py checks offline that two runs each fit their own allowance.
+    """
+    return _live_source_search_check
+
+
 @pytest.fixture
 def live_model_check() -> Callable[..., tuple]:
     """Build the live model check: its capped settings, an accounted router and its tasks.
