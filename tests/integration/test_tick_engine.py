@@ -1,4 +1,8 @@
-"""Deterministic clock, RNG, phase ordering, and trace behavior tests."""
+"""Stepping the TickEngine: phase order, validation, determinism and traces.
+
+The RNG, the execution order key and the clock alone are checked in
+tests/unit/core/test_rng.py, test_engine.py and test_clock.py.
+"""
 
 from __future__ import annotations
 
@@ -6,44 +10,19 @@ from pathlib import Path
 
 import pytest
 
-from sheltersim.core.clock import SimulationClock
 from sheltersim.core.engine import (
     TICK_PHASE_ORDER,
-    DeterministicOrderKey,
     TickEngine,
     TickPhase,
     TickTrace,
     TraceLevel,
 )
-from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
-
-
-def test_counter_rng_uses_stable_domain_keys_not_call_order() -> None:
-    rng = CounterRNG(2026)
-    first_a = rng.random("agent", "A001", "minute", 17)
-    first_b = rng.random("agent", "A002", "minute", 17)
-
-    assert first_a == CounterRNG(2026).random("agent", "A001", "minute", 17)
-    assert first_b == CounterRNG(2026).random("agent", "A002", "minute", 17)
-    assert first_a != first_b
-    assert first_a != CounterRNG(2027).random("agent", "A001", "minute", 17)
-
-
-def test_counter_rng_requires_a_stable_key() -> None:
-    rng = CounterRNG(4)
-
-    try:
-        rng.random()
-    except ValueError as error:
-        assert "stable RNG key" in str(error)
-    else:
-        raise AssertionError("an unkeyed random request should fail")
+FIXTURE = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
 
 def test_tick_runs_phases_in_documented_order_and_advances_one_minute() -> None:
@@ -135,20 +114,6 @@ def test_trace_levels_do_not_change_state_or_random_draws() -> None:
     assert len(full_records) == 5 * len(TICK_PHASE_ORDER)
 
 
-def test_execution_order_uses_agent_id_as_final_tiebreaker() -> None:
-    later_id = DeterministicOrderKey(10, 1, 4, "A002")
-    earlier_id = DeterministicOrderKey(10, 1, 4, "A001")
-    earlier_sequence = DeterministicOrderKey(10, 1, 3, "A099")
-    earlier_minute = DeterministicOrderKey(9, 99, 99, "A999")
-
-    assert sorted((later_id, earlier_id, earlier_sequence, earlier_minute)) == [
-        earlier_minute,
-        earlier_sequence,
-        earlier_id,
-        later_id,
-    ]
-
-
 def test_same_minute_event_chain_cannot_loop_inside_one_tick() -> None:
     world = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
     dispatched: list[str] = []
@@ -198,17 +163,3 @@ def test_10080_offline_ticks_complete_without_wall_clock() -> None:
 
     assert result.minute_index == 10080
     assert engine.clock.complete
-
-
-def test_clock_rejects_advancing_past_duration() -> None:
-    clock = SimulationClock(duration_minutes=1)
-    clock.advance()
-
-    assert clock.complete
-
-    try:
-        clock.advance()
-    except RuntimeError as error:
-        assert "already complete" in str(error)
-    else:
-        raise AssertionError("a complete clock should not advance")
