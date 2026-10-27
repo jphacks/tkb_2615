@@ -755,6 +755,42 @@ def information_spread_scenario() -> Callable[..., Any]:
     return _information_spread_scenario
 
 
+def _small_replay_scenario(duration_minutes: int = 30) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    return ScenarioSpec.from_json(json.dumps(document))
+
+
+@pytest.fixture
+def small_replay_scenario() -> Callable[..., Any]:
+    """Build h00_small_replay without its scheduled events, 30 minutes long by default."""
+    return _small_replay_scenario
+
+
+def _route_edit_command(
+    *,
+    edge_id: str = "corridor_toilet",
+    travel_minutes: int = 8,
+    max_agents_in_transit: int | None = 1,
+) -> dict[str, object]:
+    return {
+        "kind": "set_zone_edge",
+        "edge_id": edge_id,
+        "travel_minutes": travel_minutes,
+        "closed": False,
+        "max_agents_in_transit": max_agents_in_transit,
+    }
+
+
+@pytest.fixture
+def route_edit_command() -> Callable[..., dict[str, object]]:
+    """A layout Branch command that sets corridor_toilet to 8 minutes for one person at a time."""
+    return _route_edit_command
+
+
 def _make_event(
     event_id: str,
     *,
