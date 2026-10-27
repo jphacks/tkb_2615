@@ -23,6 +23,8 @@ ruff format --check .
 
 `-n auto`はpytest-xdistで複数CPUに分けて実行します。直列で実行する場合は省略できます。詳細は[テストと検証](docs/testing.md)を参照してください。
 
+各実行の結果は`.test-results/`に残り、出力の最後の行に失敗したテストの名前と`summary.txt`の場所が出ます。失敗の原因は再実行せずに`summary.txt`で確かめてください（[結果の残り方と見方](docs/testing.md#結果の残り方と見方)）。
+
 テストから有料APIを呼ばないでください。ライブ連携テストは別枠で、[LLM連携文書](docs/llm-integration.md)にある明示ゲートが必要です。過去タスクの予算やAPI利用承認を、新しい実行の許可として扱ってはいけません。
 
 `ruff check .`と`ruff format --check .`は指摘なしで通ります。この状態を保ってください。長い文字列の書き方と、一括整形のcommitを`git blame`で飛ばす設定は[テストと検証](docs/testing.md#通常のoffline確認)を参照してください。
