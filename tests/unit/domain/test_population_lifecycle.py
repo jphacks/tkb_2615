@@ -1,5 +1,7 @@
 """A temporary exit or transfer interrupts the person's open action with its cause.
 
+A temporary absence also keeps the reference to the state the person returns to.
+
 The exit and return on a running generated Scenario are checked in
 tests/integration/test_intervention_outcomes.py.
 """
@@ -9,7 +11,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
+from sheltersim.contracts.presence import PresenceRecord
 from sheltersim.core.engine import TickPhase, TraceLevel
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
@@ -101,3 +105,8 @@ def test_typed_population_absence_interrupts_open_action(
     )
     assert interruption.event.causation_id == event.event_id
     assert interruption.event.payload["reason_code"] == reason_code
+
+
+def test_temporary_absence_cannot_drop_the_return_state_reference() -> None:
+    with pytest.raises(ValidationError, match="retained state reference"):
+        PresenceRecord(agent_id="person", status="temporarily_absent", since_minute=1)
