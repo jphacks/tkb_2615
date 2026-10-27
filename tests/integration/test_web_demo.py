@@ -1,5 +1,6 @@
-"""The offline browser demo pauses, forks, intervenes, rewinds and compares, and its HTTP
-mutations stay separate from the read-only saved-run API.
+"""The offline browser demo pauses, forks, intervenes, rewinds and compares, including
+movement and capacity-wait KPIs, and its HTTP mutations stay separate from the read-only
+saved-run API.
 
 The command schema and the packaged scenario are checked in tests/unit/web/test_demo.py,
 and the story review route in tests/e2e/test_web_demo_story_review.py.
@@ -113,6 +114,49 @@ def test_offline_demo_pauses_forks_intervenes_rewinds_and_compares(demo: DemoSer
     assert comparison["no_op_equivalent"] is False
     assert "first_divergence_minute" in comparison
     assert "source_ids_json" not in json.dumps(comparison)
+
+
+def test_demo_comparison_reports_movement_and_capacity_wait_kpis_with_event_evidence(
+    small_replay_scenario, route_edit_command
+) -> None:
+    # The demo hosts only its packaged gym layout, so a generated Scenario cannot be
+    # used here (#137). Until #137 this was a unit test that wrote the travel and
+    # capacity-wait records by hand instead of running both Branches.
+    demo = DemoService(small_replay_scenario(600))
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    # One hour, one person at a time: long enough for people to queue for the corridor.
+    command = route_edit_command(travel_minutes=60)
+    candidate_id = demo.dispatch(
+        "layout-branch",
+        {
+            "source_branch_id": "baseline",
+            "idempotency_key": "route-kpi-test",
+            "commands": [command],
+        },
+    )["branch_id"]
+    for branch_id in ("baseline", candidate_id):
+        demo.dispatch("resume", {"branch_id": branch_id})
+        while demo.branches[branch_id].status == "running":
+            demo.dispatch("advance", {"branch_id": branch_id, "steps": 120})
+
+    report = demo.dispatch(
+        "compare", {"baseline_branch_id": "baseline", "candidate_branch_id": candidate_id}
+    )
+
+    metrics = report["routing_metrics"]
+    assert metrics["travel_minutes_total"]["delta"] > 0
+    assert metrics["capacity_wait_observation_count"]["baseline"] == 0
+    assert metrics["capacity_wait_observation_count"]["delta"] > 0
+    evidence = report["routing_evidence"]["candidate"]
+    assert any(
+        command["edge_id"] in item["edge_ids"] and item["travel_minutes"] >= 60
+        for item in evidence["completed_travel_events"]
+    )
+    assert evidence["capacity_wait_events"]
+    for item in evidence["capacity_wait_events"]:
+        assert item["edge_id"] == command["edge_id"]
+        assert item["source_id"] == "ASM-A05-ROUTE-EDIT-V1"
 
 
 def test_demo_http_mutations_are_separate_from_read_only_saved_run_api(tmp_path: Path) -> None:
