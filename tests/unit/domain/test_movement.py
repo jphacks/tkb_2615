@@ -1,20 +1,27 @@
 """Physical queues: the positioned head moves up and is served while others walk.
 
-The day-long runs are checked in tests/integration/test_physical_queues.py
-(a queue longer than its room) and tests/integration/test_queue_service.py (one
-meal station for a hundred people).
+In-room routes keep their start point too. The day-long runs are checked in
+tests/integration/test_physical_queues.py (a queue longer than its room),
+tests/integration/test_queue_service.py (one meal station for a hundred people)
+and tests/integration/test_entered_stock.py (entered stock).
 """
 
 from __future__ import annotations
 
+import math
+
 from sheltersim.contracts.extensions import Point2D
+from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.world import WorldState
 from sheltersim.domain.movement import (
     MOVEMENT_STATE_KEY,
     _geometry,
+    _point_walkable,
     _queue_slot_position,
+    _spatial_constraints,
     _zone_center,
     agent_is_at_queue_trip_destination,
+    plan_in_room_route,
     progress_physical_queue_head_to_service,
     progress_physical_queue_positions,
 )
@@ -163,3 +170,40 @@ def test_a_walk_ends_where_it_was_sent_even_if_the_slot_moved(generated_scenario
     journey["route_points"][-1] = elsewhere.model_dump(mode="json")
     assert not agent_is_at_queue_trip_destination(world, queue[1], journey)
     assert not agent_is_at_queue_trip_destination(world, queue[1], {})
+
+
+def test_in_room_route_keeps_a_start_that_rounds_onto_a_door_node(generated_scenario) -> None:
+    # Waypoints are de-duplicated on coordinates rounded to 1e-8 m. A start within
+    # that distance of a door-side waypoint used to be replaced by it and the
+    # route search raised StopIteration while queueing at a water station.
+    world = WorldState.from_scenario(generated_scenario)
+    initialize_simulator_extensions(world)
+    geometry = _geometry(world)
+    constraints = SpatialConstraints.model_validate(_spatial_constraints(world))
+    blocked = tuple(item.polygon for item in constraints.obstacles) + tuple(
+        item.polygon for item in constraints.equipment_footprints
+    )
+    clearance = 0.25 + 0.05  # independent mobility plus the planner's fixed margin
+    checked = 0
+    for zone in geometry.zones:
+        destination = _zone_center(geometry, zone.zone_id)
+        for wall in constraints.walls:
+            dx, dy = wall.end.x - wall.start.x, wall.end.y - wall.start.y
+            length = math.hypot(dx, dy)
+            for opening in (item for item in constraints.openings if item.wall_id == wall.id):
+                for side in (-1.0, 1.0):
+                    node = Point2D(
+                        x=opening.center.x - dy / length * clearance * side,
+                        y=opening.center.y + dx / length * clearance * side,
+                    )
+                    if not _point_walkable(node, zone.polygon, blocked):
+                        continue
+                    start = Point2D(x=node.x + 1e-12, y=node.y)
+                    path = plan_in_room_route(
+                        world, zone_id=zone.zone_id, start=start, destination=destination
+                    )
+                    assert path is not None
+                    assert path[0] == start
+                    assert path[-1] == destination
+                    checked += 1
+    assert checked
