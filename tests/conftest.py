@@ -477,6 +477,40 @@ def single_agent_awareness_scenario() -> Callable[[list[str]], Any]:
     return _single_agent_awareness_scenario
 
 
+def _add_toilets_program(count: int = 2, *, start_minute: int) -> Any:
+    from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
+
+    return EffectProgram(
+        program_id="program-installed-toilets",
+        narrative="Add temporary toilets",
+        source_text="仮設トイレを追加",
+        simulation_start_minute=start_minute,
+        effects=[
+            TimedAction(
+                effect_id="add-toilets",
+                op="add_toilet",
+                target_selector=TargetSelector(kind="zone", target_id="toilet"),
+                start_minute=start_minute,
+                parameters={"count": count},
+                units="toilet_stall",
+                source_id="TEST-INSTALLED-FACILITY",
+                assumption_ids=[],
+                policy_dependencies=["facility_capacity"],
+                reversible=False,
+            )
+        ],
+        assumptions=[],
+        support_mode=SupportMode.NATIVE,
+        compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
+    )
+
+
+@pytest.fixture
+def add_toilets_program() -> Callable[..., Any]:
+    """Build an EffectProgram that adds count toilets (2 by default) to the toilet zone."""
+    return _add_toilets_program
+
+
 def _make_event(
     event_id: str,
     *,

@@ -1,18 +1,18 @@
-"""Toilets installed by an intervention are placed on the floor plan and announced."""
+"""Toilets installed by an intervention on a Branch are placed, announced and used.
+
+Whether an add-toilet order can be placed at all, and the Branch command that adds
+one directly, are checked in tests/unit/domain/test_geometry_overlay.py.
+"""
 
 from __future__ import annotations
 
 import json
 import math
 
-import pytest
-
 from sheltersim.contracts.extensions import point_in_polygon
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import (
     AGENT_DYNAMICS_STATE_KEY,
-    ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
-    INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
     ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION,
     canonical_agent_dynamics_config,
 )
@@ -23,57 +23,14 @@ from sheltersim.domain.geometry_overlay import (
     effective_geometry,
 )
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
-from sheltersim.events.effects import (
-    EffectProgram,
-    SupportMode,
-    TargetSelector,
-    TimedAction,
-    validate_effect_program,
-)
+from sheltersim.events.effects import EffectProgram
 from sheltersim.events.models import EventStatus
-from sheltersim.experiments.branch import AddToiletCommand, BranchError, BranchRuntime
+from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.projects import ProjectStore, digest
 
 _FORK_MINUTE = 30
-
-
-def _variant(
-    scenario: ScenarioSpec, *, policy_version: str | None = None, overlay_version: int | None = None
-) -> ScenarioSpec:
-    document = scenario.model_dump(mode="json")
-    if policy_version is not None:
-        document["model_configs"]["agent_dynamics"] = canonical_agent_dynamics_config(
-            {"policy_version": policy_version}
-        )
-    if overlay_version is not None:
-        document["model_configs"]["geometry_overlay"] = {"schema_version": overlay_version}
-    return ScenarioSpec.model_validate(document)
-
-
-def _add_toilets(count: int = 2, *, start_minute: int = _FORK_MINUTE) -> EffectProgram:
-    return EffectProgram(
-        program_id="program-installed-toilets",
-        narrative="Add temporary toilets",
-        source_text="仮設トイレを追加",
-        simulation_start_minute=start_minute,
-        effects=[TimedAction(
-            effect_id="add-toilets",
-            op="add_toilet",
-            target_selector=TargetSelector(kind="zone", target_id="toilet"),
-            start_minute=start_minute,
-            parameters={"count": count},
-            units="toilet_stall",
-            source_id="TEST-INSTALLED-FACILITY",
-            assumption_ids=[],
-            policy_dependencies=["facility_capacity"],
-            reversible=False,
-        )],
-        assumptions=[],
-        support_mode=SupportMode.NATIVE,
-        compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
-    )
 
 
 def _timeline(tmp_path, scenario: ScenarioSpec) -> TimelineStore:
@@ -87,12 +44,21 @@ def _timeline(tmp_path, scenario: ScenarioSpec) -> TimelineStore:
     return timeline
 
 
-def _forked_child(tmp_path, scenario: ScenarioSpec, until: int) -> BranchRuntime:
+def _forked_child(
+    tmp_path, scenario: ScenarioSpec, until: int, program: EffectProgram
+) -> BranchRuntime:
     timeline = _timeline(tmp_path, scenario)
-    program = _add_toilets()
     timeline.fork("main", _FORK_MINUTE, "child", program=program,
                   approved_program_hash=digest(program.model_dump(mode="json")))
     return timeline.advance("child", until)
+
+
+def _with_agent_dynamics(scenario: ScenarioSpec, policy_version: str) -> ScenarioSpec:
+    document = scenario.model_dump(mode="json")
+    document["model_configs"]["agent_dynamics"] = canonical_agent_dynamics_config(
+        {"policy_version": policy_version}
+    )
+    return ScenarioSpec.model_validate(document)
 
 
 def _world(scenario: ScenarioSpec) -> WorldState:
@@ -110,22 +76,16 @@ def _knowers(world: WorldState, facility_id: str) -> int:
     return sum(facility_id in record["known_facility_ids"] for record in agents)
 
 
-def test_generated_scenarios_announce_and_place_installed_facilities(generated_scenario) -> None:
-    scenario = generated_scenario
-    assert scenario.model_configs["agent_dynamics"]["policy_version"] == (
-        ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
-    )
-    assert scenario.model_configs["geometry_overlay"] == {"schema_version": 4}
-    manifest = json.loads(open("fixtures/source-manifest.json", encoding="utf-8").read())
-    for source_id in (INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
-                      INSTALLED_FACILITY_PLACEMENT_SOURCE_ID):
-        assert any(row["id"] == source_id for row in scenario.provenance["assumptions"])
-        assert any(row["id"] == source_id for row in manifest["assumptions"])
-
-
-def test_installed_toilets_are_placed_announced_and_used(tmp_path, generated_scenario) -> None:
+def test_installed_toilets_are_placed_announced_and_used(
+    tmp_path, generated_scenario, add_toilets_program
+) -> None:
     before = effective_geometry(_world(generated_scenario)).facility_points
-    child = _forked_child(tmp_path, generated_scenario, until=180)
+    child = _forked_child(
+        tmp_path,
+        generated_scenario,
+        until=180,
+        program=add_toilets_program(start_minute=_FORK_MINUTE),
+    )
     world = child.world
     added = _added_toilets(world)
     assert len(added) == 2
@@ -152,38 +112,25 @@ def test_installed_toilets_are_placed_announced_and_used(tmp_path, generated_sce
     assert served & added, "no Agent was served at an installed toilet"
 
 
-def test_v2_histories_keep_installed_facilities_unknown(tmp_path, generated_scenario) -> None:
+def test_v2_histories_keep_installed_facilities_unknown(
+    tmp_path, generated_scenario, add_toilets_program
+) -> None:
     # Saved v2 Runs must replay exactly, so v2 keeps the earlier behaviour.
     child = _forked_child(
         tmp_path,
-        _variant(generated_scenario, policy_version=ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION),
+        _with_agent_dynamics(generated_scenario, ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION),
         until=60,
+        program=add_toilets_program(start_minute=_FORK_MINUTE),
     )
     for facility_id in _added_toilets(child.world):
         assert _knowers(child.world, facility_id) == 0
 
 
-def test_floor_plans_without_placement_report_add_toilet_as_not_applicable(
-    generated_scenario,
-) -> None:
-    world = _world(_variant(generated_scenario, overlay_version=3))
-    issues = validate_effect_program(world, _add_toilets(start_minute=0))
-    assert any("cannot place added toilets on this floor plan" in issue for issue in issues)
-
-
-def test_add_toilet_is_not_applicable_when_the_zone_has_no_free_point(generated_scenario) -> None:
-    # The 20-person toilet zone is 1.8 m wide; four more toilets fit, a fifth does not.
-    world = _world(generated_scenario)
-    assert validate_effect_program(world, _add_toilets(4, start_minute=0)) == ()
-    issues = validate_effect_program(world, _add_toilets(5, start_minute=0))
-    assert any("no free floor-plan point for toilet 5" in issue for issue in issues)
-
-
 def test_runtime_placement_failure_fails_the_event_without_changes(
-    tmp_path, monkeypatch, generated_scenario
+    tmp_path, monkeypatch, generated_scenario, add_toilets_program
 ) -> None:
     timeline = _timeline(tmp_path, generated_scenario)
-    program = _add_toilets()
+    program = add_toilets_program(start_minute=_FORK_MINUTE)
     timeline.fork("main", _FORK_MINUTE, "child", program=program,
                   approved_program_hash=digest(program.model_dump(mode="json")))
     # Something placed later (a partition, a room) can take the free point.
@@ -196,17 +143,3 @@ def test_runtime_placement_failure_fails_the_event_without_changes(
     assert [record.status for record in failed] == [EventStatus.FAILED]
 
 
-def test_branch_add_toilet_command_places_and_announces_the_new_toilet(generated_scenario) -> None:
-    runtime = BranchRuntime.from_world(_world(generated_scenario))
-    runtime.apply(AddToiletCommand(facility_id="extra_toilet", zone_id="toilet"))
-    assert "extra_toilet" in effective_geometry(runtime.world).facility_points
-    assert _knowers(runtime.world, "extra_toilet") == len(runtime.world.agents)
-
-
-def test_branch_add_toilet_command_refuses_a_floor_plan_without_placement(
-    generated_scenario,
-) -> None:
-    runtime = BranchRuntime.from_world(_world(_variant(generated_scenario, overlay_version=3)))
-    with pytest.raises(BranchError, match="cannot place added toilets"):
-        runtime.apply(AddToiletCommand(facility_id="extra_toilet", zone_id="toilet"))
-    assert "extra_toilet" not in runtime.world.facilities
