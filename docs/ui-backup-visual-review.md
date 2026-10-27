@@ -62,7 +62,8 @@ APIモックや画像用の固定KPIは使っていない。
 
 ```sh
 PYTHONPATH=src SHELTERSIM_LLM_MODE=offline python -m pytest -q \
-  -p no:cacheprovider tests/integration/test_demo_v2_routes.py tests/test_web_routes.py
+  -p no:cacheprovider tests/integration/test_demo_v2_routes.py \
+  tests/integration/test_web_routes.py tests/unit/web/test_server.py
 
 # 別途起動したoffline専用テストサーバーに対する実HTTP E2E
 UI_BASE_URL=http://127.0.0.1:8877 \

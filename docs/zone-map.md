@@ -6,4 +6,4 @@ Agent markerは、記録済みZone polygon内にAgent ID、Zone ID、選択minut
 
 施設状態はRun manifestから始め、選択minute以前に正常適用された施設停止・復旧eventだけを反映します。便器queueと使用中数は選択時刻以前で最も近いmetrics rowを使います。これらはZone単位集計で、個別便器のqueueではありません。座標、marker位置、混雑overlayは説明用表示です。物理距離、定員推奨、現実環境を示す根拠にはなりません。
 
-map契約はofflineのtests/unit/web/test_inspector.pyとtests/test_web_inspector.pyで確認します。Scenarioを変更せず、long simulation regressionも必要ありません。
+map契約はofflineのtests/unit/web/test_inspector.pyとtests/integration/test_web_inspector.pyで確認します。Scenarioを変更せず、long simulation regressionも必要ありません。

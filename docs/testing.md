@@ -42,7 +42,7 @@ tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、�
 
 ## 主なテスト範囲
 
-testは決定的state遷移、Checkpoint serializationと復元、独立Branch、event順、施設・資源・職員操作、履歴・timeline検索、model provenance、LLM fallbackとresponse tape、Project永続化、Web route、Demo成果物を確認します。テストは`tests/`の下に範囲ごとに置きます（[テストの置き場所と名前](#テストの置き場所と名前)）。決まりを作る前のファイルは、まだ`tests/`直下にあります。どのファイルが何を確かめるかは、下の[テストの地図](#テストの地図)を参照してください。
+testは決定的state遷移、Checkpoint serializationと復元、独立Branch、event順、施設・資源・職員操作、履歴・timeline検索、model provenance、LLM fallbackとresponse tape、Project永続化、Web route、Demo成果物を確認します。テストは`tests/`の下に範囲ごとに置きます（[テストの置き場所と名前](#テストの置き場所と名前)）。どのファイルが何を確かめるかは、下の[テストの地図](#テストの地図)を参照してください。
 
 Project画面の作用説明（`project-round3.js`の`renderEffectExplanation`）は、`tests/unit/web/test_static_project_round3.py`がその関数だけをnodeで実行して確認します。fallback時の理由表示などが対象です。nodeがない環境ではskipします。
 
@@ -61,6 +61,7 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 
 - `<担当>`は、AGENTS.mdのモジュール（`core`、`domain`、`events`、`policies`、`experiments`、`region`、`llm`、`storage`、`web`）と`cli`、それにリポジトリ自体（テストの配置、文書、fixture、出典台帳）を確かめる`repo`です。
 - 名前に、不具合名（例：`resource_loss_without_operational_state`）、開発の回の名前（例：`round2_common_services`）、`regressions`を使いません。不具合の再発防止テストはその機能のファイルに足し、守るべき振る舞いを関数名に書き、Issue番号をdocstringかコメントに書きます。
+- ブラウザー用の静的ファイル（JavaScript、HTML）を確かめる単体は、Pythonのモジュール名がないので`tests/unit/web/test_static_<ファイル名>.py`にします。例：`demo-v2.js`なら`test_static_demo_v2.py`。
 - 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/conftest.py`のfixtureにします（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
 - 何を確かめるか（結果・契約・画面）は、ディレクトリにも印にもしません。実行の選び分けに使わない印は、付け忘れても気づけず、すぐ実態とずれるためです。確かめる振る舞いを関数名に書き、全体は地図の「目的」欄で把握します。
 
@@ -73,17 +74,9 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 
 ### 既存のテスト
 
-`tests/`直下の既存ファイルは、一括では移しません。変更するときに、そのファイルを新しい置き場所へ移します。
+決まりを作る前に`tests/`直下にあったファイルは、#126で担当と範囲ごとにすべて移しました。ファイルごとに`git mv`だけのcommitを先に作り、内容の変更を次のcommitにしているので、`git log --follow`で元のファイルの履歴をたどれます。行き先のファイルがすでにあった場合は、移して足す1つのcommitにしています。
 
-1. 先に`git mv`だけのcommitを作り、内容の変更は次のcommitにします。履歴をたどれるようにするためです。
-2. 範囲が混ざるファイルは、移すときに範囲ごとに分けます。
-3. `tests/unit/repo/test_test_layout.py`の`UNSORTED`から、そのファイル名を消します。
-
-件数が多く担当もまたがる既存ファイルから、一部のテストだけを新しい置き場所へ切り出すときは、元のファイルは移しません（例：#88で`test_round2_common_services.py`から1件を切り出した場合）。残りは、そのファイルを整理するときにまとめて移します。
-
-`long_simulation`の印を付けるだけの変更では、ファイルを移しません。
-
-`tests/unit/repo/test_test_layout.py`は、`tests/`直下への新しいファイルの追加、決まった場所以外のテストファイル、`tests/live/`以外での`live_api`の印を見つけると失敗します。
+`tests/unit/repo/test_test_layout.py`は、`tests/`直下のテストファイル、決まった場所以外のテストファイル、`tests/live/`以外での`live_api`の印を見つけると失敗します。
 
 ## 利用者の経路を通る共通fixture
 
@@ -132,7 +125,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件、#118で3件、#87で1本・1件、#65で7件、#75で3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました。#75では、`test_staff_task_order_effect.py`を`unit/domain/test_staff_operations.py`へ移しました。残りは#115で、`test_round3_common_services.py`と合わせて担当と範囲ごとに分けました（新しいファイル11本と、既存の`unit/web/test_workspace.py`・`unit/domain/test_population_lifecycle.py`。確かめる内容は変えていません）。`test_staff_support_travel.py`は、生成された図面に迂回経路を1本だけ手で足して確かめています。`test_facility_queues.py`、`test_population_demand_integration.py`、`test_effect_program.py`も移しました。図面のない部品のテスト（介入の事前検証など）と、生成器が作らない形が要るテストは、fixtureのまま理由を書いて残しています。#126では、残りの`tests/`直下のファイルを担当ごとにまとめて移しています。core・events・regionの7本は、範囲と確かめているモジュールごとに17本へ分けました（新しいファイル14本と、既存の`unit/core/test_world.py`・`unit/core/test_checkpoint.py`・`unit/events/test_models.py`）。`test_state.py`のうち、ScenarioSpecの検査は`unit/experiments/test_scenario.py`へ、AgentStateの検査は`unit/domain/test_models.py`へ移したので、件数はexperimentsとdomainの行に数えています。domainの14本は、新しいファイル13本と、既存の`unit/domain/test_agent_dynamics.py`・`test_geometry_overlay.py`・`test_staff.py`・`test_staff_operations.py`へ移しました。`test_resource_ledger_state_check.py`は`unit/domain/test_resources.py`へ、`test_staff_operation_relief.py`は`unit/domain/test_staff_operations.py`へまとめています。policiesの9本は、新しいファイル12本と、既存の`unit/policies/test_registry.py`・`integration/test_research_psychology.py`などへ移しました。`test_policy_parameter_overrides.py`は、生成器の要求が実行時とCheckpointに届くことを確かめるので`unit/experiments/test_initial_scenario.py`へ、`test_route_bottleneck.py`の経路編集・施設移設のBranchは`unit/experiments/test_branch.py`へ移し、件数はexperimentsの行に数えています。experimentsの前半8本は、新しいファイル13本（うち`repo`の2本）と既存の`unit/experiments/test_branch.py`・`test_comparison.py`へ移しました。共通fixtureとScenarioのfixtureファイルそのものを確かめる単体3件は、担当を`repo`にしています。後半7本のうち、出典台帳と実装・fixtureの整合を確かめる`test_provenance.py`は`unit/repo/`へ移しました。`test_sensitivity.py`と`test_startable_generated_scenarios.py`は、既存の比較・trace level・生成器・施設のファイルへ分けて入れています。llmの11本は、新しいファイル9本と、既存の`unit/llm/test_natural_language.py`・`test_accounting.py`、`unit/web/test_workspace.py`、`unit/experiments/test_metrics.py`へ移しました。同じモジュールを確かめるファイルは1本にまとめています（`test_adaptive_event_eval.py`と`test_nl_parser.py`は`test_natural_language.py`へ、`test_complex_interactions.py`と`test_llm_runtime.py`は`test_runtime.py`へ、`test_llm_review.py`と`test_story_report.py`は`test_report.py`へ）。storage・cliの7本は、新しいファイル6本と、既存の`unit/storage/test_projects.py`・`test_checkpoints.py`・`test_query_cursors.py`、`e2e/test_cli_run.py`へ移しました。`e2e/test_cli_run.py`はCLIでの実行の流れなので、担当を`cli`にしています。`test_inspect_cli.py`の行にあった「手で時刻」の6件は統合のテストの数でした（定義は単体だけ）ので、移した先では数えていません。webの前半10本は、新しいファイル16本と、既存の`unit/llm/test_natural_language.py`・`unit/policies/test_psychology.py`・`test_behavior.py`へ移しました。ブラウザー用の静的ファイルを確かめる単体は、Pythonのモジュール名がないので`unit/web/test_static_<ファイル名>.py`にしています。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件、#118で3件、#87で1本・1件、#65で7件、#75で3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました。#75では、`test_staff_task_order_effect.py`を`unit/domain/test_staff_operations.py`へ移しました。残りは#115で、`test_round3_common_services.py`と合わせて担当と範囲ごとに分けました（新しいファイル11本と、既存の`unit/web/test_workspace.py`・`unit/domain/test_population_lifecycle.py`。確かめる内容は変えていません）。`test_staff_support_travel.py`は、生成された図面に迂回経路を1本だけ手で足して確かめています。`test_facility_queues.py`、`test_population_demand_integration.py`、`test_effect_program.py`も移しました。図面のない部品のテスト（介入の事前検証など）と、生成器が作らない形が要るテストは、fixtureのまま理由を書いて残しています。#126では、残りの`tests/`直下のファイルを担当ごとにまとめて移しています。core・events・regionの7本は、範囲と確かめているモジュールごとに17本へ分けました（新しいファイル14本と、既存の`unit/core/test_world.py`・`unit/core/test_checkpoint.py`・`unit/events/test_models.py`）。`test_state.py`のうち、ScenarioSpecの検査は`unit/experiments/test_scenario.py`へ、AgentStateの検査は`unit/domain/test_models.py`へ移したので、件数はexperimentsとdomainの行に数えています。domainの14本は、新しいファイル13本と、既存の`unit/domain/test_agent_dynamics.py`・`test_geometry_overlay.py`・`test_staff.py`・`test_staff_operations.py`へ移しました。`test_resource_ledger_state_check.py`は`unit/domain/test_resources.py`へ、`test_staff_operation_relief.py`は`unit/domain/test_staff_operations.py`へまとめています。policiesの9本は、新しいファイル12本と、既存の`unit/policies/test_registry.py`・`integration/test_research_psychology.py`などへ移しました。`test_policy_parameter_overrides.py`は、生成器の要求が実行時とCheckpointに届くことを確かめるので`unit/experiments/test_initial_scenario.py`へ、`test_route_bottleneck.py`の経路編集・施設移設のBranchは`unit/experiments/test_branch.py`へ移し、件数はexperimentsの行に数えています。experimentsの前半8本は、新しいファイル13本（うち`repo`の2本）と既存の`unit/experiments/test_branch.py`・`test_comparison.py`へ移しました。共通fixtureとScenarioのfixtureファイルそのものを確かめる単体3件は、担当を`repo`にしています。後半7本のうち、出典台帳と実装・fixtureの整合を確かめる`test_provenance.py`は`unit/repo/`へ移しました。`test_sensitivity.py`と`test_startable_generated_scenarios.py`は、既存の比較・trace level・生成器・施設のファイルへ分けて入れています。llmの11本は、新しいファイル9本と、既存の`unit/llm/test_natural_language.py`・`test_accounting.py`、`unit/web/test_workspace.py`、`unit/experiments/test_metrics.py`へ移しました。同じモジュールを確かめるファイルは1本にまとめています（`test_adaptive_event_eval.py`と`test_nl_parser.py`は`test_natural_language.py`へ、`test_complex_interactions.py`と`test_llm_runtime.py`は`test_runtime.py`へ、`test_llm_review.py`と`test_story_report.py`は`test_report.py`へ）。storage・cliの7本は、新しいファイル6本と、既存の`unit/storage/test_projects.py`・`test_checkpoints.py`・`test_query_cursors.py`、`e2e/test_cli_run.py`へ移しました。`e2e/test_cli_run.py`はCLIでの実行の流れなので、担当を`cli`にしています。`test_inspect_cli.py`の行にあった「手で時刻」の6件は統合のテストの数でした（定義は単体だけ）ので、移した先では数えていません。webの前半10本は、新しいファイル16本と、既存の`unit/llm/test_natural_language.py`・`unit/policies/test_psychology.py`・`test_behavior.py`へ移しました。ブラウザー用の静的ファイルを確かめる単体は、Pythonのモジュール名がないので`unit/web/test_static_<ファイル名>.py`にしています。webの後半9本は、新しいファイル17本と、既存の`unit/web/test_demo.py`へ移しました。これで`tests/`直下にテストファイルはなくなりました。空になった`UNSORTED`と、それが直下のファイルと一致することを確かめていたテスト1件は消したので、テストは972件です。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -291,18 +284,26 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `unit/web/test_static_demo_v2.py` | web | 1 |  |  |  | 画面 | なし |  |
 | `unit/web/test_static_project_round3.py` | web | 2 |  |  |  | 画面 | なし |  |
 | `integration/test_judge_demo.py` | web |  | 2 |  |  | 結果・契約・画面 | fixture |  |
-| `unit/web/test_demo.py` | web | 4 |  |  |  | 契約 | fixture |  |
+| `unit/web/test_demo.py` | web | 6 |  |  |  | 契約 | fixture |  |
 | `integration/test_multi_plan.py` | web |  | 1 |  |  | 契約 | fixture |  |
 | `e2e/test_multi_plan.py` | web |  |  | 2 |  | 契約 | fixture |  |
-| `test_nl_demo_ui.py` | web |  | 4 | 3 |  | 契約 | fixture |  |
-| `test_pdf_report.py` | web | 1 | 32 | 1 |  | 結果・契約 | fixture |  |
-| `test_pointer_only_reads.py` | web | 1 | 2 |  |  | 契約 | fixture |  |
-| `test_replay_frames.py` | web |  | 13 |  |  | 契約 | fixture |  |
-| `test_results_chat.py` | web | 3 | 1 |  |  | 契約 | fixture |  |
-| `test_resume_checkpoint_loads.py` | web | 2 | 1 |  |  | 契約 | fixture |  |
-| `test_web_demo.py` | web | 2 | 2 | 1 |  | 契約 | fixture |  |
-| `test_web_inspector.py` | web |  | 2 | 3 |  | 結果・契約 | fixture |  |
-| `test_web_routes.py` | web | 2 | 2 |  |  | 契約・画面 | なし |  |
+| `integration/test_nl_demo.py` | web |  | 4 |  |  | 契約 | fixture |  |
+| `e2e/test_nl_demo_branching.py` | web |  |  | 3 |  | 契約 | fixture |  |
+| `integration/test_pdf_report.py` | web |  | 32 |  |  | 結果・契約 | fixture |  |
+| `unit/web/test_pdf_report.py` | web | 1 |  |  |  | 結果 | なし |  |
+| `e2e/test_pdf_download.py` | web |  |  | 1 |  | 契約 | fixture |  |
+| `integration/test_pointer_only_reads.py` | web |  | 2 |  |  | 契約 | fixture |  |
+| `unit/web/test_projects.py` | web | 3 |  |  |  | 契約 | fixture |  |
+| `integration/test_replay_frames.py` | web |  | 13 |  |  | 契約 | fixture |  |
+| `unit/web/test_results_chat.py` | web | 3 |  |  |  | 契約 | なし |  |
+| `integration/test_results_chat.py` | web |  | 1 |  |  | 契約 | fixture |  |
+| `integration/test_resume_checkpoint_loads.py` | web |  | 1 |  |  | 契約 | fixture |  |
+| `integration/test_web_demo.py` | web |  | 2 |  |  | 契約 | fixture |  |
+| `e2e/test_web_demo_story_review.py` | web |  |  | 1 |  | 契約 | fixture |  |
+| `integration/test_web_inspector.py` | web |  | 2 |  |  | 結果・契約 | fixture |  |
+| `e2e/test_web_inspector_http.py` | web |  |  | 3 |  | 結果・契約 | fixture |  |
+| `integration/test_web_routes.py` | web |  | 2 |  |  | 契約・画面 | なし |  |
+| `unit/web/test_server.py` | web | 2 |  |  |  | 画面 | なし |  |
 | `unit/web/test_frames.py` | web | 1 |  |  |  | 契約 | 生成（実行なし） |  |
 | `unit/web/test_workspace.py` | web | 9 |  |  |  | 契約 | 生成（実行なし）・fixture・なし |  |
 | `unit/web/test_project_queries.py` | web | 2 |  |  |  | 契約 | なし |  |
@@ -313,7 +314,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `unit/cli/test_main.py` | cli | 1 |  |  |  | 契約 | なし |  |
 | `integration/test_usage_cli.py` | cli |  | 2 |  |  | 契約 | なし |  |
 | `unit/repo/test_source_manifest.py` | repo | 5 |  |  |  | 契約 | なし |  |
-| `unit/repo/test_test_layout.py` | repo | 4 |  |  |  | 契約 | なし |  |
+| `unit/repo/test_test_layout.py` | repo | 3 |  |  |  | 契約 | なし |  |
 | `unit/repo/test_generated_scenario_fixture.py` | repo | 2 |  |  |  | 契約 | 生成（実行なし） |  |
 | `unit/repo/test_scenario_fixtures.py` | repo | 1 |  |  |  | 契約 | fixture |  |
 | `unit/repo/test_provenance.py` | repo | 7 |  |  |  | 契約 | fixture |  |
@@ -333,12 +334,12 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | region | 7 | 26 | 3 | 0 | 0 | 2 |
 | llm | 12 | 142 | 15 | 0 | 0 | 1 |
 | storage | 9 | 36 | 14 | 0 | 0 | 0 |
-| web | 29 | 34 | 86 | 14 | 8 | 2 |
+| web | 37 | 34 | 86 | 14 | 0 | 2 |
 | cli | 5 | 1 | 17 | 4 | 0 | 0 |
-| repo | 6 | 20 | 0 | 0 | 0 | 0 |
-| 計 | 156 | 715 | 233 | 21 | 8 | 21 |
+| repo | 6 | 19 | 0 | 0 | 0 | 0 |
+| 計 | 164 | 714 | 233 | 21 | 0 | 21 |
 
-969件のうち単体が715件（74%）、統合が233件（24%）、e2eが21件（2%）です。範囲が1つだけのファイルは、単体だけが86本、統合だけまたはe2eだけが61本で、残りの8本は範囲が混ざっています（ほかに、実行しないライブテストが1本）。
+968件のうち単体が714件（74%）、統合が233件（24%）、e2eが21件（2%）です。どのファイルも範囲は1つだけで、単体だけが90本、統合だけまたはe2eだけが73本です（ほかに、実行しないライブテストが1本）。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -355,7 +356,7 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 
 ### 見えた穴
 
-1. **粒度がファイルごとにばらばら。** 104本中57本が、単体・統合・e2eのうち2つ以上を含みます。たとえば`test_pdf_report.py`は統合32件・単体1件・e2e 1件、`test_checkpoint_save_regressions.py`は単体17件・統合10件です。ファイル名からも置き場所からも範囲が分からず、新しいテストをどの粒度で書くかの手本がありません。→ #59
+1. **粒度がファイルごとにばらばら。** 104本中57本が、単体・統合・e2eのうち2つ以上を含みます。たとえば`test_pdf_report.py`は統合32件・単体1件・e2e 1件、`test_checkpoint_save_regressions.py`は単体17件・統合10件です。ファイル名からも置き場所からも範囲が分からず、新しいテストをどの粒度で書くかの手本がありません。→ #59で置き場所の決まりを作り、#126ですべてのファイルを範囲ごとに分けました。
 2. **時刻を手で動かす単体テストが多い。** 22本のファイルにある126件が、`TickEngine`を使わずにテスト自身で時刻を動かし、イベントを直接処理させています（`test_operational_events.py`、`test_effect_program.py`、`test_adaptive_event_eval.py`で各12件など）。中には、比較のKPIをイベント記録を手で書き込んで確かめるテスト（`test_route_bottleneck.py`）もあります。部品の検査としては有効ですが、同じ振る舞いをtickの順序どおりに通す統合テストが対になっていないものがあります。→ #59、#60
 3. **e2eが少なく、利用者の主な流れを通していない。** e2eは20件で、使うScenarioはすべてfixtureです。Project画面の主な流れ（生成Scenarioのpreview → 承認 → 実行 → 介入 → 結果を見る）をHTTPから通すテストはありません。ProjectのHTTP routeを通るのは、PDFのダウンロード（`test_pdf_http_attachment_and_existing_origin_guard`）だけです。→ #58と#60ではHTTPを通していないので、#87で`e2e/test_project_scenario_to_results.py`を足しました。demo-v2の画面と同じrequestを本物のHTTPサーバーへ送り、共通fixtureと同じ入力欄の値でpreview → 承認 → 実行 → 文で入力した介入（避難者の到着）のpreviewと承認 → 両Branchの実行 → 比較までを通します。本線の結果が`fixtures/regression-contract.json`の`generated_small`と一致することも確かめます。
 4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`（今の`integration/test_installed_facility_announcement.py`）、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60で、スタッフ追加・設備の故障・断水・物資搬入を`tests/integration/test_intervention_outcomes.py`に追加。#66で施設・職員・物資の残り（稼働の上限、修理、職員の不在・作業指示・引き継ぎ・担当変更、物資の遅延）を追加。#67で人口（到着、退所、一時外出、仮設スペース）を追加。#68で空間・経路（経路の閉鎖、施設の移動、設備の移設、仕切り、仮設の部屋）を追加。#69で環境（騒音、行動の起こりやすさ、換気、明るさ、プライバシー、気温）を追加。トイレ追加は、既存のテストが追加したトイレが使われることまでしか確かめていなかったので、本線との比較を足しました。
