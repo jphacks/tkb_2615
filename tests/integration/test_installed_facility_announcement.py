@@ -6,7 +6,6 @@ one directly, are checked in tests/unit/domain/test_geometry_overlay.py.
 
 from __future__ import annotations
 
-import json
 import math
 
 from sheltersim.contracts.extensions import point_in_polygon
@@ -28,26 +27,25 @@ from sheltersim.events.models import EventStatus
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, digest
+from sheltersim.storage.projects import digest
 
 _FORK_MINUTE = 30
 
 
-def _timeline(tmp_path, scenario: ScenarioSpec) -> TimelineStore:
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+def _timeline(saved_timeline, tmp_path, scenario: ScenarioSpec) -> TimelineStore:
+    """A recorded Run of scenario, computed to the fork minute.
+
+    saved_timeline is the fixture of the same name, passed on by the calling test.
+    """
+    _, timeline = saved_timeline(tmp_path, scenario)
     timeline.advance("main", _FORK_MINUTE)
     return timeline
 
 
 def _forked_child(
-    tmp_path, scenario: ScenarioSpec, until: int, program: EffectProgram
+    saved_timeline, tmp_path, scenario: ScenarioSpec, until: int, program: EffectProgram
 ) -> BranchRuntime:
-    timeline = _timeline(tmp_path, scenario)
+    timeline = _timeline(saved_timeline, tmp_path, scenario)
     timeline.fork(
         "main",
         _FORK_MINUTE,
@@ -82,10 +80,11 @@ def _knowers(world: WorldState, facility_id: str) -> int:
 
 
 def test_installed_toilets_are_placed_announced_and_used(
-    tmp_path, generated_scenario, add_toilets_program
+    tmp_path, generated_scenario, add_toilets_program, saved_timeline
 ) -> None:
     before = effective_geometry(_world(generated_scenario)).facility_points
     child = _forked_child(
+        saved_timeline,
         tmp_path,
         generated_scenario,
         until=180,
@@ -119,10 +118,11 @@ def test_installed_toilets_are_placed_announced_and_used(
 
 
 def test_v2_histories_keep_installed_facilities_unknown(
-    tmp_path, generated_scenario, add_toilets_program
+    tmp_path, generated_scenario, add_toilets_program, saved_timeline
 ) -> None:
     # Saved v2 Runs must replay exactly, so v2 keeps the earlier behaviour.
     child = _forked_child(
+        saved_timeline,
         tmp_path,
         _with_agent_dynamics(generated_scenario, ORIENTATION_AGENT_DYNAMICS_POLICY_VERSION),
         until=60,
@@ -133,9 +133,9 @@ def test_v2_histories_keep_installed_facilities_unknown(
 
 
 def test_runtime_placement_failure_fails_the_event_without_changes(
-    tmp_path, monkeypatch, generated_scenario, add_toilets_program
+    tmp_path, monkeypatch, generated_scenario, add_toilets_program, saved_timeline
 ) -> None:
-    timeline = _timeline(tmp_path, generated_scenario)
+    timeline = _timeline(saved_timeline, tmp_path, generated_scenario)
     program = add_toilets_program(start_minute=_FORK_MINUTE)
     timeline.fork(
         "main",

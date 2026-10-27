@@ -12,10 +12,13 @@ import pytest
 from support.paths import FAILURE_DAY3, SMALL_REPLAY
 
 
-def _small_replay_demo(duration_minutes: int = 5200) -> Any:
+def _small_replay_demo(
+    duration_minutes: int = 5200, *, paused: bool = False, offline_compiler: bool = False
+) -> Any:
     from typing import get_args
 
     from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
     from sheltersim.web.demo import DemoService
 
     document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
@@ -23,12 +26,22 @@ def _small_replay_demo(duration_minutes: int = 5200) -> Any:
     document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
     document["duration_minutes"] = duration_minutes
     document["scheduled_events"] = []
-    return DemoService(ScenarioSpec.model_validate(document))
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    if offline_compiler:
+        demo.compiler_router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
+    if paused:
+        demo.dispatch("start")
+        demo.dispatch("pause", {"branch_id": "baseline"})
+    return demo
 
 
 @pytest.fixture
 def small_replay_demo() -> Callable[..., Any]:
-    """Build a DemoService over h00_small_replay without events, 5200 minutes long by default."""
+    """Build a DemoService over h00_small_replay without events, 5200 minutes long by default.
+
+    paused=True starts it and pauses the baseline Branch, which plans fork from;
+    offline_compiler=True gives it the offline Event Compiler for typed text.
+    """
     return _small_replay_demo
 
 
@@ -135,13 +148,19 @@ def day4_plan() -> Callable[..., Any]:
     return _day4_plan
 
 
-def _failure_day3_demo(duration: int = 12, *, start: bool = True) -> Any:
+def _failure_day3_demo(
+    duration: int = 12, *, start: bool = True, events_due_minute: int | None = None
+) -> Any:
     from sheltersim.experiments.scenario import ScenarioSpec
     from sheltersim.web.demo import DemoService
 
     document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
     document["duration_minutes"] = duration
-    document["scheduled_events"] = []
+    document["scheduled_events"] = (
+        []
+        if events_due_minute is None
+        else [{**event, "due_minute": events_due_minute} for event in document["scheduled_events"]]
+    )
     demo = DemoService(ScenarioSpec.model_validate(document))
     if start:
         demo.dispatch("start")
@@ -150,8 +169,10 @@ def _failure_day3_demo(duration: int = 12, *, start: bool = True) -> Any:
 
 @pytest.fixture
 def failure_day3_demo() -> Callable[..., Any]:
-    """Build a DemoService over failure_day3 without its events, 12 minutes long and
-    started by default.
+    """Build a DemoService over failure_day3, 12 minutes long and started by default.
+
+    Its scheduled failures are dropped unless events_due_minute moves them all to
+    that minute.
     """
     return _failure_day3_demo
 
@@ -175,30 +196,6 @@ def _wait_for_job(manager: Any, job_id: str, expected: set[str]) -> dict:
 def wait_for_job() -> Callable[[Any, str, set[str]], dict]:
     """Wait for the demo jobs submitted so far to finish, then require one of the statuses."""
     return _wait_for_job
-
-
-def _paused_small_replay_demo(duration_minutes: int = 12) -> Any:
-    from typing import get_args
-
-    from sheltersim.experiments.scenario import ScenarioSpec
-    from sheltersim.web.demo import DemoService
-
-    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
-    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
-    document["duration_minutes"] = duration_minutes
-    document["scheduled_events"] = []
-    demo = DemoService(ScenarioSpec.model_validate(document))
-    demo.dispatch("start")
-    demo.dispatch("pause", {"branch_id": "baseline"})
-    return demo
-
-
-@pytest.fixture
-def paused_small_replay_demo() -> Callable[..., Any]:
-    """Build a DemoService over h00_small_replay without events, 12 minutes long by
-    default, started and paused on the baseline Branch.
-    """
-    return _paused_small_replay_demo
 
 
 MULTI_PLAN_PROVENANCE = {"compiler_kind": "offline_rule", "compiler_version": "a04-multi-test-v1"}
@@ -349,41 +346,7 @@ def apply_multi_plan() -> Callable[[Any, Any, str], dict[str, Any]]:
 @pytest.fixture
 def day3_demo() -> Any:
     """A DemoService over failure_day3, eight minutes long, with its events due at minute 2."""
-    from sheltersim.experiments.scenario import ScenarioSpec
-    from sheltersim.web.demo import DemoService
-
-    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
-    document["duration_minutes"] = 8
-    document["scheduled_events"] = [
-        {**event, "due_minute": 2} for event in document["scheduled_events"]
-    ]
-    return DemoService(ScenarioSpec.model_validate(document))
-
-
-def _paused_offline_compiler_demo(duration_minutes: int = 20) -> Any:
-    from typing import get_args
-
-    from sheltersim.experiments.scenario import ScenarioSpec
-    from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
-    from sheltersim.web.demo import DemoService
-
-    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
-    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
-    document["duration_minutes"] = duration_minutes
-    document["scheduled_events"] = []
-    demo = DemoService(ScenarioSpec.model_validate(document))
-    demo.compiler_router = LLMRouter(LLMSettings(mode=LLMMode.OFFLINE))
-    demo.dispatch("start")
-    demo.dispatch("pause", {"branch_id": "baseline"})
-    return demo
-
-
-@pytest.fixture
-def paused_offline_compiler_demo() -> Callable[..., Any]:
-    """Build a DemoService over h00_small_replay without events, 20 minutes long by default,
-    with an offline Event Compiler, started and paused on the baseline Branch.
-    """
-    return _paused_offline_compiler_demo
+    return _failure_day3_demo(8, start=False, events_due_minute=2)
 
 
 def _nl_interpret_preview(demo: Any, tmp_path: Path, selected_minute: int = 5) -> dict[str, Any]:
@@ -410,3 +373,16 @@ def nl_interpret_preview() -> Callable[..., dict[str, Any]]:
     check that the offline rule compiled a valid plan.
     """
     return _nl_interpret_preview
+
+
+def _demo_world_hash(demo: Any, branch_id: str = "baseline") -> str:
+    import hashlib
+
+    world = demo.branches[branch_id].runtime.world
+    return hashlib.sha256(world.canonical_json().encode("utf-8")).hexdigest()
+
+
+@pytest.fixture(scope="session")
+def demo_world_hash() -> Callable[..., str]:
+    """Hash a demo Branch's whole world (the baseline by default), to show it did not change."""
+    return _demo_world_hash

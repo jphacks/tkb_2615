@@ -45,10 +45,12 @@ def _saved_timeline(tmp_path: Path, scenario: Any = None) -> tuple[Any, Any]:
     return store, timeline
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def saved_timeline() -> Callable[..., tuple[Any, Any]]:
     """Open a store at a folder with project p, Run r and its first Checkpoint recorded;
     return the store and the Run's TimelineStore.
+
+    Session-scoped so module-scoped Runs can use it; each call opens a new store.
 
     The Run is of scenario_100_agents unless a ScenarioSpec is passed, for example
     saved_timeline(tmp_path, generated_scenario) for a Run with a floor plan.
@@ -100,26 +102,3 @@ def no_checkpoint_decode(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(ProjectStore, "load_checkpoint", load)
     return decoded
-
-
-def _saved_run_with_scenario(tmp_path: Path) -> tuple[Any, Any]:
-    from sheltersim.core.world import WorldState
-    from sheltersim.experiments.branch import BranchRuntime
-    from sheltersim.experiments.scenario import ScenarioSpec
-    from sheltersim.experiments.timeline import TimelineStore
-    from sheltersim.storage.projects import ProjectStore, digest
-
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    scenario = ScenarioSpec.load("fixtures/scenario_100_agents.json")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    initial = BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    TimelineStore(store, "p", "r").record(initial)
-    return store, scenario
-
-
-@pytest.fixture
-def saved_run_with_scenario() -> Callable[[Path], tuple[Any, Any]]:
-    """Like saved_timeline, but return the store and the Scenario instead of the timeline."""
-    return _saved_run_with_scenario

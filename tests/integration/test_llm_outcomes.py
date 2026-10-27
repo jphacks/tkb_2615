@@ -47,13 +47,6 @@ class DeniedAllowanceProvider:
         raise LLMAllowanceError("usage_allowance_denied:usage_limit_exceeded")
 
 
-def _router(provider, *, max_api_calls: int = 1_000) -> LLMRouter:
-    settings = LLMSettings(
-        mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=max_api_calls, budget_usd=1.0
-    )
-    return LLMRouter(settings, provider=provider, tape=ResponseTape())
-
-
 def _manifest(run_directory: Path) -> dict[str, object]:
     return json.loads((run_directory / "manifest.json").read_text(encoding="utf-8"))
 
@@ -73,9 +66,9 @@ class TruncatedProvider:
 
 
 def test_capped_run_manifest_reports_degraded_fallbacks(
-    tmp_path: Path, small_benchmark_scenario
+    tmp_path: Path, small_benchmark_scenario, recording_router
 ) -> None:
-    router = _router(AcceptingProvider(), max_api_calls=3)
+    router = recording_router(AcceptingProvider(), max_api_calls=3)
     run_scenario(small_benchmark_scenario(), tmp_path / "run", llm_router=router)
 
     usage = _manifest(tmp_path / "run")["llm_usage"]
@@ -88,12 +81,12 @@ def test_capped_run_manifest_reports_degraded_fallbacks(
 
 
 def test_denied_allowance_run_manifest_reports_all_fallback(
-    tmp_path: Path, small_benchmark_scenario
+    tmp_path: Path, small_benchmark_scenario, recording_router
 ) -> None:
     run_scenario(
         small_benchmark_scenario(),
         tmp_path / "run",
-        llm_router=_router(DeniedAllowanceProvider()),
+        llm_router=recording_router(DeniedAllowanceProvider()),
     )
 
     usage = _manifest(tmp_path / "run")["llm_usage"]
@@ -114,7 +107,7 @@ def test_offline_run_manifest_has_no_requested_tasks(
 
 
 def test_project_branch_llm_status_reads_head_checkpoint_records(
-    tmp_path: Path, small_benchmark_scenario
+    tmp_path: Path, small_benchmark_scenario, recording_router
 ) -> None:
     scenario = small_benchmark_scenario()
     store = ProjectStore(tmp_path)
@@ -124,7 +117,7 @@ def test_project_branch_llm_status_reads_head_checkpoint_records(
     )
     store.create_run("project", "run", scenario.id, saved["scenario_version"])
     runtime = BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    router = _router(DeniedAllowanceProvider())
+    router = recording_router(DeniedAllowanceProvider())
     timeline = TimelineStore(store, "project", "run")
     timeline.record(runtime, router=router)
     timeline.advance("main", 200, router=router)
@@ -148,11 +141,14 @@ def test_prepare_cli_warns_when_scenario_draft_falls_back(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     small_benchmark_scenario,
+    recording_router,
 ) -> None:
     source = tmp_path / "scenario.json"
     source.write_text(small_benchmark_scenario(30).canonical_json(), encoding="utf-8")
     monkeypatch.setattr(
-        cli, "_cli_accounted_router", lambda *_args, **_kwargs: _router(TruncatedProvider())
+        cli,
+        "_cli_accounted_router",
+        lambda *_args, **_kwargs: recording_router(TruncatedProvider()),
     )
     arguments = [
         "prepare",

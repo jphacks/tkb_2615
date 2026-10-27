@@ -159,3 +159,22 @@ def live_model_check() -> Callable[..., tuple]:
     real API; tests/unit/llm/test_accounting.py checks offline that it fits the ledgers.
     """
     return _live_model_check
+
+
+def _recording_router(provider: Any, *, max_api_calls: int = 1_000) -> Any:
+    from sheltersim.llm.cache import ResponseTape
+    from sheltersim.llm.config import LLMMode, LLMSettings
+    from sheltersim.llm.provider import LLMRouter
+
+    settings = LLMSettings(
+        mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=max_api_calls, budget_usd=1.0
+    )
+    return LLMRouter(settings, provider=provider, tape=ResponseTape())
+
+
+@pytest.fixture(scope="session")
+def recording_router() -> Callable[..., Any]:
+    """Make an LLMRouter that records a fake provider's answers: a mock key, a $1 budget
+    and at most max_api_calls (1,000 by default) calls.
+    """
+    return _recording_router

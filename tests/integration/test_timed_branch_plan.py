@@ -6,7 +6,6 @@ An invalid or tampered approval is checked in tests/unit/experiments/test_branch
 
 from __future__ import annotations
 
-import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
@@ -45,11 +44,6 @@ def _approved(plan: DraftPlan) -> dict[str, Any]:
     return ApprovedPlan.from_explicit_confirmation(plan).model_dump(mode="json")
 
 
-def _world_hash(demo: DemoService, branch_id: str = "baseline") -> str:
-    canonical = demo.branches[branch_id].runtime.world.canonical_json()
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def _history_before(demo: DemoService, branch_id: str, minute: int) -> list[tuple[str, int]]:
     return [
         (record.event.event_id, record.realized_minute)
@@ -60,13 +54,13 @@ def _history_before(demo: DemoService, branch_id: str, minute: int) -> list[tupl
 
 @pytest.mark.long_simulation
 def test_approved_plan_replays_from_checkpoint_and_is_idempotent(
-    small_replay_demo, day4_plan
+    small_replay_demo, day4_plan, demo_world_hash
 ) -> None:
     demo = small_replay_demo()
     demo.dispatch("start")
     _advance_and_pause(demo, 3000)
     _advance_and_pause(demo, _DAY4_1400 + 3)
-    source_hash = _world_hash(demo)
+    source_hash = demo_world_hash(demo)
     source_history = _history_before(demo, "baseline", _DAY4_1400)
     source_runtime = demo.branches["baseline"].runtime
     source_minute = source_runtime.world.minute_index
@@ -92,7 +86,7 @@ def test_approved_plan_replays_from_checkpoint_and_is_idempotent(
     assert len(child.runtime.world.facilities) == source_toilets + 1
     assert len(child.runtime.world.staff) == source_staff + 1
     assert _history_before(demo, child_id, _DAY4_1400) == source_history
-    assert _world_hash(demo) == source_hash
+    assert demo_world_hash(demo) == source_hash
 
     records_by_id = {item.event.event_id: item for item in child.runtime.world.event_log.records}
     scheduled_records = [records_by_id[event_id] for event_id in result["receipts"][0]["event_ids"]]

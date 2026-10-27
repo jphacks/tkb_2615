@@ -9,22 +9,14 @@ from __future__ import annotations
 import json
 from io import BytesIO
 
-import pytest
-
 from sheltersim.web.inspector import InspectorService
-from sheltersim.web.projects import ProjectAPI
 from sheltersim.web.server import _handler_for
 
 
-@pytest.fixture
-def saved_run(report_saved_run: ProjectAPI) -> ProjectAPI:
-    return report_saved_run
-
-
 def test_pdf_http_attachment_and_existing_origin_guard(
-    saved_run, monkeypatch, tmp_path, install_report_router
+    report_saved_run, monkeypatch, tmp_path, install_report_router
 ):
-    api = saved_run
+    api = report_saved_run
     install_report_router(api, monkeypatch)
     handler_type = _handler_for(InspectorService(tmp_path), projects=api)
 

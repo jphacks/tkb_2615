@@ -49,6 +49,8 @@ class RecordingProvider:
         )
 
 
+# Not the shared recording_router: that one caps spending at $1, while the day-long
+# Runs here keep the default $10 budget so the cap cannot change what they ask.
 def _router(provider) -> LLMRouter:
     settings = LLMSettings(mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=1_000)
     return LLMRouter(settings, provider=provider, tape=ResponseTape())

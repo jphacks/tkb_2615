@@ -5,18 +5,14 @@ people on the floor plan, as the Project screen's seek does. Until #137 this ran
 on scenario_100_agents, which has neither a floor plan nor facility awareness.
 """
 
-import json
-
 import pytest
 
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.world import WorldState
 from sheltersim.domain.movement import MOVEMENT_STATE_KEY
-from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.runner import OfflineSimulationController
-from sheltersim.experiments.timeline import TimelineError, TimelineStore, _MetricSink
-from sheltersim.storage.projects import ProjectStore, digest
+from sheltersim.experiments.timeline import TimelineError, _MetricSink
 
 CHECKPOINT_INTERVAL = 20
 # Between the Checkpoints at 20 and 40, while people walk on the floor plan.
@@ -24,15 +20,9 @@ SEEK_MINUTE = 28
 COMPUTED_UNTIL = 45
 
 
-def test_non_checkpoint_seek_and_noop_fork_are_exact(tmp_path, generated_scenario):
+def test_non_checkpoint_seek_and_noop_fork_are_exact(tmp_path, generated_scenario, saved_timeline):
     scenario = generated_scenario
-    store = ProjectStore(tmp_path)
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    runtime = BranchRuntime.from_world(WorldState.from_scenario(scenario))
-    timeline.record(runtime)
+    store, timeline = saved_timeline(tmp_path, scenario)
     timeline.advance("main", COMPUTED_UNTIL, checkpoint_interval=CHECKPOINT_INTERVAL)
     reference = WorldState.from_scenario(scenario)
     TickEngine(

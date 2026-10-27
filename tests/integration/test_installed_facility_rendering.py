@@ -11,12 +11,9 @@ from pathlib import Path
 import pytest
 
 from sheltersim.contracts.extensions import Point2D, point_in_polygon
-from sheltersim.core.world import WorldState
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
-from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.projects import ProjectStore, digest
+from sheltersim.storage.projects import digest
 
 _STATIC = Path(__file__).parents[2] / "src" / "sheltersim" / "web" / "static"
 _FORK, _SAVED, _UNSAVED = 30, 60, 45
@@ -51,16 +48,11 @@ def _add_two_toilets() -> EffectProgram:
 
 @pytest.fixture(scope="module")
 def frames(
-    tmp_path_factory: pytest.TempPathFactory, generated_scenario_preview: dict
+    tmp_path_factory: pytest.TempPathFactory, generated_scenario_preview: dict, saved_timeline
 ) -> dict[str, dict]:
     """Frames served by the timeline route, as the browser receives them."""
     scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
-    store = ProjectStore(tmp_path_factory.mktemp("rendering"))
-    store.create_project("p")
-    store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
-    store.create_run("p", "r", scenario.id, 1)
-    timeline = TimelineStore(store, "p", "r")
-    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    _, timeline = saved_timeline(tmp_path_factory.mktemp("rendering"), scenario)
     timeline.advance("main", _SAVED)
     program = _add_two_toilets()
     timeline.fork(

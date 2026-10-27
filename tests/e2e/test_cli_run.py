@@ -12,10 +12,7 @@ import pytest
 
 from sheltersim import cli
 from sheltersim.__main__ import main
-from sheltersim.llm.cache import ResponseTape
-from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import LLMAllowanceError
-from sheltersim.llm.provider import LLMRouter
 
 SCENARIO_100_AGENTS = Path(__file__).parents[2] / "fixtures" / "scenario_100_agents.json"
 
@@ -23,13 +20,6 @@ SCENARIO_100_AGENTS = Path(__file__).parents[2] / "fixtures" / "scenario_100_age
 class DeniedAllowanceProvider:
     def complete(self, **_kwargs):
         raise LLMAllowanceError("usage_allowance_denied:usage_limit_exceeded")
-
-
-def _router(provider, *, max_api_calls: int = 1_000) -> LLMRouter:
-    settings = LLMSettings(
-        mode=LLMMode.RECORD, api_key="mock-key", max_api_calls=max_api_calls, budget_usd=1.0
-    )
-    return LLMRouter(settings, provider=provider, tape=ResponseTape())
 
 
 def _frozen_scenario(tmp_path: Path, scenario) -> Path:
@@ -46,12 +36,15 @@ def test_cli_run_prints_status_and_warns_on_fallback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     small_benchmark_scenario,
+    recording_router,
 ) -> None:
     monkeypatch.setenv("SHELTERSIM_PROJECTS_DIR", str(tmp_path / "projects"))
     frozen = _frozen_scenario(tmp_path, small_benchmark_scenario())
     capsys.readouterr()
     monkeypatch.setattr(
-        cli, "_cli_accounted_router", lambda *_args, **_kwargs: _router(DeniedAllowanceProvider())
+        cli,
+        "_cli_accounted_router",
+        lambda *_args, **_kwargs: recording_router(DeniedAllowanceProvider()),
     )
 
     assert cli.main(["run", "--scenario", str(frozen), "--output", str(tmp_path / "run")]) == 0

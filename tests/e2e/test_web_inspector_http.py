@@ -15,19 +15,14 @@ from sheltersim.web.inspector import InspectorService, WebQueryError
 from sheltersim.web.server import _dispatch_api, _handler_for
 
 
-@pytest.fixture
-def inspector(full_trace_inspector: InspectorService) -> InspectorService:
-    return full_trace_inspector
-
-
 def test_agent_story_cards_link_only_recorded_states_decisions_and_events(
-    inspector: InspectorService,
+    full_trace_inspector: InspectorService,
 ) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
+    run_id = full_trace_inspector.list_runs()["runs"][0]["id"]
 
-    stories = inspector.agent_stories(run_id, at_minute=2)
+    stories = full_trace_inspector.agent_stories(run_id, at_minute=2)
     api_stories = _dispatch_api(
-        inspector,
+        full_trace_inspector,
         f"/api/v1/runs/{run_id}/agent-stories",
         {"at_minute": ["2"]},
     )
@@ -43,20 +38,20 @@ def test_agent_story_cards_link_only_recorded_states_decisions_and_events(
     assert all(len(item["history"]) <= 8 for item in stories["stories"])
     assert all(item["dialogue"] is None for item in stories["stories"])
     assert all(
-        inspector.event(run_id, event["event_id"])["records"]
+        full_trace_inspector.event(run_id, event["event_id"])["records"]
         for story in stories["stories"]
         for event in story["event_references"]
     )
     with pytest.raises(WebQueryError, match="duration"):
-        inspector.agent_stories(run_id, at_minute=3)
+        full_trace_inspector.agent_stories(run_id, at_minute=3)
 
 
 def test_api_dispatch_is_allowlisted_and_reports_unknown_routes(
-    inspector: InspectorService,
+    full_trace_inspector: InspectorService,
 ) -> None:
-    run_id = inspector.list_runs()["runs"][0]["id"]
+    run_id = full_trace_inspector.list_runs()["runs"][0]["id"]
     result = _dispatch_api(
-        inspector,
+        full_trace_inspector,
         f"/api/v1/runs/{run_id}/profiles",
         {"limit": ["100"]},
     )
@@ -64,13 +59,13 @@ def test_api_dispatch_is_allowlisted_and_reports_unknown_routes(
     assert "must-not-be-returned" not in encoded
     assert len(result["items"]) == 100
     with pytest.raises(WebQueryError, match="unknown API"):
-        _dispatch_api(inspector, "/api/v1/runs/nope/mutate", {})
+        _dispatch_api(full_trace_inspector, "/api/v1/runs/nope/mutate", {})
 
 
 def test_http_handler_serves_ui_and_rejects_mutating_requests(
-    inspector: InspectorService,
+    full_trace_inspector: InspectorService,
 ) -> None:
-    handler_type = _handler_for(inspector)
+    handler_type = _handler_for(full_trace_inspector)
     handler = handler_type.__new__(handler_type)
     handler.path = "/api/v1/runs/example?mutation=1"
     handler.headers = {
