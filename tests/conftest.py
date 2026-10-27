@@ -1190,6 +1190,175 @@ def wait_for_job() -> Callable[[Any, str, set[str]], dict]:
     return _wait_for_job
 
 
+def _paused_small_replay_demo(duration_minutes: int = 12) -> Any:
+    from typing import get_args
+
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = get_args(ScenarioSpec.model_fields["schema_version"].annotation)[0]
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    demo.dispatch("start")
+    demo.dispatch("pause", {"branch_id": "baseline"})
+    return demo
+
+
+@pytest.fixture
+def paused_small_replay_demo() -> Callable[..., Any]:
+    """Build a DemoService over h00_small_replay without events, 12 minutes long by
+    default, started and paused on the baseline Branch.
+    """
+    return _paused_small_replay_demo
+
+
+MULTI_PLAN_PROVENANCE = {"compiler_kind": "offline_rule", "compiler_version": "a04-multi-test-v1"}
+
+
+def _multi_plan_effect(variant: int, *, start_minute: int = 0) -> Any:
+    from sheltersim.events.effects import TargetSelector, TimedAction
+
+    if variant == 1:
+        return TimedAction(
+            effect_id="effect-add-staff",
+            op="add_staff",
+            target_selector=TargetSelector(kind="zone", target_id="information_desk"),
+            start_minute=start_minute,
+            parameters={"count": 1},
+            units="staff_member",
+            source_id="A04-MULTI-TEST",
+            policy_dependencies=["staff_operations"],
+            reversible=False,
+        )
+    if variant == 2:
+        return TimedAction(
+            effect_id="effect-add-toilet",
+            op="add_toilet",
+            target_selector=TargetSelector(kind="zone", target_id="toilet"),
+            start_minute=start_minute,
+            parameters={"count": 1},
+            units="toilet_stall",
+            source_id="A04-MULTI-TEST",
+            policy_dependencies=["facility_capacity"],
+            reversible=False,
+        )
+    return TimedAction(
+        effect_id="effect-close-toilet",
+        op="set_facility_availability",
+        target_selector=TargetSelector(kind="facility", target_id="toilet_1"),
+        start_minute=start_minute,
+        end_minute=start_minute + 2,
+        parameters={"working_units": 0},
+        units="facility_unit",
+        source_id="A04-MULTI-TEST",
+        policy_dependencies=["facility_capacity"],
+        reversible=True,
+    )
+
+
+def _multi_plan_alternative(variant: int, *, start_minute: int = 0) -> Any:
+    from sheltersim.events.effects import SupportMode
+    from sheltersim.llm.schemas import DraftPlan
+
+    return DraftPlan(
+        program_id=f"a04-plan-{variant}",
+        narrative=f"Alternative {variant}",
+        source_text="Synthetic typed alternative",
+        simulation_start_minute=0,
+        effects=[_multi_plan_effect(variant, start_minute=start_minute)],
+        assumptions=[],
+        support_mode=SupportMode.COMPOSED,
+        compiler_provenance=MULTI_PLAN_PROVENANCE,
+        branch_id="baseline",
+        fork_at_minute=0,
+        ambiguities=[],
+        requires_confirmation=True,
+    )
+
+
+def _multi_plan_draft(demo: Any, *, variants: int = 3) -> Any:
+    import hashlib
+
+    from sheltersim.llm.schemas import MultiPlanDraft
+
+    state_hash = hashlib.sha256(
+        demo.branches["baseline"].runtime.world.canonical_json().encode("utf-8")
+    ).hexdigest()
+    return MultiPlanDraft(
+        schema_version=1,
+        branch_origin="baseline",
+        source_state_hash=state_hash,
+        fork_at_minute=0,
+        parser_provenance=MULTI_PLAN_PROVENANCE,
+        branches=[
+            {
+                "variant_id": f"alternative-{variant}",
+                "label": f"比較案 {variant}",
+                "plan": _multi_plan_alternative(variant),
+            }
+            for variant in range(1, variants + 1)
+        ],
+    )
+
+
+@pytest.fixture
+def multi_plan_draft() -> Callable[..., Any]:
+    """Build a MultiPlanDraft from the demo's baseline: up to three alternatives that add
+    a worker, add a toilet, or close toilet_1 for two minutes.
+    """
+    return _multi_plan_draft
+
+
+def _post_demo_json(
+    demo: Any,
+    tmp_path: Path,
+    route: str,
+    document: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    from io import BytesIO
+
+    from sheltersim.web.inspector import InspectorService
+    from sheltersim.web.server import _handler_for
+
+    raw = json.dumps(document).encode("utf-8")
+    handler_type = _handler_for(InspectorService(tmp_path), demo)
+    handler = handler_type.__new__(handler_type)
+    handler.path = route
+    handler.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json"}
+    handler.rfile = BytesIO(raw)
+    responses: list[tuple[int, dict[str, Any]]] = []
+    handler._json_response = lambda status, value: responses.append((status, value))
+    handler.do_POST()
+    return responses[0]
+
+
+@pytest.fixture
+def post_demo_json() -> Callable[..., tuple[int, dict[str, Any]]]:
+    """POST a JSON document to a demo HTTP route; return the status and the response."""
+    return _post_demo_json
+
+
+def _apply_multi_plan(demo: Any, plan: Any, key: str) -> dict[str, Any]:
+    from sheltersim.llm.schemas import MultiPlanApproval
+
+    approval = MultiPlanApproval.from_explicit_confirmation(plan)
+    return demo.apply_multi_plan_preview(
+        {
+            "source_branch_id": plan.branch_origin,
+            "approved_plan": approval.model_dump(mode="json"),
+            "idempotency_key": key,
+        }
+    )
+
+
+@pytest.fixture
+def apply_multi_plan() -> Callable[[Any, Any, str], dict[str, Any]]:
+    """Approve a MultiPlanDraft explicitly and apply it to the demo."""
+    return _apply_multi_plan
+
+
 def _make_event(
     event_id: str,
     *,
