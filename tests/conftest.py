@@ -14,6 +14,7 @@ import pytest
 SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
 SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
 BASELINE_100_7D = Path(__file__).parents[1] / "fixtures" / "scenarios" / "baseline_100_7d.json"
+FAILURE_DAY3 = Path(__file__).parents[1] / "fixtures" / "scenarios" / "failure_day3.json"
 
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
@@ -1148,6 +1149,45 @@ def audit_inspector(tmp_path: Path) -> Any:
     scenario = ScenarioSpec.model_validate(document)
     run_scenario(scenario, tmp_path / "run-one")
     return InspectorService(tmp_path)
+
+
+def _failure_day3_demo(duration: int = 12, *, start: bool = True) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    demo = DemoService(ScenarioSpec.model_validate(document))
+    if start:
+        demo.dispatch("start")
+    return demo
+
+
+@pytest.fixture
+def failure_day3_demo() -> Callable[..., Any]:
+    """Build a DemoService over failure_day3 without its events, 12 minutes long and
+    started by default.
+    """
+    return _failure_day3_demo
+
+
+def _wait_for_job(manager: Any, job_id: str, expected: set[str]) -> dict:
+    import time
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = manager.get(job_id)
+        if job["status"] in expected:
+            return job
+        time.sleep(0.01)
+    pytest.fail(f"job {job_id} did not reach {sorted(expected)}: {manager.get(job_id)}")
+
+
+@pytest.fixture
+def wait_for_job() -> Callable[[Any, str, set[str]], dict]:
+    """Wait up to five seconds for a demo job to reach one of the expected statuses."""
+    return _wait_for_job
 
 
 def _make_event(
