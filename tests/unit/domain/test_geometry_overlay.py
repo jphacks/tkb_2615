@@ -1,5 +1,6 @@
-"""Runtime floor-plan geometry: per-phase parsing, checks before approval, and typed
-geometry EffectPrograms applied, expired and restored from a Checkpoint.
+"""Runtime floor-plan geometry: per-phase parsing, checks before approval, typed
+geometry EffectPrograms applied, expired and restored from a Checkpoint, and a free
+floor-plan point for each toilet an intervention adds.
 
 That tick phases reuse the parsed geometry without changing results is checked
 in tests/integration/test_geometry_config_cache.py.
@@ -7,6 +8,7 @@ in tests/integration/test_geometry_config_cache.py.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -15,13 +17,20 @@ from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
+from sheltersim.domain.agent_dynamics import (
+    AGENT_DYNAMICS_STATE_KEY,
+    ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
+    INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+)
 from sheltersim.domain.geometry_overlay import (
     GEOMETRY_OVERLAY_KEY,
+    INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
     effective_geometry,
     effective_spatial_constraints,
     geometry_config_scope,
     validate_geometry_change,
 )
+from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.events.effects import (
     EffectProgram,
     EffectProgramGeometryHandler,
@@ -33,6 +42,8 @@ from sheltersim.events.effects import (
 )
 from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventStatus
+from sheltersim.experiments.branch import AddToiletCommand, BranchError, BranchRuntime
+from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import world_frame
 
 
@@ -413,3 +424,73 @@ def test_geometry_overlay_checkpoint_without_temporary_room_key_still_restores(
 
     assert "temporary_rooms" not in restored.model_state["geometry_overlay_v1"]
     restored.validate()
+
+
+# Toilets added by an intervention get a free point on the floor plan and are
+# announced to everyone. Running them on a Branch is checked in
+# tests/integration/test_installed_facility_announcement.py.
+def _world_with_extensions(scenario: ScenarioSpec) -> WorldState:
+    world = WorldState.from_scenario(scenario)
+    initialize_simulator_extensions(world)
+    return world
+
+
+def _without_placement(scenario: ScenarioSpec) -> ScenarioSpec:
+    # Floor-plan overlay schema 3 predates placing installed facilities.
+    document = scenario.model_dump(mode="json")
+    document["model_configs"]["geometry_overlay"] = {"schema_version": 3}
+    return ScenarioSpec.model_validate(document)
+
+
+def _knowers(world: WorldState, facility_id: str) -> int:
+    agents = world.model_state[AGENT_DYNAMICS_STATE_KEY]["agents"].values()
+    return sum(facility_id in record["known_facility_ids"] for record in agents)
+
+
+def test_generated_scenarios_announce_and_place_installed_facilities(generated_scenario) -> None:
+    scenario = generated_scenario
+    assert scenario.model_configs["agent_dynamics"]["policy_version"] == (
+        ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION
+    )
+    assert scenario.model_configs["geometry_overlay"] == {"schema_version": 4}
+    manifest = json.loads(open("fixtures/source-manifest.json", encoding="utf-8").read())
+    for source_id in (INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
+                      INSTALLED_FACILITY_PLACEMENT_SOURCE_ID):
+        assert any(row["id"] == source_id for row in scenario.provenance["assumptions"])
+        assert any(row["id"] == source_id for row in manifest["assumptions"])
+
+
+def test_floor_plans_without_placement_report_add_toilet_as_not_applicable(
+    generated_scenario, add_toilets_program
+) -> None:
+    world = _world_with_extensions(_without_placement(generated_scenario))
+    issues = validate_effect_program(world, add_toilets_program(start_minute=0))
+    assert any("cannot place added toilets on this floor plan" in issue for issue in issues)
+
+
+def test_add_toilet_is_not_applicable_when_the_zone_has_no_free_point(
+    generated_scenario, add_toilets_program
+) -> None:
+    # The 20-person toilet zone is 1.8 m wide; four more toilets fit, a fifth does not.
+    world = _world_with_extensions(generated_scenario)
+    assert validate_effect_program(world, add_toilets_program(4, start_minute=0)) == ()
+    issues = validate_effect_program(world, add_toilets_program(5, start_minute=0))
+    assert any("no free floor-plan point for toilet 5" in issue for issue in issues)
+
+
+def test_branch_add_toilet_command_places_and_announces_the_new_toilet(generated_scenario) -> None:
+    runtime = BranchRuntime.from_world(_world_with_extensions(generated_scenario))
+    runtime.apply(AddToiletCommand(facility_id="extra_toilet", zone_id="toilet"))
+    assert "extra_toilet" in effective_geometry(runtime.world).facility_points
+    assert _knowers(runtime.world, "extra_toilet") == len(runtime.world.agents)
+
+
+def test_branch_add_toilet_command_refuses_a_floor_plan_without_placement(
+    generated_scenario,
+) -> None:
+    runtime = BranchRuntime.from_world(
+        _world_with_extensions(_without_placement(generated_scenario))
+    )
+    with pytest.raises(BranchError, match="cannot place added toilets"):
+        runtime.apply(AddToiletCommand(facility_id="extra_toilet", zone_id="toilet"))
+    assert "extra_toilet" not in runtime.world.facilities

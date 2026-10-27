@@ -1,10 +1,16 @@
-"""Opt-in ResourceLedger accounting, reservation, replay and artifact contracts."""
+"""Opt-in ResourceLedger accounting, reservation, replay and checks.
+
+Operations and per-tick checks use the ledger's current state; the full check
+replays it.
+
+That a Run saves the ledger the same at every trace level and serves it to the
+inspector is checked in tests/e2e/test_resource_ledger_inspection.py.
+"""
 
 from __future__ import annotations
 
-import csv
+import copy
 import json
-import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -12,56 +18,24 @@ import pytest
 from pydantic import ValidationError
 
 from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import StateInvariantError, WorldState
-from sheltersim.domain.resources import RESOURCE_LEDGER_KEY
+from sheltersim.domain.resources import (
+    RESOURCE_LEDGER_KEY,
+    ResourceLedgerError,
+    apply_resource_operation,
+    validate_resource_ledger,
+    validate_resource_ledger_state,
+)
 from sheltersim.events.handlers import (
     EventDispatcher,
     ResourceLedgerHandler,
 )
 from sheltersim.events.models import EventApplicationError, EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.metrics import MetricsRecorder
-from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.inspection.query import RunInspector
-from sheltersim.web.inspector import InspectorService
-from sheltersim.web.server import _dispatch_api
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 SCENARIO_FIXTURE = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
-
-
-def scenario_with_stock(
-    *,
-    water_ml: int = 0,
-    food_meal_units: int = 0,
-    source_ids: list[str] | None = None,
-    scheduled_events: list[dict[str, object]] | None = None,
-    duration_minutes: int = 5,
-) -> ScenarioSpec:
-    document = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
-    document["schema_version"] = 3
-    document["duration_minutes"] = duration_minutes
-    document["scheduled_events"] = scheduled_events or []
-    for scheduled in document["scheduled_events"]:
-        if scheduled.get("event_type", "").startswith("resource_"):
-            scheduled["payload"] = {
-                "warehouse_id": "warehouse-main",
-                **scheduled.get("payload", {}),
-            }
-    document["initial_stock"] = {
-        "schema_version": 1,
-        "warehouse_id": "warehouse-main",
-        "zone_id": "sleeping",
-        "water_ml": water_ml,
-        "food_meal_units": food_meal_units,
-        "source_ids": (
-            source_ids
-            if source_ids is not None
-            else (["ASM-H01-TEST-INITIAL-STOCK-V1"] if water_ml or food_meal_units else [])
-        ),
-    }
-    return ScenarioSpec.model_validate(document)
 
 
 def event(
@@ -94,7 +68,9 @@ def resource_dispatcher() -> EventDispatcher:
     )
 
 
-def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips() -> None:
+def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
+    scenario_with_stock
+) -> None:
     old_fixture = ScenarioSpec.load(SCENARIO_FIXTURE)
     assert old_fixture.schema_version == 3
     baseline_world = WorldState.from_scenario(old_fixture)
@@ -138,7 +114,9 @@ def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips() -> N
     }
 
 
-def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis() -> None:
+def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis(
+    scenario_with_stock
+) -> None:
     original = WorldState.from_scenario(scenario_with_stock(food_meal_units=2))
     original.schedule_event(
         event(
@@ -188,7 +166,7 @@ def test_checkpoint_restore_continuation_preserves_ledger_audit_and_kpis() -> No
     assert final_account["reserved"] == 0
 
 
-def test_resource_scenario_v2_migration_and_v3_stock_rejections() -> None:
+def test_resource_scenario_v2_migration_and_v3_stock_rejections(scenario_with_stock) -> None:
     source = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
     assert source["schema_version"] == 2
     migrated = ScenarioSpec.from_json(json.dumps(source))
@@ -211,7 +189,9 @@ def test_resource_scenario_v2_migration_and_v3_stock_rejections() -> None:
         scenario_with_stock(food_meal_units=-1)
 
 
-def test_resource_operations_balance_inventory_and_preserve_audit_sources() -> None:
+def test_resource_operations_balance_inventory_and_preserve_audit_sources(
+    scenario_with_stock
+) -> None:
     world = WorldState.from_scenario(
         scenario_with_stock(
             water_ml=1000,
@@ -293,7 +273,7 @@ def test_resource_operations_balance_inventory_and_preserve_audit_sources() -> N
     world.validate()
 
 
-def test_invalid_and_cross_agent_resource_actions_are_atomic() -> None:
+def test_invalid_and_cross_agent_resource_actions_are_atomic(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     handler = ResourceLedgerHandler("reserve")
     before = world.canonical_json()
@@ -397,7 +377,7 @@ def test_invalid_and_cross_agent_resource_actions_are_atomic() -> None:
     assert world.canonical_json() == consumed
 
 
-def test_one_last_meal_reservation_is_stable_by_event_sequence() -> None:
+def test_one_last_meal_reservation_is_stable_by_event_sequence(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     world.schedule_event(
         event(
@@ -437,88 +417,7 @@ def test_one_last_meal_reservation_is_stable_by_event_sequence() -> None:
     world.validate()
 
 
-def test_resource_metrics_logs_and_state_are_trace_level_independent(tmp_path: Path) -> None:
-    events: list[dict[str, object]] = [
-        {
-            "id": "resource-reserve",
-            "due_minute": 0,
-            "sequence": 0,
-            "event_type": "resource_reserve",
-            "source_id": "ASM-H01-TEST-RESOURCE-ALLOCATION-V1",
-            "payload": {
-                "warehouse_id": "warehouse-main",
-                "resource_id": "food_meal_units",
-                "reservation_id": "meal-A001",
-                "agent_id": "A001",
-                "quantity": 1,
-            },
-        },
-        {
-            "id": "resource-consume",
-            "due_minute": 0,
-            "sequence": 1,
-            "event_type": "resource_consume",
-            "source_id": "ASM-H01-TEST-RESOURCE-SERVICE-V1",
-            "payload": {
-                "warehouse_id": "warehouse-main",
-                "resource_id": "food_meal_units",
-                "reservation_id": "meal-A001",
-                "agent_id": "A001",
-                "quantity": 1,
-            },
-        },
-    ]
-    scenario = scenario_with_stock(
-        water_ml=900,
-        food_meal_units=2,
-        scheduled_events=events,
-        duration_minutes=3,
-    )
-    off_directory = tmp_path / "trace-off"
-    summary_directory = tmp_path / "trace-summary"
-    off_world = run_scenario(scenario, off_directory, trace_level=TraceLevel.OFF)
-    summary_world = run_scenario(scenario, summary_directory, trace_level=TraceLevel.SUMMARY)
-
-    assert off_world.canonical_json() == summary_world.canonical_json()
-    assert (off_directory / "events_realized.jsonl").read_bytes() == (
-        summary_directory / "events_realized.jsonl"
-    ).read_bytes()
-    assert (off_directory / "metrics.csv").read_bytes() == (
-        summary_directory / "metrics.csv"
-    ).read_bytes()
-    with (off_directory / "metrics.csv").open(encoding="utf-8", newline="") as stream:
-        metric_rows = list(csv.DictReader(stream))
-    assert metric_rows[0]["food_meal_units_initial"] == "2"
-    assert metric_rows[0]["food_meal_units_served"] == "1"
-    assert metric_rows[0]["food_meal_units_remaining"] == "1"
-    off_manifest = json.loads((off_directory / "manifest.json").read_text(encoding="utf-8"))
-    summary_manifest = json.loads((summary_directory / "manifest.json").read_text(encoding="utf-8"))
-    assert off_manifest["resource_ledger_summary"] == summary_manifest["resource_ledger_summary"]
-    assert off_manifest["resource_ledger_summary"]["audit_entry_count"] == 4
-    assert off_manifest["initial_stock"]["source_ids"] == ["ASM-H01-TEST-INITIAL-STOCK-V1"]
-    assert (off_directory / "resource_ledger.json").is_file()
-    ledger = json.loads((off_directory / "resource_ledger.json").read_text(encoding="utf-8"))
-    assert ledger == off_world.model_state[RESOURCE_LEDGER_KEY]
-    assert ledger["warehouse_id"] == "warehouse-main"
-    query = RunInspector(off_directory).resource_ledger()
-    assert query == ledger
-    run_id = off_manifest["run_id"]
-    runs_directory = tmp_path / "runs"
-    runs_directory.mkdir()
-    shutil.copytree(off_directory, runs_directory / run_id)
-    web_inspector = InspectorService(runs_directory)
-    assert web_inspector.resource_ledger(run_id) == {"enabled": True, "ledger": ledger}
-    assert _dispatch_api(web_inspector, f"/api/v1/runs/{run_id}/resource-ledger", {}) == {
-        "enabled": True,
-        "ledger": ledger,
-    }
-    assert (
-        web_inspector.overview(run_id)["manifest"]["resource_ledger_summary"]["zone_id"]
-        == "sleeping"
-    )
-
-
-def test_world_rejects_resource_accounting_or_reservation_corruption() -> None:
+def test_world_rejects_resource_accounting_or_reservation_corruption(scenario_with_stock) -> None:
     world = WorldState.from_scenario(scenario_with_stock(food_meal_units=1))
     world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["food_meal_units"]["remaining"] = 2
 
@@ -526,7 +425,9 @@ def test_world_rejects_resource_accounting_or_reservation_corruption() -> None:
         world.validate()
 
 
-def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tampering() -> None:
+def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tampering(
+    scenario_with_stock
+) -> None:
     with pytest.raises(ValidationError, match="references unknown zone"):
         scenario = scenario_with_stock(food_meal_units=1).model_dump(mode="json")
         scenario["initial_stock"]["zone_id"] = "unknown-zone"
@@ -548,3 +449,142 @@ def test_resource_contract_rejects_unknown_zone_resource_keys_and_audit_tamperin
     world.model_state[RESOURCE_LEDGER_KEY]["audit"][0]["remaining"] += 1
     with pytest.raises(StateInvariantError, match="audit after-state does not match replay"):
         world.validate()
+
+
+SOURCE = "ASM-TEST-RESOURCE-OPERATION"
+
+
+def _world() -> WorldState:
+    document = json.loads(SCENARIO_FIXTURE.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = 30
+    document["scheduled_events"] = []
+    document["initial_stock"] = {
+        "schema_version": 1,
+        "warehouse_id": "warehouse-main",
+        "zone_id": "sleeping",
+        "water_ml": 1_000,
+        "food_meal_units": 4,
+        "source_ids": ["ASM-TEST-INITIAL-STOCK"],
+    }
+    return WorldState.from_scenario(ScenarioSpec.model_validate(document))
+
+
+def _apply(world: WorldState, minute: int, operation: str, **payload: object) -> None:
+    world.minute_index = minute
+    sequence = len(world.model_state[RESOURCE_LEDGER_KEY]["audit"])
+    apply_resource_operation(
+        world,
+        ScheduledEvent(
+            event_id=f"op-{sequence:03d}",
+            kind=EventKind.EXOGENOUS,
+            due_minute=minute,
+            priority=0,
+            sequence=sequence,
+            event_type=f"resource_{operation}",
+            payload={"warehouse_id": "warehouse-main", **payload},
+            source_id=SOURCE,
+        ),
+        operation,
+    )
+
+
+def _operated_world() -> WorldState:
+    world = _world()
+    agent_id = sorted(world.agents)[0]
+    meal = {"resource_id": "food_meal_units", "agent_id": agent_id}
+    _apply(world, 1, "delivery", resource_id="water_ml", quantity=500)
+    _apply(world, 2, "reserve", reservation_id="r-1", quantity=2, **meal)
+    _apply(world, 3, "consume", reservation_id="r-1", quantity=1, **meal)
+    _apply(world, 4, "reserve", reservation_id="r-2", quantity=1, **meal)
+    _apply(world, 5, "release", reservation_id="r-2", **meal)
+    _apply(world, 9, "loss", resource_id="water_ml", quantity=200)
+    world.minute_index = 20
+    return world
+
+
+def _check_state(world: WorldState) -> None:
+    validate_resource_ledger_state(
+        world.model_state[RESOURCE_LEDGER_KEY],
+        world.resources,
+        set(world.agents),
+        set(world.zones),
+        minute_index=world.minute_index,
+    )
+
+
+def _check_full(world: WorldState) -> None:
+    validate_resource_ledger(
+        world.model_state[RESOURCE_LEDGER_KEY], world.resources, set(world.agents), set(world.zones)
+    )
+
+
+def test_operations_keep_both_checks_passing() -> None:
+    world = _operated_world()
+
+    _check_state(world)
+    _check_full(world)
+    assert world.resources == {"water_ml": 1_300, "food_meal_units": 3}
+    assert world.model_state[RESOURCE_LEDGER_KEY]["used_reservation_ids"] == ["r-1", "r-2"]
+
+
+def test_a_successful_operation_leaves_the_previous_ledger_untouched() -> None:
+    world = _operated_world()
+    previous = world.model_state[RESOURCE_LEDGER_KEY]
+    snapshot = copy.deepcopy(previous)
+
+    _apply(world, 20, "delivery", resource_id="food_meal_units", quantity=3)
+
+    assert previous == snapshot
+    assert world.model_state[RESOURCE_LEDGER_KEY] is not previous
+    assert len(world.model_state[RESOURCE_LEDGER_KEY]["audit"]) == len(previous["audit"]) + 1
+
+
+def test_a_rejected_operation_changes_nothing() -> None:
+    world = _operated_world()
+    before = world.canonical_json()
+
+    with pytest.raises(ResourceLedgerError, match="reservation ID 'r-1' was already used"):
+        _apply(
+            world,
+            20,
+            "reserve",
+            resource_id="water_ml",
+            reservation_id="r-1",
+            agent_id=sorted(world.agents)[0],
+            quantity=1,
+        )
+
+    assert world.canonical_json() == before
+
+
+def test_the_newest_audit_record_must_match_its_account() -> None:
+    world = _operated_world()
+    world.model_state[RESOURCE_LEDGER_KEY]["audit"][-1]["remaining"] += 1
+
+    with pytest.raises(ResourceLedgerError, match="balance does not match audit"):
+        _check_state(world)
+    with pytest.raises(StateInvariantError, match="balance does not match audit"):
+        world.validate(validate_event_history=False)
+
+
+def test_an_old_audit_record_is_left_to_the_full_check() -> None:
+    world = _operated_world()
+    delivery = world.model_state[RESOURCE_LEDGER_KEY]["audit"][2]
+    assert delivery["operation"] == "delivery" and delivery["minute"] < world.minute_index - 1
+    delivery["quantity"] += 1
+
+    _check_state(world)
+    world.validate(validate_event_history=False)
+    with pytest.raises(StateInvariantError, match="after-state does not match replay"):
+        world.validate()
+
+
+def test_the_full_check_rejects_a_reused_reservation_id() -> None:
+    world = _operated_world()
+    ledger = world.model_state[RESOURCE_LEDGER_KEY]
+    second_reserve = next(row for row in ledger["audit"] if row["reservation_id"] == "r-2")
+    second_reserve["reservation_id"] = "r-1"
+
+    with pytest.raises(ResourceLedgerError, match="reservation ID was reused"):
+        _check_full(world)

@@ -1,3 +1,6 @@
+"""Social interactions are kept as structured history without utterances, and an
+interaction whose state context comes from the future is refused."""
+
 from __future__ import annotations
 
 import json
@@ -21,7 +24,7 @@ from sheltersim.inspection.frames import social_event_records
 from sheltersim.storage.history_index import HistoryIndex
 from sheltersim.storage.projects import ProjectStore
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def make_world() -> WorldState:

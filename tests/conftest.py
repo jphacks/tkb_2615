@@ -11,6 +11,9 @@ from typing import Any
 
 import pytest
 
+SMALL_REPLAY = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
+SCENARIO_100_AGENTS = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+
 # The structured form the demo-v2 Scenario screen posts (scenarioRequest in
 # demo-v2.js): only the fields an operator types, each marked as user input.
 # Small enough that running the whole Scenario takes seconds.
@@ -304,6 +307,208 @@ def place_three_at_facility() -> Callable[[Any, str], None]:
             )
 
     return place
+
+
+def _scenario_with_stock(
+    *,
+    water_ml: int = 0,
+    food_meal_units: int = 0,
+    source_ids: list[str] | None = None,
+    scheduled_events: list[dict[str, object]] | None = None,
+    duration_minutes: int = 5,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = duration_minutes
+    document["scheduled_events"] = scheduled_events or []
+    for scheduled in document["scheduled_events"]:
+        if scheduled.get("event_type", "").startswith("resource_"):
+            scheduled["payload"] = {
+                "warehouse_id": "warehouse-main",
+                **scheduled.get("payload", {}),
+            }
+    document["initial_stock"] = {
+        "schema_version": 1,
+        "warehouse_id": "warehouse-main",
+        "zone_id": "sleeping",
+        "water_ml": water_ml,
+        "food_meal_units": food_meal_units,
+        "source_ids": (
+            source_ids
+            if source_ids is not None
+            else (["ASM-H01-TEST-INITIAL-STOCK-V1"] if water_ml or food_meal_units else [])
+        ),
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def scenario_with_stock() -> Callable[..., Any]:
+    """Build h00_small_replay with an initial stock in warehouse-main and resource events.
+
+    Resource events get warehouse-main in their payload, and a stock other than zero
+    gets a test source ID unless source_ids is given.
+    """
+    return _scenario_with_stock
+
+
+def _resource_service_scenario(
+    *,
+    duration: int = 12,
+    water_ml: int = 1000,
+    food_units: int = 4,
+    water_capacity: int = 1,
+    meal_capacity: int = 1,
+    water_working: int | None = None,
+    water_staff_count: int = 1,
+    meal_staff: bool = True,
+    service_minutes: int = 2,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = []
+    document["facilities"].extend(
+        [
+            {
+                "id": "water_station_1",
+                "kind": "water_station",
+                "zone_id": "toilet",
+                "capacity": water_capacity,
+                "working_units": water_capacity if water_working is None else water_working,
+            },
+            {
+                "id": "meal_distribution_1",
+                "kind": "meal_distribution",
+                "zone_id": "toilet",
+                "capacity": meal_capacity,
+                "working_units": meal_capacity,
+            },
+        ]
+    )
+    for index in range(water_staff_count):
+        document["staff"].append(
+            {"id": f"S-WATER-{index + 1}", "zone_id": "toilet", "skills": ["water_service"]}
+        )
+    if meal_staff:
+        document["staff"].append({"id": "S-MEAL", "zone_id": "toilet", "skills": ["meal_service"]})
+    document["initial_stock"] = {
+        "schema_version": 1,
+        "warehouse_id": "warehouse-h02",
+        "zone_id": "toilet",
+        "water_ml": water_ml,
+        "food_meal_units": food_units,
+        "source_ids": ["ASM-H02-TEST-INITIAL-STOCK-V1"] if water_ml or food_units else [],
+    }
+    document["model_configs"]["resource_service"] = {
+        "schema_version": 1,
+        "policy_version": "resource-service-v1",
+        "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
+        "source_type": "assumption",
+        "service_minutes": service_minutes,
+        "water_ml_per_service": 250,
+        "food_meal_units_per_service": 1,
+        "hydration_growth_per_minute": 0.02,
+        "hydration_action_threshold": 0.25,
+        "hunger_action_threshold": 0.70,
+        "hydration_relief": 0.35,
+        "hunger_relief": 0.50,
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def resource_service_scenario() -> Callable[..., Any]:
+    """Build h00_small_replay with a staffed water station and meal point in the toilet zone.
+
+    The Scenario opts into resource_service and starts with water and meals in
+    warehouse-h02; the arguments change the stock, capacities, staff and duration.
+    """
+    return _resource_service_scenario
+
+
+def _single_agent_awareness_scenario(initial_known_facility_ids: list[str]) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "facility-awareness-toilet-integration"
+    document["duration_minutes"] = 180
+    document["scheduled_events"] = []
+    document["profiles"] = document["profiles"][:1]
+    profile = document["profiles"][0]
+    profile["initial_zone_id"] = "sleeping"
+    profile["initial_needs"] = {
+        "toilet_urgency": 0.65,
+        "hunger": 0.45,
+        "fatigue": 0.25,
+    }
+    document["model_configs"]["psychology"] = {
+        "natural_recovery_rate_per_minute": 0.01,
+        "chronic_retention": 0.9,
+        "chronic_acute_weight": 0.08,
+        "chronic_high_distress_weight": 0.02,
+        "high_distress_threshold": 0.7,
+    }
+    document["model_configs"]["policy_registry"] = {
+        "schema_version": 1,
+        "psychology": "mean-reverting-life-state-v1",
+    }
+    document["model_configs"]["facility_awareness"] = {
+        "schema_version": 1,
+        "initial_known_facility_ids": initial_known_facility_ids,
+        "discover_co_located_facilities_on_arrival": True,
+        "source_type": "assumption",
+        "source_id": "ASM-FACILITY-ENTRY-ORIENTATION-V1",
+    }
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def single_agent_awareness_scenario() -> Callable[[list[str]], Any]:
+    """Build a 180-minute scenario_100_agents with only A001, in the sleeping area.
+
+    A001 needs the toilet, the Scenario opts into facility_awareness, and A001
+    starts knowing only the facilities given; it discovers the others it reaches.
+    """
+    return _single_agent_awareness_scenario
+
+
+def _add_toilets_program(count: int = 2, *, start_minute: int) -> Any:
+    from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
+
+    return EffectProgram(
+        program_id="program-installed-toilets",
+        narrative="Add temporary toilets",
+        source_text="仮設トイレを追加",
+        simulation_start_minute=start_minute,
+        effects=[
+            TimedAction(
+                effect_id="add-toilets",
+                op="add_toilet",
+                target_selector=TargetSelector(kind="zone", target_id="toilet"),
+                start_minute=start_minute,
+                parameters={"count": count},
+                units="toilet_stall",
+                source_id="TEST-INSTALLED-FACILITY",
+                assumption_ids=[],
+                policy_dependencies=["facility_capacity"],
+                reversible=False,
+            )
+        ],
+        assumptions=[],
+        support_mode=SupportMode.NATIVE,
+        compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
+    )
+
+
+@pytest.fixture
+def add_toilets_program() -> Callable[..., Any]:
+    """Build an EffectProgram that adds count toilets (2 by default) to the toilet zone."""
+    return _add_toilets_program
 
 
 def _make_event(

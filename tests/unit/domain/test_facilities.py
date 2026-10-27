@@ -19,7 +19,7 @@ from sheltersim.events.handlers import (
 from sheltersim.events.models import EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def make_world() -> WorldState:

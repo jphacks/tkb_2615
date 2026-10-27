@@ -45,7 +45,7 @@ from sheltersim.llm.schemas import ParseRequest
 from sheltersim.policies.behavior import ActionKind, UtilityBehaviorPolicy, WorldView
 from sheltersim.policies.psychology import Activity, SimplePsychologyPolicy
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[3]
 SMALL_SCENARIO = ROOT / "fixtures" / "scenarios" / "h00_small_replay.json"
 ENVIRONMENT_SOURCE = "ASM-H19-ZONE-ENVIRONMENT-V1"
 

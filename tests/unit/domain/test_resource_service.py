@@ -1,17 +1,20 @@
-"""Opt-in H02 hydration, staffed resource service, and replay contracts."""
+"""Opt-in H02 hydration, staffed resource service, and replay contracts.
+
+Water and meals served while the TickEngine runs are checked in
+tests/integration/test_resource_service.py.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from sheltersim.core.checkpoint import Checkpoint
-from sheltersim.core.engine import TickEngine, TraceLevel
+from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.models import Activity
 from sheltersim.domain.resource_service import ResourceServiceManager
@@ -34,72 +37,7 @@ from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.traces import RunArtifactWriter
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenarios" / "h00_small_replay.json"
-
-
-def resource_scenario(
-    *,
-    duration: int = 12,
-    water_ml: int = 1000,
-    food_units: int = 4,
-    water_capacity: int = 1,
-    meal_capacity: int = 1,
-    water_working: int | None = None,
-    water_staff_count: int = 1,
-    meal_staff: bool = True,
-    service_minutes: int = 2,
-) -> ScenarioSpec:
-    document = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    document["schema_version"] = 3
-    document["duration_minutes"] = duration
-    document["scheduled_events"] = []
-    document["facilities"].extend(
-        [
-            {
-                "id": "water_station_1",
-                "kind": "water_station",
-                "zone_id": "toilet",
-                "capacity": water_capacity,
-                "working_units": water_capacity if water_working is None else water_working,
-            },
-            {
-                "id": "meal_distribution_1",
-                "kind": "meal_distribution",
-                "zone_id": "toilet",
-                "capacity": meal_capacity,
-                "working_units": meal_capacity,
-            },
-        ]
-    )
-    for index in range(water_staff_count):
-        document["staff"].append(
-            {"id": f"S-WATER-{index + 1}", "zone_id": "toilet", "skills": ["water_service"]}
-        )
-    if meal_staff:
-        document["staff"].append({"id": "S-MEAL", "zone_id": "toilet", "skills": ["meal_service"]})
-    document["initial_stock"] = {
-        "schema_version": 1,
-        "warehouse_id": "warehouse-h02",
-        "zone_id": "toilet",
-        "water_ml": water_ml,
-        "food_meal_units": food_units,
-        "source_ids": ["ASM-H02-TEST-INITIAL-STOCK-V1"] if water_ml or food_units else [],
-    }
-    document["model_configs"]["resource_service"] = {
-        "schema_version": 1,
-        "policy_version": "resource-service-v1",
-        "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
-        "source_type": "assumption",
-        "service_minutes": service_minutes,
-        "water_ml_per_service": 250,
-        "food_meal_units_per_service": 1,
-        "hydration_growth_per_minute": 0.02,
-        "hydration_action_threshold": 0.25,
-        "hunger_action_threshold": 0.70,
-        "hydration_relief": 0.35,
-        "hunger_relief": 0.50,
-    }
-    return ScenarioSpec.model_validate(document)
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenarios" / "h00_small_replay.json"
 
 
 def queue_and_start(
@@ -118,7 +56,9 @@ def queue_and_start(
     return manager, started[0]
 
 
-def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_version() -> None:
+def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_version(
+    resource_service_scenario
+) -> None:
     baseline = WorldState.from_scenario(ScenarioSpec.load(FIXTURE))
     baseline_json = baseline.canonical_json()
     baseline_doc_state = baseline.to_dict()
@@ -139,7 +79,7 @@ def test_v5_and_v6_serialization_keep_strict_need_contracts_and_checkpoint_versi
         baseline.validate()
     baseline.agents["A001"].needs.hydration_need = 0.0
 
-    scenario = resource_scenario()
+    scenario = resource_service_scenario()
     world = WorldState.from_scenario(scenario)
     state_doc = world.to_dict()
     assert world.schema_version == 6
@@ -206,8 +146,10 @@ def test_resource_service_config_is_strict_and_opt_in_only() -> None:
             ScenarioSpec.model_validate(invalid)
 
 
-def test_v6_world_and_checkpoint_reject_noncanonical_service_config() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_v6_world_and_checkpoint_reject_noncanonical_service_config(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     state_document = world.to_dict()
     del state_document["model_configs"]["resource_service"]["water_utility_base"]
     with pytest.raises(StateInvariantError, match="complete canonical v1 values"):
@@ -230,8 +172,10 @@ def test_v6_world_and_checkpoint_reject_noncanonical_service_config() -> None:
         Checkpoint.from_dict(checkpoint_document)
 
 
-def test_resource_request_requires_arrival_and_world_rejects_legacy_resource_slots() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_resource_request_requires_arrival_and_world_rejects_legacy_resource_slots(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     manager = ResourceServiceManager(world)
     agent = world.agents["A001"]
     facility = world.facilities["water_station_1"]
@@ -256,11 +200,11 @@ def test_resource_request_requires_arrival_and_world_rejects_legacy_resource_slo
         world.validate()
 
 
-def test_h02_test_inputs_match_assumption_manifest() -> None:
-    root = Path(__file__).parents[1]
+def test_h02_test_inputs_match_assumption_manifest(resource_service_scenario) -> None:
+    root = Path(__file__).parents[3]
     manifest = json.loads((root / "fixtures/source-manifest.json").read_text(encoding="utf-8"))
     assumptions = {item["id"]: item for item in manifest["assumptions"]}
-    scenario = resource_scenario()
+    scenario = resource_service_scenario()
     config = scenario.model_configs["resource_service"]
     service_assumption = assumptions["ASM-H02-RESOURCE-SERVICE-V1"]
     for field, value in config.items():
@@ -275,8 +219,10 @@ def test_h02_test_inputs_match_assumption_manifest() -> None:
     assert stalls == ["capacity", "staff", "stock", "run_end"]
 
 
-def test_completion_schedule_collision_is_rejected_before_start_mutation() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_completion_schedule_collision_is_rejected_before_start_mutation(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     manager = ResourceServiceManager(world)
     world.agents["A001"].zone_id = world.facilities["water_station_1"].zone_id
     manager.request("A001", "water_station_1")
@@ -302,8 +248,10 @@ def test_completion_schedule_collision_is_rejected_before_start_mutation() -> No
     assert world.canonical_json() == before
 
 
-def test_h01_reservation_id_collision_does_not_partially_start_service() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_h01_reservation_id_collision_does_not_partially_start_service(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     facility = world.facilities["water_station_1"]
     world.agents["A001"].zone_id = facility.zone_id
     manager = ResourceServiceManager(world)
@@ -336,8 +284,10 @@ def test_h01_reservation_id_collision_does_not_partially_start_service() -> None
     assert world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["water_ml"]["reserved"] == 0
 
 
-def test_h01_external_reservation_survives_v6_checkpoint_and_release() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_h01_external_reservation_survives_v6_checkpoint_and_release(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     reserve = ScheduledEvent(
         event_id="h01-reserve-outside-service",
         kind=EventKind.EXOGENOUS,
@@ -400,8 +350,8 @@ def test_h01_external_reservation_survives_v6_checkpoint_and_release() -> None:
     ]
 
 
-def test_h01_reserve_cannot_claim_a_queued_h02_service_task_id() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_h01_reserve_cannot_claim_a_queued_h02_service_task_id(resource_service_scenario) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     world.agents["A001"].zone_id = world.facilities["water_station_1"].zone_id
     receipt = ResourceServiceManager(world).request("A001", "water_station_1")
     reserve = ScheduledEvent(
@@ -427,8 +377,8 @@ def test_h01_reserve_cannot_claim_a_queued_h02_service_task_id() -> None:
     world.validate()
 
 
-def test_stock_delivery_retries_fifo_head_on_next_arbitration() -> None:
-    world = WorldState.from_scenario(resource_scenario(water_ml=0, duration=8))
+def test_stock_delivery_retries_fifo_head_on_next_arbitration(resource_service_scenario) -> None:
+    world = WorldState.from_scenario(resource_service_scenario(water_ml=0, duration=8))
     facility = world.facilities["water_station_1"]
     world.agents["A001"].zone_id = facility.zone_id
     manager = ResourceServiceManager(world)
@@ -472,8 +422,10 @@ def test_stock_delivery_retries_fifo_head_on_next_arbitration() -> None:
 
 
 @pytest.mark.parametrize("operation", ["release", "consume"])
-def test_h01_handlers_cannot_mutate_service_owned_reservation(operation: str) -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_h01_handlers_cannot_mutate_service_owned_reservation(
+    operation: str, resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     _, completion = queue_and_start(world)
     payload: dict[str, object] = {
         "warehouse_id": "warehouse-h02",
@@ -500,8 +452,10 @@ def test_h01_handlers_cannot_mutate_service_owned_reservation(operation: str) ->
     world.validate()
 
 
-def test_water_service_completes_ledger_need_and_event_log_after_checkpoint_restore() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_water_service_completes_ledger_need_and_event_log_after_checkpoint_restore(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     world.model_configs["resource_service"]["hydration_relief"] = 0.2
     world.agents["A001"].needs.hydration_need = 0.8
     manager, completion = queue_and_start(world)
@@ -536,8 +490,10 @@ def test_water_service_completes_ledger_need_and_event_log_after_checkpoint_rest
     ]
 
 
-def test_partial_or_wrong_agent_completion_payload_fails_before_any_mutation() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_partial_or_wrong_agent_completion_payload_fails_before_any_mutation(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     manager, completion = queue_and_start(world)
     for changes in ({"quantity": 1}, {"agent_id": "A002"}):
         payload = completion.to_dict()["payload"]
@@ -549,8 +505,10 @@ def test_partial_or_wrong_agent_completion_payload_fails_before_any_mutation() -
         assert world.canonical_json() == before
 
 
-def test_typed_cancellation_releases_once_and_stale_completion_is_suppressed() -> None:
-    world = WorldState.from_scenario(resource_scenario())
+def test_typed_cancellation_releases_once_and_stale_completion_is_suppressed(
+    resource_service_scenario
+) -> None:
+    world = WorldState.from_scenario(resource_service_scenario())
     manager, completion = queue_and_start(world)
     cancel = ScheduledEvent(
         event_id="resource-cancel-operator",
@@ -593,9 +551,9 @@ def test_typed_cancellation_releases_once_and_stale_completion_is_suppressed() -
     ],
 )
 def test_unavailable_capacity_staff_stock_or_run_end_keeps_fifo_head(
-    overrides: dict[str, object], expected_reason: str
+    overrides: dict[str, object], expected_reason: str, resource_service_scenario
 ) -> None:
-    world = WorldState.from_scenario(resource_scenario(**overrides))
+    world = WorldState.from_scenario(resource_service_scenario(**overrides))
     manager = ResourceServiceManager(world)
     world.agents["A001"].zone_id = world.facilities["water_station_1"].zone_id
     manager.request("A001", "water_station_1")
@@ -609,9 +567,11 @@ def test_unavailable_capacity_staff_stock_or_run_end_keeps_fifo_head(
     world.validate()
 
 
-def test_fifo_and_one_staff_one_service_allow_one_last_meal_to_one_agent() -> None:
+def test_fifo_and_one_staff_one_service_allow_one_last_meal_to_one_agent(
+    resource_service_scenario
+) -> None:
     world = WorldState.from_scenario(
-        resource_scenario(food_units=1, meal_capacity=2, service_minutes=2)
+        resource_service_scenario(food_units=1, meal_capacity=2, service_minutes=2)
     )
     manager = ResourceServiceManager(world)
     for agent_id in ("A001", "A002"):
@@ -630,9 +590,11 @@ def test_fifo_and_one_staff_one_service_allow_one_last_meal_to_one_agent() -> No
     world.validate()
 
 
-def test_capacity_n_starts_at_most_n_services_with_one_staff_each() -> None:
+def test_capacity_n_starts_at_most_n_services_with_one_staff_each(
+    resource_service_scenario
+) -> None:
     world = WorldState.from_scenario(
-        resource_scenario(water_capacity=2, water_staff_count=2, service_minutes=2)
+        resource_service_scenario(water_capacity=2, water_staff_count=2, service_minutes=2)
     )
     manager = ResourceServiceManager(world)
     for agent_id in ("A001", "A002"):
@@ -647,69 +609,10 @@ def test_capacity_n_starts_at_most_n_services_with_one_staff_each() -> None:
     world.validate()
 
 
-@pytest.mark.parametrize(("agent_zone", "travel_expected"), [("sleeping", True), ("toilet", False)])
-def test_behavior_fetch_water_runs_travel_queue_service_completion_and_artifacts(
-    tmp_path: Path,
-    agent_zone: str,
-    travel_expected: bool,
-) -> None:
-    scenario = resource_scenario(duration=12, service_minutes=2)
-    scenario.model_configs["behavior"]["temperature"] = 0.0001
-    world = WorldState.from_scenario(scenario)
-    for agent in world.agents.values():
-        agent.next_decision_at = 100
-        agent.needs.toilet_urgency = 0.0
-        agent.needs.hunger = 0.1
-        agent.needs.fatigue = 0.1
-        agent.stress = 0.0
-    agent = world.agents["A001"]
-    agent.profile = replace(agent.profile, support_need=0.0)
-    agent.zone_id = agent_zone
-    agent.needs.hydration_need = 0.9
-    agent.next_decision_at = 0
-
-    output = tmp_path / f"resource-{agent_zone}"
-    artifacts = RunArtifactWriter(scenario, output, trace_level=TraceLevel.FULL)
-    artifacts.write_initial(world)
-    controller = OfflineSimulationController(world, artifacts)
-    TickEngine(world, phase_handler=controller).run()
-    artifacts.finalize(world)
-
-    resource_travel_events = [
-        record
-        for record in world.event_log.records
-        if record.event.event_type == "agent_travel_complete"
-        and record.event.payload.get("purpose") == "resource_request"
-    ]
-    assert bool(resource_travel_events) is travel_expected
-    assert world.agents["A001"].needs.hydration_need == pytest.approx(0.79)
-    water = world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["water_ml"]
-    assert water["served"] == 250
-    assert water["reserved"] == 0
-    decisions = [
-        json.loads(line)
-        for line in (output / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert any(
-        record["agent_id"] == "A001" and record["action"] == "fetch_water" for record in decisions
-    )
-    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["world_state_schema_version"] == 6
-    assert manifest["resource_service_summary"]["policy_version"] == "resource-service-v1"
-    assert (
-        manifest["model_assumptions"]["resource_service"]["source_id"]
-        == "ASM-H02-RESOURCE-SERVICE-V1"
-    )
-    assert (
-        json.loads((output / "resource_service.json").read_text(encoding="utf-8"))["schema_version"]
-        == 1
-    )
-
-
 def test_arrival_admission_rejection_is_saved_with_origin_and_detail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resource_service_scenario
 ) -> None:
-    scenario = resource_scenario(duration=8)
+    scenario = resource_service_scenario(duration=8)
     world = WorldState.from_scenario(scenario)
     agent = world.agents["A001"]
     agent.zone_id = "sleeping"
@@ -764,86 +667,9 @@ def test_arrival_admission_rejection_is_saved_with_origin_and_detail(
     assert service_artifact["request_history"][-1] == history[-1]
 
 
-def test_behavior_collect_meal_consumes_food_and_reduces_hunger(tmp_path: Path) -> None:
-    scenario = resource_scenario(duration=12, service_minutes=2)
-    scenario.model_configs["behavior"]["temperature"] = 0.0001
-    world = WorldState.from_scenario(scenario)
-    for agent in world.agents.values():
-        agent.next_decision_at = 100
-        agent.needs.toilet_urgency = 0.0
-        agent.needs.hunger = 0.1
-        agent.needs.fatigue = 0.1
-        agent.needs.hydration_need = 0.1
-        agent.stress = 0.0
-    agent = world.agents["A001"]
-    agent.profile = replace(agent.profile, support_need=0.0)
-    agent.needs.hunger = 0.95
-    agent.next_decision_at = 0
-
-    output = tmp_path / "meal-service"
-    artifacts = RunArtifactWriter(scenario, output, trace_level=TraceLevel.FULL)
-    artifacts.write_initial(world)
-    controller = OfflineSimulationController(world, artifacts)
-    TickEngine(world, phase_handler=controller).run()
-    artifacts.finalize(world)
-
-    food = world.model_state[RESOURCE_LEDGER_KEY]["accounts"]["food_meal_units"]
-    assert food["served"] == 1
-    assert food["remaining"] == 3
-    assert food["reserved"] == 0
-    assert world.agents["A001"].needs.hunger == pytest.approx(0.456)
-    assert world.model_state[RESOURCE_LEDGER_KEY]["audit"][-1]["operation"] == "consume"
-    decisions = [
-        json.loads(line)
-        for line in (output / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert any(
-        record["agent_id"] == "A001" and record["action"] == "collect_meal" for record in decisions
-    )
-
-
-def test_resource_service_trace_off_and_summary_have_identical_outputs(tmp_path: Path) -> None:
-    outputs: dict[TraceLevel, tuple[WorldState, Path]] = {}
-    for trace_level in (TraceLevel.OFF, TraceLevel.SUMMARY):
-        scenario = resource_scenario(duration=8, service_minutes=2)
-        scenario.model_configs["behavior"]["temperature"] = 0.0001
-        world = WorldState.from_scenario(scenario)
-        for agent in world.agents.values():
-            agent.next_decision_at = 100
-            agent.needs.toilet_urgency = 0.0
-            agent.needs.hunger = 0.1
-            agent.needs.fatigue = 0.1
-            agent.needs.hydration_need = 0.1
-            agent.stress = 0.0
-        agent = world.agents["A001"]
-        agent.zone_id = world.facilities["water_station_1"].zone_id
-        agent.profile = replace(agent.profile, support_need=0.0)
-        agent.needs.hydration_need = 0.9
-        agent.next_decision_at = 0
-
-        output = tmp_path / trace_level.value
-        artifacts = RunArtifactWriter(scenario, output, trace_level=trace_level)
-        artifacts.write_initial(world)
-        controller = OfflineSimulationController(world, artifacts)
-        TickEngine(world, phase_handler=controller).run()
-        artifacts.finalize(world)
-        outputs[trace_level] = (world, output)
-
-    off_world, off_path = outputs[TraceLevel.OFF]
-    summary_world, summary_path = outputs[TraceLevel.SUMMARY]
-    assert off_world.canonical_json() == summary_world.canonical_json()
-    assert off_world.event_log.records == summary_world.event_log.records
-    assert (off_path / "events_realized.jsonl").read_bytes() == (
-        summary_path / "events_realized.jsonl"
-    ).read_bytes()
-    assert (off_path / "metrics.csv").read_bytes() == (summary_path / "metrics.csv").read_bytes()
-    for artifact_name in ("resource_ledger.json", "resource_service.json"):
-        assert (off_path / artifact_name).read_bytes() == (
-            summary_path / artifact_name
-        ).read_bytes()
-
-
-def test_behavior_view_exposes_resource_actions_only_for_opted_in_v6() -> None:
+def test_behavior_view_exposes_resource_actions_only_for_opted_in_v6(
+    resource_service_scenario
+) -> None:
     from sheltersim.core.rng import CounterRNG
     from sheltersim.policies.behavior import ActionKind, UtilityBehaviorPolicy, WorldView
 
@@ -854,7 +680,7 @@ def test_behavior_view_exposes_resource_actions_only_for_opted_in_v6() -> None:
     assert not old_view.resource_service_enabled
     assert ActionKind.FETCH_WATER not in {item.action for item in old_proposal.candidates}
 
-    world = WorldState.from_scenario(resource_scenario())
+    world = WorldState.from_scenario(resource_service_scenario())
     world.agents["A001"].next_decision_at = 0
     world.agents["A001"].needs.hydration_need = 0.9
     view = WorldView.from_world(world)
