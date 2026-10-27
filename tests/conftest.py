@@ -1398,6 +1398,33 @@ def saved_run_with_scenario() -> Callable[[Path], tuple[Any, Any]]:
     return _saved_run_with_scenario
 
 
+def _bare_request_handler(tmp_path: Path) -> tuple[Any, list[int], dict[str, str], Any]:
+    from io import BytesIO
+
+    from sheltersim.web.demo import DemoService
+    from sheltersim.web.inspector import InspectorService
+    from sheltersim.web.server import _handler_for
+
+    handler_type = _handler_for(InspectorService(tmp_path), DemoService())
+    handler = handler_type.__new__(handler_type)
+    statuses: list[int] = []
+    headers: dict[str, str] = {}
+    output = BytesIO()
+    handler.send_response = statuses.append
+    handler.send_header = lambda name, value: headers.__setitem__(name, value)
+    handler.end_headers = lambda: None
+    handler.wfile = output
+    return handler, statuses, headers, output
+
+
+@pytest.fixture
+def bare_request_handler() -> Callable[[Path], tuple[Any, list[int], dict[str, str], Any]]:
+    """Make a web request handler without a socket; return it with the statuses, headers and
+    body it writes.
+    """
+    return _bare_request_handler
+
+
 def _make_event(
     event_id: str,
     *,
