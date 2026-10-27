@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import subprocess
@@ -13,11 +14,11 @@ from sheltersim.contracts.extensions import Point2D, point_in_polygon
 from sheltersim.core.world import WorldState
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
 from sheltersim.experiments.branch import BranchRuntime
-from sheltersim.experiments.initial_scenario import InitialScenarioBuilder, InitialScenarioRequest
+from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.projects import ProjectStore, digest
 
-_STATIC = Path(__file__).parents[1] / "src" / "sheltersim" / "web" / "static"
+_STATIC = Path(__file__).parents[2] / "src" / "sheltersim" / "web" / "static"
 _FORK, _SAVED, _UNSAVED = 30, 60, 45
 _NODE = shutil.which("node")
 
@@ -28,18 +29,20 @@ def _add_two_toilets() -> EffectProgram:
         narrative="Add temporary toilets",
         source_text="仮設トイレを2基追加",
         simulation_start_minute=_FORK,
-        effects=[TimedAction(
-            effect_id="add-toilets",
-            op="add_toilet",
-            target_selector=TargetSelector(kind="zone", target_id="toilet"),
-            start_minute=_FORK,
-            parameters={"count": 2},
-            units="toilet_stall",
-            source_id="TEST-RENDERED-FACILITY",
-            assumption_ids=[],
-            policy_dependencies=["facility_capacity"],
-            reversible=False,
-        )],
+        effects=[
+            TimedAction(
+                effect_id="add-toilets",
+                op="add_toilet",
+                target_selector=TargetSelector(kind="zone", target_id="toilet"),
+                start_minute=_FORK,
+                parameters={"count": 2},
+                units="toilet_stall",
+                source_id="TEST-RENDERED-FACILITY",
+                assumption_ids=[],
+                policy_dependencies=["facility_capacity"],
+                reversible=False,
+            )
+        ],
         assumptions=[],
         support_mode=SupportMode.NATIVE,
         compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
@@ -47,12 +50,11 @@ def _add_two_toilets() -> EffectProgram:
 
 
 @pytest.fixture(scope="module")
-def frames(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
+def frames(
+    tmp_path_factory: pytest.TempPathFactory, generated_scenario_preview: dict
+) -> dict[str, dict]:
     """Frames served by the timeline route, as the browser receives them."""
-    scenario = InitialScenarioBuilder().build(InitialScenarioRequest(
-        municipality="Synthetic municipality", disaster="earthquake",
-        evacuees=20, duration_days=0.25, seed=0,
-    )).scenario
+    scenario = ScenarioSpec.model_validate(copy.deepcopy(generated_scenario_preview["scenario"]))
     store = ProjectStore(tmp_path_factory.mktemp("rendering"))
     store.create_project("p")
     store.save_scenario("p", scenario, approved_hash=digest(json.loads(scenario.canonical_json())))
@@ -61,8 +63,13 @@ def frames(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
     timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
     timeline.advance("main", _SAVED)
     program = _add_two_toilets()
-    timeline.fork("main", _FORK, "child", program=program,
-                  approved_program_hash=digest(program.model_dump(mode="json")))
+    timeline.fork(
+        "main",
+        _FORK,
+        "child",
+        program=program,
+        approved_program_hash=digest(program.model_dump(mode="json")),
+    )
     timeline.advance("child", _SAVED)
     return {
         "main": timeline.frame("main", _SAVED),
@@ -144,7 +151,10 @@ def _drawn(frames: dict[str, dict], tmp_path: Path) -> dict[str, list[dict]]:
     path.write_text(json.dumps(frames), encoding="utf-8")
     completed = subprocess.run(
         [_NODE, "-e", _HARNESS, str(_STATIC), str(path)],
-        capture_output=True, text=True, check=True, timeout=60,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
     )
     return json.loads(completed.stdout)
 
