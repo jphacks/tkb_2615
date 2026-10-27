@@ -132,7 +132,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 
 ## テストの地図
 
-2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました（残りは#115で扱います）。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
+2026-10-27時点の`develop`（`64f7059`）で、`tests/`の全テストファイル104本（`tests/`直下103本と`tests/integration/`の1本）と、そこに含まれるテスト896件（parametrizeを1件ずつ数えた数）を分類しました。#53の段階1（#57）の成果です。テストを足したり移したりしたら、この表も直します。その後に足したテストも表と集計に加えています（#58で1本・3件、#59で1本・4件、#60で1本・4件、#61で1本・5件、#66で8件、#67で5件、#68で6件、#69で6件、#60の残りで1件、#76・#78・#82で2本・5件、#91で1本・3件、#72で1件、#74で1本・1件、#79で1本・2件、#83で1本・3件）。#59でライブテストを`tests/integration/`から`tests/live/`へ移しました。#88では、既存のファイルを共通fixtureに寄せながら新しい置き場所へ移しています（`test_facility_orientation.py`、`test_geometry_config_cache.py`、`test_installed_facility_rendering.py`、`test_nl_opus.py`、`test_research_psychology_default.py`、`test_resource_loss_without_operational_state.py`、`test_model_evaluation.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_resource_queue_regressions.py`、`test_household_correction.py`、`test_care_lifecycle.py`、`test_region_water_outage_conditions.py`、`test_service_capacity.py`、`test_standard_provisioning.py`。範囲が混ざっていたものは、単体と統合に分けました）。`test_round2_common_services.py`からは、生成器を使う1件だけを3件に分けて切り出しました（残りは#115で扱います）。`test_staff_support_travel.py`は、生成された図面に迂回経路を1本だけ手で足して確かめています。見えた穴の説明は#57時点の分析で、対応が済んだものには印を付けています。
 
 ### 分類の軸
 
@@ -193,12 +193,13 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | `test_resources.py` | domain | 8 |  | 1 | 3 | 結果・契約 | fixture |  |
 | `test_staff.py` | domain | 9 |  |  | 2 | 結果 | fixture |  |
 | `test_staff_operation_relief.py` | domain | 13 |  |  | 6 | 契約 | fixture |  |
-| `test_staff_support_travel.py` | domain | 8 |  |  | 2 | 契約 | fixture＋図面 |  |
+| `unit/domain/test_common_operations.py` | domain | 1 |  |  |  | 契約 | なし |  |
+| `integration/test_staff_support_travel.py` | domain |  | 1 |  |  | 契約 | 生成 |  |
 | `test_staff_task_order_effect.py` | domain | 5 |  |  | 5 | 契約 | fixture |  |
 | `test_structured_social_history.py` | domain | 2 |  |  | 2 | 契約 | fixture |  |
 | `unit/domain/test_geometry_overlay.py` | domain | 6 |  |  |  | 契約 | 生成（実行なし） |  |
 | `unit/domain/test_population.py` | domain | 4 |  |  |  |  | 生成（実行なし） |  |
-| `unit/domain/test_staff.py` | domain | 1 |  |  |  | 結果 | 生成（実行なし） |  |
+| `unit/domain/test_staff.py` | domain | 7 |  |  | 1 | 結果・契約 | 生成（実行なし） |  |
 | `integration/test_intervention_outcomes.py` | events |  | 31 |  |  | 結果 | 生成 |  |
 | `test_effect_program.py` | events | 19 | 1 |  | 12 | 契約 | fixture＋図面 |  |
 | `test_events.py` | events | 13 |  |  | 10 |  | fixture |  |
@@ -297,7 +298,7 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | 担当 | ファイル | 単体 | 統合 | e2e | 範囲が混ざるファイル | 生成Scenarioを実行するファイル |
 |---|---|---|---|---|---|---|
 | core | 5 | 39 | 13 | 0 | 3 | 1 |
-| domain | 32 | 184 | 17 | 1 | 5 | 8 |
+| domain | 33 | 183 | 18 | 1 | 5 | 9 |
 | events | 5 | 36 | 32 | 0 | 1 | 1 |
 | policies | 12 | 106 | 14 | 1 | 5 | 2 |
 | experiments | 20 | 88 | 20 | 1 | 9 | 1 |
@@ -308,9 +309,9 @@ AGENTS.mdは、新しい係数の根拠を`fixtures/source-manifest.json`に記�
 | cli | 2 | 1 | 15 | 1 | 2 | 0 |
 | 横断 | 1 | 21 | 2 | 0 | 1 | 1 |
 | repo | 2 | 9 | 0 | 0 | 0 | 0 |
-| 計 | 127 | 704 | 231 | 20 | 46 | 18 |
+| 計 | 128 | 703 | 232 | 20 | 46 | 19 |
 
-955件のうち単体が704件（74%）、統合が231件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが62本、統合だけまたはe2eだけが18本で、残りの46本は範囲が混ざっています。
+955件のうち単体が703件（74%）、統合が232件（24%）、e2eが20件（2%）です。範囲が1つだけのファイルは、単体だけが62本、統合だけまたはe2eだけが19本で、残りの46本は範囲が混ざっています。
 
 fixtureのScenarioは次のとおり使われています（全件のoffline実行中に読まれた回数。読んだ後に書き換える分を含みません）。
 
@@ -332,7 +333,7 @@ fixtureのScenarioは次のとおり使われています（全件のoffline実�
 3. **e2eが少なく、利用者の主な流れを通していない。** e2eは20件で、使うScenarioはすべてfixtureです。Project画面の主な流れ（生成Scenarioのpreview → 承認 → 実行 → 介入 → 結果を見る）をHTTPから通すテストはありません。ProjectのHTTP routeを通るのは、PDFのダウンロード（`test_pdf_http_attachment_and_existing_origin_guard`）だけです。→ #58と#60ではHTTPを通していないので、#87で扱います。
 4. **利用者が見る結果を、利用者の経路で確かめるテストが少ない。** 目的に「結果」が付くファイル21本のうち、生成Scenarioを実行するのは5本（`test_installed_facility_announcement.py`、`test_installed_facility_rendering.py`、`test_physical_queue_overflow.py`、`test_queue_service_while_repositioning.py`、`test_standard_provisioning.py`）です。そのうち、介入して本線と比べるのはトイレ追加だけです。→ #60で、スタッフ追加・設備の故障・断水・物資搬入を`tests/integration/test_intervention_outcomes.py`に追加。#66で施設・職員・物資の残り（稼働の上限、修理、職員の不在・作業指示・引き継ぎ・担当変更、物資の遅延）を追加。#67で人口（到着、退所、一時外出、仮設スペース）を追加。#68で空間・経路（経路の閉鎖、施設の移動、設備の移設、仕切り、仮設の部屋）を追加。#69で環境（騒音、行動の起こりやすさ、換気、明るさ、プライバシー、気温）を追加。トイレ追加は、既存のテストが追加したトイレが使われることまでしか確かめていなかったので、本線との比較を足しました。
 5. **experiments、storage、eventsを主担当とするファイルは、生成Scenarioを1本も実行しない**（#58で足した共通fixtureの検査`test_generated_scenario_fixture.py`と、#60で足した介入の結果テストを除く）。 Branch、比較、時系列、Project保存、EffectProgramを、図面と認知を持つ状態で確かめていません（`横断`の`test_round2_common_services.py`が生成Scenarioの保存を一部含みます）。webで生成Scenarioを実行するのも、描画の1本だけです。→ #58、#60
-6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58で共通fixtureを用意。既存の4本を移すのは#88で扱います。
+6. **UIでは作られない組み合わせで確かめているファイルがある。** `test_effect_program.py`、`test_facility_queues.py`、`test_population_demand_integration.py`、`test_staff_support_travel.py`は、fixtureに図面だけを足し、認知を持たない状態で実行します。→ #58で共通fixtureを用意。既存の4本を移すのは#88で扱います（`test_staff_support_travel.py`は移しました）。
 7. **再現性の固定が生成Scenarioにない。** `fixtures/regression-contract.json`が結果を固定するのは、`baseline_100_7d`と`small_replay`（どちらもfixture）だけです。→ #58で対応済み（`generated_small`を追加）
 8. **生成Scenarioのテストが遅く、印もない。** 実行時間の上位5件のうち3件が生成Scenarioのテストです（`test_one_meal_station_keeps_up_with_one_hundred_people`約104秒、`test_staffed_water_station_serves_a_queue_longer_than_its_room`約58秒、`test_generated_scenario_with_entered_stock_completes_a_day`約52秒）。どれにも`long_simulation`の印がありません。新しいテストで生成Scenarioを気軽に使うには、小規模な生成Scenarioが要ります。→ #58で小規模な生成Scenarioの共通fixtureを用意済み。既存の遅いテストのうち、1件で30秒以上（直列）かかる4件（上の3件と`test_default_generated_scenario_serves_water_and_meals`）に`long_simulation`の印を付けました。
 9. **名前から担当が分からないファイルがある。** `test_round2_common_services.py`（24件）と`test_round3_common_services.py`は、LLMの利用記録、保存、web projectionをまとめて扱っています。また、今の`tests/integration/`には有料APIのライブテストだけが入っていて、「統合」の意味では使われていません。→ #59で置き場所と名前の決まりを作り、ライブテストを`tests/live/`へ移しました。既存ファイルの改名は、移すときに行います。→ 2本の整理は#115で扱います。
