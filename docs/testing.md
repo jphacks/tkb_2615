@@ -88,9 +88,26 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 - `<担当>`は、AGENTS.mdのモジュール（`core`、`domain`、`events`、`policies`、`experiments`、`region`、`llm`、`storage`、`web`）と`cli`、それにリポジトリ自体（テストの配置、文書、fixture、出典台帳）を確かめる`repo`です。
 - 名前に、不具合名（例：`resource_loss_without_operational_state`）、開発の回の名前（例：`round2_common_services`）、`regressions`を使いません。不具合の再発防止テストはその機能のファイルに足し、守るべき振る舞いを関数名に書き、Issue番号をdocstringかコメントに書きます。
 - ブラウザー用の静的ファイル（JavaScript、HTML）を確かめる単体は、Pythonのモジュール名がないので`tests/unit/web/test_static_<ファイル名>.py`にします。例：`demo-v2.js`なら`test_static_demo_v2.py`。
-- 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/conftest.py`のfixtureにします（`pyproject.toml`の`pythonpath`に`tests`を入れているのは、結果を残すplugin `tests/results_log.py`を読み込むためです。テストの準備を置くモジュールには使いません）（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
+- 同じ名前のファイルを別のディレクトリに置けるよう、pytestは`--import-mode=importlib`で動かします（`pyproject.toml`）。テストファイル同士ではimportできないので、共有する準備は`tests/support/`の題材ごとのモジュールにfixtureとして置きます（下の「共有する準備の置き場所」）。テストファイルはfixtureとして受け取り、`tests/support/`のモジュールを直接importしません（例：`project_store_at`は空のproject`project`を持つ`ProjectStore`を開き、`counting_provider`は呼ばれた回数を数える偽のLLM Providerを返します）。
 - 背景で動くjob（`DemoJobManager`、`ProjectAPI`）の終わりは、実時間の短い期限で状態を読み続けて待ちません。CPUが混むと期限を超えて失敗するためです（#143）。どちらもworkerが1つなので、`wait_for_job`のfixture（`DemoJobManager`）か、`api._pool.submit(lambda: None).result(timeout=120)`（`ProjectAPI`）で、それまでのjobが終わるのを待ってから状態を確かめます。`timeout`は止まったときにテストを終わらせるためだけのものです。
 - 何を確かめるか（結果・契約・画面）は、ディレクトリにも印にもしません。実行の選び分けに使わない印は、付け忘れても気づけず、すぐ実態とずれるためです。確かめる振る舞いを関数名に書き、全体は地図の「目的」欄で把握します。
+
+### 共有する準備の置き場所
+
+共有するfixtureは、`tests/support/`に題材ごとのモジュールとして置き、`tests/conftest.py`の`pytest_plugins`で読み込みます（#138）。`pyproject.toml`の`pythonpath`に`tests`を入れているので、`support.<モジュール名>`として読み込めます。`tests/conftest.py`に残すのは、すべてのテストに効く設定（ローカルの状態の隔離と、並列実行のときの長いテストの並べ替え）と、結果を残すplugin `tests/results_log.py`の読み込みだけです。新しいfixtureは、題材が合うモジュールに足します。合うモジュールがなければ、新しいモジュールを作って`pytest_plugins`に加え、この表にも足します。
+
+| モジュール | 題材 | 主なfixture |
+|---|---|---|
+| `support/generated.py` | UIで作る生成ScenarioとProject画面のAPI | `generated_scenario`、`generated_scenario_with`、`generated_previews`、`ui_project_api`、`place_three_at_facility`、`add_toilets_program` |
+| `support/fixture_scenarios.py` | `fixtures/`のScenarioを基に、1つの仕組みを確かめるために組み立てたScenario | `small_replay_scenario`、`small_benchmark_scenario`、`resource_service_scenario`、`information_spread_scenario`、`research_psychology_scenario` |
+| `support/demo.py` | 旧UIのdemo（`web/demo.py`）と、その計画・HTTP | `small_replay_demo`、`failure_day3_demo`、`day3_demo`、`day4_plan`、`multi_plan_draft`、`wait_for_job` |
+| `support/storage.py` | Projectの保存、保存済みRunとCheckpoint、ほかのOSでの保存 | `project_store_at`、`saved_timeline`、`saved_run_with_scenario`、`no_checkpoint_decode`、`windows_like` |
+| `support/web.py` | 保存したRunのinspectorと、socketのないrequest handler | `demo_timeline_inspector`、`audit_inspector`、`full_trace_inspector`、`bare_request_handler` |
+| `support/llm.py` | 偽のLLM Providerと、有料APIのライブの確認 | `counting_provider`、`live_model_check`、`live_source_search_check` |
+| `support/reports.py` | PDFレポートの保存済みRun、根拠つきの文章、偽のOpus | `report_saved_run`、`prose_document`、`report_router`、`install_report_router` |
+| `support/world.py` | WorldState・イベント・検証の部品 | `make_event`、`record_handler`、`stress_delta`、`count_validations`、`live_checkpoint_world` |
+
+`support/paths.py`（fixtureのScenarioのパス）と`support/isolation.py`（隔離の処理）は、ほかのモジュールと`tests/conftest.py`が使う部品で、fixtureを持ちません。
 
 ### 時刻を手で動かすテスト
 
@@ -107,7 +124,7 @@ demo-v2の地図描画は、`tests/integration/test_installed_facility_rendering
 
 ## 利用者の経路を通る共通fixture
 
-UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent_dynamics`）を持ちます。一方、`fixtures/`のScenarioはどちらも持ちません。#51の不具合は図面と認知がある場合にだけ起き、fixtureを使う多くのテストをすり抜けました。新しいテストは、特に理由がなければ`tests/conftest.py`の共通fixtureを使ってください。
+UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent_dynamics`）を持ちます。一方、`fixtures/`のScenarioはどちらも持ちません。#51の不具合は図面と認知がある場合にだけ起き、fixtureを使う多くのテストをすり抜けました。新しいテストは、特に理由がなければ`tests/support/generated.py`の共通fixtureを使ってください。
 
 - `generated_scenario`：`ScenarioSpec`をテストごとに新しく作って返します。テスト内で変更しても、ほかのテストには影響しません。
 - `generated_scenario_preview`：元になったpreviewの結果（`scenario`、`approved_hash`、`can_start`、`request`など）です。session単位で1回だけ作るので、変更してはいけません。module単位のfixtureから使うときは、`copy.deepcopy(generated_scenario_preview["scenario"])`から`ScenarioSpec`を作ります。

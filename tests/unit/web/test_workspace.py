@@ -1,7 +1,7 @@
 """The Project screen's draft routes: the structured-form preview and household correction.
 
 Household correction links unaccompanied minors to a parent. Every draft comes
-from the same Scenario preview the screen uses (tests/conftest.py
+from the same Scenario preview the screen uses (tests/support/generated.py
 ui_project_api), so the people corrected here are generated ones, found in the
 draft rather than pinned by ID.
 """

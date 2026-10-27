@@ -18,7 +18,7 @@ except ImportError:  # Windows
 
 # Windows has no fcntl and no os.O_NOFOLLOW; msvcrt.locking locks a byte range per file
 # handle. Linux open-file-description locks give the same per-handle behaviour, so the
-# windows_like fixture (tests/conftest.py) simulates Windows with them.
+# windows_like fixture (tests/support/storage.py) simulates Windows with them.
 needs_ofd_locks = pytest.mark.skipif(
     not hasattr(fcntl, "F_OFD_SETLK"), reason="needs Linux open-file-description locks"
 )

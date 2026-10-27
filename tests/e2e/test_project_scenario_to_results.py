@@ -4,7 +4,7 @@ Each request is one the demo-v2 screen sends (demo-v2.js), to a real HTTP
 server on a loopback port: preview a generated Scenario, approve and run it,
 preview and approve an intervention typed as text, run both Branches, and
 read the comparison. Only the regional research is replaced, as in the shared
-fixtures (tests/conftest.py ui_project_api); the intervention text is read by
+fixtures (tests/support/generated.py ui_project_api); the intervention text is read by
 the offline rules.
 """
 
