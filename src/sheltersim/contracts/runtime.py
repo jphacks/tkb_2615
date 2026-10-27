@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING, Mapping, Protocol, Literal
 from copy import deepcopy
 from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol
 
 from pydantic import Field, model_validator
-from sheltersim.contracts.extensions import ExtensionModel, Finite, Identifier
 
+from sheltersim.contracts.extensions import ExtensionModel, Finite, Identifier
 from sheltersim.contracts.workspace import StateDescriptor
 
 if TYPE_CHECKING:
@@ -164,7 +164,7 @@ def declared_states(configs: dict[str, Any]) -> dict[str, StateDescriptor]:
         ):
             raise ValueError("model-state implementation/schema mismatch; migration required")
         if descriptor.policy_domain:
-            from sheltersim.contracts.policies import selected_models, model_catalog
+            from sheltersim.contracts.policies import model_catalog, selected_models
 
             selected = selected_models(configs).get(descriptor.policy_domain)
             if (

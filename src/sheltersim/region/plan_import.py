@@ -22,14 +22,6 @@ from sheltersim.contracts.extensions import (
     ServiceAccessConditions,
 )
 from sheltersim.experiments.scenario import FacilitySpec, ZoneEdgeSpec, ZoneSpec
-from sheltersim.region.models import (
-    ACCESSIBLE_ROUTE_MIN_WIDTH_M,
-    DataSource,
-    MunicipalPlanObservation,
-    RegionModel,
-    RegionResearchResult,
-    ShelterCandidate,
-)
 from sheltersim.region.facility import (
     EditableFacilityGeometry,
     FacilityEquipmentFootprint,
@@ -40,6 +32,14 @@ from sheltersim.region.facility import (
     validate_editable_routes,
     validate_facility_physical_layout,
     with_legacy_service_points,
+)
+from sheltersim.region.models import (
+    ACCESSIBLE_ROUTE_MIN_WIDTH_M,
+    DataSource,
+    MunicipalPlanObservation,
+    RegionModel,
+    RegionResearchResult,
+    ShelterCandidate,
 )
 
 MAX_PLAN_BYTES = 15 * 1024 * 1024

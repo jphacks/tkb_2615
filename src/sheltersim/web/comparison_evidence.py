@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from itertools import islice
-import json
 from typing import Any
 
 from sheltersim.contracts.workspace import ComparisonDifferenceQuery

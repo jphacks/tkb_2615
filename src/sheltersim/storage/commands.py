@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 from typing import Any
 
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
+from sheltersim.llm.accounting import accounted_router
 from sheltersim.llm.config import LLMSettings
 from sheltersim.llm.provider import LLMRouter
-from sheltersim.llm.accounting import accounted_router
 from sheltersim.storage.projects import ProjectStore, StorageError, digest
 
 
@@ -114,10 +114,10 @@ def execute(arguments: Any) -> dict[str, Any]:
         "draft-show",
         "history",
     }:
-        from sheltersim.web.projects import ProjectAPI
-        from sheltersim.storage.artifacts import ArtifactStore
         from sheltersim.contracts.workspace import DraftInput, HistoryQuery
+        from sheltersim.storage.artifacts import ArtifactStore
         from sheltersim.web.project_queries import ProjectQueries
+        from sheltersim.web.projects import ProjectAPI
 
         api = ProjectAPI(store, recover=False)
         try:

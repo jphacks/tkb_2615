@@ -405,9 +405,9 @@ def _apply_to_world(world: WorldState, command: BranchCommand) -> None:
         world.staff[command.staff_id] = StaffState(
             id=command.staff_id, zone_id=command.zone_id, skills=command.skills
         )
+        from sheltersim.domain.movement import staff_position_snapshots
         from sheltersim.domain.staff_dynamics import add_staff
         from sheltersim.domain.staff_operations import add_staff_operations_agent
-        from sheltersim.domain.movement import staff_position_snapshots
 
         add_staff(world, command.staff_id)
         add_staff_operations_agent(world, command.staff_id)

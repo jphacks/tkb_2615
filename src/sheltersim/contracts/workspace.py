@@ -193,8 +193,8 @@ class DatasetInput(ExtensionModel):
     def range_is_ordered(self) -> DatasetInput:
         if self.lower > self.upper:
             raise ValueError("dataset lower bound exceeds upper bound")
-        from urllib.parse import urlsplit, parse_qsl
         import re
+        from urllib.parse import parse_qsl, urlsplit
 
         url = urlsplit(self.url)
         if (

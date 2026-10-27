@@ -26,9 +26,9 @@ from sheltersim.region.models import (
     DataSource,
     HazardObservation,
     MunicipalPlanObservation,
+    RegionalProviderStatus,
     RegionModel,
     RegionResearchRequest,
-    RegionalProviderStatus,
     WeatherObservation,
 )
 from sheltersim.region.providers import RegionDatasetError, RegionProviderError

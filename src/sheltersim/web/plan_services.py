@@ -16,12 +16,12 @@ from sheltersim.region.plan_import import (
     PlanFeatureProposal,
     PlanFeatureReview,
     create_plan_extraction_proposal,
-    inspect_plan_upload,
     import_metric_geojson,
-    review_plan_extraction,
-    trace_uploaded_plan,
+    inspect_plan_upload,
     manual_trace_from_reviewed_features,
+    review_plan_extraction,
     revise_imported_plan_geometry,
+    trace_uploaded_plan,
 )
 from sheltersim.storage.artifacts import ArtifactStore
 from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
@@ -90,8 +90,8 @@ class PlanServices:
         raster_preview = None
         if operation == "extract":
             from sheltersim.region.plan_extract import (
-                extract_plan_features_from_asset,
                 PlanExtractionUnavailable,
+                extract_plan_features_from_asset,
             )
 
             page = body.get("page_index", 0)

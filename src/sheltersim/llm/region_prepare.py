@@ -15,8 +15,14 @@ from sheltersim.experiments.initial_scenario import (
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.llm.contracts import LLMStage, LLMTask
 from sheltersim.llm.provider import LLMRouter
-from sheltersim.region.models import RegionModel, RegionResearchResult
+from sheltersim.region.conditions import (
+    OPERATOR_CONDITION_SOURCE_ID,
+    InitialResourceCondition,
+    OperationalConditions,
+)
 from sheltersim.region.facility import FacilityZoneCondition
+from sheltersim.region.models import RegionModel, RegionResearchResult
+from sheltersim.region.plan_import import ImportedPlanGeometry
 from sheltersim.region.population import (
     AgeBand,
     EvacuationSelection,
@@ -25,9 +31,6 @@ from sheltersim.region.population import (
     age_bands_from_observations,
     household_mix_from_observations,
 )
-from sheltersim.region.conditions import OperationalConditions
-from sheltersim.region.conditions import InitialResourceCondition, OPERATOR_CONDITION_SOURCE_ID
-from sheltersim.region.plan_import import ImportedPlanGeometry
 
 _MAX_INPUT_LENGTH = 4_000
 _DISASTER_TERMS = (

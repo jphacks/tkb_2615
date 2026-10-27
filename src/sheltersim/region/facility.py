@@ -18,8 +18,8 @@ from sheltersim.contracts.extensions import (
 )
 from sheltersim.contracts.spatial import legacy_service_points
 from sheltersim.experiments.scenario import FacilitySpec, StaffSpec, ZoneEdgeSpec, ZoneSpec
-from sheltersim.region.models import ACCESSIBLE_ROUTE_MIN_WIDTH_M, RegionModel
 from sheltersim.region.conditions import FacilityEquipmentCondition
+from sheltersim.region.models import ACCESSIBLE_ROUTE_MIN_WIDTH_M, RegionModel
 
 SYNTHETIC_FACILITY_SOURCE_ID = "ASM-STANDARD-SHELTER-GEOMETRY-V1"
 SYNTHETIC_CAPACITY_SOURCE_ID = "ASM-SHELTER-AREA-HEURISTIC-V1"
