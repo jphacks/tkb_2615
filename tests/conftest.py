@@ -144,3 +144,24 @@ def generated_scenario_with(generated_previews: Callable[..., dict[str, Any]]):
         return ScenarioSpec.model_validate(copy.deepcopy(generated_previews(**fields)["scenario"]))
 
     return build
+
+
+@pytest.fixture
+def count_validations(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], list[int]]:
+    """Record the id of every object a pydantic model validates from now on.
+
+    For tests of parsed-config caches; monkeypatch.undo() stops the counting.
+    """
+
+    def count(model: Any) -> list[int]:
+        calls: list[int] = []
+        original = model.model_validate.__func__
+
+        def validate(cls, value, *args, **kwargs):
+            calls.append(id(value))
+            return original(cls, value, *args, **kwargs)
+
+        monkeypatch.setattr(model, "model_validate", classmethod(validate))
+        return calls
+
+    return count
