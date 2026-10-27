@@ -11,7 +11,7 @@ from sheltersim.domain.zones import ZoneConnection, ZoneGraph, ZoneNode
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.space import SpaceRouter, ZoneRoute
 
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "scenario_100_agents.json"
+FIXTURE = Path(__file__).parents[3] / "fixtures" / "scenario_100_agents.json"
 
 
 def fixture_graph() -> ZoneGraph:
