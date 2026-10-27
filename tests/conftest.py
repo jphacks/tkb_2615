@@ -1459,6 +1459,20 @@ def full_trace_inspector(tmp_path: Path) -> Any:
     return InspectorService(tmp_path)
 
 
+@pytest.fixture
+def day3_demo() -> Any:
+    """A DemoService over failure_day3, eight minutes long, with its events due at minute 2."""
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.web.demo import DemoService
+
+    document = json.loads(FAILURE_DAY3.read_text(encoding="utf-8"))
+    document["duration_minutes"] = 8
+    document["scheduled_events"] = [
+        {**event, "due_minute": 2} for event in document["scheduled_events"]
+    ]
+    return DemoService(ScenarioSpec.model_validate(document))
+
+
 def _make_event(
     event_id: str,
     *,
