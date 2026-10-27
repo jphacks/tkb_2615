@@ -655,6 +655,106 @@ def causal_stress_scenario() -> Callable[..., Any]:
     return _causal_stress_scenario
 
 
+def _information_spread_config(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "enabled": True,
+        "max_contacts_per_agent": 16,
+        "minimum_contact_minutes": 1,
+        "contact_duration_scale_minutes": 1,
+        "base_transmission_probability": 1.0,
+        "correction_transmission_multiplier": 1.0,
+        "trust_sensitivity": 0.0,
+        "family_contact_multiplier": 1.0,
+        "adjacent_zone_contact_multiplier": 1.0,
+        "query_pressure_per_claim": 0.5,
+        "query_pressure_decay_per_minute": 0.0,
+        "query_pressure_relief_per_correction": 0.5,
+        "query_threshold": 0.5,
+        "query_utility_weight": 4.0,
+    }
+    values.update(overrides)
+    return values
+
+
+@pytest.fixture
+def information_spread_config() -> Callable[..., dict[str, object]]:
+    """An enabled information_spread config where every contact passes a claim on.
+
+    Keyword arguments replace single coefficients.
+    """
+    return _information_spread_config
+
+
+def _information_spread_scenario(
+    *,
+    duration: int = 6,
+    profile_count: int = 2,
+    truth_status: str = "unknown",
+    correction: bool = True,
+    config: dict[str, object] | None = None,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    document = json.loads(SCENARIO_100_AGENTS.read_text(encoding="utf-8"))
+    document["id"] = "information-spread-test"
+    document["duration_minutes"] = duration
+    document["scheduled_events"] = [
+        {
+            "id": "rumor-event",
+            "kind": "exogenous",
+            "due_minute": 0,
+            "priority": 0,
+            "sequence": 10,
+            "event_type": "information_rumor",
+            "payload": {
+                "message_id": "claim-water-1",
+                "truth_status": truth_status,
+                "origin_agent_id": "A001",
+            },
+            "source_id": "scenario-rumor-source",
+        }
+    ]
+    if correction:
+        document["scheduled_events"].append(
+            {
+                "id": "correction-event",
+                "kind": "exogenous",
+                "due_minute": 3,
+                "priority": 0,
+                "sequence": 11,
+                "event_type": "information_correction",
+                "payload": {
+                    "message_id": "claim-water-1",
+                    "zone_id": "sleeping",
+                    "belief": "rejected" if truth_status == "false" else "verified",
+                },
+                "source_id": "staff-notice-source",
+                "causation_id": "rumor-event",
+            }
+        )
+    document["profiles"] = document["profiles"][:profile_count]
+    for profile in document["profiles"]:
+        profile["support_need"] = 0.0
+        profile["initial_needs"] = {
+            "toilet_urgency": 0.0,
+            "hunger": 0.0,
+            "fatigue": 0.0,
+        }
+    document["model_configs"]["information_spread"] = config or _information_spread_config()
+    document["model_configs"].setdefault("behavior", {})["temperature"] = 0.01
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def information_spread_scenario() -> Callable[..., Any]:
+    """Build scenario_100_agents with a rumor from A001 at minute 0 and, by default, a
+    staff correction in the sleeping area at minute 3.
+
+    Residents have no needs, so information is the only thing that drives inquiries.
+    """
+    return _information_spread_scenario
+
+
 def _make_event(
     event_id: str,
     *,
