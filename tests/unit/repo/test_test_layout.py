@@ -52,7 +52,6 @@ UNSORTED = frozenset(
         "test_facilities.py",
         "test_facility_awareness.py",
         "test_generated_scenario_fixture.py",
-        "test_imported_plan_route_revision.py",
         "test_information_spread.py",
         "test_inspect_cli.py",
         "test_installed_facility_announcement.py",
