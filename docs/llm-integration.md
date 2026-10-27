@@ -114,7 +114,7 @@ CLIはprepareとrunのたびに新しい利用枠（cli-prepare-…、cli-run-�
 
 live連携testは標準testとは別で、`tests/live/test_live_api.py`にあります。ANTHROPIC_API_KEYとSHELTERSIM_ALLOW_LIVE_API_TESTS=1の両方が必要で、pytest実行中にAPIキーを使えるのはこのファイルのテストだけです。設定の既定値は2 call、test budget 0.01ドルですが、OpusとSonnetの呼出しはthinking用の余裕を予約するため、この既定値ではOpusを1回も呼べません。そのため各testは、上限を自分で設定します。
 
-- モデル別確認：3 call、0.15ドル
+- モデル別確認：3 call、0.15ドル。runtimeの呼び出しは分析用の枠（`ANALYSIS_RESERVED_CALLS`）を残す必要があるので、Haiku（runtime）を最初に、Opus・Sonnetをその後に呼びます。上限は実行ごとの口座（`live-task-qa-<乱数>`）に掛かり、全実行の合計は端末の共有上限（task-global-v1）が抑えます。この設定と順番が、2回続けても台帳の上限に収まることは、`tests/unit/llm/test_accounting.py`がAPIを呼ばずに確かめます（#148）。
 - 公式ドメイン検索：2 call分の枠
 - 機能の通し確認：12 call、2ドル
 

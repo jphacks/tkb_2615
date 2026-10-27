@@ -10,7 +10,7 @@ import pytest
 from sheltersim.llm.accounting import AccountedProvider, runtime_usage_store, usage_limits
 from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.config import LLMSettings
-from sheltersim.llm.contracts import LLMStage, LLMTask
+from sheltersim.llm.contracts import LLMStage
 from sheltersim.llm.provider import THINKING_HEADROOM_TOKENS, LLMRouter
 from sheltersim.storage.usage import UsageLedger, task_campaign_ledger
 
@@ -113,61 +113,21 @@ def test_live_pdf_reports_use_opus_and_reuse_saved_pdf(tmp_path, monkeypatch) ->
         api.close()
 
 
-_ACK_SCHEMA = {
-    "type": "object",
-    "properties": {"ok": {"type": "boolean"}},
-    "required": ["ok"],
-    "additionalProperties": False,
-}
-
-
-def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(tmp_path) -> None:
-    settings = LLMSettings.from_env().for_live_integration_tests()
-    # Opus and Sonnet always think, so each non-runtime call reserves thinking headroom
-    # (about $0.09 for Opus before the call); actual spend stays far below this cap.
-    settings = replace(
-        settings,
-        max_api_calls=3,
-        live_test_max_calls=3,
-        live_test_budget_usd=0.15,
-        budget_usd=0.15,
-        intervention_model_family="sonnet",
+def test_live_opus_sonnet_and_haiku_calls_are_durably_capped_and_replayable(
+    tmp_path, live_model_check
+) -> None:
+    settings, router, tasks, store = live_model_check(
+        LLMSettings.from_env(), tmp_path / "live-api-tape.json"
     )
-    settings = replace(settings, cache_path=tmp_path / "live-api-tape.json")
-    store = runtime_usage_store()
-    store.create_project("runtime-accounts", _internal=True)
-    ledger = UsageLedger(store, "runtime-accounts", "live-task-qa")
-    ledger.create(usage_limits(settings))
-    router = LLMRouter(settings)
-    router.provider = AccountedProvider(
-        router.provider,
-        ledger,
-        settings,
-        "live_api_qa",
-        branch_id=None,
-        campaign_ledger=task_campaign_ledger(store),
-    )
-    tasks = [
-        LLMTask(
-            stage=stage,
-            input_text='Reply with exactly {"ok":true}.',
-            state_hash=f"live-test-{stage.value}",
-            prompt_version="live-integration-ack-v1",
-            output_schema=_ACK_SCHEMA,
-            fallback_text='{"ok":false}',
-            max_output_tokens=32,
-        )
-        for stage in (LLMStage.PREPARE, LLMStage.INTERVENTION, LLMStage.RUNTIME)
-    ]
 
     outputs = [router.complete(task) for task in tasks]
 
     assert [output for output in outputs if '"ok":true' in output] == outputs
     assert router.api_request_count == 3
     assert [record.model_id for record in router.records] == [
+        settings.haiku_model,
         settings.opus_model,
         settings.sonnet_model,
-        settings.haiku_model,
     ]
     assert all(record.outcome == "recorded" for record in router.records)
     # Billed output includes thinking outside runtime; runtime Haiku runs without it.
