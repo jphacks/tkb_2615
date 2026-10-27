@@ -56,7 +56,6 @@ UNSORTED = frozenset(
         "test_exact_timeline.py",
         "test_facilities.py",
         "test_facility_awareness.py",
-        "test_facility_orientation.py",
         "test_facility_queues.py",
         "test_generated_scenario_fixture.py",
         "test_geometry_config_cache.py",
