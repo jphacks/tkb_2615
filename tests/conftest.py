@@ -1359,6 +1359,22 @@ def apply_multi_plan() -> Callable[[Any, Any, str], dict[str, Any]]:
     return _apply_multi_plan
 
 
+@pytest.fixture
+def no_checkpoint_decode(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the hash of every checkpoint ProjectStore loads from now on."""
+    from sheltersim.storage.projects import ProjectStore
+
+    decoded = []
+    original = ProjectStore.load_checkpoint
+
+    def load(self, project_id, run_id, checkpoint_hash):
+        decoded.append(checkpoint_hash)
+        return original(self, project_id, run_id, checkpoint_hash)
+
+    monkeypatch.setattr(ProjectStore, "load_checkpoint", load)
+    return decoded
+
+
 def _make_event(
     event_id: str,
     *,
