@@ -14,6 +14,7 @@ import pytest
 from sheltersim.core.rng import CounterRNG, KeyedRandom
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity
+from sheltersim.domain.staff import StaffService
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.behavior import (
     ActionCandidate,
@@ -219,3 +220,37 @@ def test_behavior_runner_only_proposes_due_agents_in_stable_id_order() -> None:
     assert [proposal.agent_id for proposal in proposals] == ["A001", "A002"]
 
 
+def test_support_candidates_are_suppressed_for_open_request_and_cooldown(
+    causal_stress_scenario
+) -> None:
+    scenario = causal_stress_scenario(agent_count=1)
+    world = WorldState.from_scenario(scenario)
+    agent = world.agents["A001"]
+    agent.activity = Activity.IDLE
+    receipt = StaffService(world).request(agent.id)
+    agent.activity = Activity.IDLE  # Keep the proposal gate under test while request is open.
+    policy = UtilityBehaviorPolicy()
+
+    proposal = policy.propose(WorldView.from_world(world), agent.id, CounterRNG(world.seed))
+    help_candidate = next(
+        item for item in proposal.candidates if item.action is ActionKind.SEEK_HELP
+    )
+    assert not help_candidate.eligible
+    assert world.support_requests[receipt.request_id].status.value == "pending"
+
+    agent.support_request_id = None
+    agent.support_cooldown_until = 10
+    cooldown_proposal = policy.propose(
+        WorldView.from_world(world), agent.id, CounterRNG(world.seed)
+    )
+    assert not next(
+        item for item in cooldown_proposal.candidates if item.action is ActionKind.SEEK_HELP
+    ).eligible
+
+    world.minute_index = 10
+    eligible_proposal = policy.propose(
+        WorldView.from_world(world), agent.id, CounterRNG(world.seed)
+    )
+    assert next(
+        item for item in eligible_proposal.candidates if item.action is ActionKind.SEEK_HELP
+    ).eligible

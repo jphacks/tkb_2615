@@ -584,6 +584,77 @@ def stress_delta() -> Callable[[str, int, float], Any]:
     return _stress_delta
 
 
+def _causal_stress_scenario(
+    *,
+    agent_count: int = 2,
+    duration: int = 20,
+    stress_pressure: float = 0.1,
+    queued_stress: float = 0.01,
+    support_wait_stress: float = 0.02,
+    social_enabled: bool = False,
+    with_service: bool = True,
+) -> Any:
+    from sheltersim.experiments.scenario import ScenarioSpec
+
+    profiles = [
+        {
+            "schema_version": 2,
+            "id": f"A{index:03}",
+            "group_id": "G01",
+            "initial_zone_id": "main",
+            "support_need": 0.8,
+            "stress_sensitivity": 1.0,
+            "initial_needs": {"toilet_urgency": 0.8, "hunger": 0.9, "fatigue": 0.2},
+            "rng_key": f"profile:A{index:03}",
+        }
+        for index in range(1, agent_count + 1)
+    ]
+    config = {
+        "psychology": {
+            "stress_pressure": stress_pressure,
+            "queued_stress": queued_stress,
+            "support_wait_stress": support_wait_stress,
+        },
+        "behavior": {"decision_interval_minutes": 5},
+        "staff": {"support_task_minutes": 5, "unresolved_after_minutes": 10},
+        "social_propagation": {
+            "enabled": social_enabled,
+            "max_contacts_per_agent": 1,
+            "minimum_contact_minutes": 1,
+            "stress_spread_per_minute": 0.01,
+            "natural_recovery_per_minute": 0.0,
+            "cooldown_minutes": 1,
+            "max_pair_stress_increase": 0.05,
+            "max_agent_stress_increase_per_minute": 0.05,
+        },
+    }
+    document = {
+        "schema_version": 3,
+        "id": "causal-stress-test",
+        "duration_minutes": duration,
+        "seed": 23,
+        "zones": [{"id": "main", "name": "Main", "capacity": 10}],
+        "profiles": profiles,
+        "model_configs": config,
+    }
+    if with_service:
+        document["facilities"] = [
+            {"id": "toilet-1", "kind": "toilet", "zone_id": "main", "capacity": 1}
+        ]
+        document["staff"] = [{"id": "staff-1", "zone_id": "main", "skills": ["support"]}]
+    return ScenarioSpec.model_validate(document)
+
+
+@pytest.fixture
+def causal_stress_scenario() -> Callable[..., Any]:
+    """Build a one-zone Scenario where needy residents queue for one toilet and one worker.
+
+    The psychology coefficients for need pressure, queueing and support waits can be
+    changed; with_service=False drops the toilet and the worker.
+    """
+    return _causal_stress_scenario
+
+
 def _make_event(
     event_id: str,
     *,

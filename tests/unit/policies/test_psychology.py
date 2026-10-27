@@ -12,8 +12,11 @@ import math
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+from sheltersim.core.engine import TraceLevel
 from sheltersim.core.world import StateInvariantError, WorldState
+from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.models import (
     Activity,
@@ -25,12 +28,17 @@ from sheltersim.domain.models import (
     TypedMessage,
 )
 from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
-from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.domain.staff import StaffService
+from sheltersim.events.handlers import EventDispatcher, FacilityOutageHandler
+from sheltersim.events.models import EventKind, ScheduledEvent
+from sheltersim.experiments.scenario import PsychologyModelConfig, ScenarioSpec
+from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import (
     AgentStateDelta,
     IntegratedDistressLifeStatePolicy,
     MeanRevertingDistressPolicy,
+    PsychologyParameters,
     SimplePsychologyPolicy,
     apply_state_deltas,
     mean_reverting_step,
@@ -409,3 +417,96 @@ def test_psychology_application_rejects_stale_or_duplicate_updates_atomically() 
     with pytest.raises(StateInvariantError, match="duplicate psychology update"):
         apply_state_deltas(world, (update, update))
     assert world.canonical_json() == initial
+
+
+def test_psychology_trace_separates_need_queue_and_staff_causes(causal_stress_scenario) -> None:
+    scenario = causal_stress_scenario()
+    world = WorldState.from_scenario(scenario)
+    outage = ScheduledEvent(
+        event_id="toilet-outage",
+        kind=EventKind.EXOGENOUS,
+        due_minute=0,
+        priority=0,
+        sequence=world.allocate_event_sequence(),
+        event_type="facility_outage",
+        payload={"facility_id": "toilet-1", "units_out": 1},
+        source_id="test-scenario",
+    )
+    world.schedule_event(outage)
+    EventDispatcher({"facility_outage": FacilityOutageHandler()}).dispatch_due(world, 0)
+
+    world.agents["A001"].activity = Activity.IDLE
+    ToiletServiceManager(world).request("A001", "toilet-1")
+    support = StaffService(world, task_duration_minutes=5).request("A002")
+    StaffService(world, task_duration_minutes=5).assign_pending(0)
+    world.minute_index = 5
+
+    view = WorldView.from_world(world)
+    result = SimplePsychologyPolicy(
+        PsychologyParameters(
+            stress_pressure=0.1,
+            queued_stress=0.01,
+            support_wait_stress=0.02,
+        )
+    ).explain_update(view, 5)
+    trace = result.trace_document(
+        5,
+        source_id="ASM-H04-CAUSAL-STRESS-V1",
+        full=True,
+    )
+    by_agent = {item["agent_id"]: item for item in trace["agents"]}
+    queue_trace = by_agent["A001"]
+    support_trace = by_agent["A002"]
+
+    assert queue_trace["stress"]["components"]["unmet_need_pressure"] > 0.0
+    assert queue_trace["stress"]["components"]["facility_queue_wait"] == pytest.approx(0.01)
+    queue_cause = next(
+        item for item in queue_trace["direct_causes"] if item["kind"] == "facility_queue_wait"
+    )
+    assert queue_cause["wait_minutes"] == 5
+    assert queue_cause["source_id"] == "ASM-TOILET-SERVICE-DURATION-V1"
+    assert queue_cause["facility_capacity"] == 1
+    assert queue_cause["facility_working_units"] == 0
+    assert "toilet-outage" in queue_cause["capacity_event_context_ids"]
+    assert support_trace["stress"]["components"]["staff_support_wait"] == pytest.approx(0.02)
+    support_cause = next(
+        item for item in support_trace["direct_causes"] if item["kind"] == "staff_support_wait"
+    )
+    assert support_cause["support_request_id"] == support.request_id
+    assert support_cause["assigned_staff_id"] == "staff-1"
+    assert support_trace["source_references"]["support_source_id"] == (
+        "ASM-STAFF-SUPPORT-LIFECYCLE-V1"
+    )
+
+    capacity_before = world.facilities["toilet-1"].working_units
+    apply_state_deltas(world, result.deltas)
+    assert world.facilities["toilet-1"].working_units == capacity_before == 0
+
+
+def test_scenario_psychology_coefficients_are_validated_and_source_tagged(
+    tmp_path, causal_stress_scenario
+) -> None:
+    scenario = causal_stress_scenario(stress_pressure=0.2)
+    config = PsychologyModelConfig.model_validate(scenario.model_configs["psychology"])
+    assert config.source_id == "ASM-H04-CAUSAL-STRESS-V1"
+    assert config.policy_version == "causal-stress-v1"
+    assert config.stress_pressure == pytest.approx(0.2)
+
+    world = WorldState.from_scenario(scenario)
+    writer = RunArtifactWriter(scenario, tmp_path / "run", trace_level=TraceLevel.OFF)
+    writer.write_initial(world)
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model_assumptions"]["psychology"]["source_id"] == config.source_id
+    assert manifest["model_assumptions"]["psychology"]["values"]["stress_pressure"] == 0.2
+
+    view = WorldView.from_world(world)
+    low_sensitivity = SimplePsychologyPolicy(
+        PsychologyParameters(stress_pressure=0.01, support_wait_stress=0.0)
+    ).update(view, 0)[0]
+    high_sensitivity = SimplePsychologyPolicy(
+        PsychologyParameters(stress_pressure=0.2, support_wait_stress=0.0)
+    ).update(view, 0)[0]
+    assert high_sensitivity.stress > low_sensitivity.stress
+
+    with pytest.raises(ValidationError):
+        causal_stress_scenario(stress_pressure=0.251)
