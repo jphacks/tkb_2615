@@ -1236,8 +1236,10 @@ def trace_uploaded_plan(
     for footprint in equipment_footprint_values:
         facility = facility_spec_by_id[footprint.facility_id]
         zone_polygon = next(
-            item.polygon for item in physical_zones if item.zone_id == facility.zone_id
+            (item.polygon for item in physical_zones if item.zone_id == facility.zone_id), None
         )
+        if zone_polygon is None:
+            raise ValueError(f"facility {facility.id!r} references an unknown traced zone")
         if not all(_point_in_or_on_polygon(vertex, zone_polygon) for vertex in footprint.polygon):
             raise ValueError(
                 f"equipment footprint {footprint.facility_id!r} lies outside its assigned zone"
@@ -1383,12 +1385,14 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
         raise ValueError("vector plan must declare units='m' and origin='top_left'")
     if document.get("type") == "FeatureCollection":
         return _import_metric_feature_collection(asset, document)
-    zone_values = tuple(ZoneSpec.model_validate(value) for value in document.get("zones", ()))
+    zone_values = tuple(
+        ZoneSpec.model_validate(value) for value in _json_objects(document, "zones")
+    )
     edge_values = tuple(
-        ZoneEdgeSpec.model_validate(value) for value in document.get("zone_edges", ())
+        ZoneEdgeSpec.model_validate(value) for value in _json_objects(document, "zone_edges")
     )
     facility_values = tuple(
-        FacilitySpec.model_validate(value) for value in document.get("facilities", ())
+        FacilitySpec.model_validate(value) for value in _json_objects(document, "facilities")
     )
     geometry_values = document.get("geometry")
     if not isinstance(geometry_values, dict):
@@ -1400,7 +1404,7 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
     geometry_data["source_kind"] = "operator"
     geometry_data["source_ids"] = [asset.source_id]
     geometry_data["zones"] = [
-        dict(zone, source_ids=[asset.source_id]) for zone in geometry_data.get("zones", ())
+        dict(zone, source_ids=[asset.source_id]) for zone in _json_objects(geometry_data, "zones")
     ]
     geometry = FacilityGeometry.model_validate(geometry_data)
     editable_geometry = None
@@ -1410,17 +1414,20 @@ def import_metric_geojson(asset: PlanAsset, content: bytes) -> ImportedPlanGeome
             raise ValueError("editable_geometry must be an object when supplied")
         editable_data = dict(editable_data)
         editable_data["walls"] = [
-            dict(item, source_ids=[asset.source_id]) for item in editable_data.get("walls", ())
+            dict(item, source_ids=[asset.source_id])
+            for item in _json_objects(editable_data, "walls")
         ]
         editable_data["openings"] = [
-            dict(item, source_ids=[asset.source_id]) for item in editable_data.get("openings", ())
+            dict(item, source_ids=[asset.source_id])
+            for item in _json_objects(editable_data, "openings")
         ]
         editable_data["obstacles"] = [
-            dict(item, source_ids=[asset.source_id]) for item in editable_data.get("obstacles", ())
+            dict(item, source_ids=[asset.source_id])
+            for item in _json_objects(editable_data, "obstacles")
         ]
         editable_data["equipment_footprints"] = [
             dict(item, source_ids=[asset.source_id])
-            for item in editable_data.get("equipment_footprints", ())
+            for item in _json_objects(editable_data, "equipment_footprints")
         ]
         editable_geometry = EditableFacilityGeometry.model_validate(editable_data)
     geometry = with_legacy_service_points(geometry, facility_values)
@@ -1665,8 +1672,8 @@ def _polygon_area(polygon: tuple[Point2D, ...]) -> float:
 def _import_metric_feature_collection(
     asset: PlanAsset, document: dict[str, Any]
 ) -> ImportedPlanGeometry:
-    width_m = float(document.get("width_m", 0))
-    height_m = float(document.get("height_m", 0))
+    width_m = _geojson_number(document.get("width_m", 0), "width_m")
+    height_m = _geojson_number(document.get("height_m", 0), "height_m")
     if width_m <= 0 or height_m <= 0:
         raise ValueError("metric GeoJSON FeatureCollection requires positive width_m and height_m")
     zones: list[ZoneSpec] = []
@@ -1707,7 +1714,7 @@ def _import_metric_feature_collection(
                 ring = ring[:-1]
             polygon = tuple(_geojson_point(item) for item in ring)
             zone_id = str(properties.get("zone_id") or "")
-            area = float(properties.get("usable_area_m2", 0))
+            area = _geojson_number(properties.get("usable_area_m2", 0), "usable_area_m2")
             zones.append(
                 ZoneSpec(
                     id=zone_id,
@@ -1756,7 +1763,7 @@ def _import_metric_feature_collection(
                 )
             )
         elif feature_type == "route" and geometry.get("type") == "LineString":
-            route_points = tuple(_geojson_point(item) for item in coordinates)
+            route_points = _geojson_line(coordinates, feature_type="route")
             edge_id = str(properties.get("edge_id") or "")
             edges.append(
                 ZoneEdgeSpec(
@@ -1779,7 +1786,7 @@ def _import_metric_feature_collection(
             if opening_id is not None:
                 route_openings.append(RouteOpeningUse(route_id=edge_id, opening_id=str(opening_id)))
         elif feature_type == "wall" and geometry.get("type") == "LineString":
-            points = tuple(_geojson_point(item) for item in coordinates)
+            points = _geojson_line(coordinates, feature_type="wall")
             if len(points) != 2:
                 raise ValueError("GeoJSON wall features must contain exactly two endpoints")
             walls.append(
@@ -1791,7 +1798,7 @@ def _import_metric_feature_collection(
                 )
             )
         elif feature_type == "opening" and geometry.get("type") == "LineString":
-            points = tuple(_geojson_point(item) for item in coordinates)
+            points = _geojson_line(coordinates, feature_type="opening")
             if len(points) != 2:
                 raise ValueError("GeoJSON opening features must contain exactly two endpoints")
             openings.append(
@@ -1910,7 +1917,30 @@ def _import_metric_feature_collection(
 def _geojson_point(value: Any) -> Point2D:
     if not isinstance(value, (list, tuple)) or len(value) < 2:
         raise ValueError("GeoJSON coordinates must contain x and y")
-    return Point2D(x=float(value[0]), y=float(value[1]))
+    return Point2D(x=_geojson_number(value[0], "x"), y=_geojson_number(value[1], "y"))
+
+
+def _geojson_number(value: Any, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"GeoJSON {name} must be a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"GeoJSON {name} must be finite")
+    return number
+
+
+def _geojson_line(coordinates: Any, *, feature_type: str) -> tuple[Point2D, ...]:
+    if not isinstance(coordinates, list):
+        raise ValueError(f"GeoJSON {feature_type} LineString coordinates must be an array")
+    return tuple(_geojson_point(item) for item in coordinates)
+
+
+def _json_objects(document: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    values = document.get(name, [])
+    if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):
+        raise ValueError(f"vector plan {name} must be an array of objects")
+    return values
 
 
 def _geojson_polygon_ring(coordinates: Any, *, feature_type: str) -> list[Any]:

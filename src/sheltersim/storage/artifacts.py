@@ -169,7 +169,10 @@ class ArtifactStore:
             if mime in signatures and not signatures[mime]:
                 raise StorageError("asset_media_mismatch")
             if mime in {"application/json", "application/geo+json"}:
-                document = json.loads(data)
+                try:
+                    document = json.loads(data)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise StorageError(f"invalid_plan_json: {exc}") from exc
                 if not isinstance(document, dict) or safe_document(document) != document:
                     raise StorageError("invalid_or_sensitive_plan_json")
             self._bytes(self.store._path(project_id, "assets", asset_id, "content"), data)

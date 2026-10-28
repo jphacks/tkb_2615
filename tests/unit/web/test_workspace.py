@@ -439,3 +439,42 @@ def test_repeated_identical_intervention_preview_reuses_the_saved_reply(
     # Before stored compiler tapes, the ledger refused this identical paid request.
     assert second["fallback_used"] is False
     assert len(calls) == calls_after_first
+
+
+def test_a_selected_plan_without_a_sleeping_zone_is_refused_with_the_reason(
+    ui_project_api, generated_request, upload_plan
+) -> None:
+    from support.plans import shelter_plan_png
+
+    asset = upload_plan(ui_project_api, shelter_plan_png())
+    trace = {
+        "raster_pixel_width": 400,
+        "raster_pixel_height": 300,
+        "building_width_m": 40,
+        "building_height_m": 30,
+        "zones": [
+            {"zone_id": "hall", "name": "Hall", "pixel_polygon": [[20, 20], [380, 20], [380, 280]]}
+        ],
+        "facilities": [],
+        "routes": [],
+    }
+    preview = ui_project_api.post(
+        ["project", "assets", asset, "plan-preview"], {"operation": "trace", "trace": trace}
+    )
+    ui_project_api.post(
+        ["project", "geometries", "hall"],
+        {
+            "preview_id": preview["preview_id"],
+            "asset_id": asset,
+            "approved_hash": preview["value_hash"],
+            "approved": True,
+        },
+    )
+
+    with pytest.raises(StorageError) as refused:
+        ui_project_api.workspace.preview(
+            "project", {"text": "", "request": generated_request(), "geometry_id": "hall"}
+        )
+
+    assert refused.value.code == "scenario_plan_invalid"
+    assert "zone named 'sleeping'" in str(refused.value)

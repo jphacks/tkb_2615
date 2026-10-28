@@ -8,10 +8,13 @@ import re
 import uuid
 from typing import Any
 
+from pydantic import ValidationError
+
 from sheltersim.contracts.workspace import AssetBegin, AssetChunk, DraftInput
 from sheltersim.region.plan_import import (
     ImportedPlanGeometry,
     ManualPlanTrace,
+    PlanAsset,
     PlanExtractionProposal,
     PlanFeatureProposal,
     PlanFeatureReview,
@@ -87,6 +90,55 @@ class PlanServices:
             rights_status="operator_permission_asserted",
             use_restriction_note=manifest["license_note"],
         )
+        try:
+            result, raster_preview = self._operation_result(
+                project, asset_id, body, manifest, asset, content
+            )
+        except StorageError:
+            raise
+        except ValueError as exc:
+            # Plans are drawn by people; give them the reason, not a bare 400 (#204).
+            raise StorageError(f"plan_{operation}_invalid: {plan_rejection_reason(exc)}") from exc
+        if isinstance(result, ImportedPlanGeometry) and raster_preview is not None:
+            result = self._bind_raster_provenance(project, result, raster_preview)
+        kind = "geometry" if isinstance(result, ImportedPlanGeometry) else "proposal"
+        value = result.model_dump(mode="json")
+        if safe_document(value) != value:
+            raise StorageError("plan_contains_sensitive_fields")
+        preview_id = "plan-" + uuid.uuid4().hex
+        record = {
+            "record_type": "plan_preview",
+            "asset_id": asset_id,
+            "kind": kind,
+            "value": value,
+            "value_hash": digest(value),
+            "validation": "region_structural_rules_only",
+            "runtime_verified": False,
+        }
+        if raster_preview is not None:
+            record["raster_preview"] = raster_preview
+        self.artifacts.save_draft(project, preview_id, DraftInput(content=record))
+        return {
+            "schema_version": 1,
+            "preview_id": preview_id,
+            **record,
+            "limits": (
+                "Raster extraction, when requested, is an untrusted bounded heuristic. Geometry "
+                "requires human review/calibration. No provider call is made by this adapter."
+            ),
+        }
+
+    def _operation_result(
+        self,
+        project: str,
+        asset_id: str,
+        body: dict[str, Any],
+        manifest: dict[str, Any],
+        asset: PlanAsset,
+        content: bytes,
+    ) -> tuple[ImportedPlanGeometry | PlanExtractionProposal, dict[str, Any] | None]:
+        """Run one plan preview operation and return its result and raster preview."""
+        operation = body["operation"]
         raster_preview = None
         if operation == "extract":
             from sheltersim.region.plan_extract import (
@@ -215,7 +267,9 @@ class PlanServices:
                     editable_geometry=body.get("editable_geometry"),
                 )
             except (TypeError, ValueError) as exc:
-                raise StorageError(f"plan_geometry_revision_invalid: {exc}") from exc
+                raise StorageError(
+                    f"plan_geometry_revision_invalid: {plan_rejection_reason(exc)}"
+                ) from exc
         else:
             reviewed = None
             if body.get("reviewed_preview_id"):
@@ -260,34 +314,7 @@ class PlanServices:
             ):
                 raise StorageError("plan_raster_preview_trace_calibration_mismatch")
             result = trace_uploaded_plan(asset, trace, reviewed_proposal=reviewed)
-        if isinstance(result, ImportedPlanGeometry) and raster_preview is not None:
-            result = self._bind_raster_provenance(project, result, raster_preview)
-        kind = "geometry" if isinstance(result, ImportedPlanGeometry) else "proposal"
-        value = result.model_dump(mode="json")
-        if safe_document(value) != value:
-            raise StorageError("plan_contains_sensitive_fields")
-        preview_id = "plan-" + uuid.uuid4().hex
-        record = {
-            "record_type": "plan_preview",
-            "asset_id": asset_id,
-            "kind": kind,
-            "value": value,
-            "value_hash": digest(value),
-            "validation": "region_structural_rules_only",
-            "runtime_verified": False,
-        }
-        if raster_preview is not None:
-            record["raster_preview"] = raster_preview
-        self.artifacts.save_draft(project, preview_id, DraftInput(content=record))
-        return {
-            "schema_version": 1,
-            "preview_id": preview_id,
-            **record,
-            "limits": (
-                "Raster extraction, when requested, is an untrusted bounded heuristic. Geometry "
-                "requires human review/calibration. No provider call is made by this adapter."
-            ),
-        }
+        return result, raster_preview
 
     def _preview(self, project: str, preview_id: str, asset: str, kind: str) -> dict[str, Any]:
         record = self.artifacts.draft(project, preview_id)["content"]
@@ -436,3 +463,17 @@ class PlanServices:
             project, record["asset_id"], geometry, record.get("raster_preview")
         )
         return record
+
+
+def plan_rejection_reason(exc: Exception) -> str:
+    """Why a plan input was refused, naming contract fields without echoing their values."""
+    if isinstance(exc, ValidationError):
+        errors = exc.errors(include_url=False, include_input=False)
+        parts = [
+            f"{'.'.join(str(part) for part in error['loc']) or 'value'}: {error['msg']}"
+            for error in errors[:5]
+        ]
+        if len(errors) > 5:
+            parts.append(f"and {len(errors) - 5} more")
+        return "; ".join(parts)
+    return str(exc)[:600]
