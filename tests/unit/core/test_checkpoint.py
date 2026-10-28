@@ -110,6 +110,43 @@ def test_paired_restore_constructs_one_validated_detached_world(monkeypatch) -> 
     assert again_metrics.to_dict() == metrics.to_dict()
 
 
+def test_capture_restored_returns_the_restore_it_checked_detached_from_both(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    world = live_checkpoint_world
+    metrics = MetricsRecorder()
+    metrics.capture(world, minute=0)
+    original = WorldState.from_dict.__func__
+    calls = []
+
+    def restore(cls, document, **kwargs):
+        calls.append(document["minute_index"])
+        return original(cls, document, **kwargs)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(restore))
+    checkpoint, restored_world, restored_metrics = Checkpoint.capture_restored(
+        world, metrics=metrics, runtime_state={"branch": {"command_log": []}}
+    )
+    # The capture's own restore check is the only restore (#46).
+    assert calls == [0]
+    saved = checkpoint.to_json()
+    assert (
+        saved
+        == Checkpoint.capture(
+            world, metrics=metrics, runtime_state={"branch": {"command_log": []}}
+        ).to_json()
+    )
+    expected_world, expected_metrics = checkpoint.restore_state()
+    assert restored_world.canonical_json() == expected_world.canonical_json()
+    assert restored_metrics.to_dict() == expected_metrics.to_dict()
+    before = world.canonical_json()
+    restored_world.model_state["behavior-model"]["adaptive_state"].append(1.0)
+    restored_world.metric_state["model_accumulator"] = 0.0
+    restored_metrics.snapshots.clear()
+    assert checkpoint.to_json() == saved
+    assert world.canonical_json() == before
+
+
 def test_checkpoint_has_independent_schema_and_captures_every_runtime_state(
     tmp_path: Path, live_checkpoint_world
 ) -> None:

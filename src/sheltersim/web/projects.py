@@ -16,7 +16,7 @@ from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.experiments.validation import evidence_context
 from sheltersim.llm.accounting import accounted_router, usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import ProjectStore, StorageError
 from sheltersim.storage.telemetry import RunTelemetryStore
 from sheltersim.storage.usage import UsageLedger
 
@@ -326,10 +326,15 @@ class ProjectAPI:
                         program=program,
                         approved_program_hash=document.get("approved_program_hash"),
                     )
+                    # The child's saved head holds the hash of its world.
+                    head = self.store.branch_reference(project_id, run_id, child.branch_id)
+                    saved = self.store.checkpoint_fields(
+                        project_id, run_id, head.checkpoint_hash, ("state_hash",)
+                    )
                 return {
                     "branch_id": child.branch_id,
                     "minute": child.world.minute_index,
-                    "state_hash": digest(child.world.to_dict()),
+                    "state_hash": saved["state_hash"],
                 }
         raise StorageError("unknown project operation")
 

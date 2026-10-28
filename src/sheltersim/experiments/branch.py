@@ -268,8 +268,13 @@ class BranchRuntime:
         *,
         branch_id: str,
         parent_branch_id: str | None = None,
+        _restored: tuple[WorldState, MetricsRecorder] | None = None,
     ) -> BranchRuntime:
-        """Create an isolated child; no mutable world structures are shared."""
+        """Create an isolated child; no mutable world structures are shared.
+
+        _restored is the world and metrics Checkpoint.capture_restored() built for
+        this checkpoint; they are used instead of restoring it again.
+        """
         branch_id = _validate_identifier("branch_id", branch_id)
         metadata = checkpoint.runtime_state.get("branch", {})
         stored_branch_id = metadata.get("branch_id") if isinstance(metadata, dict) else None
@@ -277,7 +282,7 @@ class BranchRuntime:
             stored_parent = metadata.get("parent_branch_id") if isinstance(metadata, dict) else None
             parent_branch_id = stored_parent if stored_branch_id == branch_id else stored_branch_id
         try:
-            world, metrics = checkpoint.restore_state()
+            world, metrics = _restored if _restored is not None else checkpoint.restore_state()
             return cls(
                 branch_id=branch_id,
                 parent_branch_id=parent_branch_id,
@@ -315,6 +320,14 @@ class BranchRuntime:
 
         A writer saving this runtime repeatedly passes its own history_cache.
         """
+        return Checkpoint.capture(
+            self.world,
+            metrics=self.metrics,
+            runtime_state=self._checkpoint_runtime_state(),
+            history_cache=history_cache,
+        )
+
+    def _checkpoint_runtime_state(self) -> dict[str, Any]:
         runtime = deepcopy(self.runtime_state)
         runtime["branch"] = {
             "schema_version": self.CURRENT_SCHEMA_VERSION,
@@ -323,15 +336,24 @@ class BranchRuntime:
             "pairing_key": self.pairing_key,
             "command_log": deepcopy(self.command_log),
         }
-        return Checkpoint.capture(
-            self.world, metrics=self.metrics, runtime_state=runtime, history_cache=history_cache
-        )
+        return runtime
 
     def fork(self, branch_id: str) -> BranchRuntime:
         """Take an exact child snapshot and preserve the paired RNG scenario key."""
-        return BranchRuntime.from_checkpoint(
-            self.checkpoint(), branch_id=branch_id, parent_branch_id=self.branch_id
+        return self.fork_with_checkpoint(branch_id)[0]
+
+    def fork_with_checkpoint(self, branch_id: str) -> tuple[BranchRuntime, Checkpoint]:
+        """fork(), and the checkpoint() of this runtime the child was taken from."""
+        checkpoint, world, metrics = Checkpoint.capture_restored(
+            self.world, metrics=self.metrics, runtime_state=self._checkpoint_runtime_state()
         )
+        child = BranchRuntime.from_checkpoint(
+            checkpoint,
+            branch_id=branch_id,
+            parent_branch_id=self.branch_id,
+            _restored=(world, metrics),
+        )
+        return child, checkpoint
 
     def apply(self, command: BranchCommand) -> CommandReceipt:
         """Apply a typed command atomically and record it in the realized event log."""

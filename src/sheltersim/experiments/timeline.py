@@ -612,12 +612,14 @@ class TimelineStore:
         ).exists():
             raise TimelineError("child branch already exists")
         source = self.seek(branch_id, minute)
-        child = source.fork(child_id)
+        # The child is taken from this Checkpoint, which also holds both hashes of
+        # the source.
+        child, checkpoint = source.fork_with_checkpoint(child_id)
         child.runtime_state["fork_origin"] = {
             "branch_id": branch_id,
             "minute": minute,
-            "state_hash": digest(source.world.to_dict()),
-            "checkpoint_hash": source.checkpoint().checkpoint_hash,
+            "state_hash": checkpoint.state_hash,
+            "checkpoint_hash": checkpoint.checkpoint_hash,
         }
         if program is not None:
             if approved_program_hash != digest(program.model_dump(mode="json")):
@@ -625,8 +627,12 @@ class TimelineStore:
             child.runtime_state.pop("replay_source", None)
             child.apply_effect_program(program)
         elif "llm" in source.runtime_state:
-            _, head = self.store.load_branch(self.project_id, self.run_id, branch_id)
-            child.runtime_state["replay_source"] = deepcopy(head.runtime_state["llm"])
+            # Only the head's response tape is needed, not its restored world.
+            reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
+            head = self.store.checkpoint_fields(
+                self.project_id, self.run_id, reference.checkpoint_hash, ("runtime_state",)
+            )
+            child.runtime_state["replay_source"] = deepcopy(head["runtime_state"]["llm"])
         self.record(child, fork_minute=minute)
         return child
 
