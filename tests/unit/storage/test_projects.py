@@ -388,3 +388,25 @@ def test_repeated_short_and_long_texts_and_text_subclasses_are_redacted_alike() 
         }
     with pytest.raises(StorageError, match="sensitive fields"):
         safe_document({"note": short, 1: "x"})
+
+
+def test_texts_are_redacted_as_by_the_secret_and_phone_patterns() -> None:
+    """Text without "@", "sk-" or "bearer" skips the secret pattern; results are unchanged."""
+    from sheltersim.storage.projects import _SECRET, PHONE_NUMBER
+
+    texts = [
+        '{"realized_events":["action-lifecycle-38460"],"busy_staff":[]}' * 40,
+        "token sk-ant-abcdefghijklmnop end",
+        "SK-ABCDEFGHIJKLMNOP",
+        "ſK-abcdefghijklmnop",  # long s and Kelvin sign match "sk" ignoring case
+        "Authorization: BEARER abc.def",
+        "beаrer abc",  # Cyrillic a: not "bearer"
+        "write to name@example.com or call 090-1234-5678",
+        "straße k- 03-1234-5678",
+        "no secrets here",
+        "",
+    ]
+    for text in texts:
+        expected = PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", text))
+        assert safe_document(text) == expected
+        assert safe_document([text]) == [expected]
