@@ -72,7 +72,12 @@ def _private_field(key: str) -> bool:
 
 
 def _redact(value: str) -> str:
-    return PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", value))
+    # _SECRET matches only text with "@", "sk-" or "bearer" (in any case, which
+    # casefold() covers). Without them it can only fail, and slowly on long text
+    # without spaces: its address pattern rescans the text from every word.
+    if "@" in value or "sk-" in (folded := value.casefold()) or "bearer" in folded:
+        value = _SECRET.sub("[redacted]", value)
+    return PHONE_NUMBER.sub("[redacted]", value)
 
 
 # Saved records repeat the same IDs, labels and short texts; redact each one once.
