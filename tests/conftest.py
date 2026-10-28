@@ -20,6 +20,7 @@ pytest_plugins = [
     "support.llm",
     "support.reports",
     "support.world",
+    "support.plans",
 ]
 
 
