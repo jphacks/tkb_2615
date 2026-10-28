@@ -37,7 +37,10 @@ _PRIVATE = re.compile(
 # The top-level domain is letters, so a value with a decimal after "@", such as a
 # model signature, is not taken for an address (#187).
 EMAIL_ADDRESS = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\W\d_]{2,}\b")
-_SECRET = re.compile(r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|" + EMAIL_ADDRESS.pattern, re.I)
+_KEY_OR_BEARER = r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+"
+_SECRET = re.compile(_KEY_OR_BEARER + "|" + EMAIL_ADDRESS.pattern, re.I)
+# _SECRET for text without "@", where its address alternative can never match.
+_SECRET_WITHOUT_ADDRESS = re.compile(_KEY_OR_BEARER, re.I)
 # Three separated digit groups, so DOIs and dates in provenance are not phone
 # numbers (#190). Run artifacts and the saved-Run inspector use the same definition.
 PHONE_NUMBER = re.compile(r"(?<!\w)(?:\+\d{1,3}[ -])?\d{2,4}[- ]\d{2,4}[- ]\d{3,4}(?!\w)")
@@ -73,10 +76,13 @@ def _private_field(key: str) -> bool:
 
 def _redact(value: str) -> str:
     # _SECRET matches only text with "@", "sk-" or "bearer" (in any case, which
-    # casefold() covers). Without them it can only fail, and slowly on long text
-    # without spaces: its address pattern rescans the text from every word.
-    if "@" in value or "sk-" in (folded := value.casefold()) or "bearer" in folded:
+    # casefold() covers). Its address alternative needs "@" and is slow on long text
+    # without spaces, as it rescans the text from every word; IDs such as "task-1"
+    # contain "sk-", so text without "@" uses the pattern without it.
+    if "@" in value:
         value = _SECRET.sub("[redacted]", value)
+    elif "sk-" in (folded := value.casefold()) or "bearer" in folded:
+        value = _SECRET_WITHOUT_ADDRESS.sub("[redacted]", value)
     return PHONE_NUMBER.sub("[redacted]", value)
 
 
