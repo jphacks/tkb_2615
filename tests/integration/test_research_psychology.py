@@ -91,11 +91,6 @@ def test_full_runner_recovers_initially_high_agents_and_records_online_recovery(
 RECOVERY_MINUTES = 60
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#159: a fall below the threshold during event handling is not counted",
-)
 def test_full_runner_records_every_recovery_of_a_generated_scenario(
     tmp_path: Path, generated_scenario
 ) -> None:
