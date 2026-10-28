@@ -898,13 +898,7 @@ class FacilityOutageHandler:
         new_working_units = facility.working_units - units_out
         if new_working_units < 0:
             raise EventApplicationError("facility outage exceeds currently working capacity")
-        active_occupancy = len(facility.active_agent_ids)
-        if world.schema_version == 6:
-            active_occupancy += len(facility.resource_active_agent_ids)
-        if new_working_units < active_occupancy:
-            raise EventApplicationError(
-                "facility outage would reduce capacity below active occupancy"
-            )
+        # People already being served finish; no new service starts on the units out (#188).
         facility.working_units = new_working_units
         infrastructure = world.model_state.get(INFRASTRUCTURE_STATE_KEY)
         if isinstance(infrastructure, dict):
@@ -1362,16 +1356,8 @@ def _recalculate_infrastructure_capacity(world: WorldState, cause: ScheduledEven
     except ValueError as exc:
         raise EventApplicationError(str(exc)) from exc
     for facility_id in sorted(changed_facility_ids):
-        capacity = capacities[facility_id]
-        facility = world.facilities[facility_id]
-        active_occupancy = len(facility.active_agent_ids)
-        if world.schema_version == 6:
-            active_occupancy += len(facility.resource_active_agent_ids)
-        if capacity < active_occupancy:
-            raise EventApplicationError(
-                f"infrastructure outage would reduce {facility_id!r} below active occupancy"
-            )
-        facility.working_units = capacity
+        # As with a facility outage, current users finish (#188).
+        world.facilities[facility_id].working_units = capacities[facility_id]
 
 
 @dataclass(frozen=True)

@@ -243,7 +243,8 @@ def test_competing_equipment_failures_reject_atomically_and_keep_first_outage() 
     assert world.facilities["toilet_1"].working_units == 1
 
 
-def test_power_outage_with_active_facility_task_fails_without_partial_changes() -> None:
+def test_a_power_outage_takes_an_occupied_facility_out_and_keeps_its_user() -> None:
+    """The outage used to fail while someone used a dependent facility (#188)."""
     scenario = _scenario(
         [
             _event(
@@ -290,11 +291,13 @@ def test_power_outage_with_active_facility_task_fails_without_partial_changes() 
 
     outcome = _dispatcher().dispatch_due(world, 0)[0]
 
-    assert outcome.status is EventStatus.FAILED
-    assert "active occupancy" in (outcome.detail or "")
-    assert facility.working_units == 1
-    assert not world.model_state[INFRASTRUCTURE_STATE_KEY]["outages"]["outage-grid"]["active"]
-    assert not any(event.event_type == "power_restored" for event in world.event_queue.pending())
+    assert outcome.status is EventStatus.APPLIED
+    # The handler applies a validated copy, so read the facility again.
+    facility = world.facilities["toilet_1"]
+    assert facility.working_units == 0
+    assert facility.active_agent_ids == [agent.id]
+    assert world.model_state[INFRASTRUCTURE_STATE_KEY]["outages"]["outage-grid"]["active"]
+    assert any(event.event_type == "power_restored" for event in world.event_queue.pending())
     world.validate()
 
 

@@ -171,7 +171,8 @@ def test_stale_duplicate_completion_is_logged_as_failed_without_double_release()
     world.validate()
 
 
-def test_outage_that_would_interrupt_active_service_is_failed_atomically() -> None:
+def test_an_outage_of_a_unit_in_use_lets_the_user_finish_and_keeps_it_out() -> None:
+    """The outage used to fail, so the unit never went out of service (#188)."""
     world = make_world()
     facility = world.facilities["toilet_1"]
     agent = world.agents["A001"]
@@ -209,9 +210,20 @@ def test_outage_that_would_interrupt_active_service_is_failed_atomically() -> No
         payload={"facility_id": facility.id, "units_out": 1},
     )
     world.schedule_event(outage)
-    result = EventDispatcher({"facility_outage": FacilityOutageHandler()}).dispatch_due(world, 0)
+    dispatcher = EventDispatcher(
+        {
+            "facility_outage": FacilityOutageHandler(),
+            "toilet_service_complete": ToiletServiceCompletionHandler(),
+        }
+    )
+    result = dispatcher.dispatch_due(world, 0)
 
-    assert facility.working_units == 1
-    assert result[0].status is EventStatus.FAILED
-    assert "active occupancy" in (result[0].detail or "")
+    assert result[0].status is EventStatus.APPLIED
+    assert facility.working_units == 0
+    assert facility.active_agent_ids == ["A001"]
+    world.validate()
+    world.minute_index = 5
+    dispatcher.dispatch_due(world, 5)
+    assert facility.active_agent_ids == []
+    assert facility.working_units == 0
     world.validate()
