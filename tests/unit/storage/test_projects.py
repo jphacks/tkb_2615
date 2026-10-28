@@ -391,11 +391,15 @@ def test_repeated_short_and_long_texts_and_text_subclasses_are_redacted_alike() 
 
 
 def test_texts_are_redacted_as_by_the_secret_and_phone_patterns() -> None:
-    """Text without "@", "sk-" or "bearer" skips the secret pattern; results are unchanged."""
+    """Text without "@" skips the address pattern, and text without "@", "sk-" or "bearer"
+    the whole secret pattern; results are unchanged."""
     from sheltersim.storage.projects import _SECRET, PHONE_NUMBER
 
     texts = [
         '{"realized_events":["action-lifecycle-38460"],"busy_staff":[]}' * 40,
+        '{"staff_tasks":["task-1","task-2"]}' * 40,  # "sk-" without "@"
+        "staff-task-abcdefghijklmnop",
+        "sk-abcdefghijklmnop@example.com and Bearer name@example.com",
         "token sk-ant-abcdefghijklmnop end",
         "SK-ABCDEFGHIJKLMNOP",
         "ſK-abcdefghijklmnop",  # long s and Kelvin sign match "sk" ignoring case
