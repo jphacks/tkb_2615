@@ -16,11 +16,10 @@ from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.domain.layouts import LayoutSpec
 from sheltersim.experiments.profiles import select_representative_profiles
 from sheltersim.experiments.scenario import ProfileSpec
-from sheltersim.storage.projects import EMAIL_ADDRESS
+from sheltersim.storage.projects import EMAIL_ADDRESS, PHONE_NUMBER
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ENTITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-_PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
 _PRIVATE_FIELD = re.compile(
     r"(?:api[_-]?(?:key|token)|access[_-]?token|credential|password|secret|prompt|raw[_-]?text|"
     r"email|phone|address|person[_-]?name|full[_-]?name)",
@@ -1354,7 +1353,7 @@ def _safe_public_text(value: Any, *, limit: int = 256) -> str | None:
         return None
     bounded = value[:limit]
     lowered = bounded.casefold()
-    if EMAIL_ADDRESS.search(bounded) or _PHONE.search(bounded):
+    if EMAIL_ADDRESS.search(bounded) or PHONE_NUMBER.search(bounded):
         return "[REDACTED]"
     if any(marker in lowered for marker in ("api_key", "authorization", "password", "secret=")):
         return "[REDACTED]"
