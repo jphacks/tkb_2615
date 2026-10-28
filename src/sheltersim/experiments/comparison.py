@@ -12,7 +12,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from sheltersim.contracts.policies import legacy_psychology_notice, selected_models
+from sheltersim.contracts.policies import (
+    SUITE_RUNTIME_RESOLVED_DOMAINS,
+    legacy_psychology_notice,
+    selected_models,
+)
 from sheltersim.experiments.branch import BranchRuntime
 
 
@@ -367,7 +371,7 @@ def _validate_behavior_policy_pair(
         behavior_config = model_configs.get("behavior")
         if not isinstance(behavior_config, dict):
             raise ValueError("policy comparison requires a behavior model config")
-        model_configs["policy_registry"] = _non_behavior_model_selection(model_configs)
+        model_configs["policy_registry"] = _non_behavior_model_selection(manifest)
         behavior_config.pop("policy", None)
         behavior_config.pop("source_id", None)
         # Only the sleep-aware policy accepts this weight, and the variants always differ.
@@ -434,23 +438,31 @@ def _validate_behavior_policy_pair(
     }
 
 
-def _non_behavior_model_selection(model_configs: dict[str, Any]) -> dict[str, Any]:
-    """The non-behavior models a Run declares and the selectors its runtime reads.
+def _non_behavior_model_selection(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The non-behavior models a Run declares, which are the models it ran.
 
     ScenarioSpec.with_behavior_policy_variant rewrites a model suite that fixes
     another behavior policy as schema-2 per-domain selectors (#157). Both forms
-    declare the same models, but some runtime code reads per-domain selectors
-    directly, so a selector the suite left implicit still changes the Run.
+    declare the same models, and the runtime resolves both the same way (#169).
     """
+    model_configs = manifest["model_configs"]
+    registry = model_configs.get("policy_registry", {})
+    suite_id = registry.get("suite_id")
+    implicit = SUITE_RUNTIME_RESOLVED_DOMAINS - set(registry)
+    recorded_suite = manifest.get("policy_versions", {}).get("model_suite")
+    if suite_id is not None and implicit and recorded_suite == f"{suite_id}@1":
+        raise ValueError(
+            "policy comparison cannot use a Run recorded before a model suite's implicit "
+            f"selectors ran their declared models: {', '.join(sorted(implicit))}"
+        )
     declared = selected_models(model_configs)
     declared.pop("behavior")
-    selectors = dict(model_configs.get("policy_registry", {}))
-    selectors.pop("behavior", None)
     # Schema 3 is schema 2 plus the suite pin; the suite only labels the declared set.
-    selectors.pop("suite_id", None)
-    if selectors.get("schema_version") == 3:
-        selectors["schema_version"] = 2
-    return {"declared_models": declared, "selectors": selectors}
+    schema_version = registry.get("schema_version", 1)
+    return {
+        "declared_models": declared,
+        "schema_version": 2 if schema_version == 3 else schema_version,
+    }
 
 
 def _decision_action_counts(run_directory: Path) -> dict[str, Any]:

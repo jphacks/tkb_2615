@@ -51,7 +51,7 @@
 - `tests/unit/repo/test_provenance.py` は全主要係数、fixture/model/event source ID、policy traceの有効値を台帳に照合します。Run manifestと判断traceに出典IDが入ることは `tests/unit/experiments/test_metrics.py` が確かめます。
 - H02 resource-service係数とテスト初期stock/stall reasonは対応するmanifest entryと照合し、enabled runのmanifestと`resource_service.json`にもversion/sourceを記録します。これは設定・実装整合性の検査であり、校正検証ではありません。
 - 変更前後の仮説比較は複数 seed を用い、平均とばらつきを記録します。単一 seed の結果は記述的な例であり、因果効果や統計的優位性とは呼びません。
-- A08 policy comparison は同じseed/Scenario inputsでpolicy variantだけを替え、action count、KPI、記録済み事前decision needsを比較します。支援ニーズ上位quartileと移動支援フラグのcohortは、Agentごとの記録need平均を等重みで集計します。これは分単位の未充足時間でも、妥当性確認済みの公平性指標でもありません。結果はシミュレーション内部の記述的比較です。モデル一式（`policy_registry.suite_id`）を使うScenarioでは、`ScenarioSpec.with_behavior_policy_variant`がsuiteを個別の指定（schema 2）に展開し、v2専用の`behavior.sleep_debt_utility_weight`を外します。比較は、行動以外の宣言上のモデル（`selected_models`）と、実行時に読まれる個別の指定（`suite_id`を除き、schema 3を2として扱う）の両方が一致すれば同じ入力とみなします（#157）。suiteで個別に指定していない領域は、展開すると実行時のモデルが変わる場合があるため拒否します。
+- A08 policy comparison は同じseed/Scenario inputsでpolicy variantだけを替え、action count、KPI、記録済み事前decision needsを比較します。支援ニーズ上位quartileと移動支援フラグのcohortは、Agentごとの記録need平均を等重みで集計します。これは分単位の未充足時間でも、妥当性確認済みの公平性指標でもありません。結果はシミュレーション内部の記述的比較です。モデル一式（`policy_registry.suite_id`）を使うScenarioでは、`ScenarioSpec.with_behavior_policy_variant`がsuiteを個別の指定（schema 2）に展開し、v2専用の`behavior.sleep_debt_utility_weight`を外します。比較は、行動以外の宣言上のモデル（`selected_models`）とregistryのschema（3を2として扱う）が一致すれば同じ入力とみなします（#157）。実行時は、suiteが個別の指定を省いた領域も宣言上のモデルを使います（#169）。ただし、省いた領域があるのに `model_suite` を `@1` で記録したRunは、#169より前に昔の既定で動いたものなので拒否します。
 - 実測データを将来導入する場合は、集計単位、観測期間、選択方法、欠測、データ利用承認、秘匿化方法を記録し、実測・文献・ヒアリング・仮定を分けます。個人データや原ヒアリング記録は fixture や Git に登録しません。
 
 現時点では、結果は仮説の内部整合性と実装経路の検証に限定します。現実の避難所の安全性、住民の心理、被災者支援の効果が実証されたと結論づけません。

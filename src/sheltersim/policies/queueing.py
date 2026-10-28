@@ -109,9 +109,11 @@ class StrictFIFOQueuePolicy:
 
 
 def create_queue_policy(configs: dict[str, dict[str, Any]]) -> FacilityQueuePolicy:
-    """Resolve an explicitly registered policy or the geometry-aware default."""
+    """Resolve a registered or suite-selected policy, or the geometry-aware default."""
     raw = configs.get("facility_queues", {})
-    selection = configs.get("policy_registry", {}).get("queue")
+    from sheltersim.contracts.policies import selected_models
+
+    selection = selected_models(configs).get("queue")
     if selection is not None:
         from sheltersim.policies.registry import create_installed_model
 
