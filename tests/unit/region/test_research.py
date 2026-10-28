@@ -1,17 +1,22 @@
 """Regional research: LLM search stays a candidate, and warnings follow the provider results.
 
-The providers themselves are checked in tests/unit/region/test_providers.py.
+The research also reads every public service for a selected municipality, and a service
+that fails becomes an unknown instead of stopping the research. Those services are the
+fakes of tests/support/public_data.py. The providers themselves are checked in
+tests/unit/region/test_providers.py.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
+from support.public_data import FAILURES, HOSTS, PLAN_SOURCE_ID
 
 from sheltersim.region import providers
 from sheltersim.region.models import LLMSearchSourceCandidate
-from sheltersim.region.research import _official_source_search_task
+from sheltersim.region.research import RegionResearchService, _official_source_search_task
 
 
 def test_llm_region_search_is_official_domain_only_and_keeps_candidate_status() -> None:
@@ -184,3 +189,85 @@ def test_unreadable_row_warning_needs_unreadable_rows(invalid_rows: int, warned:
     )
 
     assert any("解釈できない行" in warning for warning in result.warnings) is warned
+
+
+def test_research_reads_every_public_service_for_the_selected_municipality(
+    public_data, research_request
+) -> None:
+    result = RegionResearchService().research(research_request())
+
+    assert [item.name for item in result.municipalities] == ["合成県合成市"]
+    assert result.shelter_register.status == "matched" and result.shelter_register.complete
+    assert [(item.name, item.shelter_subtype) for item in result.shelters] == [
+        ("合成小学校", "general"),
+        ("合成福祉センター", "welfare"),
+    ]
+    assert [item.table_id for item in result.statistical_tables] == ["0000000001"]
+    assert {
+        item.category_labels["cat01"]: item.value for item in result.population_observations
+    } == {
+        "0～14歳": 0,
+        "15～64歳": 0,
+        "65歳以上": 5000,
+    }
+    # The selected day only: weather and rain chance for the area, temperature for its station.
+    assert sorted(item.metric for item in result.weather_observations) == [
+        "precipitation_probability_pct",
+        "temperature_c",
+        "weather_description",
+    ]
+    assert [(item.metric, item.value) for item in result.municipal_plan_observations] == [
+        ("備蓄水", 3000)
+    ]
+    statuses = {item.data_kind: item.status for item in result.provider_statuses}
+    assert statuses == {
+        "hazard": "not_configured",
+        "municipal_plan": "available",
+        "weather": "available",
+    }
+    assert PLAN_SOURCE_ID in {item.id for item in result.sources}
+    assert "placeholder-app-id" not in json.dumps(result.model_dump(mode="json"))
+
+
+# Failures that escape the research and stop the whole Scenario preview (#208).
+_ESCAPING = {
+    ("msearch.gsi.go.jp", "disconnected"),
+    ("msearch.gsi.go.jp", "reset_while_reading"),
+    ("msearch.gsi.go.jp", "truncated"),
+    ("api.e-stat.go.jp", "disconnected"),
+    ("api.e-stat.go.jp", "reset_while_reading"),
+    ("api.e-stat.go.jp", "truncated"),
+    ("api.e-stat.go.jp", "json_list"),
+    ("api.e-stat.go.jp", "json_null"),
+    ("www.jma.go.jp", "truncated"),
+    ("data.example.jp", "truncated"),
+}
+
+
+@pytest.mark.parametrize(
+    ("host", "failure"),
+    [
+        pytest.param(
+            host,
+            failure,
+            marks=pytest.mark.xfail(strict=True, reason="#208: the failure escapes the research")
+            if (host, failure) in _ESCAPING
+            else (),
+        )
+        for host in HOSTS
+        for failure in FAILURES
+    ],
+)
+def test_a_failing_public_service_becomes_an_unknown(
+    public_data, research_request, host, failure
+) -> None:
+    public_data.fail(host, failure)
+
+    result = RegionResearchService().research(research_request())
+
+    # The other services still answer.
+    assert bool(result.shelters) == (host != "hinanmap.gsi.go.jp")
+    assert bool(result.population_observations) == (host != "api.e-stat.go.jp")
+    assert bool(result.weather_observations) == (host != "www.jma.go.jp")
+    assert bool(result.municipal_plan_observations) == (host != "data.example.jp")
+    assert result.unknowns

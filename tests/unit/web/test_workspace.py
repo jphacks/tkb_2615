@@ -478,3 +478,114 @@ def test_a_selected_plan_without_a_sleeping_zone_is_refused_with_the_reason(
 
     assert refused.value.code == "scenario_plan_invalid"
     assert "zone named 'sleeping'" in str(refused.value)
+
+
+def _researched_preview(api, generated_request, **selections) -> dict:
+    """A Project screen preview of 合成県合成市, researched over the fake public services."""
+    from support.public_data import MUNICIPALITY
+
+    fields = {key: selections.pop(key) for key in list(selections) if key in REQUEST_FIELDS}
+    request = generated_request(municipality=MUNICIPALITY, **fields)
+    return api.workspace.preview("project", {"text": "", "request": request, **selections})
+
+
+# Selections the Project screen puts in the structured form; the others go beside it.
+REQUEST_FIELDS = {"municipality_code", "target_date", "weather_area_code"}
+
+
+def test_a_preview_uses_the_selected_statistics_and_shelter(
+    researching_project_api, generated_request
+) -> None:
+    from support.public_data import (
+        ESTAT_PERIOD_CODE,
+        ESTAT_TABLE_ID,
+        MUNICIPALITY_CODE,
+        SCHOOL_SHELTER_ID,
+    )
+
+    first = _researched_preview(researching_project_api, generated_request)
+    # Before any selection, the screen offers the shelters and tables to choose from.
+    assert [item["id"] for item in first["research"]["shelters"]][0] == SCHOOL_SHELTER_ID
+    assert [item["table_id"] for item in first["research"]["statistical_tables"]] == [
+        ESTAT_TABLE_ID
+    ]
+    assert not first["research"]["population_observations"]
+
+    preview = _researched_preview(
+        researching_project_api,
+        generated_request,
+        municipality_code=MUNICIPALITY_CODE,
+        estat_stats_data_id=ESTAT_TABLE_ID,
+        estat_area_code=MUNICIPALITY_CODE,
+        estat_period_code=ESTAT_PERIOD_CODE,
+        selected_shelter_id=SCHOOL_SHELTER_ID,
+    )
+
+    assert preview["can_start"], preview["approval_blockers"]
+    provenance = preview["scenario"]["provenance"]
+    generation = provenance["population_generation"]
+    # The selected table counts only people aged 65 and over.
+    assert generation["evacuee_age_distribution"] == {
+        "0～14歳": 0.0,
+        "15～64歳": 0.0,
+        "65歳以上": 1.0,
+    }
+    assert {source for band in generation["age_bands"] for source in band["source_ids"]} == {
+        "SRC-ESTAT-API"
+    }
+    assert provenance["selected_shelter"]["name"] == "合成小学校"
+    assert provenance["selected_shelter"]["source_id"] in {
+        item["id"] for item in provenance["sources"]
+    }
+
+
+def test_a_partial_municipality_name_lists_codes_until_one_is_chosen(
+    researching_project_api, generated_request
+) -> None:
+    api = researching_project_api
+    request = generated_request(municipality="合成")
+
+    listed = api.workspace.preview("project", {"text": "", "request": request})
+    chosen = api.workspace.preview(
+        "project", {"text": "", "request": {**request, "municipality_code": "99901"}}
+    )
+
+    register = listed["research"]["shelter_register"]
+    assert register["status"] == "unresolved_municipality"
+    assert [item["municipality_code"] for item in register["municipality_candidates"]] == [
+        "99901",
+        "99902",
+    ]
+    assert not listed["research"]["shelters"]
+    assert chosen["research"]["shelter_register"]["status"] == "matched"
+    assert len(chosen["research"]["shelters"]) == 2
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#209: a total row makes the selected statistics unused, and nobody is told",
+)
+def test_selected_statistics_with_a_total_row_are_used_or_reported(
+    researching_project_api, generated_request, public_data
+) -> None:
+    from support.public_data import ESTAT_PERIOD_CODE, ESTAT_TABLE_ID, MUNICIPALITY_CODE
+
+    # Most e-Stat population tables count everyone in a 総数 class of the age axis.
+    public_data.age_classes.insert(0, ("000", "総数", "5000"))
+
+    preview = _researched_preview(
+        researching_project_api,
+        generated_request,
+        municipality_code=MUNICIPALITY_CODE,
+        estat_stats_data_id=ESTAT_TABLE_ID,
+        estat_area_code=MUNICIPALITY_CODE,
+        estat_period_code=ESTAT_PERIOD_CODE,
+    )
+
+    if len(preview["research"]["population_observations"]) != 4:
+        pytest.fail("the total row and the three age rows must be fetched")
+    distribution = preview["scenario"]["provenance"]["population_generation"][
+        "evacuee_age_distribution"
+    ]
+    told = any("e-Stat" in warning or "統計" in warning for warning in preview["warnings"])
+    assert distribution.get("65歳以上") == 1.0 or told
