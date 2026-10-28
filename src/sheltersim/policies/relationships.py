@@ -101,8 +101,10 @@ class DurationOnlyTrustPolicy:
 def create_relationship_policy(
     configs: dict[str, dict[str, object]],
 ) -> RelationshipFormationPolicy:
-    """Resolve an explicit Registry replacement or the current proximity model."""
-    selection = configs.get("policy_registry", {}).get("relationship")
+    """Resolve a registered or suite-selected replacement, or the current proximity model."""
+    from sheltersim.contracts.policies import selected_models
+
+    selection = selected_models(configs).get("relationship")
     if selection is not None:
         from sheltersim.policies.registry import create_installed_model
 

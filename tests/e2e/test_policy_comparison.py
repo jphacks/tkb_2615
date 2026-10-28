@@ -4,7 +4,8 @@ CLI reports the variants; any other change is refused.
 The first test runs h00_small_replay, which selects its models one by one. The
 second runs a generated Scenario, which selects them as a model suite; swapping
 the behavior policy rewrites the suite as per-domain selectors, and the comparison
-treats the two forms as the same input (#157).
+treats the two forms as the same input (#157). Both forms run the declared models,
+even where the suite leaves a selector implicit (#169).
 """
 
 from __future__ import annotations
@@ -153,11 +154,12 @@ def test_policy_comparison_of_a_generated_scenario_reports_both_variants(
         compare_run_artifacts(baseline_output, candidate_output, allow_behavior_policy_change=True)
 
 
-def test_policy_comparison_refuses_a_suite_whose_per_domain_form_runs_other_models(
+def test_policy_comparison_accepts_a_suite_that_leaves_selectors_implicit(
     tmp_path: Path, generated_previews
 ) -> None:
-    """A suite that leaves a selector implicit runs another relationship policy once
-    expanded, although both declare the same models (#157)."""
+    """A suite runs its declared models whether a selector is explicit or not (#169),
+    so it compares with its per-domain form. A Run recorded before that ran a legacy
+    default instead and is refused."""
     preview = generated_previews(duration_days=POLICY_DURATION_DAYS)
     document = copy.deepcopy(preview["scenario"])
     registry = document["model_configs"]["policy_registry"]
@@ -170,5 +172,15 @@ def test_policy_comparison_refuses_a_suite_whose_per_domain_form_runs_other_mode
     run_scenario(baseline, baseline_output, trace_level=TraceLevel.FULL)
     run_scenario(candidate, candidate_output, trace_level=TraceLevel.FULL)
 
-    with pytest.raises(ValueError, match="inputs differ"):
+    report = compare_run_artifacts(
+        baseline_output, candidate_output, allow_behavior_policy_change=True
+    )
+    assert report["behavior_policy_comparison"]["candidate_variant"] == "priority-rule-v1"
+
+    manifest_path = baseline_output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["policy_versions"]["model_suite"] == "core-model-suite-v2@2"
+    manifest["policy_versions"]["model_suite"] = "core-model-suite-v2@1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="recorded before"):
         compare_run_artifacts(baseline_output, candidate_output, allow_behavior_policy_change=True)

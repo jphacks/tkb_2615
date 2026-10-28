@@ -59,6 +59,10 @@ CORE_MODEL_SUITES = {
     CORE_MODEL_SUITE_V1: CORE_MODEL_SUITE_MODELS_V1,
     CORE_MODEL_SUITE_V2: CORE_MODEL_SUITE_MODELS,
 }
+# Runtime code once read these selectors from policy_registry itself, so a suite
+# that left one implicit ran a legacy default instead of the declared model (#169).
+# Such a suite is signed model_suite@2, which refuses Checkpoints captured before.
+SUITE_RUNTIME_RESOLVED_DOMAINS = frozenset({"psychology", "queue", "relationship"})
 
 # Pre-research psychology models stay installed so saved Runs and Checkpoints
 # replay exactly and remain usable as comparison controls. The mark lives here,
@@ -569,7 +573,8 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         **state_signatures(configs),
     }
     if suite_id is not None:
-        signatures["model_suite"] = f"{suite_id}@1"
+        implicit = SUITE_RUNTIME_RESOLVED_DOMAINS - set(configs["policy_registry"])
+        signatures["model_suite"] = f"{suite_id}@{2 if implicit else 1}"
     return signatures
 
 

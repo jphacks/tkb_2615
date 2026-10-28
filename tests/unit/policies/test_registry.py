@@ -1,7 +1,8 @@
 """Generated Scenarios select the research psychology model; legacy models stay replayable.
 
 Installed formula factories change their operator and sign the Checkpoint, and the core
-model suite is pinned for new configs without rewriting historical ones.
+model suite is pinned for new configs without rewriting historical ones. A suite runs
+the models it declares even where it leaves a per-domain selector implicit (#169).
 
 Running a generated Scenario is checked in tests/integration/test_research_psychology.py,
 and the CLI warning for a legacy model in tests/e2e/test_legacy_psychology_cli.py.
@@ -20,12 +21,15 @@ from sheltersim.contracts.policies import (
     CORE_MODEL_SUITE_V1,
     CORE_MODEL_SUITE_V2,
     LEGACY_PSYCHOLOGY_MODELS,
+    SUITE_RUNTIME_RESOLVED_DOMAINS,
     legacy_psychology_notice,
     model_signatures,
     selected_models,
 )
-from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.checkpoint import Checkpoint, CheckpointError, _digest
 from sheltersim.core.world import WorldState
+from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
+from sheltersim.domain.models import AgentInformationState, TypedMessage
 from sheltersim.domain.psychological_state import INTEGRATED_PSYCHOLOGY_POLICY_VERSION
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.experiments.model_suite import install_default_model_suite
@@ -36,7 +40,12 @@ from sheltersim.policies.psychology import (
     LifeStatePsychologyPolicy,
     PsychologyParameters,
 )
+from sheltersim.policies.queueing import NeedWeightedPhysicalQueuePolicy, create_queue_policy
 from sheltersim.policies.registry import create_psychology
+from sheltersim.policies.relationships import (
+    DistanceDurationRepeatTrustPolicy,
+    create_relationship_policy,
+)
 
 
 def test_generated_scenarios_select_the_research_psychology_model(generated_scenario) -> None:
@@ -242,14 +251,81 @@ def test_suite_v1_selector_keeps_its_original_model_map():
     assert selected_models(configs) == CORE_MODEL_SUITE_MODELS_V1
 
 
-def test_core_suite_is_checkpoint_signed_and_restorable():
+def _implicit_suite_scenario() -> ScenarioSpec:
+    """A suite without per-domain selectors, as the Scenario editor and prepare write it."""
     document = ScenarioSpec.load(SCENARIO_100_AGENTS).model_dump(mode="json")
     document["model_configs"].pop("policy_registry", None)
     document["model_configs"] = install_default_model_suite(document["model_configs"])
-    scenario = ScenarioSpec.model_validate(document)
+    return ScenarioSpec.model_validate(document)
+
+
+def test_core_suite_is_checkpoint_signed_and_restorable():
+    scenario = _implicit_suite_scenario()
     world = WorldState.from_scenario(scenario)
     checkpoint = Checkpoint.capture(world)
 
-    assert model_signatures(scenario.model_configs)["model_suite"] == f"{CORE_MODEL_SUITE_V2}@1"
-    assert checkpoint.model_versions["model_suite"] == f"{CORE_MODEL_SUITE_V2}@1"
+    assert model_signatures(scenario.model_configs)["model_suite"] == f"{CORE_MODEL_SUITE_V2}@2"
+    assert checkpoint.model_versions["model_suite"] == f"{CORE_MODEL_SUITE_V2}@2"
     assert checkpoint.restore_world().model_configs == scenario.model_configs
+
+
+def test_a_suite_with_every_selector_explicit_keeps_its_checkpoint_signature(
+    generated_scenario,
+) -> None:
+    """Explicit selectors always ran their models, so their Checkpoints stay valid."""
+    configs = generated_scenario.model_configs
+    assert SUITE_RUNTIME_RESOLVED_DOMAINS <= set(configs["policy_registry"])
+    assert model_signatures(configs)["model_suite"] == f"{CORE_MODEL_SUITE_V2}@1"
+
+
+def test_a_suite_runs_the_models_it_leaves_implicit():
+    """The runtime used legacy defaults for these domains before #169."""
+    scenario = _implicit_suite_scenario()
+    configs = scenario.model_configs
+    assert SUITE_RUNTIME_RESOLVED_DOMAINS.isdisjoint(configs["policy_registry"])
+    assert selected_models(configs)["relationship"] == "distance-duration-repeat-trust-v1"
+    assert isinstance(create_relationship_policy(configs), DistanceDurationRepeatTrustPolicy)
+    assert selected_models(configs)["queue"] == "need-weighted-physical-queue-v1"
+    assert isinstance(create_queue_policy(configs), NeedWeightedPhysicalQueuePolicy)
+
+    # The life-state psychology model weighs a strongly held false belief.
+    world = WorldState.from_scenario(scenario)
+    agent_id = sorted(world.agents)[0]
+    information = world.model_state[INFORMATION_SPREAD_STATE_KEY]
+    information["messages"] = {
+        "rumor": TypedMessage(
+            id="rumor",
+            truth_status="false",
+            source_id="test-source",
+            zone_id=world.agents[agent_id].zone_id,
+            time=0,
+            origin_event_id="rumor-event",
+            origin_agent_id=agent_id,
+        ).to_dict()
+    }
+    information["beliefs"] = {
+        agent_id: {
+            "rumor": AgentInformationState(
+                message_id="rumor",
+                belief="heard",
+                source="test-source",
+                last_contact=0,
+                last_event_id="rumor-event",
+                belief_strength=0.9,
+            ).to_dict()
+        }
+    }
+    view = WorldView.from_world(world)
+    assert view.agents[agent_id].misinformation_belief_pressure == pytest.approx(0.8)
+
+
+def test_a_checkpoint_from_before_implicit_suite_selectors_ran_is_refused():
+    """Resuming it would switch models mid-Run under an unchanged signature (#169)."""
+    world = WorldState.from_scenario(_implicit_suite_scenario())
+    document = Checkpoint.capture(world).to_dict()
+    document["model_versions"]["model_suite"] = f"{CORE_MODEL_SUITE_V2}@1"
+    document.pop("checkpoint_hash")
+    document["checkpoint_hash"] = _digest(document)
+
+    with pytest.raises(CheckpointError, match="explicit migration required"):
+        Checkpoint.from_dict(document).restore_world()

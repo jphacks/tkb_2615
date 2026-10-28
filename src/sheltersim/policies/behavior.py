@@ -10,6 +10,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+from sheltersim.contracts.policies import selected_models
 from sheltersim.contracts.population import PersonContext, population_context_people
 from sheltersim.core.rng import KeyedRandom, RNGKeyPart
 from sheltersim.core.world import WorldState
@@ -199,9 +200,7 @@ class WorldView:
         )
         staff_operations = world.model_state.get("staff_operations_v1", {})
         misinformation_by_agent: dict[str, tuple[float, tuple[tuple[str, str, str], ...]]] = {}
-        psychology_model_id = world.model_configs.get("policy_registry", {}).get(
-            "psychology", "causal-stress-v1"
-        )
+        psychology_model_id = selected_models(world.model_configs)["psychology"]
         if (
             isinstance(information_state, dict)
             and psychology_model_id in LIFE_STATE_PSYCHOLOGY_POLICIES
