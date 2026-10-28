@@ -110,7 +110,8 @@ def test_invalid_outage_is_logged_without_partial_facility_mutation(
     assert len(world.event_queue) == 0
 
 
-def test_outage_below_active_occupancy_is_rejected_before_mutation(make_event) -> None:
+def test_an_outage_below_active_occupancy_applies_and_keeps_its_user(make_event) -> None:
+    """The user finishes on the unit taken out of service (#188)."""
     world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     agent = world.agents["A001"]
     agent.activity = Activity.IN_SERVICE
@@ -149,9 +150,9 @@ def test_outage_below_active_occupancy_is_rejected_before_mutation(make_event) -
 
     dispatcher.dispatch_due(world, 0)
 
-    assert world.facilities["toilet_1"].working_units == 1
-    assert world.event_log.records[0].status is EventStatus.FAILED
-    assert "active occupancy" in (world.event_log.records[0].detail or "")
+    assert world.event_log.records[0].status is EventStatus.APPLIED
+    assert world.facilities["toilet_1"].working_units == 0
+    assert world.facilities["toilet_1"].active_agent_ids == ["A001"]
     world.validate()
 
 

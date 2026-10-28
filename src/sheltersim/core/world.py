@@ -633,7 +633,10 @@ class WorldState:
                 raise StateInvariantError(f"facility {facility.id!r} references an unknown zone")
             if facility.capacity < 0 or not 0 <= facility.working_units <= facility.capacity:
                 raise StateInvariantError(f"facility {facility.id!r} has invalid capacity")
-            if len(facility.active_agent_ids) > facility.working_units:
+            # An outage can take units out of service while their users finish, so
+            # occupancy is bounded by the installed units, not the working ones (#188).
+            # Service never starts beyond the working units.
+            if len(facility.active_agent_ids) > facility.capacity:
                 raise StateInvariantError(f"facility {facility.id!r} is over capacity")
             if self.schema_version == 5 and (
                 facility.resource_active_agent_ids or facility.resource_queue_agent_ids
@@ -703,11 +706,9 @@ class WorldState:
                 raise StateInvariantError(
                     f"facility {facility.id!r} has duplicate resource active entries"
                 )
-            if len(facility.resource_active_agent_ids) > min(
-                facility.capacity, facility.working_units
-            ):
+            if len(facility.resource_active_agent_ids) > facility.capacity:
                 raise StateInvariantError(
-                    f"resource facility {facility.id!r} is over its working capacity"
+                    f"resource facility {facility.id!r} is over its installed capacity"
                 )
             for agent_id in facility.resource_queue_agent_ids:
                 if agent_id not in self.agents:
