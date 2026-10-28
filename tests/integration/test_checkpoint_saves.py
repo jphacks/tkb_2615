@@ -145,3 +145,37 @@ def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path, saved_
     assert CheckpointArchive(other).encode(head) == manifest
     for chunk in (other / "chunks").iterdir():
         assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()
+
+
+def test_every_save_matches_a_full_capture_and_the_public_encoder(
+    tmp_path, monkeypatch, saved_timeline, generated_scenario
+):
+    """Each save of an advance stores what a full capture and a fresh archive would.
+
+    The generated Scenario keeps every growing history a save handles (event log,
+    body-state history, KPI and resource snapshots); fork and resume start new
+    writers. Issue #44 made saves reuse the encodings of history saved earlier.
+    """
+    store, timeline = saved_timeline(tmp_path, generated_scenario)
+    saved = []
+    original = timeline.record
+
+    def record(runtime, **kwargs):
+        checkpoint = original(runtime, **kwargs)
+        assert checkpoint.to_json() == runtime.checkpoint().to_json()
+        saved.append(checkpoint)
+        return checkpoint
+
+    monkeypatch.setattr(timeline, "record", record)
+    timeline.advance("main", 50, checkpoint_interval=10)
+    timeline.advance("main", 70, checkpoint_interval=10)
+    timeline.fork("main", 40, "child")
+    timeline.advance("child", 60, checkpoint_interval=10)
+    assert [item.simulation_minute for item in saved] == [10, 20, 30, 40, 50, 60, 70, 40, 50, 60]
+    directory = store._path("p", "runs", "r", "checkpoints")
+    for checkpoint in saved:
+        manifest = json.loads((directory / f"{checkpoint.checkpoint_hash}.json").read_text())
+        other = tmp_path / "public" / checkpoint.checkpoint_hash
+        assert CheckpointArchive(other).encode(checkpoint) == manifest
+        for chunk in (other / "chunks").iterdir():
+            assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()

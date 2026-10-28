@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -1366,7 +1367,15 @@ class WorldState:
     def canonical_json(self) -> str:
         """Serialize the complete current state deterministically as compact JSON."""
         self.validate()
-        data = {
+        return self._canonical_text(self._canonical_data())
+
+    def _canonical_data(self, *, include_event_log: bool = True) -> dict[str, Any]:
+        """The canonical_json() document before encoding; it shares live model state.
+
+        Without the EventLog its "event_log" is empty, for a caller that adds
+        records it already converted.
+        """
+        return {
             "schema_version": self.schema_version,
             "scenario_id": self.scenario_id,
             "seed": self.seed,
@@ -1399,20 +1408,25 @@ class WorldState:
                 for task in sorted(self.active_tasks.values(), key=lambda item: item.id)
             ],
             "event_queue": [event.to_dict() for event in self.event_queue.pending()],
-            "event_log": [record.to_dict() for record in self.event_log.records],
+            "event_log": (
+                [record.to_dict() for record in self.event_log.records] if include_event_log else []
+            ),
             "rng_state": self.rng_state,
             "id_counters": self.id_counters,
             "metric_state": self.metric_state,
             "model_configs": self.model_configs,
             "model_state": self.model_state,
         }
+
+    @classmethod
+    def _canonical_text(cls, data: Any) -> str:
         return json.dumps(
             data,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
             allow_nan=False,
-            default=self._json_default,
+            default=cls._json_default,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1420,8 +1434,20 @@ class WorldState:
         return json.loads(self.canonical_json())
 
     @classmethod
-    def from_dict(cls, document: dict[str, Any]) -> WorldState:
-        """Restore the exact current schema; older or unknown schemas fail closed."""
+    def from_dict(
+        cls,
+        document: dict[str, Any],
+        *,
+        _restored_events: Sequence[EventLogRecord] = (),
+        _shared: Sequence[Any] = (),
+    ) -> WorldState:
+        """Restore the exact current schema; older or unknown schemas fail closed.
+
+        The private arguments are for the restore check of Checkpoint.capture only:
+        _restored_events are records restored before from the same leading
+        event_log documents, which are not parsed again, and the new world may keep
+        the _shared model_state lists instead of copies.
+        """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
         expected_fields = {
@@ -1552,15 +1578,20 @@ class WorldState:
             }
             active_tasks = {item["id"]: ActiveTask(**item) for item in document["active_tasks"]}
             queue = EventQueue([ScheduledEvent(**item) for item in document["event_queue"]])
+            if len(_restored_events) > len(document["event_log"]):
+                raise StateInvariantError("restored EventLog records exceed the document")
             log = EventLog(
                 [
-                    EventLogRecord(
-                        event=ScheduledEvent(**item["event"]),
-                        realized_minute=item["realized_minute"],
-                        status=EventStatus(item["status"]),
-                        detail=item["detail"],
-                    )
-                    for item in document["event_log"]
+                    *_restored_events,
+                    *(
+                        EventLogRecord(
+                            event=ScheduledEvent(**item["event"]),
+                            realized_minute=item["realized_minute"],
+                            status=EventStatus(item["status"]),
+                            detail=item["detail"],
+                        )
+                        for item in document["event_log"][len(_restored_events) :]
+                    ),
                 ]
             )
             world = cls(
@@ -1582,7 +1613,7 @@ class WorldState:
                 id_counters=deepcopy(document["id_counters"]),
                 metric_state=deepcopy(document["metric_state"]),
                 model_configs=deepcopy(document["model_configs"]),
-                model_state=deepcopy(document["model_state"]),
+                model_state=deepcopy(document["model_state"], {id(item): item for item in _shared}),
                 schema_version=document["schema_version"],
             )
             world.validate()

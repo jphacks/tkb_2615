@@ -54,3 +54,53 @@ def test_compressed_checkpoint_retains_hash_and_reuses_chunks(tmp_path):
     assert archive.decode(manifest).to_json() == checkpoint.to_json()
     assert archive.encode(checkpoint) == manifest
     assert sorted(tmp_path.rglob("*.json.gz")) == first
+
+
+@pytest.mark.parametrize("chunk_records", [20, 128])
+def test_archive_of_a_cached_capture_is_byte_identical(
+    tmp_path, live_checkpoint_world, chunk_records
+):
+    """Packing with a capture's encoder writes the manifest and chunks a plain
+    archive writes (Issue #44). The EventLog is long enough to be split into chunks."""
+    from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+    from sheltersim.events.handlers import EventDispatcher
+    from sheltersim.events.models import EventKind, ScheduledEvent
+    from sheltersim.experiments.metrics import MetricsRecorder
+
+    world = live_checkpoint_world
+    metrics = MetricsRecorder()
+    metrics.capture(world, minute=0)
+    cache = CheckpointHistoryCache()
+    Checkpoint.capture(world, metrics=metrics, history_cache=cache)
+    for index in range(130):
+        world.schedule_event(
+            ScheduledEvent(
+                event_id=f"archive-event-{index}",
+                kind=EventKind.EXOGENOUS,
+                due_minute=0,
+                priority=0,
+                sequence=world.allocate_event_sequence(),
+                event_type="unknown_checkpoint_test_event",
+                payload={"note": "x" * 600},
+            )
+        )
+        EventDispatcher().dispatch_due(world, 0)
+    assert len(world.event_log) == 131
+    checkpoint = Checkpoint.capture(world, metrics=metrics, history_cache=cache)
+    cached = CheckpointArchive(
+        tmp_path / "cached", chunk_records=chunk_records, encoder=checkpoint._encoder
+    )
+    manifest = cached._encode_validated_document(
+        checkpoint._document_view(), checkpoint_hash=checkpoint.checkpoint_hash
+    )
+    plain = CheckpointArchive(tmp_path / "plain", chunk_records=chunk_records)
+    assert manifest == plain.encode(checkpoint)
+    assert manifest["document"]["fields"]["world_state"]["fields"]["event_log"]["kind"] == (
+        "list_v2"
+    )
+    chunks = sorted(path.name for path in (tmp_path / "plain" / "chunks").iterdir())
+    assert sorted(path.name for path in (tmp_path / "cached" / "chunks").iterdir()) == chunks
+    for name in chunks:
+        assert (tmp_path / "cached" / "chunks" / name).read_bytes() == (
+            tmp_path / "plain" / "chunks" / name
+        ).read_bytes()

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from sheltersim.contracts.policies import model_signatures
+from sheltersim.core.checkpoint_cache import CanonicalEncoder, CheckpointHistoryCache
 from sheltersim.core.world import StateInvariantError, WorldState
+from sheltersim.events.models import EventLogRecord
 from sheltersim.experiments.metrics import MetricsRecorder
 
 
@@ -33,6 +36,9 @@ class Checkpoint:
     runtime_state: dict[str, Any]
     checkpoint_hash: str
 
+    # Set by a capture with a history cache, for saving the just-captured object.
+    _encoder: CanonicalEncoder | None = field(default=None, init=False, repr=False, compare=False)
+
     CURRENT_SCHEMA_VERSION = 1
 
     @classmethod
@@ -43,13 +49,26 @@ class Checkpoint:
         metrics: MetricsRecorder | None = None,
         runtime_state: dict[str, Any] | None = None,
         model_versions: dict[str, str] | None = None,
+        history_cache: CheckpointHistoryCache | None = None,
     ) -> Checkpoint:
-        """Capture every serialized WorldState field and optional controller state."""
+        """Capture every serialized WorldState field and optional controller state.
+
+        A writer that captures the same runtime repeatedly passes its own
+        history_cache: history converted and restore-checked by an earlier capture
+        is reused, and the result is the same Checkpoint.
+        """
         world.validate()
-        world_document = world.to_dict()
-        metric_document = (
-            metrics.to_dict() if metrics is not None else {"schema_version": 3, "snapshots": []}
-        )
+        encoder = None
+        digest = _digest
+        if history_cache is None:
+            world_document = world.to_dict()
+            metric_document = (
+                metrics.to_dict() if metrics is not None else {"schema_version": 3, "snapshots": []}
+            )
+        else:
+            # world.to_dict() would validate the same world again.
+            world_document, metric_document, encoder = history_cache.documents(world, metrics)
+            digest = encoder.digest
         versions = _model_versions(world)
         if model_versions is not None:
             versions.update(deepcopy(model_versions))
@@ -58,14 +77,14 @@ class Checkpoint:
             "world_state_schema_version": world.schema_version,
             "scenario_id": world.scenario_id,
             "simulation_minute": world.minute_index,
-            "state_hash": _digest(world_document),
+            "state_hash": digest(world_document),
             "model_versions": versions,
             "world_state": world_document,
             "metrics_state": metric_document,
             "runtime_state": deepcopy(runtime_state or {}),
         }
         try:
-            checkpoint_hash = _digest(body)
+            checkpoint_hash = digest(body)
         except (TypeError, ValueError) as exc:
             raise CheckpointError(
                 f"checkpoint state must contain finite JSON values: {exc}"
@@ -73,7 +92,18 @@ class Checkpoint:
         checkpoint = cls(**body, checkpoint_hash=checkpoint_hash)
         # Both hashes were just computed from these same, unshared objects;
         # recomputing them here cannot fail. Structure and restore checks remain.
-        checkpoint._validate(hashes_verified=True)
+        if history_cache is None:
+            checkpoint._validate(hashes_verified=True)
+            return checkpoint
+        # EventLog documents an earlier capture restored are not parsed again;
+        # the restored world is still built and validated as a whole.
+        restored, _ = checkpoint._validate(
+            hashes_verified=True,
+            restored_events=history_cache.restored_events(),
+            shared=encoder.spliced_lists(),
+        )
+        history_cache.remember_restored(restored.event_log.records)
+        object.__setattr__(checkpoint, "_encoder", encoder)
         return checkpoint
 
     def restore_world(
@@ -118,8 +148,8 @@ class Checkpoint:
             )
         return compatible
 
-    def _world_document_for_restore(self) -> dict[str, Any]:
-        world_document = deepcopy(self.world_state)
+    def _world_document_for_restore(self, shared: Sequence[Any] = ()) -> dict[str, Any]:
+        world_document = deepcopy(self.world_state, {id(item): item for item in shared})
         if self._legacy_queue_migration_required():
             from sheltersim.domain.facility_queues import (
                 FACILITY_QUEUES_LEGACY_MODE,
@@ -225,7 +255,13 @@ class Checkpoint:
         """Load and validate a checkpoint from disk."""
         return cls.from_json(Path(path).read_text(encoding="utf-8"))
 
-    def _validate(self, *, hashes_verified: bool = False) -> tuple[WorldState, MetricsRecorder]:
+    def _validate(
+        self,
+        *,
+        hashes_verified: bool = False,
+        restored_events: list[EventLogRecord] | None = None,
+        shared: Sequence[Any] = (),
+    ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version != self.CURRENT_SCHEMA_VERSION:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
         if self.world_state_schema_version not in (5, 6):
@@ -251,8 +287,20 @@ class Checkpoint:
         if not hashes_verified and _digest(self.world_state) != self.state_hash:
             raise CheckpointError("checkpoint WorldState integrity hash mismatch")
         try:
-            world = WorldState.from_dict(self._world_document_for_restore())
-            metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
+            if restored_events is None:
+                world = WorldState.from_dict(self._world_document_for_restore())
+                metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
+            else:
+                # A capture's restore check discards the restored world, and the
+                # history lists it reused are never changed, so they are not copied.
+                world = WorldState.from_dict(
+                    self._world_document_for_restore(shared),
+                    _restored_events=restored_events,
+                    _shared=shared,
+                )
+                metrics = MetricsRecorder.from_dict(
+                    deepcopy(self.metrics_state, {id(item): item for item in shared})
+                )
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         if not hashes_verified and _digest(self._body_dict()) != self.checkpoint_hash:
