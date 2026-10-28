@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar, TypeAlias
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import FacilityState, StaffState
 from sheltersim.domain.zones import ZoneGraph
@@ -309,8 +310,11 @@ class BranchRuntime:
             metrics=MetricsRecorder.from_dict(metrics.to_dict()) if metrics else MetricsRecorder(),
         )
 
-    def checkpoint(self) -> Checkpoint:
-        """Save branch lineage and accepted commands inside checkpoint runtime state."""
+    def checkpoint(self, *, history_cache: CheckpointHistoryCache | None = None) -> Checkpoint:
+        """Save branch lineage and accepted commands inside checkpoint runtime state.
+
+        A writer saving this runtime repeatedly passes its own history_cache.
+        """
         runtime = deepcopy(self.runtime_state)
         runtime["branch"] = {
             "schema_version": self.CURRENT_SCHEMA_VERSION,
@@ -319,7 +323,9 @@ class BranchRuntime:
             "pairing_key": self.pairing_key,
             "command_log": deepcopy(self.command_log),
         }
-        return Checkpoint.capture(self.world, metrics=self.metrics, runtime_state=runtime)
+        return Checkpoint.capture(
+            self.world, metrics=self.metrics, runtime_state=runtime, history_cache=history_cache
+        )
 
     def fork(self, branch_id: str) -> BranchRuntime:
         """Take an exact child snapshot and preserve the paired RNG scenario key."""

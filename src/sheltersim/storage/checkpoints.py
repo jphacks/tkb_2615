@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.checkpoint_cache import CanonicalEncoder
 
 _HASH = re.compile(r"^[a-f0-9]{64}$")
 
@@ -33,6 +34,7 @@ class CheckpointArchive:
         chunk_records: int = 128,
         max_new_bytes: int | None = None,
         content_check: Callable[[Any], None] | None = None,
+        encoder: CanonicalEncoder | None = None,
     ) -> None:
         self.directory = directory
         self.chunk_records = chunk_records
@@ -40,17 +42,21 @@ class CheckpointArchive:
         # Called on every chunk value (and large-object field names) that is not
         # already stored. Stored chunks passed the same check when first written.
         self.content_check = content_check
+        # The encoder of a just-captured Checkpoint already holds the bytes of the
+        # history it reused; chunks and sizes are the same with or without it.
+        self.encoder = encoder
         self.new_bytes = 0
         self.chunk_directory = directory / "chunks"
         self._staged: dict[str, bytes] | None = None
         self._staged_bytes = 0
 
-    def _put(self, value: Any) -> str:
+    def _put(self, value: Any, raw: bytes | None = None) -> str:
         if self.chunk_directory.is_symlink() or not self.chunk_directory.resolve().is_relative_to(
             self.directory.resolve()
         ):
             raise CheckpointError("checkpoint chunk directory cannot follow symlinks")
-        raw = _encoded(value)
+        if raw is None:
+            raw = _encoded(value)
         if len(raw) > 16_777_216:
             raise CheckpointError("checkpoint chunk exceeds the supported size")
         key = hashlib.sha256(raw).hexdigest()
@@ -91,10 +97,16 @@ class CheckpointArchive:
 
     def _pack(self, value: Any) -> dict[str, Any]:
         if isinstance(value, list) and len(value) > self.chunk_records:
+            items = self.encoder.list_items(value) if self.encoder is not None else None
             return {
                 "kind": "list_v2",
                 "chunks": [
-                    self._put(value[i : i + self.chunk_records])
+                    self._put(
+                        value[i : i + self.chunk_records],
+                        None
+                        if items is None
+                        else b"[" + b",".join(items[i : i + self.chunk_records]) + b"]",
+                    )
                     for i in range(0, len(value), self.chunk_records)
                 ],
                 "starts": list(range(0, len(value), self.chunk_records)),
@@ -109,7 +121,7 @@ class CheckpointArchive:
                     for i in range(0, len(keys), self.chunk_records)
                 ],
             }
-        if isinstance(value, dict) and len(_encoded(value)) > 65_536:
+        if isinstance(value, dict) and self._size(value) > 65_536:
             if self.content_check is not None:
                 # Field names of a split object live in the manifest, not a chunk.
                 self.content_check(dict.fromkeys(value))
@@ -117,7 +129,13 @@ class CheckpointArchive:
                 "kind": "object",
                 "fields": {key: self._pack(item) for key, item in sorted(value.items())},
             }
-        return {"kind": "value", "chunk": self._put(value)}
+        return {
+            "kind": "value",
+            "chunk": self._put(value, None if self.encoder is None else self.encoder.encode(value)),
+        }
+
+    def _size(self, value: Any) -> int:
+        return len(_encoded(value)) if self.encoder is None else self.encoder.size(value)
 
     def encode(self, checkpoint: Checkpoint) -> dict[str, Any]:
         return self._encode_validated_document(

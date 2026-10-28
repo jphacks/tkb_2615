@@ -196,9 +196,21 @@ class MetricsRecorder:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the complete metric accumulator for checkpoint continuation."""
-        document = {"schema_version": 4, "snapshots": [asdict(item) for item in self.snapshots]}
-        if self.resource_snapshots is not None:
-            document["resource_snapshots"] = [dict(item) for item in self.resource_snapshots]
+        return self._document(
+            [asdict(item) for item in self.snapshots],
+            None
+            if self.resource_snapshots is None
+            else [dict(item) for item in self.resource_snapshots],
+        )
+
+    @staticmethod
+    def _document(
+        snapshots: list[dict[str, Any]], resource_snapshots: list[dict[str, int]] | None
+    ) -> dict[str, Any]:
+        """to_dict() of sample documents a Checkpoint save may have converted before."""
+        document: dict[str, Any] = {"schema_version": 4, "snapshots": snapshots}
+        if resource_snapshots is not None:
+            document["resource_snapshots"] = resource_snapshots
         return document
 
     @classmethod

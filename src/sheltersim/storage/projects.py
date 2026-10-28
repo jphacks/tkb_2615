@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised on Windows.
 from sheltersim.contracts.api import BranchReference, EvidenceReference, RunReference
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.checkpoint_cache import CanonicalEncoder
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import CheckpointArchive
 
@@ -426,6 +427,7 @@ class ProjectStore:
             checkpoint,
             checkpoint._document_view,
             expected_checkpoint_hash=expected_checkpoint_hash,
+            encoder=checkpoint._encoder,
         )
 
     def _save_branch(
@@ -436,6 +438,7 @@ class ProjectStore:
         document_source: Any,
         *,
         expected_checkpoint_hash: str | None,
+        encoder: CanonicalEncoder | None = None,
     ) -> None:
         with self.transaction():
             run = self.run(project_id, reference.run_id)
@@ -497,6 +500,7 @@ class ProjectStore:
                 checkpoint_path.parent,
                 max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
                 content_check=_reject_sensitive_checkpoint_content,
+                encoder=encoder,
             )
             encoded_archive = archive._prepare_validated_document(
                 document,

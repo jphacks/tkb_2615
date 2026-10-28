@@ -8,6 +8,7 @@ from typing import Any
 
 from sheltersim.contracts.api import BranchReference
 from sheltersim.core.checkpoint import Checkpoint
+from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.domain.population_lifecycle import current_household_id
 from sheltersim.experiments.branch import BranchRuntime
@@ -320,6 +321,7 @@ class TimelineStore:
         fork_minute: int = 0,
         router: LLMRouter | None = None,
         observations: list[dict[str, Any]] | None = None,
+        history_cache: CheckpointHistoryCache | None = None,
     ) -> Checkpoint:
         if router is not None:
             runtime.runtime_state["llm"] = router.snapshot_state()
@@ -328,7 +330,7 @@ class TimelineStore:
             ):
                 runtime.runtime_state["replay_source"] = router.snapshot_state()
             runtime.runtime_state["llm_settings"] = public_router_settings(router)
-        checkpoint = runtime.checkpoint()
+        checkpoint = runtime.checkpoint(history_cache=history_cache)
         try:
             prior = self.store.branch_reference(self.project_id, self.run_id, runtime.branch_id)
         except StorageError:
@@ -563,6 +565,8 @@ class TimelineStore:
         controller = OfflineSimulationController(runtime.world, sink, llm_router=router)
         engine = TickEngine(runtime.world, phase_handler=controller)
         last_recorded_minute = head.simulation_minute
+        # Each save after the first reuses the history this loop saved before.
+        history_cache = CheckpointHistoryCache()
         while runtime.world.minute_index < target_minute:
             if cancelled is not None and cancelled():
                 break
@@ -573,6 +577,7 @@ class TimelineStore:
                     fork_minute=reference.fork_minute,
                     router=router,
                     observations=sink.observations,
+                    history_cache=history_cache,
                 )
                 sink.observations.clear()
                 last_recorded_minute = runtime.world.minute_index
@@ -588,6 +593,7 @@ class TimelineStore:
                 fork_minute=reference.fork_minute,
                 router=router,
                 observations=sink.observations,
+                history_cache=history_cache,
             )
         return runtime
 
