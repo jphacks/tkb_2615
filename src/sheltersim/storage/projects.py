@@ -11,6 +11,7 @@ import re
 import tempfile
 import threading
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -115,6 +116,15 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+def _copy_restored(
+    world: WorldState, metrics: MetricsRecorder
+) -> tuple[WorldState, MetricsRecorder]:
+    """An independent copy; EventLog records and scheduled events are frozen and shared."""
+    memo: dict[int, Any] = {id(record): record for record in world.event_log.records}
+    memo.update({id(event): event for event in world.event_queue.pending()})
+    return deepcopy(world, memo), deepcopy(metrics)
+
+
 def _reject_sensitive_checkpoint_content(value: Any) -> None:
     if safe_document(value) != value:
         raise StorageError("checkpoint contains sensitive data")
@@ -130,6 +140,10 @@ class ProjectStore:
             raise StorageError("max_bytes must be positive")
         self.max_bytes = max_bytes
         self._mutex = threading.RLock()
+        # Untouched copies of the worlds and metrics restored from the last two
+        # Checkpoints this store loaded (a comparison or replay reads two branches),
+        # by checkpoint hash (#46). The same verified document restores the same state.
+        self._restored: dict[tuple[str, str, str], tuple[WorldState, MetricsRecorder]] = {}
         self._checkpoint_write_bytes: dict[tuple[str, str], int] = {}
 
     @contextmanager
@@ -680,15 +694,48 @@ class ProjectStore:
 
         They are what restore_state() returns, without restoring the Checkpoint again.
         """
+        key = (project_id, run_id, checkpoint_hash)
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         document = self._read(path)
+        with self._mutex:
+            kept = self._restored.pop(key, None)
+            if kept is not None:
+                self._restored[key] = kept
+        archived = document.get("storage_type") in {
+            "checkpoint_archive_v1",
+            "checkpoint_archive_v2",
+        }
+        if kept is not None and archived:
+            # Seeks, comparisons and replays read the same Checkpoint again. Its document
+            # is still decoded and its hashes checked, but the world is a copy of the one
+            # restored before instead of a new restore.
+            try:
+                unpacked = CheckpointArchive(path.parent).unpack_document(document)
+                if (
+                    not isinstance(unpacked, dict)
+                    or unpacked.get("checkpoint_hash") != checkpoint_hash
+                    or document.get("checkpoint_hash") != checkpoint_hash
+                ):
+                    raise CheckpointError("checkpoint archive pointer hash mismatch")
+                checkpoint = Checkpoint(**unpacked)
+                checkpoint._verify_hashes()
+            except (CheckpointError, ValueError, TypeError, KeyError) as exc:
+                raise StorageError("checkpoint_incompatible_or_corrupt") from exc
+            return checkpoint, _copy_restored(*kept)
         try:
             if document.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
-                return CheckpointArchive(path.parent).decode_restored(document)
-            # _read parsed the file just now, so the document is not shared.
-            return Checkpoint._load(document)
+                checkpoint, restored = CheckpointArchive(path.parent).decode_restored(document)
+            else:
+                # _read parsed the file just now, so the document is not shared.
+                checkpoint, restored = Checkpoint._load(document)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
+        copy = _copy_restored(*restored)
+        with self._mutex:
+            self._restored[key] = copy
+            while len(self._restored) > 2:
+                del self._restored[next(iter(self._restored))]
+        return checkpoint, restored
 
     def checkpoint_document(
         self, project_id: str, run_id: str, checkpoint_hash: str

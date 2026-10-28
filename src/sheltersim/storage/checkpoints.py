@@ -252,6 +252,11 @@ class CheckpointArchive:
             raise CheckpointError("checkpoint archive pointer hash mismatch")
         return checkpoint, restored
 
+    def unpack_document(self, record: dict[str, Any]) -> Any:
+        """The unpacked Checkpoint document of a valid manifest, before any hash check."""
+        self._validate_manifest(record)
+        return self._unpack(record["document"])
+
     def document(self, record: dict[str, Any]) -> dict[str, Any]:
         """Verify original logical hashes without interpreting a newer model schema.
 

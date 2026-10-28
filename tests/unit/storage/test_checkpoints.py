@@ -124,7 +124,9 @@ def test_a_loaded_checkpoint_is_restored_once_and_shares_nothing_with_its_restor
         return original(cls, document, **kwargs)
 
     monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
-    checkpoint, restored = store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
+    # A new store, which has not restored this Checkpoint before, reads it from disk.
+    fresh = type(store)(store.root)
+    checkpoint, restored = fresh.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
     runtime = BranchRuntime.from_checkpoint(checkpoint, branch_id="main", _restored=restored)
     assert restores == [30]
     assert checkpoint.to_json() == expected.to_json()
@@ -134,3 +136,44 @@ def test_a_loaded_checkpoint_is_restored_once_and_shares_nothing_with_its_restor
     runtime.world.metric_state["test_only"] = 1.0
     runtime.metrics.snapshots.clear()
     assert checkpoint.to_json() == expected.to_json()
+
+
+def test_a_checkpoint_read_again_is_an_independent_copy_of_the_first_restore(
+    tmp_path, saved_timeline
+):
+    """Draft for #46: a Checkpoint read again is decoded and checked anew, and its world is
+    a copy of the one restored before."""
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    reference = store.branch_reference("p", "r", "main")
+    checkpoint, (world, metrics) = store.load_restored_checkpoint(
+        "p", "r", reference.checkpoint_hash
+    )
+    expected = world.canonical_json()
+    world.metric_state["test_only"] = 1.0
+    world.model_state.clear()
+    metrics.snapshots.clear()
+    again, (world_again, metrics_again) = store.load_restored_checkpoint(
+        "p", "r", reference.checkpoint_hash
+    )
+    assert again is not checkpoint
+    assert again.to_json() == checkpoint.to_json()
+    assert world_again.canonical_json() == expected
+    assert metrics_again.to_dict() == checkpoint.restore_metrics().to_dict()
+    assert world_again is not world
+
+
+def test_a_checkpoint_read_again_still_detects_a_corrupt_chunk(tmp_path, saved_timeline):
+    """Draft for #46: reusing the restored world never skips checking the disk."""
+    import gzip
+
+    from sheltersim.storage.projects import StorageError
+
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    reference = store.branch_reference("p", "r", "main")
+    store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
+    for chunk in (tmp_path / "p" / "runs" / "r" / "checkpoints" / "chunks").glob("*.json.gz"):
+        chunk.write_bytes(gzip.compress(b'["tampered"]'))
+    with pytest.raises(StorageError, match="checkpoint_incompatible_or_corrupt"):
+        store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
