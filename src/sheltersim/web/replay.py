@@ -3,6 +3,7 @@
 from copy import deepcopy
 from typing import Any
 
+from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.inspection.frames import world_frame
 from sheltersim.storage.projects import ProjectStore, StorageError
@@ -35,6 +36,31 @@ def comparison_projection(run_id, minute, common_range, frames, receipts, paired
     }
 
 
+def _branch_frames(
+    timeline: TimelineStore, run_id: str, ref: Any, start: int, end: int
+) -> list[dict[str, Any]]:
+    # Each replayed minute's state hash is world.state_digest(). The history cache of
+    # Checkpoint saves (#44) gives the same bytes and converts only the history added
+    # since the previous minute instead of encoding the whole world each minute.
+    history = CheckpointHistoryCache()
+    frames = []
+    for world in timeline.iter_worlds(ref.branch_id, start, end):
+        world.validate()
+        document, _, encoder = history.documents(world, None)
+        frames.append(
+            deepcopy(
+                world_frame(
+                    world,
+                    run_id=run_id,
+                    branch_id=ref.branch_id,
+                    computed_until=ref.computed_until,
+                    state_hash=encoder.digest(document),
+                )
+            )
+        )
+    return frames
+
+
 def replay_frames(
     store: ProjectStore,
     workspace: Any,
@@ -58,21 +84,14 @@ def replay_frames(
         ref.computed_until for ref in refs
     ):
         raise StorageError("replay interval is outside the common computed range")
+    # The comparison of the first minute without its frames, which are rendered below.
     template = (
-        workspace.comparison(project_id, run_id, branch_ids, start) if len(refs) == 2 else None
+        workspace.comparison_context(project_id, run_id, branch_ids, start)
+        if len(refs) == 2
+        else None
     )
     timeline = TimelineStore(store, project_id, run_id)
-    batches = [
-        [
-            deepcopy(
-                world_frame(
-                    world, run_id=run_id, branch_id=ref.branch_id, computed_until=ref.computed_until
-                )
-            )
-            for world in timeline.iter_worlds(ref.branch_id, start, end)
-        ]
-        for ref in refs
-    ]
+    batches = [_branch_frames(timeline, run_id, ref, start, end) for ref in refs]
     if any(
         store.branch_reference(project_id, run_id, ref.branch_id).checkpoint_hash
         != ref.checkpoint_hash
@@ -82,17 +101,12 @@ def replay_frames(
     samples = []
     for index, minute in enumerate(range(start, end + 1)):
         frames = [batch[index] for batch in batches]
+        if template is None:
+            samples.append(frames[0])
+            continue
+        common_range, receipts, paired = template
         samples.append(
-            comparison_projection(
-                run_id,
-                minute,
-                template["common_range"],
-                frames,
-                template["origin_receipts"],
-                template["shared_origin"],
-            )
-            if template
-            else frames[0]
+            comparison_projection(run_id, minute, common_range, frames, receipts, paired)
         )
     return {
         "schema_version": 1,
