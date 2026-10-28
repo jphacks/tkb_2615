@@ -29,12 +29,13 @@ from sheltersim.region.conditions import (
     with_standard_provisioning,
 )
 from sheltersim.region.facility import (
-    SYNTHETIC_STAFFING_SOURCE_ID,
     EditableFacilityGeometry,
     FacilityDesign,
     FacilityDesignRequest,
     FacilityZoneCondition,
     StandardShelterGenerator,
+    shelter_staff,
+    shelter_staff_assumption,
 )
 from sheltersim.region.models import (
     ACCESSIBLE_ROUTE_MIN_WIDTH_M,
@@ -369,9 +370,18 @@ class InitialScenarioBuilder:
             zone_ids = {zone.id for zone in zones}
             if not zones or "sleeping" not in zone_ids:
                 raise ValueError("an imported plan must contain a scenario zone named 'sleeping'")
-            staff_zone_id = "staff" if "staff" in zone_ids else "sleeping"
-            staff = tuple(
-                member.model_copy(update={"zone_id": staff_zone_id}) for member in design.staff
+            # The plan's own water and meal stations each get a member in their zone, as in
+            # the standard design; otherwise the service never starts (#201).
+            staff = shelter_staff(
+                population=request.evacuees,
+                staff_count=request.staff_count,
+                station_zone_ids=tuple(
+                    facility.zone_id
+                    for kind in ("water_station", "meal_distribution")
+                    for facility in facilities
+                    if facility.kind == kind
+                ),
+                general_zone_id="staff" if "staff" in zone_ids else "sleeping",
             )
             design_warnings.append(
                 "施設図面Geometryを使用しています。ゾーン名・避難者容量・経路の実測性と対応は現場担当者が確認してください。"
@@ -563,11 +573,7 @@ class InitialScenarioBuilder:
         facility_assumptions = (
             design.assumptions
             if plan_override is None
-            else tuple(
-                assumption
-                for assumption in design.assumptions
-                if assumption["source_id"] == SYNTHETIC_STAFFING_SOURCE_ID
-            )
+            else (shelter_staff_assumption(staff, entered_total=request.staff_count),)
         )
         model_assumptions: tuple[dict[str, object], ...] = (
             {
