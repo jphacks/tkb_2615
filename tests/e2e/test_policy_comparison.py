@@ -1,10 +1,10 @@
 """Two Runs that differ only in the registered behavior policy can be compared, and the
 CLI reports the variants; any other change is refused.
 
-The first test runs h00_small_replay, which selects its models one by one. A
-generated Scenario selects them as a model suite, and the comparison refuses every
-variant pair of it (#157); the second test expects what it should report. Keep the
-first until the second passes (#137).
+The first test runs h00_small_replay, which selects its models one by one. The
+second runs a generated Scenario, which selects them as a model suite; swapping
+the behavior policy rewrites the suite as per-domain selectors, and the comparison
+treats the two forms as the same input (#157).
 """
 
 from __future__ import annotations
@@ -98,11 +98,6 @@ def test_policy_comparison_requires_only_the_registered_variant_to_change(
 POLICY_DURATION_DAYS = 1 / 12
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="#157: a generated Scenario's model suite makes every variant pair differ",
-)
 def test_policy_comparison_of_a_generated_scenario_reports_both_variants(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], generated_previews
 ) -> None:
@@ -147,3 +142,33 @@ def test_policy_comparison_of_a_generated_scenario_reports_both_variants(
     )
     assert comparison_exit == 0
     assert "need_cohort_comparison" in capsys.readouterr().out
+
+    # The suite and its per-domain form must still declare and run the same models.
+    manifest_path = candidate_output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    registry = manifest["model_configs"]["policy_registry"]
+    registry["relationship"] = "duration-contact-trust-v1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="inputs differ"):
+        compare_run_artifacts(baseline_output, candidate_output, allow_behavior_policy_change=True)
+
+
+def test_policy_comparison_refuses_a_suite_whose_per_domain_form_runs_other_models(
+    tmp_path: Path, generated_previews
+) -> None:
+    """A suite that leaves a selector implicit runs another relationship policy once
+    expanded, although both declare the same models (#157)."""
+    preview = generated_previews(duration_days=POLICY_DURATION_DAYS)
+    document = copy.deepcopy(preview["scenario"])
+    registry = document["model_configs"]["policy_registry"]
+    del registry["relationship"]
+    baseline = ScenarioSpec.model_validate(document)
+    candidate = baseline.with_behavior_policy_variant("priority-rule-v1")
+    assert "relationship" in candidate.model_configs["policy_registry"]
+    baseline_output = tmp_path / "sleep-aware"
+    candidate_output = tmp_path / "priority"
+    run_scenario(baseline, baseline_output, trace_level=TraceLevel.FULL)
+    run_scenario(candidate, candidate_output, trace_level=TraceLevel.FULL)
+
+    with pytest.raises(ValueError, match="inputs differ"):
+        compare_run_artifacts(baseline_output, candidate_output, allow_behavior_policy_change=True)

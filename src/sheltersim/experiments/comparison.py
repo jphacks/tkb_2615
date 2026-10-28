@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from sheltersim.contracts.policies import legacy_psychology_notice
+from sheltersim.contracts.policies import legacy_psychology_notice, selected_models
 from sheltersim.experiments.branch import BranchRuntime
 
 
@@ -367,8 +367,11 @@ def _validate_behavior_policy_pair(
         behavior_config = model_configs.get("behavior")
         if not isinstance(behavior_config, dict):
             raise ValueError("policy comparison requires a behavior model config")
+        model_configs["policy_registry"] = _non_behavior_model_selection(model_configs)
         behavior_config.pop("policy", None)
         behavior_config.pop("source_id", None)
+        # Only the sleep-aware policy accepts this weight, and the variants always differ.
+        behavior_config.pop("sleep_debt_utility_weight", None)
         assumptions = json.loads(_canonical_json(manifest.get("model_assumptions", {})))
         assumptions_behavior = assumptions.get("behavior")
         if not isinstance(assumptions_behavior, dict):
@@ -429,6 +432,25 @@ def _validate_behavior_policy_pair(
         "candidate_run_id": candidate_manifest.get("run_id"),
         "candidate_scenario_hash": candidate_manifest.get("scenario_hash"),
     }
+
+
+def _non_behavior_model_selection(model_configs: dict[str, Any]) -> dict[str, Any]:
+    """The non-behavior models a Run declares and the selectors its runtime reads.
+
+    ScenarioSpec.with_behavior_policy_variant rewrites a model suite that fixes
+    another behavior policy as schema-2 per-domain selectors (#157). Both forms
+    declare the same models, but some runtime code reads per-domain selectors
+    directly, so a selector the suite left implicit still changes the Run.
+    """
+    declared = selected_models(model_configs)
+    declared.pop("behavior")
+    selectors = dict(model_configs.get("policy_registry", {}))
+    selectors.pop("behavior", None)
+    # Schema 3 is schema 2 plus the suite pin; the suite only labels the declared set.
+    selectors.pop("suite_id", None)
+    if selectors.get("schema_version") == 3:
+        selectors["schema_version"] = 2
+    return {"declared_models": declared, "selectors": selectors}
 
 
 def _decision_action_counts(run_directory: Path) -> dict[str, Any]:
