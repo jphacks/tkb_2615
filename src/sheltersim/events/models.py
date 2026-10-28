@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from json import dumps
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -36,7 +37,13 @@ def _validate_id(name: str, value: str | None, *, optional: bool = False) -> Non
         raise ValueError(f"{name} must be a stable ID")
 
 
+# Exact JSON scalar types, which freezing and thawing return as they are.
+_SCALARS = frozenset({str, int, float, bool, type(None)})
+
+
 def _freeze_json(value: Any) -> Any:
+    if type(value) in _SCALARS:
+        return value
     # A Mapping may be a value frozen by another event; copy it like a dict.
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) for key in value):
@@ -55,6 +62,8 @@ def _json_default(value: Any) -> Any:
 
 
 def _thaw_json(value: Any) -> Any:
+    if type(value) in _SCALARS:
+        return value
     if isinstance(value, Mapping):
         return {key: _thaw_json(item) for key, item in value.items()}
     if isinstance(value, tuple):
