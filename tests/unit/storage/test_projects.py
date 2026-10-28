@@ -370,3 +370,21 @@ def test_model_signatures_are_kept_while_email_addresses_are_redacted():
     signature = "distance-sampled-proximity-v1@1:state1:distance=1.5:interval=15:pairs=500"
     assert safe_document("contact name@example.com today") == "contact [redacted] today"
     assert safe_document(signature) == signature
+
+
+def test_repeated_short_and_long_texts_and_text_subclasses_are_redacted_alike() -> None:
+    """Short texts are redacted once and remembered (#223); every text gets the same result."""
+    short = "call 090-1234-5678"
+    long = "note " * 30 + "name@example.com"
+
+    class Label(str):
+        pass
+
+    for _ in range(2):
+        assert safe_document({"a": short, "b": [long, (short,)], "c": Label(short)}) == {
+            "a": "call [redacted]",
+            "b": ["note " * 30 + "[redacted]", ["call [redacted]"]],
+            "c": "call [redacted]",
+        }
+    with pytest.raises(StorageError, match="sensitive fields"):
+        safe_document({"note": short, 1: "x"})

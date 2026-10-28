@@ -69,16 +69,27 @@ def _private_field(key: str) -> bool:
     return _PRIVATE.search(key) is not None
 
 
+def _redact(value: str) -> str:
+    return PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", value))
+
+
+# Saved records repeat the same IDs, labels and short texts; redact each one once.
+_redact_short = functools.lru_cache(maxsize=16_384)(_redact)
+
+
 def safe_document(value: Any) -> Any:
     """Reject credential-bearing fields; redact conventional secrets/contact text."""
+    if type(value) is str:
+        return _redact_short(value) if len(value) <= 128 else _redact(value)
     if isinstance(value, dict):
-        if any(not isinstance(key, str) or _private_field(key) for key in value):
-            raise StorageError("sensitive fields cannot be persisted")
+        for key in value:
+            if not isinstance(key, str) or _private_field(key):
+                raise StorageError("sensitive fields cannot be persisted")
         return {key: safe_document(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [safe_document(item) for item in value]
     if isinstance(value, str):
-        return PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", value))
+        return _redact(value)
     if value is None or type(value) is bool:
         return value
     if type(value) is int or (type(value) is float and math.isfinite(value)):
