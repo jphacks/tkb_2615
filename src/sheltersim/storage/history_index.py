@@ -8,6 +8,7 @@ The authoritative JSON/checkpoint hashes remain unchanged and independently read
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import json
 import re
@@ -37,6 +38,25 @@ CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, toke
 PRAGMA user_version=1;
 """  # noqa: E501
 _WRITE_CACHE_KIB = 16_384
+
+
+@functools.cache
+def _operation_receipts() -> Any:
+    # Building a TypeAdapter compiles its validator; build each one once (#223).
+    from pydantic import TypeAdapter
+
+    from sheltersim.contracts.operations import OperationHistoryRecord
+
+    return TypeAdapter(OperationHistoryRecord)
+
+
+@functools.cache
+def _queue_receipts() -> Any:
+    from pydantic import TypeAdapter
+
+    from sheltersim.contracts.operations import FacilityQueueTransitionReceipt
+
+    return TypeAdapter(FacilityQueueTransitionReceipt)
 
 
 def cursor_encode(value: dict[str, Any]) -> str:
@@ -431,6 +451,7 @@ class HistoryIndex:
                             "deltas": observed_deltas,
                         }
                     )
+            geometry = None
             offset = counts.get("events", 0)
             if offset > len(events):
                 raise StorageError("history_event_prefix_shortened")
@@ -545,14 +566,8 @@ class HistoryIndex:
                     }:
                         if "shared_operations" not in world.get("model_configs", {}):
                             raise StorageError("operation_event_without_signed_contract")
-                        from pydantic import TypeAdapter
-
-                        from sheltersim.contracts.operations import OperationHistoryRecord
-
                         try:
-                            receipt = TypeAdapter(OperationHistoryRecord).validate_python(
-                                event["payload"]
-                            )
+                            receipt = _operation_receipts().validate_python(event["payload"])
                         except (TypeError, ValueError) as exc:
                             raise StorageError("operation_event_receipt_invalid") from exc
                         if receipt.causation_id != event.get("causation_id") or (
@@ -576,22 +591,19 @@ class HistoryIndex:
                             key=f"{row['record_type']}:{receipt.event_id}",
                         )
                     if event_type == "facility_queue_transition" and isinstance(payload, dict):
-                        from pydantic import TypeAdapter
-
                         from sheltersim.contracts.extensions import FacilityGeometry
-                        from sheltersim.contracts.operations import FacilityQueueTransitionReceipt
                         from sheltersim.domain.facility_queues import (
                             FACILITY_QUEUES_POLICY_VERSION,
                             FACILITY_QUEUES_STATE_KEY,
                         )
 
                         try:
-                            receipt = TypeAdapter(FacilityQueueTransitionReceipt).validate_python(
-                                payload
-                            )
-                            geometry = FacilityGeometry.model_validate(
-                                world.get("model_configs", {}).get("facility_geometry", {})
-                            )
+                            receipt = _queue_receipts().validate_python(payload)
+                            if geometry is None:
+                                # One checkpoint has one geometry; parse it once.
+                                geometry = FacilityGeometry.model_validate(
+                                    world.get("model_configs", {}).get("facility_geometry", {})
+                                )
                         except (TypeError, ValueError) as exc:
                             raise StorageError("facility_queue_event_receipt_invalid") from exc
                         point = next(
