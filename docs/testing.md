@@ -55,6 +55,49 @@ test results: 1 failed, 967 passed, 4 skipped; failed: tests/unit/x/test_y.py::t
 
 tests/conftest.pyは各testのProject保存先（SHELTERSIM_PROJECTS_DIR）、状態保存先（XDG_STATE_HOME）、LLM cache（SHELTERSIM_LLM_CACHE_PATH）を一時directoryに向けます。並列workerがこれらを共有せず、開発者のrunsやPC全体の利用記録にも書き込みません。test内でこれらを設定した場合はその値が優先されます。live_api testは、実費をPC全体の利用記録に残すため対象外です。
 
+### 網羅率の計測
+
+網羅率（行と分岐）は、必要なときだけ測ります。開発依存にpytest-covとcoverageを入れてあり、設定は`pyproject.toml`の`[tool.coverage.*]`です（対象は`sheltersim`、分岐も数える）。通常のpytestは計測しません。
+
+~~~shell
+SHELTERSIM_LLM_MODE=offline python -m pytest -n auto -m "not long_simulation" --cov --cov-report=html
+python -m coverage report --sort=cover
+~~~
+
+計測の結果はリポジトリ直下の`.coverage`と`htmlcov/`に書かれます。どちらも`.gitignore`の対象です。`htmlcov/index.html`を開くと、ファイルごとに通っていない行と分岐が見えます。
+
+`long_simulation`の印のテストは外します。計測すると、それらだけが極端に遅くなるためです。2026-10-28の計測では次のとおりでした。
+
+- 全件：2時間6分。7日間のテスト1件が52倍遅くなり、約2時間かかった。
+- 印のテストを外す：7分25秒。網羅率は73.2%から73.1%になり、外したことで通らなくなる行は6行だけだった（`events/effects.py`のguardの比較、`web/demo.py`の1行）。
+
+#### 2026-10-28の計測（`develop`の`e12b7d4`）
+
+印のないテスト（992 passed、4 skipped）で、行77.8%（27,984/35,965）、分岐62.4%（9,786/15,686）、合わせて73.1%でした。担当ごとの値は次のとおりです。
+
+| 担当 | 行数 | 行 | 行と分岐 |
+|---|---:|---:|---:|
+| `region` | 4,704 | 53.8% | 46.9% |
+| `web` | 4,698 | 70.3% | 66.5% |
+| `storage` | 2,047 | 72.0% | 67.4% |
+| `events` | 3,075 | 81.6% | 76.7% |
+| `core` | 994 | 81.6% | 77.6% |
+| 直下のファイル | 410 | 80.2% | 77.7% |
+| `domain` | 8,097 | 83.5% | 78.8% |
+| `llm` | 2,992 | 83.2% | 78.9% |
+| `contracts` | 1,658 | 85.2% | 79.1% |
+| `experiments` | 4,389 | 85.7% | 82.0% |
+| `policies` | 2,132 | 89.4% | 85.8% |
+| `inspection` | 769 | 91.2% | 88.0% |
+
+利用者の経路で、通っていない処理が多いのは次の箇所です。テストを足す候補として記録します。
+
+- Project画面のAPI：`web/project_services.py`の`get`（HTTPのGETの経路。205行中167行が通っていない）、`web/project_queries.py`の`first_divergence`・`compare`・`history`。
+- 避難者の一時外出・帰還・移動・再会（`domain/population_lifecycle.py`の`apply_population_presence_command`、`_schedule_relocation`、`admit_pending_returns`など）。
+- イベントの処理：近接接触（`ProximityContactHandler`）、移動の完了（`AgentTravelCompletionHandler`）の一部、職員の不在（`StaffUnavailabilityHandler`）、施設の復旧（`FacilityRecoveryHandler`）、情報の噂・訂正・接触の一部。
+- EffectProgramの検証で、不正な入力を拒否する分岐（`events/effects.py`の`validate_effect_program`で115行）とguardの評価。LLMの出力を信頼しない入力として扱うための検査なので、拒否の分岐も確かめる価値がある。
+- 図面の取り込み（`region/plan_import.py`が31.6%、`region/plan_extract.py`はテストがなく0%）と、外部データの接続（`region/additional_providers.py`、`region/providers.py`）。外部サービスを呼ぶ部分は、偽の応答で確かめる必要がある。
+
 ## 移管時の検証記録
 
 採用したsource snapshot a162aed8284641c2a21e21bbcd04bad6e595ffb1で、CPython 3.12.14と固定dependencyを使ってoffline pytest全件を実行し、**579 passed、3 skipped**でした。所要時間は545.17秒です。ANTHROPIC_API_KEYとlive test gateは未設定で、有料Provider呼び出しはありません。
