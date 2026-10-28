@@ -1,7 +1,8 @@
 """Paths of the files under fixtures/ that tests read.
 
-Test files may import these constants directly (docs/testing.md); everything else
-in tests/support/ reaches them as fixtures.
+Test files may import these constants directly, as they may the stateless synthetic
+data of other support modules (docs/testing.md); anything with state or cleanup in
+tests/support/ reaches them as a fixture.
 """
 
 from __future__ import annotations
