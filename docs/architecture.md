@@ -46,6 +46,7 @@ Python標準ライブラリのHTTPサーバーがローカルブラウザーア�
 - 資源台帳への操作（納入、損失、予約、解放、消費）と毎分の指標集計は、現在の残高・予約と、直前の監査記録・各資源の最新の監査記録を確認します。操作は変更する口座だけを複製した候補に適用し、確認を通ってから差し替えます。監査記録の全件の再生は完全検証で行います。
 - Checkpointは対応する復元に必要なstateとruntime情報を含みます。BranchRuntimeは分離したstateを復元し、兄弟Branchで可変queue、RNG状態、actor objectを共有しません。
 - 計算を進めるworker（`TimelineStore`の継続計算）は、Checkpointを保存するたびに、前の保存で変換した追記専用の履歴（EventLog、KPIと資源の標本、上の追記専用の履歴）の文書と正準JSONのbyte列、EventLog記録の復元結果を再利用し、新しく増えた分だけを変換・復元します（`core/checkpoint_cache.py`、#44）。保存されるCheckpoint v1のbyte列、hash、archiveのchunkは、全体を変換した場合と同じです。項目は同一性で照合し、古い項目を先頭から捨てる窓にも対応します。凍結されていない履歴の項目は保存済みの文書と等しい間だけ再利用し、書き換えられていれば変換し直します。保存前の完全検証と、復元した世界の完全検証は、従来どおり保存のたびに行います。
+- Branchの分岐（`TimelineStore.fork`）は、分岐する時刻の状態からCheckpointを1回だけ作ります。そのCheckpointが分岐の記録（`fork_origin`）の`state_hash`と`checkpoint_hash`になり、作成時の復元検証で組み立てた世界と指標が、そのまま子Branchになります（`Checkpoint.capture_restored`、#46）。この世界と指標は、Checkpointとも分岐元とも何も共有しません。子Branchに引き継ぐ応答テープは、分岐元のhead Checkpointの`runtime_state`だけを読みます。
 - inspection、描画、metrics、trace levelはWorldStateを変えず、simulation乱数も消費しません。
 
 ScenarioSpec、WorldState、Checkpoint、EffectProgram、Project recordはそれぞれ個別に版管理します。state変更には互換性テストが必要です。古い永続データを読み続ける場合は明示的な移行を用意します。

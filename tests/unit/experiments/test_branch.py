@@ -222,6 +222,21 @@ def test_branch_checkpoint_restores_lineage_and_interventions() -> None:
     assert restored.command_log == child.command_log
 
 
+def test_fork_is_the_child_of_the_branch_checkpoint_and_shares_nothing_with_it() -> None:
+    root = BranchRuntime.from_world(WorldState.from_scenario(ScenarioSpec.load(BASELINE_100_7D)))
+    root.apply(AddStaffCommand("staff-extra", "sleeping"))
+
+    child, checkpoint = root.fork_with_checkpoint("child")
+
+    # One Checkpoint gives both the fork's receipt and the child (#46).
+    assert checkpoint.to_json() == root.checkpoint().to_json()
+    expected = BranchRuntime.from_checkpoint(checkpoint, branch_id="child")
+    assert child.checkpoint().to_json() == expected.checkpoint().to_json()
+    child.apply(AddStaffCommand("staff-child", "sleeping"))
+    child.metrics.snapshots.clear()
+    assert checkpoint.to_json() == root.checkpoint().to_json()
+
+
 def _approved(plan: DraftPlan) -> dict[str, Any]:
     return ApprovedPlan.from_explicit_confirmation(plan).model_dump(mode="json")
 

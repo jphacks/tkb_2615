@@ -10,7 +10,7 @@ from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.llm.accounting import accounted_router
 from sheltersim.llm.config import LLMSettings
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import ProjectStore, StorageError
 
 
 def configure_parser(subparsers: Any) -> None:
@@ -197,10 +197,15 @@ def execute(arguments: Any) -> dict[str, Any]:
         return timeline.frame(arguments.branch_id, arguments.minute)
     if action == "fork":
         runtime = timeline.fork(arguments.branch_id, arguments.minute, arguments.child_id)
+        # The child's saved head holds the hash of its world.
+        head = store.branch_reference(project_id, arguments.run_id, runtime.branch_id)
+        saved = store.checkpoint_fields(
+            project_id, arguments.run_id, head.checkpoint_hash, ("state_hash",)
+        )
         return {
             "branch_id": runtime.branch_id,
             "minute": runtime.world.minute_index,
-            "state_hash": digest(runtime.world.to_dict()),
+            "state_hash": saved["state_hash"],
         }
     if action == "resume":
         _, checkpoint = store.load_branch(project_id, arguments.run_id, arguments.branch_id)

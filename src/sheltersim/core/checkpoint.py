@@ -57,6 +57,35 @@ class Checkpoint:
         history_cache: history converted and restore-checked by an earlier capture
         is reused, and the result is the same Checkpoint.
         """
+        return cls._capture(world, metrics, runtime_state, model_versions, history_cache)[0]
+
+    @classmethod
+    def capture_restored(
+        cls,
+        world: WorldState,
+        *,
+        metrics: MetricsRecorder | None = None,
+        runtime_state: dict[str, Any] | None = None,
+    ) -> tuple[Checkpoint, WorldState, MetricsRecorder]:
+        """capture(), and the world and metrics its restore check built.
+
+        They are what restore_state() of the Checkpoint returns, independent of it
+        and of the captured objects, without restoring it a second time.
+        """
+        checkpoint, restored = cls._capture(world, metrics, runtime_state, None, None)
+        assert restored is not None
+        return checkpoint, *restored
+
+    @classmethod
+    def _capture(
+        cls,
+        world: WorldState,
+        metrics: MetricsRecorder | None,
+        runtime_state: dict[str, Any] | None,
+        model_versions: dict[str, str] | None,
+        history_cache: CheckpointHistoryCache | None,
+    ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder] | None]:
+        # The restored objects are returned only when they share nothing.
         world.validate()
         encoder = None
         digest = _digest
@@ -93,8 +122,7 @@ class Checkpoint:
         # Both hashes were just computed from these same, unshared objects;
         # recomputing them here cannot fail. Structure and restore checks remain.
         if history_cache is None:
-            checkpoint._validate(hashes_verified=True)
-            return checkpoint
+            return checkpoint, checkpoint._validate(hashes_verified=True)
         # EventLog documents an earlier capture restored are not parsed again;
         # the restored world is still built and validated as a whole.
         restored, _ = checkpoint._validate(
@@ -104,7 +132,8 @@ class Checkpoint:
         )
         history_cache.remember_restored(restored.event_log.records)
         object.__setattr__(checkpoint, "_encoder", encoder)
-        return checkpoint
+        # The restored world shares the history lists of the captured documents.
+        return checkpoint, None
 
     def restore_world(
         self,
