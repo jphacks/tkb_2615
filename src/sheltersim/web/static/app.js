@@ -2100,12 +2100,21 @@ function drawMap(map) {
       ctx.fillText("!", agent.x + 7, agent.y - 6);
     }
   }
-  const count = (map.agents || []).length;
   const visualEdit = $("layout-visual-edit")?.checked;
   $("zone-map").classList.toggle("visual-layout-edit", Boolean(visualEdit));
-  $("map-note").textContent = map.layout
+  $("map-note").textContent = mapNote(map);
+}
+
+function mapNote(map) {
+  const count = (map.agents || []).length;
+  const note = map.layout
     ? `${map.layout.title} · ${count}人表示 · 座標は表示用 · 配置編集はブラウザ内のみ`
     : map.synthetic_layout ? `${count}人 · 合成配置` : `${count}人 · Scenario座標`;
+  // Agents in a zone without a shape on this map are reported, not silently dropped (#161).
+  const undrawn = map.undrawn_agents || [];
+  if (!undrawn.length) return note;
+  const zones = [...new Set(undrawn.map((agent) => agent.zone_id ?? "区画不明"))].join("、");
+  return `${note} · ${undrawn.length}人は地図にない区画（${zones}）にいるため非表示`;
 }
 
 $("zone-map").addEventListener("click", async (event) => {

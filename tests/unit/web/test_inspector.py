@@ -1,5 +1,6 @@
-"""Read-only Inspector projections: the deterministic synthetic gym map, and the demo
-timeline's event times, relations and agent support from saved artifacts.
+"""Read-only Inspector projections: the deterministic map (the Run's floor plan, or the
+synthetic gym without one), and the demo timeline's event times, relations and agent
+support from saved artifacts.
 """
 
 from __future__ import annotations
@@ -163,6 +164,77 @@ def test_map_shows_100_agents_at_their_recorded_zone_deterministically(
     assert all(_inside(agent, polygon_by_zone[agent["zone_id"]]) for agent in first["agents"])
     assert sum(zone["occupancy"] for zone in first["zones"] if zone.get("modelled", True)) == 100
     assert before == {path.name: path.read_bytes() for path in run.iterdir()}
+
+
+def _add_floor_plan(run: Path) -> dict[str, Any]:
+    """Record a 20 m x 10 m floor plan with the four zones of the hand-written Run."""
+    rectangles = {
+        "corridor": (0, 0, 20, 2),
+        "sleeping": (0, 2, 12, 10),
+        "information_desk": (12, 2, 16, 10),
+        "toilet": (16, 2, 20, 10),
+    }
+    geometry = {
+        "width_m": 20,
+        "height_m": 10,
+        "source_kind": "synthetic",
+        "zones": [
+            {
+                "zone_id": zone_id,
+                "polygon": [
+                    {"x": left, "y": top},
+                    {"x": right, "y": top},
+                    {"x": right, "y": bottom},
+                    {"x": left, "y": bottom},
+                ],
+                "usable_area_m2": (right - left) * (bottom - top),
+            }
+            for zone_id, (left, top, right, bottom) in rectangles.items()
+        ],
+        "facility_points": {
+            f"toilet_{index}": {"x": 16.5 + index * 0.5, "y": 9} for index in range(1, 5)
+        },
+    }
+    manifest_path = run / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["model_configs"] = {"facility_geometry": geometry}
+    _write_json(manifest_path, manifest)
+    return geometry
+
+
+def test_a_run_with_a_floor_plan_is_drawn_from_it(tmp_path: Path) -> None:
+    """Not from the bundled gym, whose zones need not match the Run's (#161)."""
+    run = _write_run(tmp_path)
+    _add_floor_plan(run)
+
+    map_data = InspectorService(tmp_path).zone_map("run-map", at_minute=10)
+
+    assert map_data["layout"]["id"] == "facility-geometry"
+    assert map_data["synthetic_layout"] is False
+    polygons = {zone["id"]: zone["polygon"] for zone in map_data["zones"]}
+    assert set(polygons) == {"corridor", "sleeping", "information_desk", "toilet"}
+    assert all(zone.get("modelled", True) for zone in map_data["zones"])
+    # 48 px per m fits 20 m into 1000 px with 20 px margins; 10 m is centered in 560 px.
+    assert polygons["corridor"] == [[20.0, 40.0], [980.0, 40.0], [980.0, 136.0], [20.0, 136.0]]
+    assert len(map_data["agents"]) == 100
+    assert map_data["undrawn_agents"] == []
+    assert all(_inside(agent, polygons[agent["zone_id"]]) for agent in map_data["agents"])
+    toilet_1 = next(item for item in map_data["facilities"] if item["id"] == "toilet_1")
+    assert (toilet_1["x"], toilet_1["y"]) == (836.0, 472.0)
+
+
+def test_agents_in_a_zone_the_map_cannot_draw_are_reported(tmp_path: Path) -> None:
+    """The gym has no shape for food, so A001 there is listed instead of dropped (#161)."""
+    run = _write_run(tmp_path)
+    decision = json.loads((run / "decisions.jsonl").read_text(encoding="utf-8"))
+    decision["observed_state"]["zone_id"] = "food"
+    _write_json(run / "decisions.jsonl", decision)
+
+    map_data = InspectorService(tmp_path).zone_map("run-map", at_minute=10)
+
+    assert map_data["layout"]["id"] == "gym-synthetic-v1"
+    assert len(map_data["agents"]) == 99
+    assert map_data["undrawn_agents"] == [{"id": "A001", "zone_id": "food"}]
 
 
 def test_facility_outage_and_queue_kpis_follow_the_selected_minute(tmp_path: Path) -> None:
