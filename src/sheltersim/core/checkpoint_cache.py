@@ -21,11 +21,11 @@ import hashlib
 import json
 import operator
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from typing import Any
 
 from sheltersim.core.world import WorldState
-from sheltersim.events.models import EventLogRecord
+from sheltersim.events.models import EventLogRecord, ScheduledEvent
 from sheltersim.experiments.metrics import MetricsRecorder
 
 
@@ -180,6 +180,10 @@ def _event_document(record: EventLogRecord) -> Any:
     return _world_json(record.to_dict())
 
 
+_RECORD_FIELDS = {item.name for item in fields(EventLogRecord)}
+_EVENT_FIELDS = {item.name for item in fields(ScheduledEvent)}
+
+
 # Append-only model_state histories (they may drop their oldest entries).
 _MODEL_STATE_HISTORIES = (
     ("body_state_v1", "history"),
@@ -260,6 +264,26 @@ class CheckpointHistoryCache:
             if resource_snapshots is not None:
                 encoder.splice(resource_snapshots, list(self._resource_snapshots.raws))
         return world_document, metric_document, encoder
+
+    def seed_events(self, records: Sequence[EventLogRecord], documents: Sequence[Any]) -> bool:
+        """Start from records a Checkpoint restore made from its event_log documents.
+
+        records[i] must be the record restored from documents[i], and the documents
+        must never change. A restored record converts back to its document when the
+        document has exactly the record's fields, so the first capture then reuses
+        both instead of converting and restoring the whole EventLog. Returns whether
+        the documents were used.
+        """
+        if len(records) != len(documents) or any(
+            set(document) != _RECORD_FIELDS or set(document["event"]) != _EVENT_FIELDS
+            for document in documents
+        ):
+            return False
+        events = self._events
+        events.items, events.documents = list(records), list(documents)
+        events.raws = [canonical_bytes(document) for document in documents]
+        events.restored = list(records)
+        return True
 
     def restored_events(self) -> list[EventLogRecord]:
         """Records restored from the leading event_log documents of the last documents()."""

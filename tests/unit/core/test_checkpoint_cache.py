@@ -131,3 +131,38 @@ def test_a_new_world_object_is_converted_and_restored_again(live_checkpoint_worl
     cached = Checkpoint.capture(restored, history_cache=cache)
     assert cached.to_json() == Checkpoint.capture(restored).to_json()
     assert first.to_json() == Checkpoint.capture(world).to_json()
+
+
+def test_a_cache_seeded_with_a_restored_event_log_captures_what_a_full_capture_does(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    """A load or a fork seeds the EventLog its restore made, so the first save reuses it."""
+    world = live_checkpoint_world
+    _realize(world, "cache-event-1")
+    saved = Checkpoint.capture(world)
+    restored = WorldState.from_dict(json.loads(json.dumps(saved.world_state)))
+    documents = saved.world_state["event_log"]
+    parsed = []
+    original = WorldState.from_dict.__func__
+
+    def from_dict(cls, document, **kwargs):
+        if "_restored_events" in kwargs:
+            parsed.append(len(document["event_log"]) - len(kwargs["_restored_events"]))
+        return original(cls, document, **kwargs)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
+    cache = CheckpointHistoryCache()
+    assert cache.seed_events(restored.event_log.records, documents)
+    _realize(restored, "cache-event-2")
+    cached = Checkpoint.capture(restored, history_cache=cache)
+    assert cached.to_json() == Checkpoint.capture(restored).to_json()
+    # Only the record added after the seed was restored from its document.
+    assert parsed == [1]
+
+    # A document that a record does not convert back to is never seeded.
+    extra = [dict(documents[0], note="older field"), *documents[1:]]
+    unseeded = CheckpointHistoryCache()
+    assert not unseeded.seed_events(restored.event_log.records[: len(extra)], extra)
+    assert not unseeded.seed_events(restored.event_log.records, documents)
+    cached = Checkpoint.capture(restored, history_cache=unseeded)
+    assert cached.to_json() == Checkpoint.capture(restored).to_json()
