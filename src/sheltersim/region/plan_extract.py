@@ -391,9 +391,11 @@ def _rectangular_room_candidates(
                 {
                     round(item[0], 3)
                     for item in verticals
+                    # A side wall meets the top and bottom walls at their ends, as an outer
+                    # wall does at a corner; allow 6 px past the ends in both directions (#200).
                     if item[1] <= top[1] + 6
                     and item[3] >= bottom[1] - 6
-                    and overlap_left + 6 <= item[0] <= overlap_right - 6
+                    and overlap_left - 6 <= item[0] <= overlap_right + 6
                 }
             )
             for left_x, right_x in zip(crossings, crossings[1:]):
