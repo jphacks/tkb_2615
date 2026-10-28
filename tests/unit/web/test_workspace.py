@@ -561,6 +561,28 @@ def test_a_partial_municipality_name_lists_codes_until_one_is_chosen(
     assert len(chosen["research"]["shelters"]) == 2
 
 
+def test_a_preview_survives_a_public_service_dropping_the_connection(
+    researching_project_api, generated_request, public_data
+) -> None:
+    from support.public_data import ESTAT_PERIOD_CODE, ESTAT_TABLE_ID, MUNICIPALITY_CODE
+
+    # Before #208, the dropped connection failed the whole preview with HTTP 500.
+    public_data.fail("api.e-stat.go.jp", "disconnected")
+
+    preview = _researched_preview(
+        researching_project_api,
+        generated_request,
+        municipality_code=MUNICIPALITY_CODE,
+        estat_stats_data_id=ESTAT_TABLE_ID,
+        estat_area_code=MUNICIPALITY_CODE,
+        estat_period_code=ESTAT_PERIOD_CODE,
+    )
+
+    assert preview["can_start"], preview["approval_blockers"]
+    assert "e-Stat APIから統計を取得できませんでした。" in preview["research"]["unknowns"]
+    assert len(preview["research"]["shelters"]) == 2
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="#209: a total row makes the selected statistics unused, and nobody is told",

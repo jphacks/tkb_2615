@@ -14,6 +14,7 @@ import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from http.client import HTTPException
 from threading import RLock
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -240,7 +241,7 @@ def _download_json(url: str, allowed_hosts: tuple[str, ...]) -> JsonSnapshot:
         failure: RegionProviderError = RegionProviderError(
             f"public-data endpoint returned HTTP {exc.code}"
         )
-    except (URLError, TimeoutError, socket.timeout, OSError):
+    except (URLError, TimeoutError, socket.timeout, OSError, HTTPException):
         failure = RegionProviderError("public-data endpoint could not be reached")
     else:
         if len(body) > _MAX_JSON_BYTES:

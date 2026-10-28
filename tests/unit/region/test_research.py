@@ -229,34 +229,9 @@ def test_research_reads_every_public_service_for_the_selected_municipality(
     assert "placeholder-app-id" not in json.dumps(result.model_dump(mode="json"))
 
 
-# Failures that escape the research and stop the whole Scenario preview (#208).
-_ESCAPING = {
-    ("msearch.gsi.go.jp", "disconnected"),
-    ("msearch.gsi.go.jp", "reset_while_reading"),
-    ("msearch.gsi.go.jp", "truncated"),
-    ("api.e-stat.go.jp", "disconnected"),
-    ("api.e-stat.go.jp", "reset_while_reading"),
-    ("api.e-stat.go.jp", "truncated"),
-    ("api.e-stat.go.jp", "json_list"),
-    ("api.e-stat.go.jp", "json_null"),
-    ("www.jma.go.jp", "truncated"),
-    ("data.example.jp", "truncated"),
-}
-
-
 @pytest.mark.parametrize(
     ("host", "failure"),
-    [
-        pytest.param(
-            host,
-            failure,
-            marks=pytest.mark.xfail(strict=True, reason="#208: the failure escapes the research")
-            if (host, failure) in _ESCAPING
-            else (),
-        )
-        for host in HOSTS
-        for failure in FAILURES
-    ],
+    [(host, failure) for host in HOSTS for failure in FAILURES],
 )
 def test_a_failing_public_service_becomes_an_unknown(
     public_data, research_request, host, failure
