@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from sheltersim.contracts.policies import model_signatures
-from sheltersim.core.checkpoint_cache import CanonicalEncoder, CheckpointHistoryCache
+from sheltersim.core.checkpoint_cache import (
+    CanonicalEncoder,
+    CheckpointHistoryCache,
+    canonical_bytes,
+)
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.events.models import EventLogRecord
 from sheltersim.experiments.metrics import MetricsRecorder
@@ -177,8 +181,17 @@ class Checkpoint:
             )
         return compatible
 
-    def _world_document_for_restore(self, shared: Sequence[Any] = ()) -> dict[str, Any]:
-        world_document = deepcopy(self.world_state, {id(item): item for item in shared})
+    def _world_document_for_restore(
+        self, shared: Sequence[Any] = (), *, raw: bytes | None = None
+    ) -> dict[str, Any]:
+        # raw is the canonical JSON of world_state. Saved and captured documents are
+        # read from canonical JSON, so reading it again copies them, key order
+        # included, faster than deepcopy.
+        world_document = (
+            json.loads(raw)
+            if raw is not None
+            else deepcopy(self.world_state, {id(item): item for item in shared})
+        )
         if self._legacy_queue_migration_required():
             from sheltersim.domain.facility_queues import (
                 FACILITY_QUEUES_LEGACY_MODE,
@@ -323,11 +336,15 @@ class Checkpoint:
             raise CheckpointError("checkpoint scenario ID does not match its WorldState")
         if self.world_state.get("minute_index") != self.simulation_minute:
             raise CheckpointError("checkpoint minute does not match its WorldState")
-        if not hashes_verified and _digest(self.world_state) != self.state_hash:
-            raise CheckpointError("checkpoint WorldState integrity hash mismatch")
+        world_raw = None
+        if not hashes_verified:
+            # The body hash covers the same world bytes, so the world is encoded once.
+            world_raw = canonical_bytes(self.world_state)
+            if hashlib.sha256(world_raw).hexdigest() != self.state_hash:
+                raise CheckpointError("checkpoint WorldState integrity hash mismatch")
         try:
             if restored_events is None:
-                world = WorldState.from_dict(self._world_document_for_restore())
+                world = WorldState.from_dict(self._world_document_for_restore(raw=world_raw))
                 metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
             else:
                 # A capture's restore check discards the restored world, and the
@@ -342,8 +359,12 @@ class Checkpoint:
                 )
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
-        if not hashes_verified and _digest(self._body_dict()) != self.checkpoint_hash:
-            raise CheckpointError("checkpoint integrity hash mismatch")
+        if world_raw is not None:
+            body = self._body_dict()
+            encoder = CanonicalEncoder()
+            encoder.remember(self.world_state, world_raw, body)
+            if encoder.digest(body) != self.checkpoint_hash:
+                raise CheckpointError("checkpoint integrity hash mismatch")
         return world, metrics
 
     def _body_dict(self) -> dict[str, Any]:

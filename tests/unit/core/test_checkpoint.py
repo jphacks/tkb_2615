@@ -246,3 +246,32 @@ def test_checkpoint_cadence_is_configurable_and_defaults_to_thirty_minutes() -> 
     assert schedule.should_capture(60)
     assert not schedule.should_capture(59)
     assert CheckpointSchedule(10).should_capture(20)
+
+
+def test_verifying_a_checkpoint_encodes_its_world_once_and_restores_a_detached_world(
+    monkeypatch, live_checkpoint_world
+) -> None:
+    """Both hashes come from one encoding of the world, which also gives the restore copy."""
+    import sheltersim.core.checkpoint as module
+    import sheltersim.core.checkpoint_cache as cache_module
+
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    encoded = []
+    original = cache_module.canonical_bytes
+
+    def counting(value):
+        # The world, alone or inside the Checkpoint body.
+        world = value.get("world_state") if isinstance(value, dict) else None
+        encoded.append(checkpoint.world_state in (value, world))
+        return original(value)
+
+    monkeypatch.setattr(module, "canonical_bytes", counting)
+    monkeypatch.setattr(cache_module, "canonical_bytes", counting)
+    world, _ = checkpoint.restore_state()
+    assert encoded.count(True) == 1
+    monkeypatch.undo()
+    assert world.canonical_json() == live_checkpoint_world.canonical_json()
+    saved = checkpoint.to_json()
+    world.model_state["behavior-model"]["adaptive_state"].append(1.0)
+    world.metric_state["model_accumulator"] = 0.0
+    assert checkpoint.to_json() == saved
