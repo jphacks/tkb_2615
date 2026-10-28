@@ -1181,23 +1181,13 @@ def _assert_can_leave(world: WorldState, agent_id: str) -> None:
 
 
 def _zone_has_room(world: WorldState, zone_id: str, *, excluding: str | None = None) -> bool:
-    from sheltersim.domain.temporary_spaces import effective_zone_capacity
+    from sheltersim.domain.temporary_spaces import effective_zone_capacity, incoming_travelers
 
     occupancy = sum(
         agent_id != excluding and agent.zone_id == zone_id
         for agent_id, agent in world.agents.items()
     )
-    incoming = sum(
-        agent_id != excluding
-        and agent.activity is Activity.MOVING
-        and agent.target_id == zone_id
-        and any(
-            task.agent_id == agent_id and task.kind == "travel_return"
-            for task in world.active_tasks.values()
-        )
-        for agent_id, agent in world.agents.items()
-    )
-    total = occupancy + incoming
+    total = occupancy + incoming_travelers(world, zone_id, excluding=excluding)
     capacity = effective_zone_capacity(world, zone_id, occupancy=total)
     return capacity is None or total < capacity
 

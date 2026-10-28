@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from sheltersim.core.world import WorldState
+from sheltersim.domain.models import Activity
 
 TEMPORARY_SPACES_STATE_KEY = "temporary_spaces_v1"
 TEMPORARY_SPACES_POLICY_VERSION = "typed-temporary-capacity-v1"
@@ -197,6 +198,23 @@ def effective_total_zone_capacity(
 ) -> int | None:
     """Capacity bound for WorldState validation, including signed physical rooms."""
     return capacity_metrics(world, zone_id, occupancy=occupancy)["effective_total_capacity"]
+
+
+def incoming_travelers(world: WorldState, zone_id: str, *, excluding: str | None = None) -> int:
+    """People walking to zone_id, directly or to one of its facilities.
+
+    Travel admission holds their place from departure, so every other admission into
+    the zone must count them too, or their arrival overfills it (#180).
+    """
+    count = 0
+    for agent_id, agent in world.agents.items():
+        if agent_id == excluding or agent.activity is not Activity.MOVING:
+            continue
+        target = agent.target_id
+        if target in world.facilities:
+            target = world.facilities[target].zone_id
+        count += target == zone_id
+    return count
 
 
 def register_temporary_space(world: WorldState, record: dict[str, Any], *, event_id: str) -> None:
