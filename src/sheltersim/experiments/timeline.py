@@ -575,8 +575,10 @@ class TimelineStore:
         controller = OfflineSimulationController(runtime.world, sink, llm_router=router)
         engine = TickEngine(runtime.world, phase_handler=controller)
         last_recorded_minute = head.simulation_minute
-        # Each save after the first reuses the history this loop saved before.
+        # Each save reuses the history this loop saved before; the first one reuses
+        # the EventLog of the head it continues from.
         history_cache = CheckpointHistoryCache()
+        history_cache.seed_events(runtime.world.event_log.records, head.world_state["event_log"])
         while runtime.world.minute_index < target_minute:
             if cancelled is not None and cancelled():
                 break
@@ -643,7 +645,14 @@ class TimelineStore:
                 self.project_id, self.run_id, reference.checkpoint_hash, ("runtime_state",)
             )
             child.runtime_state["replay_source"] = deepcopy(head["runtime_state"]["llm"])
-        self.record(child, fork_minute=minute)
+        # The child's world was restored from this Checkpoint, so its first save
+        # reuses the Checkpoint's EventLog.
+        history_cache = CheckpointHistoryCache()
+        history_cache.seed_events(
+            child.world.event_log.records[: len(checkpoint.world_state["event_log"])],
+            checkpoint.world_state["event_log"],
+        )
+        self.record(child, fork_minute=minute, history_cache=history_cache)
         return child
 
     def frame(self, branch_id: str, minute: int) -> dict[str, Any]:
