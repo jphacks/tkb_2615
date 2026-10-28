@@ -44,7 +44,7 @@ from sheltersim.domain.movement import (
     start_movement,
 )
 from sheltersim.domain.social_network import SOCIAL_NETWORK_STATE_KEY
-from sheltersim.events.models import EventApplicationError, ScheduledEvent
+from sheltersim.events.models import EventApplicationError, EventSuppressed, ScheduledEvent
 
 POPULATION_LIFECYCLE_STATE_KEY = "population_lifecycle_v1"
 POPULATION_LIFECYCLE_POLICY_VERSION = "same-id-population-lifecycle-v1"
@@ -301,13 +301,18 @@ def apply_population_presence_command(
             "population command minute must match the current event boundary"
         )
     if typed.expected_return_minute is not None and typed.expected_return_minute < minute:
+        if "population_retry" in event.provenance:
+            # Deferred while busy (#181) past the time it was meant to end.
+            raise EventSuppressed(
+                "temporary exit dropped: the person was not free before the expected return"
+            )
         raise EventApplicationError("expected return minute precedes the departure event")
     if typed.action == "temporary_exit":
         agent_id = ids[0]
         agent = candidate.agents.get(agent_id)
         if agent is None:
             raise EventApplicationError("temporary exit requires an admitted person")
-        _assert_can_leave(candidate, agent_id)
+        _defer_while_busy(world, event, agent_id)
         _archive_person(candidate, agent_id, event, state)
         presence = _presence_state(candidate)
         if presence is not None:
@@ -331,7 +336,7 @@ def apply_population_presence_command(
         agent = candidate.agents.get(agent_id)
         if agent is None:
             raise EventApplicationError("transfer requires an admitted person")
-        _assert_can_leave(candidate, agent_id)
+        _defer_while_busy(world, event, agent_id)
         from_zone = agent.zone_id
         _archive_person(candidate, agent_id, event, state)
         presence = _presence_state(candidate)
@@ -1165,19 +1170,26 @@ def _append_history(state: dict[str, Any], row: dict[str, Any]) -> None:
         del state["history"][: len(state["history"]) - MAX_LIFECYCLE_HISTORY]
 
 
-def _assert_can_leave(world: WorldState, agent_id: str) -> None:
+def _defer_while_busy(world: WorldState, event: ScheduledEvent, agent_id: str) -> None:
+    """Retry an exit or transfer next minute while the person is busy (#181).
+
+    The person finishes an active task, a queue place or a support request first, as
+    an approved departure of residents already does. The retry is scheduled on the
+    world itself, because the command's candidate copy is discarded on suppression.
+    """
     agent = world.agents[agent_id]
-    if (
-        agent.activity not in (Activity.IDLE, Activity.RESTING, Activity.SLEEPING)
-        or agent.support_request_id is not None
-    ):
-        raise EventApplicationError(
-            "population exit is deferred while the person has an active task or support request"
-        )
-    if any(task.agent_id == agent_id for task in world.active_tasks.values()):
-        raise EventApplicationError(
-            "population exit is deferred while the person owns an active task"
-        )
+    if agent.activity not in (Activity.IDLE, Activity.RESTING, Activity.SLEEPING):
+        reason = f"the person is {agent.activity.value}"
+    elif agent.support_request_id is not None:
+        reason = "the person is waiting for support"
+    elif any(task.agent_id == agent_id for task in world.active_tasks.values()):
+        reason = "the person owns an active task"
+    else:
+        return
+    from sheltersim.domain.population import schedule_population_retry
+
+    schedule_population_retry(world, event, id_prefix="presence-retry", subject="population exit")
+    raise EventSuppressed(f"population exit waits until the person is free: {reason}")
 
 
 def _zone_has_room(world: WorldState, zone_id: str, *, excluding: str | None = None) -> bool:
