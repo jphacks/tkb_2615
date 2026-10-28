@@ -62,6 +62,37 @@ def problem_window(rows: list[dict[str, Any]], key: str, start: int, end: int) -
     }
 
 
+_INTERVENTION_DETAIL_KEYS = (
+    "op",
+    "parameters",
+    "target_id",
+    "facility_id",
+    "zone_id",
+    "capacity",
+    "working_units",
+    "end_minute",
+    "delta",
+    "kind",
+    # EffectProgram events keep some parameters at the top level of the payload (#160).
+    "count",
+    "quantity",
+    "resource_id",
+    "household_size",
+    "include_initial",
+    "to_minute",
+    "staff_id",
+    "until_minute",
+)
+
+
+def intervention_details(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload values a report shows for one intervention.
+
+    Per-person context, free text and internal IDs stay out of the report.
+    """
+    return {key: payload[key] for key in _INTERVENTION_DETAIL_KEYS if key in payload}
+
+
 def collect_report(
     api: Any, project: str, run_id: str, ids: list[str], minute: int
 ) -> dict[str, Any]:
@@ -126,22 +157,7 @@ def collect_report(
                     "realized_minute": realized,
                     "status": status,
                     "operator": marker.get("op"),
-                    "details": {
-                        key: payload[key]
-                        for key in (
-                            "op",
-                            "parameters",
-                            "target_id",
-                            "facility_id",
-                            "zone_id",
-                            "capacity",
-                            "working_units",
-                            "end_minute",
-                            "delta",
-                            "kind",
-                        )
-                        if key in payload
-                    },
+                    "details": intervention_details(payload),
                 }
             )
         # Local report includes typed intervention records, never individual profiles or prompts.

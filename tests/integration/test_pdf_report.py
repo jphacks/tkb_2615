@@ -382,11 +382,6 @@ def test_effect_program_intervention_is_reported_with_deltas_and_read_only_check
         assert api.store.load_branch("p", "r", key)[1].to_json() == checkpoint
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=KeyError,
-    reason="#160: the report keeps only some payload keys, and count is not one of them",
-)
 def test_effect_program_intervention_reports_how_many_toilets_were_added(generated_saved_run):
     report = collect_report(generated_saved_run, "p", "r", ["main", "capacity"], GENERATED_END)
 
@@ -415,3 +410,5 @@ def test_pdf_of_a_generated_run_with_an_effect_program_renders_every_section(
         assert heading in text
     assert "優先案" in text and "代替案" in text
     assert "表示対象外" not in text and "\ufffd" not in text and "■" not in text
+    # The EffectProgram's count reaches the body, not only the analysis facts (#160).
+    assert f"数: {ADDED_TOILETS}" in text
