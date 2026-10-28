@@ -657,7 +657,8 @@ class OfflineSimulationController:
         if self.information_policy is None:
             return
         result = self.information_policy.update(
-            WorldView.from_world(self.world),
+            # Information policies read the people and the minute, never the audit hash.
+            WorldView.from_world(self.world, include_state_hash=False),
             self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
             rng,
             zone_neighbors=self.zone_neighbors,
