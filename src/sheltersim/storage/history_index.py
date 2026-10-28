@@ -869,6 +869,16 @@ class HistoryIndex:
             from types import SimpleNamespace
 
             reference = self.store.branch_reference(self.project_id, self.run_id, branch)
+            if self.path.exists():
+                with self.connect() as db:
+                    head = db.execute("SELECT hash FROM heads WHERE branch=?", (branch,)).fetchone()
+                if head is not None and head["hash"] == reference.checkpoint_hash:
+                    # The action and dialogue decisions recorded while computing live only
+                    # in this index, not in any Checkpoint; a rebuild would drop them (#213).
+                    raise StorageError(
+                        "history_index_current: the index already matches the Branch head; "
+                        "rebuilding it would drop the decisions recorded while computing"
+                    )
             document = self.store.checkpoint_document(
                 self.project_id, self.run_id, reference.checkpoint_hash
             )
@@ -905,7 +915,8 @@ class HistoryIndex:
                 "checkpoint_hash": checkpoint.checkpoint_hash,
                 "limits": (
                     "Legacy actions/expired contacts absent from source cannot be reconstructed "
-                    "by an index."
+                    "by an index. Action and dialogue decisions recorded while computing are "
+                    "not in Checkpoints and are not restored."
                 ),
             }
         finally:
