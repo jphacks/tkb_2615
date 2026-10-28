@@ -1,10 +1,10 @@
 """EffectProgram guards on a generated Scenario: a false guard suppresses an effect's start
-and its expiry alike, and an and-guard applies when every operand holds.
+and its expiry alike, an and-guard applies when every operand holds, and a guard on a
+floor plan change reads its facility or zone target (#194).
 
-The xfail tests are defects found while covering these paths (#178): a guard on a floor
-plan change cannot find its target (#194), an environment expiry after a suppressed
-start is recorded as failed (#195), and eq compares an integer with a float by type
-(#196).
+The xfail tests are defects found while covering these paths (#178): an environment
+expiry after a suppressed start is recorded as failed (#195), and eq compares an
+integer with a float by type (#196).
 """
 
 from __future__ import annotations
@@ -140,45 +140,49 @@ def test_an_environment_change_with_a_false_guard_has_a_suppressed_expiry(main_l
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#194: a floor plan change keeps its target in target_id, which guards ignore",
+# Floor plan changes keep their target in target_id; guards used to ignore it (#194).
+MOVE_DESK = ("move_facility", "facility", "medical_desk", {"point_m": {"x": 10.4, "y": 5.0}})
+CORNER_PARTITION = (
+    "set_partition",
+    "zone",
+    "medical",
+    {
+        "polygon_m": [
+            {"x": 9.6, "y": 11.9},
+            {"x": 9.9, "y": 11.9},
+            {"x": 9.9, "y": 12.3},
+            {"x": 9.6, "y": 12.3},
+        ]
+    },
 )
+
+
 @pytest.mark.parametrize(
-    "op,kind,target,parameters,guard,end",
+    "change,guard,end",
     [
-        (
-            "move_facility",
-            "facility",
-            "medical_desk",
-            {"point_m": {"x": 10.4, "y": 5.0}},
-            _leaf("target.working_units", "eq", 1),
-            None,
-        ),
-        (
-            "set_partition",
-            "zone",
-            "medical",
-            {
-                "polygon_m": [
-                    {"x": 9.6, "y": 11.9},
-                    {"x": 9.9, "y": 11.9},
-                    {"x": 9.9, "y": 12.3},
-                    {"x": 9.6, "y": 12.3},
-                ]
-            },
-            _leaf("zone.occupancy", "gte", 0),
-            STOP,
-        ),
+        (MOVE_DESK, _leaf("target.working_units", "eq", 1), None),
+        (CORNER_PARTITION, _leaf("zone.occupancy", "gte", 0), STOP),
     ],
 )
-def test_a_true_guard_on_a_floor_plan_change_applies_it(
-    main_line, op, kind, target, parameters, guard, end
-):
-    outcomes = _outcomes(main_line, op, kind, target, parameters, guard, end=end)
+def test_a_true_guard_on_a_floor_plan_change_applies_it(main_line, change, guard, end):
+    outcomes = _outcomes(main_line, *change, guard, end=end)
 
     assert outcomes[0][:2] == (START, "applied"), outcomes[0]
+
+
+@pytest.mark.parametrize(
+    "change,guard,end",
+    [
+        (MOVE_DESK, _leaf("target.working_units", "eq", 99), None),
+        (CORNER_PARTITION, _leaf("zone.occupancy", "gt", 100_000), STOP),
+    ],
+)
+def test_a_false_guard_on_a_floor_plan_change_suppresses_it(main_line, change, guard, end):
+    outcomes = _outcomes(main_line, *change, guard, end=end)
+
+    assert {status for _, status, _ in outcomes} == {"suppressed"}
+    assert outcomes[0][:2] == (START, "suppressed")
+    assert outcomes[0][2] == "EffectProgram guard evaluated false"
 
 
 @pytest.mark.xfail(

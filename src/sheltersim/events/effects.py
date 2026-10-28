@@ -1967,10 +1967,11 @@ def _evaluate_guard_node(world: WorldState, event: ScheduledEvent, guard: GuardE
     if guard.operator == "or":
         return any(_evaluate_guard_node(world, event, item) for item in guard.operands)
     field_name = guard.field
+    # Floor plan changes keep their facility or zone target in target_id (#194).
     target_id = next(
         (
             event.payload.get(name)
-            for name in ("facility_id", "staff_id", "zone_id", "resource_id")
+            for name in ("facility_id", "staff_id", "zone_id", "resource_id", "target_id")
             if isinstance(event.payload.get(name), str)
         ),
         None,
