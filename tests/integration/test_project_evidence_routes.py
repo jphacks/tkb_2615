@@ -169,3 +169,20 @@ def test_condition_differences_are_only_the_approved_program(evidence_api):
     assert item["baseline"]["value"] == []
     (command,) = item["candidate"]["value"]
     assert (command["command"], command["minute"]) == ("effect_program", FORK_MINUTE)
+
+
+@pytest.mark.parametrize("step", [3, 7, 25])
+def test_people_history_replayed_between_minutes_equals_restoring_each_minute(
+    evidence_api, monkeypatch, step
+):
+    """Nearby minutes are replayed from the previous one; the samples equal restoring each."""
+    import sheltersim.web.project_queries as queries
+
+    api, scenario = evidence_api
+    query = dict(kind="people", start=FORK_MINUTE, end=END, step=step)
+    query["agent_id"] = scenario.profiles[0].id
+    replayed = _history(api, "capacity", **query)
+    monkeypatch.setattr(queries, "_REPLAY_RATHER_THAN_RESTORE", -1)
+    restored = _history(api, "capacity", **query)
+    assert replayed == restored
+    assert replayed["items"]

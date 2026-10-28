@@ -10,6 +10,10 @@ from sheltersim.contracts.workspace import ComparisonQuery, HistoryQuery
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest
 
+# Ticks a replay may take instead of restoring a Checkpoint: one restore of a day-long
+# history takes about as long as 60 ticks.
+_REPLAY_RATHER_THAN_RESTORE = 60
+
 
 def page(
     items: list[Any], query: dict[str, Any], anchor: str, *, limit: int, cursor: str | None = None
@@ -105,18 +109,16 @@ class ProjectQueries:
         timeline = TimelineStore(self.store, project_id, run_id)
         rows = []
         requested_minutes = list(result["items"])
-        replay = None
-        if requested_minutes and query.step <= 5:
-            replay = iter(
-                timeline.iter_worlds(branch_id, requested_minutes[0], requested_minutes[-1])
-            )
+        replay: Any = None
+        world: Any = None
         for minute in requested_minutes:
-            if replay is None:
-                world = timeline.seek(branch_id, minute).world
-            else:
+            # Replaying from the previous minute gives the same world as restoring this
+            # one; it is cheaper while the gap is shorter than a restore takes.
+            if world is None or minute - world.minute_index > _REPLAY_RATHER_THAN_RESTORE:
+                replay = iter(timeline.iter_worlds(branch_id, minute, requested_minutes[-1]))
+            world = next(replay)
+            while world.minute_index < minute:
                 world = next(replay)
-                while world.minute_index < minute:
-                    world = next(replay)
             from sheltersim.inspection.frames import person_projection, social_event_records
 
             presence = world.model_state.get("population_presence_v1", {}).get("people", {})
