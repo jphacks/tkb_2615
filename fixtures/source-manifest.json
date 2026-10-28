@@ -1377,11 +1377,11 @@
     {
       "id": "ASM-SHELTER-STAFFING-HEURISTIC-V2",
       "source_type": "assumption",
-      "target": "StandardShelterGenerator staff count and placement",
+      "target": "StandardShelterGenerator and imported-plan staff count and placement",
       "model_version": "role-based-staffing-v1",
       "values": {
-        "general_staff": "max(1, ceil(population / 100)) in the staff zone with every skill",
-        "station_staff": "one per water or meal station in the food zone with water_service and meal_service",
+        "general_staff": "max(1, ceil(population / 100)) in the staff zone (an imported plan without one: the sleeping zone) with every skill",
+        "station_staff": "one per water or meal station in that station's zone (the food zone in the standard design) with water_service and meal_service",
         "entered_total": "kept as entered; station staff fill all but one place"
       },
       "context_sources": [],

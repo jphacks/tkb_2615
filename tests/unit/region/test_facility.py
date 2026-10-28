@@ -18,6 +18,8 @@ from sheltersim.region.facility import (
     SYNTHETIC_STAFFING_SOURCE_ID,
     FacilityDesignRequest,
     StandardShelterGenerator,
+    shelter_staff,
+    shelter_staff_assumption,
     standard_service_counts,
 )
 from sheltersim.region.models import ACCESSIBLE_ROUTE_MIN_WIDTH_M
@@ -103,6 +105,32 @@ def test_an_entered_staff_total_keeps_one_general_staff_member(
         if item["source_id"] == SYNTHETIC_STAFFING_SOURCE_ID
     )
     assert record["value"]["entered_total"] == entered
+
+
+@pytest.mark.parametrize(
+    ("entered", "stations"), [(None, ["water_room", "food", "food"]), (3, ["water_room", "food"])]
+)
+def test_station_staff_are_placed_in_the_zones_of_their_stations(
+    entered: int | None, stations: list[str]
+) -> None:
+    # An imported plan can put its water and meal stations in different zones.
+    staff = shelter_staff(
+        population=100,
+        staff_count=entered,
+        station_zone_ids=("water_room", "food", "food"),
+        general_zone_id="sleeping",
+    )
+
+    assert [member.zone_id for member in staff] == ["sleeping", *stations]
+    assert [member.id for member in staff] == [f"staff_{n:03d}" for n in range(1, len(staff) + 1)]
+    record = shelter_staff_assumption(staff, entered_total=entered)
+    assert record["value"] == {
+        "total": len(staff),
+        "general_staff": 1,
+        "station_staff": len(stations),
+        "station_staff_zone_ids": sorted(set(stations)),
+        "entered_total": entered,
+    }
 
 
 @pytest.mark.parametrize("population", [10, 30, 100])

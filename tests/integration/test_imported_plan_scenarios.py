@@ -84,11 +84,6 @@ def test_an_imported_plan_is_the_facility_of_a_startable_scenario_that_resumes(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#201: an imported plan puts every staff member in one zone, so water and meals "
-    "never start",
-)
 def test_water_and_meals_are_served_on_an_imported_plan(
     tmp_path, ui_project_api, upload_plan, generated_request, saved_timeline, shelter_trace
 ):
@@ -98,6 +93,10 @@ def test_water_and_meals_are_served_on_an_imported_plan(
     if not preview["can_start"]:
         pytest.fail(f"the Scenario must start: {preview['approval_blockers']}")
     scenario = ScenarioSpec.model_validate(preview["scenario"])
+    # Each of the plan's two stations gets a staff member in its zone, as in the standard
+    # design, so neither service is reported as never starting.
+    assert [member.zone_id for member in scenario.staff] == ["sleeping", "food", "food"]
+    assert not any("一度も始まりません" in warning for warning in preview["warnings"])
     _, timeline = saved_timeline(tmp_path / "projects", scenario)
     initial = dict(timeline.seek("main", 0).world.resources)
 

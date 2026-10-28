@@ -51,7 +51,7 @@
     "realized_event_ids_sha256": "6e5bedc35b572e48f3054508da2dd11df0855d3ac9f706fd9eb6eaba0b662a3c",
     "scenario_id": "region-3ed2de3ec6535af4",
     "scenario_schema_version": 3,
-    "scenario_sha256": "a5317c564065e1708291c3587704b6b63ef569822324034d36e099c4650aae6b",
+    "scenario_sha256": "fd1f12f27ea240e8daa337b1cf12c2a670f1672b5af80fdc0e8285d0bbdf2bbf",
     "seed": 2026,
     "world_state_schema_version": 6
   },

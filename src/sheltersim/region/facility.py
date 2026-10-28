@@ -26,6 +26,7 @@ SYNTHETIC_CAPACITY_SOURCE_ID = "ASM-SHELTER-AREA-HEURISTIC-V1"
 SYNTHETIC_STAFFING_SOURCE_ID = "ASM-SHELTER-STAFFING-HEURISTIC-V2"
 SYNTHETIC_TOILET_SOURCE_ID = "ASM-SHELTER-TOILET-HEURISTIC-V2"
 SERVICE_STATION_SOURCE_ID = "ASM-SHELTER-SERVICE-STATIONS-V1"
+STATION_STAFF_SKILLS = ("water_service", "meal_service")
 
 
 class FacilityZoneCondition(RegionModel):
@@ -585,32 +586,10 @@ class StandardShelterGenerator:
                 )
             facility_points[item.facility_id] = item.position_m
 
-        # Water and meal service start only with skilled staff in the food zone, so each
-        # station gets its own station-based staff member next to the general staff.
-        station_staff_needed = counts["water_station"] + counts["meal_distribution"]
-        if request.staff_count is None:
-            general_staff_count = max(1, math.ceil(request.population / 100))
-            station_staff_count = station_staff_needed
-        else:
-            station_staff_count = min(station_staff_needed, max(0, request.staff_count - 1))
-            general_staff_count = request.staff_count - station_staff_count
-        staff_count = general_staff_count + station_staff_count
-        staff_skills = (
-            "support",
-            "intake",
-            "information",
-            "water_service",
-            "meal_service",
-            "medical_support",
-        )
-        staff = tuple(
-            StaffSpec(id=f"staff_{index:03d}", zone_id="staff", skills=staff_skills)
-            for index in range(1, general_staff_count + 1)
-        ) + tuple(
-            StaffSpec(
-                id=f"staff_{index:03d}", zone_id="food", skills=("water_service", "meal_service")
-            )
-            for index in range(general_staff_count + 1, staff_count + 1)
+        staff = shelter_staff(
+            population=request.population,
+            staff_count=request.staff_count,
+            station_zone_ids=("food",) * (counts["water_station"] + counts["meal_distribution"]),
         )
 
         edges: list[ZoneEdgeSpec] = []
@@ -769,24 +748,7 @@ class StandardShelterGenerator:
                 ),
                 "source_id": SYNTHETIC_CAPACITY_SOURCE_ID,
             },
-            {
-                "id": SYNTHETIC_STAFFING_SOURCE_ID,
-                "subject": "synthetic_staff_count",
-                "value": {
-                    "total": staff_count,
-                    "general_staff": general_staff_count,
-                    "station_staff": station_staff_count,
-                    "station_staff_zone_id": "food",
-                    "entered_total": request.staff_count,
-                },
-                "reason": (
-                    "One general staff member per 100 requested occupants (minimum one) plus one "
-                    "station-based staff member per water or meal station; an entered total "
-                    "keeps at least one general staff member. Not an operational staffing "
-                    "standard."
-                ),
-                "source_id": SYNTHETIC_STAFFING_SOURCE_ID,
-            },
+            shelter_staff_assumption(staff, entered_total=request.staff_count),
             {
                 "id": SYNTHETIC_TOILET_SOURCE_ID,
                 "subject": "synthetic_toilet_count",
@@ -876,6 +838,72 @@ def standard_service_counts(population: int) -> dict[str, int]:
         "meal_distribution": max(
             1, required_service_units(population * meal_uses * resource.service_minutes)
         ),
+    }
+
+
+def shelter_staff(
+    *,
+    population: int,
+    staff_count: int | None,
+    station_zone_ids: tuple[str, ...],
+    general_zone_id: str = "staff",
+) -> tuple[StaffSpec, ...]:
+    """Return the general staff and one station member per water or meal station.
+
+    Water and meal service start only with skilled staff in the station's zone, so each
+    station gets its own member in that zone, listed in station_zone_ids. A requested
+    staff_count keeps at least one general member and gives the rest to stations in order.
+    """
+    station_staff_needed = len(station_zone_ids)
+    if staff_count is None:
+        general_staff_count = max(1, math.ceil(population / 100))
+        station_staff_count = station_staff_needed
+    else:
+        station_staff_count = min(station_staff_needed, max(0, staff_count - 1))
+        general_staff_count = staff_count - station_staff_count
+    staff_skills = (
+        "support",
+        "intake",
+        "information",
+        "water_service",
+        "meal_service",
+        "medical_support",
+    )
+    return tuple(
+        StaffSpec(id=f"staff_{index:03d}", zone_id=general_zone_id, skills=staff_skills)
+        for index in range(1, general_staff_count + 1)
+    ) + tuple(
+        StaffSpec(
+            id=f"staff_{general_staff_count + index:03d}",
+            zone_id=zone_id,
+            skills=STATION_STAFF_SKILLS,
+        )
+        for index, zone_id in enumerate(station_zone_ids[:station_staff_count], start=1)
+    )
+
+
+def shelter_staff_assumption(
+    staff: tuple[StaffSpec, ...], *, entered_total: int | None
+) -> dict[str, object]:
+    """The assumption record of a staff list made by shelter_staff."""
+    stations = [member for member in staff if member.skills == STATION_STAFF_SKILLS]
+    return {
+        "id": SYNTHETIC_STAFFING_SOURCE_ID,
+        "subject": "synthetic_staff_count",
+        "value": {
+            "total": len(staff),
+            "general_staff": len(staff) - len(stations),
+            "station_staff": len(stations),
+            "station_staff_zone_ids": sorted({member.zone_id for member in stations}),
+            "entered_total": entered_total,
+        },
+        "reason": (
+            "One general staff member per 100 requested occupants (minimum one) plus one "
+            "station-based staff member per water or meal station, in that station's zone; "
+            "an entered total keeps at least one general staff member. Not an operational "
+            "staffing standard."
+        ),
+        "source_id": SYNTHETIC_STAFFING_SOURCE_ID,
     }
 
 
