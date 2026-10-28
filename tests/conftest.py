@@ -21,6 +21,7 @@ pytest_plugins = [
     "support.reports",
     "support.world",
     "support.plans",
+    "support.public_data",
 ]
 
 
