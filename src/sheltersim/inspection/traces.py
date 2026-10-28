@@ -52,9 +52,9 @@ from sheltersim.policies.behavior import (
     behavior_policy_definition,
 )
 from sheltersim.policies.social import SocialPropagationParameters
+from sheltersim.storage.projects import EMAIL_ADDRESS
 from sheltersim.storage.streams import TraceSpool
 
-_EMAIL = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
 _PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
 _SENSITIVE_FIELDS = (
     "api_key",
@@ -939,7 +939,7 @@ def _sanitize(value: Any, *, field_name: str = "") -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, str):
-        if _EMAIL.search(value) or _PHONE.search(value):
+        if EMAIL_ADDRESS.search(value) or _PHONE.search(value):
             return "[REDACTED]"
         return value
     if isinstance(value, Mapping):

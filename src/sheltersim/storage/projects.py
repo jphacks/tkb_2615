@@ -30,9 +30,10 @@ _PRIVATE = re.compile(
     r"api.?key|secret|password|credential|authorization|raw.?prompt|full.?name|email|phone|address",
     re.I,
 )
-_SECRET = re.compile(
-    r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|\b[^\s@]+@[^\s@]+\.[^\s@]+\b", re.I
-)
+# The top-level domain is letters, so a value with a decimal after "@", such as a
+# model signature, is not taken for an address (#187).
+EMAIL_ADDRESS = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\W\d_]{2,}\b")
+_SECRET = re.compile(r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|" + EMAIL_ADDRESS.pattern, re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+\d{1,3}[ -])?\d{2,4}[- ]\d{2,4}[- ]\d{3,4}(?!\w)")
 _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
 
