@@ -4,6 +4,8 @@
 
 新規の未選択Scenarioに `policy_registry.schema_version=3` と `suite_id=core-model-suite-v2` を記録する。Policy Registryのselectorとsuiteの両方をRun署名へ含める。suite v1は旧utility selectorを使う固定モデルとして保持し、v2では7日Runで判明した睡眠負債の過小評価に対して新しいsleep-aware behavior selectorを導入した。v2の7日同seed Runはv1よりstress平均を0.9347から0.9019へ、sleep debtを1,438.6分から981.3分へ改善した一方、終了時の高stress率94%と最長episode 9,872分が残った。suite v2は内部候補であり、全合格ゲートを通過したモデルや実地検証済みモデルではない。新規Scenarioへの候補適用はこのfeature branch上の検証対象として扱い、Gate Dの条件行列、複数seedと残余stress原因の検証が完了するまで統合対象にしない。[13-comprehensive-validation.md](13-comprehensive-validation.md) に判定を記録する。
 
+この段落の7日の数値は、#169 の不具合があったときの動作で計算した。suiteが個別の指定を省いた queue・relationship・誤情報の圧力に、宣言とは違うものが使われていた。#170 以降は宣言どおりのモデルを使い、署名は `model_suite: core-model-suite-v2@2` になる。同じ条件で実行し直したv2の7日の値は、終了stress平均0.9020、終了時の高stress率89%、sleep debt 942.3分、最長episode 9,894分である。前後の比較と、書き換えずに残した判断は [13-comprehensive-validation.md](13-comprehensive-validation.md) の冒頭の注記を参照（#171）。
+
 | domain | selector | 主要な設定/有効化 |
 |---|---|---|
 | 行動 | `sleep-aware-utility-softmax-v2` | 15分間隔。睡眠負債を1日必要睡眠時間で割り、1日分の負債相当につき効用+1。必要時間未指定時は480分を仮定 |

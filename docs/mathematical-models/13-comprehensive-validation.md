@@ -6,6 +6,42 @@
 
 機械可読比較: [core-model-suite-validation.json](core-model-suite-validation.json)。再実行: `SHELTERSIM_LLM_MODE=offline .venv/bin/python scripts/run_core_model_suite_validation.py --duration 1440`。
 
+## 注記：#169 の前後の結果（2026-10-28、#171）
+
+本書のsuite v1・v2の結果JSON 6つ（`core-model-suite-validation.json`、`core-model-suite-validation-7d.json`、`core-model-suite-mechanism-probe.json` と、それぞれのv2版）と、下の表・本文の数値は、#169 の不具合があったときの動作で計算した。検証スクリプトが入れる `policy_registry` はsuiteだけで、領域ごとの指定がない。当時の実行時コードは relationship・queue・誤情報の圧力について個別の指定だけを読んだため、suiteの宣言とは違うものが使われた。検証Scenarioには図面がない。
+
+| 領域 | suiteの宣言（JSONの `model_signatures`） | #169 より前に使われたもの |
+|---|---|---|
+| queue | `need-weighted-physical-queue-v1` | `StrictFIFOQueuePolicy` |
+| relationship | `distance-duration-repeat-trust-v1` | `DurationOnlyTrustPolicy` |
+| psychology（誤情報の圧力） | `mean-reverting-life-state-v1` | 圧力を計算しない（0） |
+
+#170 で、実行時はsuiteの宣言どおりのモデルを使うようになった。この場合の署名は `model_suite: core-model-suite-v2@2` で、上の結果JSONの `@1` と区別できる。v2の3つを、#170 のマージ後の `develop`（`7cc948e`）で同じ条件のまま実行し直し、別のファイルに保存した。
+
+- [1日比較](core-model-suite-v2-validation-after-169.json)：`scripts/run_core_model_suite_validation.py --output …`（seed 2026、100 agents、1,440分）
+- [7日 candidate-only](core-model-suite-v2-validation-7d-after-169.json)：`--duration 10080 --candidate-only`
+- [mechanism probe](core-model-suite-v2-mechanism-probe-after-169.json)：`scripts/run_core_model_suite_mechanism_probe.py`（12人・180分）
+
+#170 の直前のコミット（`249cee6`）で同じスクリプトを実行すると、3つとも元のv2のJSONと同じ値になる。1日比較と7日では、最終状態のハッシュ（`candidate_same_seed_final_state_sha256`、`same_seed_final_state_sha256`）も一致する。また、baselineの値は前後で変わらない。そのため、下の差はすべて #169 の修正によるものである。
+
+| 指標（suite v2） | #169 より前 | #170 以降 |
+|---|---:|---:|
+| 1日：終了stress平均 | 0.7926 | 0.7952 |
+| 1日：`stress ≥ 0.7` | 65% | 63% |
+| 1日：mean sleep debt | 724.9分 | 726.2分 |
+| 1日：sleep actions | 713 | 716 |
+| 1日：toilet services complete | 138 | 135 |
+| 1日：toilet queue person-minutes | 913 | 970 |
+| 1日：最終平均待ち | 6.62分 | 7.14分 |
+| 1日：最長待ち | 27分 | 78分 |
+| 7日：終了stress平均 | 0.9019 | 0.9020 |
+| 7日：`stress ≥ 0.7` | 94% | 89% |
+| 7日：mean sleep debt | 981.3分 | 942.3分 |
+| 7日：最大継続episode | 9,872分 | 9,894分 |
+| probe：社会影響Trace positive／negative magnitude | 0.0411／0.0961 | 0.0411／0.0961 |
+
+probeの false claim exposure 12、correction exposure 4、受容4、終了時誤信念7は変わらない。v1の結果は、今のスクリプトがv2しか入れないので実行し直していない。下の表・本文・ゲートの判定は #169 より前の値のまま残している。#170 以降の値でもこの解釈とゲートの判定が成り立つかは、#171 でモデル担当が確認する。
+
 ## Level 1–3: 数式・機構・接続経路
 
 | 機構/接続 | 確認方法 | 結果・限界 |
