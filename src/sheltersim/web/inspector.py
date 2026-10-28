@@ -12,6 +12,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.domain.layouts import LayoutSpec
 from sheltersim.experiments.profiles import select_representative_profiles
 from sheltersim.experiments.scenario import ProfileSpec
@@ -31,6 +32,10 @@ _MAX_TIMELINE_POINTS = 2000
 _GYM_LAYOUT_PATH = (
     Path(__file__).resolve().parents[3] / "fixtures" / "layouts" / "gym_synthetic.json"
 )
+# The inspector map canvas (static/index.html) and the margin a floor plan keeps from it.
+_MAP_WIDTH = 1000
+_MAP_HEIGHT = 560
+_MAP_MARGIN = 20
 _METRIC_COLUMNS = frozenset(
     {
         "minute_index",
@@ -641,7 +646,9 @@ class InspectorService:
             for item in zones
         )
         ordered_zones = sorted(zones, key=lambda item: str(item.get("id", "")))
-        layout = _read_gym_layout()
+        # A Run with a recorded floor plan is drawn from it, not from the bundled gym (#161).
+        recorded_manifest = _read_object(directory / "manifest.json")
+        layout = _geometry_layout(recorded_manifest, ordered_zones) or _read_gym_layout()
         layout_areas = layout.get("zones", []) if layout else []
         area_by_zone = {
             item.get("zone_id"): item
@@ -715,11 +722,14 @@ class InspectorService:
             if item.get("id") is not None
         }
         agent_points = []
+        undrawn_agents = []
         for agent_id in sorted(states):
             state = states[agent_id]
             zone_id = state.get("zone_id")
             polygon = zone_shapes.get(zone_id)
             if not _valid_polygon(polygon):
+                # The map has no shape for this zone; report the Agent instead of dropping it.
+                undrawn_agents.append({"id": agent_id, "zone_id": zone_id})
                 continue
             x, y = _deterministic_display_point(agent_id, str(zone_id), at_minute, polygon)
             agent_points.append(
@@ -736,13 +746,13 @@ class InspectorService:
                     "y": y,
                 }
             )
-        facility_markers = _facility_markers(
-            directory, _read_object(directory / "manifest.json"), layout, at_minute
-        )
+        facility_markers = _facility_markers(directory, recorded_manifest, layout, at_minute)
         queue_summary = _queue_summary(directory, at_minute)
         return {
             "at_minute": at_minute,
-            "synthetic_layout": True if layout else not coordinates_available,
+            "synthetic_layout": (
+                layout["id"] != "facility-geometry" if layout else not coordinates_available
+            ),
             "layout": (
                 {
                     "id": layout.get("id"),
@@ -757,6 +767,7 @@ class InspectorService:
             ),
             "zones": projected_zones,
             "agents": agent_points,
+            "undrawn_agents": undrawn_agents,
             "facilities": facility_markers,
             "queue_summary": queue_summary,
             "edges": [
@@ -994,6 +1005,55 @@ def _planned_event(record: dict[str, Any]) -> dict[str, Any]:
         "branch_id": _safe_identifier(record.get("provenance", {}).get("branch_id"))
         if isinstance(record.get("provenance"), dict)
         else None,
+    }
+
+
+def _geometry_layout(
+    manifest: dict[str, Any], zones: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Scale the Run's recorded floor plan onto the map canvas, keeping its proportions."""
+    configs = manifest.get("model_configs")
+    document = configs.get("facility_geometry") if isinstance(configs, dict) else None
+    if document is None:
+        return None
+    try:
+        geometry = FacilityGeometry.model_validate(document)
+    except ValueError as exc:
+        raise WebQueryError(f"facility_geometry is invalid: {exc}") from exc
+    scale = min(
+        (_MAP_WIDTH - 2 * _MAP_MARGIN) / geometry.width_m,
+        (_MAP_HEIGHT - 2 * _MAP_MARGIN) / geometry.height_m,
+    )
+    left = (_MAP_WIDTH - geometry.width_m * scale) / 2
+    top = (_MAP_HEIGHT - geometry.height_m * scale) / 2
+
+    def project(point: Any) -> list[float]:
+        return [round(left + point.x * scale, 2), round(top + point.y * scale, 2)]
+
+    names = {item.get("id"): item.get("name") for item in zones}
+    return {
+        "id": "facility-geometry",
+        "title": "Scenarioの図面",
+        "source": f"model_configs.facility_geometry ({geometry.source_kind})",
+        "note": (
+            f"記録した図面（{geometry.width_m:g} m × {geometry.height_m:g} m）を"
+            "表示用に縮小した。人の位置は区画の中の表示用の点で、実際の位置ではない。"
+        ),
+        "width": _MAP_WIDTH,
+        "height": _MAP_HEIGHT,
+        "zones": [
+            {
+                "zone_id": zone.zone_id,
+                "label": names.get(zone.zone_id) or zone.zone_id,
+                "polygon": [project(point) for point in zone.polygon],
+                "modelled": True,
+            }
+            for zone in geometry.zones
+        ],
+        "facilities": [
+            {"facility_id": facility_id, "point": project(point)}
+            for facility_id, point in sorted(geometry.facility_points.items())
+        ],
     }
 
 
