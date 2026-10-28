@@ -44,7 +44,8 @@ def test_indexed_search_does_not_load_a_world_and_rejects_changed_head(
     def no_world(*_args: object) -> None:
         raise AssertionError("indexed evidence must not decode a whole WorldState")
 
-    monkeypatch.setattr(store, "load_branch", no_world)
+    # Every load, load_branch() included, decodes through load_restored_checkpoint().
+    monkeypatch.setattr(store, "load_restored_checkpoint", no_world)
     checkpoint = SimpleNamespace(
         checkpoint_hash=head,
         simulation_minute=5000,

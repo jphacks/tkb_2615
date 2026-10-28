@@ -419,11 +419,16 @@ class TimelineStore:
         ):
             raise TimelineError("minute is outside this branch's computed range")
         _, checkpoint_hash = self._nearest_checkpoint(branch_id, minute, reference)
-        checkpoint = self.store.load_checkpoint(self.project_id, self.run_id, checkpoint_hash)
+        checkpoint, restored = self.store.load_restored_checkpoint(
+            self.project_id, self.run_id, checkpoint_hash
+        )
         if checkpoint.checkpoint_hash != checkpoint_hash:
             raise TimelineError("timeline checkpoint hash mismatch")
         runtime = BranchRuntime.from_checkpoint(
-            checkpoint, branch_id=branch_id, parent_branch_id=reference.parent_branch_id
+            checkpoint,
+            branch_id=branch_id,
+            parent_branch_id=reference.parent_branch_id,
+            _restored=restored,
         )
         if minute == checkpoint.simulation_minute:
             return runtime
@@ -511,7 +516,9 @@ class TimelineStore:
         cancelled: Any = None,
     ) -> BranchRuntime:
         """Caller must hold the Run writer lease (Project jobs or advance())."""
-        reference, head = self.store.load_branch(self.project_id, self.run_id, branch_id)
+        reference, head, restored = self.store.load_restored_branch(
+            self.project_id, self.run_id, branch_id
+        )
         if (
             type(target_minute) is not int
             or not head.simulation_minute <= target_minute <= head.world_state["duration_minutes"]
@@ -520,7 +527,10 @@ class TimelineStore:
         if type(checkpoint_interval) is not int or checkpoint_interval <= 0:
             raise TimelineError("checkpoint interval must be positive")
         runtime = BranchRuntime.from_checkpoint(
-            head, branch_id=branch_id, parent_branch_id=reference.parent_branch_id
+            head,
+            branch_id=branch_id,
+            parent_branch_id=reference.parent_branch_id,
+            _restored=restored,
         )
         if target_minute == head.simulation_minute:
             return runtime
