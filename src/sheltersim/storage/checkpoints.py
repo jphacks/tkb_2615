@@ -48,6 +48,7 @@ class CheckpointArchive:
         # history it reused; chunks and sizes are the same with or without it.
         self.encoder = encoder
         self.new_bytes = 0
+        self.new_files = 0
         self.chunk_directory = directory / "chunks"
         self._staged: dict[str, bytes] | None = None
         self._staged_bytes = 0
@@ -92,6 +93,7 @@ class CheckpointArchive:
             try:
                 os.link(name, path)
                 self.new_bytes += len(compressed)
+                self.new_files += 1
             except FileExistsError:
                 pass
         finally:
