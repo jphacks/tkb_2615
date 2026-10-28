@@ -199,8 +199,11 @@ def collect_report(
             )
             values[key] = {"baseline": a, "candidate": b, "delta": delta, "assessment": direction}
         differences.append({"branch_id": branch["branch_id"], "metrics": values})
-    # Reuse the existing comparison contract for pairing and common-range semantics.
-    comparison = api.workspace.comparison(project, run_id, ids, minute) if len(ids) > 1 else None
+    # Reuse the existing comparison contract for pairing and common-range semantics;
+    # its frames, which would restore each branch again, are not needed.
+    paired = (
+        api.workspace.comparison_context(project, run_id, ids, minute)[2] if len(ids) > 1 else False
+    )
     conditions = {
         "population": len(scenario.profiles),
         "duration_minutes": scenario.duration_minutes,
@@ -231,7 +234,7 @@ def collect_report(
         "conditions": conditions,
         "branches": branches,
         "differences": differences,
-        "paired": comparison["shared_origin"] if comparison else False,
+        "paired": paired,
         "heads": [ref.model_dump(mode="json") for ref in refs],
     }
 
