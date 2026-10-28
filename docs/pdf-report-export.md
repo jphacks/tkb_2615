@@ -29,6 +29,7 @@ KPIは評価境界の `MetricSnapshot`、時系列は保存済みsnapshotsです
 問題の継続時間は、トイレ待ち人数・未解決支援要請数が正で、両端が記録された1分区間の合計です。
 初回観測・欠測時間を明記し、欠測を補間しません。これらは表示上の整理であり、医療的な判定基準ではありません。
 重要イベントはexogenous/interventionの実行記録です。介入表は型付き作用の実行・予定時刻と結果を区別します。
+介入表の条件には、イベントのpayloadから決まったキーだけを載せます（`pdf_report.intervention_details`）。EffectProgramの作用がpayloadの直下に置く数量（仮設トイレ・スタッフ・避難者の`count`、物資の`resource_id`と`quantity`など）も含みます（#160）。追加避難者の個人ごとの文脈（`person_context_overrides`）・言語・経路、内部のprogram・effect・modifierのIDは載せません。
 
 `llm/pdf_analysis.py` が既存LLMRouter・公式Anthropic SDK・共有UsageLedger・StoredResponseTapeを通して
 Opusへ執筆を依頼します。APIへ渡すのは固定の集計項目と匿名の根拠参照のみです。

@@ -94,6 +94,12 @@ _PARAMETERS = {
     "target_id": "対象ID",
     "end_minute": "終了予定分",
     "delta": "変化量",
+    "resource_id": "物資",
+    "household_size": "世帯人数",
+    "include_initial": "初期の避難者を含む",
+    "to_minute": "変更後の到着予定分",
+    "staff_id": "スタッフID",
+    "until_minute": "終了予定分",
 }
 
 
