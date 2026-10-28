@@ -2025,10 +2025,20 @@ def _evaluate_guard_node(world: WorldState, event: ScheduledEvent, guard: GuardE
     else:
         raise EventApplicationError(f"guard field {field_name!r} is not implemented")
     expected = guard.value
+    # Numbers compare by value, so a count equals 0.0 (#196); a boolean never equals a number.
+    numeric = all(
+        isinstance(item, (int, float)) and not isinstance(item, bool) for item in (actual, expected)
+    )
     if guard.operator == "eq":
-        return type(actual) is type(expected) and actual == expected
+        return (
+            actual == expected if numeric else type(actual) is type(expected) and actual == expected
+        )
     if guard.operator == "ne":
-        return type(actual) is not type(expected) or actual != expected
+        return (
+            actual != expected
+            if numeric
+            else type(actual) is not type(expected) or actual != expected
+        )
     if not isinstance(actual, (int, float)) or isinstance(actual, bool):
         return False
     if guard.operator == "gt":
@@ -2774,7 +2784,9 @@ class EffectProgramEnvironmentHandler:
         try:
             self._apply(candidate, event)
             candidate.validate()
-        except EventApplicationError:
+        except (EventApplicationError, EventSuppressed):
+            # EventSuppressed is a ValueError; an expiry after a start its guard suppressed
+            # must stay suppressed, not become a failure (#195).
             raise
         except ValueError as exc:
             raise EventApplicationError(f"zone environment modifier is invalid: {exc}") from exc

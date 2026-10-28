@@ -34,6 +34,7 @@ from sheltersim.events.effects import (
     TargetSelector,
     TimedAction,
     schedule_effect_program,
+    should_apply_effect_guard,
     validate_effect_program,
 )
 from sheltersim.events.handlers import (
@@ -706,3 +707,37 @@ def test_generated_scenarios_shorter_than_four_days_accept_outages_and_absences(
     program = program.model_copy(update={"effects": [effect]})
 
     assert validate_effect_program(world, program) == ()
+
+
+@pytest.mark.parametrize(
+    "operator,value,expected",
+    [
+        ("eq", 1, True),
+        ("eq", 1.0, True),
+        ("ne", 1.0, False),
+        ("eq", True, False),
+        ("ne", True, True),
+    ],
+)
+def test_guard_equality_compares_numbers_by_value_but_not_with_booleans(
+    generated_scenario, operator, value, expected
+) -> None:
+    """A float such as 1.0 used to differ from the integer 1 (#196)."""
+    world = WorldState.from_scenario(generated_scenario)
+    assert world.facilities["toilet_01"].capacity == 1
+    event = ScheduledEvent(
+        event_id="guarded",
+        kind=EventKind.INTERVENTION,
+        due_minute=0,
+        priority=0,
+        sequence=world.allocate_event_sequence(),
+        event_type="effect_program_apply",
+        payload={"facility_id": "toilet_01"},
+        provenance={
+            "effect_program_v1": {
+                "guard": {"operator": operator, "field": "target.capacity", "value": value}
+            }
+        },
+    )
+
+    assert should_apply_effect_guard(world, event) is expected
