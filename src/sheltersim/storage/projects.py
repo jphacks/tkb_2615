@@ -34,7 +34,9 @@ _PRIVATE = re.compile(
 # model signature, is not taken for an address (#187).
 EMAIL_ADDRESS = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\W\d_]{2,}\b")
 _SECRET = re.compile(r"sk-(?:ant-)?[A-Za-z0-9_-]{12,}|Bearer\s+\S+|" + EMAIL_ADDRESS.pattern, re.I)
-_PHONE = re.compile(r"(?<!\w)(?:\+\d{1,3}[ -])?\d{2,4}[- ]\d{2,4}[- ]\d{3,4}(?!\w)")
+# Three separated digit groups, so DOIs and dates in provenance are not phone
+# numbers (#190). Run artifacts and the saved-Run inspector use the same definition.
+PHONE_NUMBER = re.compile(r"(?<!\w)(?:\+\d{1,3}[ -])?\d{2,4}[- ]\d{2,4}[- ]\d{3,4}(?!\w)")
 _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
 
 
@@ -68,7 +70,7 @@ def safe_document(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [safe_document(item) for item in value]
     if isinstance(value, str):
-        return _PHONE.sub("[redacted]", _SECRET.sub("[redacted]", value))
+        return PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", value))
     if value is None or type(value) is bool:
         return value
     if type(value) is float and math.isfinite(value):

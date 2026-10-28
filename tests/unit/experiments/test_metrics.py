@@ -90,6 +90,35 @@ def test_support_wait_metrics_explain_busy_qualified_staff_and_elapsed_wait() ->
     assert later_sources["support_wait_by_agent"]["A002"]["waited_minutes"] == 3
 
 
+def test_artifacts_keep_model_references_and_redact_phone_numbers(tmp_path: Path) -> None:
+    """A DOI in a model reference was taken for a phone number and blanked (#190)."""
+    scenario = load_scenario()
+    world = WorldState.from_scenario(scenario)
+    world.schedule_event(
+        ScheduledEvent(
+            event_id="phone-event",
+            kind=EventKind.EXOGENOUS,
+            due_minute=0,
+            priority=0,
+            sequence=world.allocate_event_sequence(),
+            event_type="unregistered",
+            payload={"note": "call 090-1234-5678", "kind": "toilet"},
+        )
+    )
+    EventDispatcher().dispatch_due(world, 0)
+    artifacts = RunArtifactWriter(scenario, tmp_path / "run", trace_level=TraceLevel.FULL)
+
+    artifacts.write_initial(WorldState.from_scenario(scenario))
+    artifacts.finalize(world)
+
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+    references = [item["reference"] for item in manifest["policy_sources"].values()]
+    assert any("doi:10.1111/1467-8721" in reference for reference in references)
+    assert "[REDACTED]" not in references
+    event_line = (tmp_path / "run" / "events_realized.jsonl").read_text(encoding="utf-8")
+    assert "090-1234-5678" not in event_line
+
+
 def test_artifact_writer_emits_required_files_and_redacts_sensitive_fields(
     tmp_path: Path, monkeypatch
 ) -> None:

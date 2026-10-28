@@ -290,6 +290,21 @@ def test_run_writer_lease_works_without_fcntl_or_nofollow(
     ProjectStore(tmp_path).release_run(ProjectStore(tmp_path).claim_run("project", "run"))
 
 
+def test_phone_numbers_are_redacted_but_dois_and_dates_are_not():
+    """Run artifacts share this definition; a broader one blanked model references (#190)."""
+    from sheltersim.storage.projects import safe_document
+
+    for text in ("call 090-1234-5678", "03-1234-5678", "+81 90 1234 5678"):
+        assert safe_document(text) != text
+    for text in (
+        "DeGroot (1974), doi:10.1080/01621459.1974.10480137",
+        "https://link.springer.com/article/10.1007/s10458-012-9201-1",
+        "doi:10.1111/1467-8721.ep10770953",
+        "accessed 2026-10-28",
+    ):
+        assert safe_document(text) == text
+
+
 def test_model_signatures_are_kept_while_email_addresses_are_redacted():
     """A decimal after "@" in a model signature was taken for an address (#187)."""
     from sheltersim.storage.projects import safe_document

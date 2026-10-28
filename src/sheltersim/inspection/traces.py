@@ -7,7 +7,6 @@ import hashlib
 import io
 import json
 import math
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from enum import Enum
@@ -52,10 +51,9 @@ from sheltersim.policies.behavior import (
     behavior_policy_definition,
 )
 from sheltersim.policies.social import SocialPropagationParameters
-from sheltersim.storage.projects import EMAIL_ADDRESS
+from sheltersim.storage.projects import EMAIL_ADDRESS, PHONE_NUMBER
 from sheltersim.storage.streams import TraceSpool
 
-_PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
 _SENSITIVE_FIELDS = (
     "api_key",
     "apikey",
@@ -939,7 +937,7 @@ def _sanitize(value: Any, *, field_name: str = "") -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, str):
-        if EMAIL_ADDRESS.search(value) or _PHONE.search(value):
+        if EMAIL_ADDRESS.search(value) or PHONE_NUMBER.search(value):
             return "[REDACTED]"
         return value
     if isinstance(value, Mapping):
