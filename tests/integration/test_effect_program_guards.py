@@ -1,10 +1,9 @@
 """EffectProgram guards on a generated Scenario: a false guard suppresses an effect's start
-and its expiry alike, an and-guard applies when every operand holds, and a guard on a
-floor plan change reads its facility or zone target (#194).
+and its expiry alike, environment changes included (#195), an and-guard applies when
+every operand holds, a guard on a floor plan change reads its facility or zone target
+(#194), and eq compares a count with a float by value (#196).
 
-The xfail tests are defects found while covering these paths (#178): an environment
-expiry after a suppressed start is recorded as failed (#195), and eq compares an
-integer with a float by type (#196).
+These were defects found while covering these paths (#178).
 """
 
 from __future__ import annotations
@@ -126,11 +125,6 @@ def test_an_and_guard_applies_when_every_operand_holds(main_line):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#195: an environment expiry after a suppressed start is recorded as failed",
-)
 def test_an_environment_change_with_a_false_guard_has_a_suppressed_expiry(main_line):
     outcomes = _outcomes(main_line, "set_ambient_noise", "zone", "sleeping", {"level": 0.8}, NEVER)
 
@@ -185,11 +179,6 @@ def test_a_false_guard_on_a_floor_plan_change_suppresses_it(main_line, change, g
     assert outcomes[0][2] == "EffectProgram guard evaluated false"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#196: eq compares an integer field with a float value by type",
-)
 def test_eq_compares_numbers_by_value(main_line):
     if main_line.seek("main", START).world.facilities["medical_desk"].queue_agent_ids:
         pytest.fail("the medical desk queue must be empty at the start")
