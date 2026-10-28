@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key)
 CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
 PRAGMA user_version=1;
 """  # noqa: E501
-_WRITE_CACHE_KIB = 16_384
+_WRITE_CACHE_KIB = 65_536
 
 
 @functools.cache
