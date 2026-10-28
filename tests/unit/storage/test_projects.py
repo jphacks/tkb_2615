@@ -4,12 +4,14 @@ started Run are refused.
 
 Saving a Checkpoint validates and detaches it once and refuses mutated or sensitive
 data before anything is written; saved Runs over time are checked in
-tests/integration/test_checkpoint_saves.py.
+tests/integration/test_checkpoint_saves.py. The storage usage counts the regular files
+on disk at each call, and a write over the capacity is refused.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -206,7 +208,9 @@ def test_split_object_field_names_are_privacy_checked(tmp_path):
     assert not any(tmp_path.rglob("*.gz"))
 
 
-@pytest.mark.parametrize("value", [None, True, False, 0, -1, 0.0, -0.0, 0.12345678901234567])
+@pytest.mark.parametrize(
+    "value", [None, True, False, 0, -1, 10**30, 0.0, -0.0, 0.12345678901234567]
+)
 def test_privacy_scalar_fast_path_keeps_exact_json_values(value):
     assert json.dumps(safe_document(value), allow_nan=False) == json.dumps(value, allow_nan=False)
 
@@ -215,6 +219,60 @@ def test_privacy_scalar_fast_path_keeps_exact_json_values(value):
 def test_privacy_scalar_fast_path_still_rejects_nonfinite_numbers(value):
     with pytest.raises(ValueError):
         safe_document({"values": [value]})
+
+
+def test_usage_counts_regular_files_without_following_symlinks(tmp_path):
+    store = ProjectStore(tmp_path / "store")
+    (store.root / "p" / "runs").mkdir(parents=True)
+    (store.root / "p" / "runs" / ".hidden").write_bytes(b"12345")
+    (store.root / "p" / "a.json").write_bytes(b"1")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "big").write_bytes(b"0" * 100)
+    (store.root / "p" / "linked").symlink_to(outside, target_is_directory=True)
+    (store.root / "p" / "b.json").symlink_to(outside / "big")
+    # .lock is created empty by the first transaction.
+    assert store.usage() == {"bytes": 6, "files": 2, "limit_bytes": store.max_bytes}
+
+
+def test_usage_sees_another_stores_writes_at_once(tmp_path):
+    """Usage is measured at each call, never cached, so another process's file counts (#47)."""
+    store = ProjectStore(tmp_path)
+    store.create_project("a")
+    before = store.usage()
+    ProjectStore(tmp_path).create_project("p")
+    after = store.usage()
+    size = (tmp_path / "p" / "project.json").stat().st_size
+    assert (after["bytes"], after["files"]) == (before["bytes"] + size, before["files"] + 1)
+
+
+def test_usage_skips_a_file_removed_while_it_is_measured(tmp_path, monkeypatch):
+    store = ProjectStore(tmp_path)
+    (tmp_path / "kept").write_bytes(b"12")
+    (tmp_path / ".pending-x").write_bytes(b"1234")
+    scandir = os.scandir
+
+    def listing_then_removal(path):
+        entries = list(scandir(path))
+        (tmp_path / ".pending-x").unlink(missing_ok=True)
+        return iter(entries)
+
+    monkeypatch.setattr(os, "scandir", listing_then_removal)
+    assert store.usage()["bytes"] == 2
+
+
+def test_a_write_over_the_capacity_is_refused_and_leaves_the_file(tmp_path):
+    store = ProjectStore(tmp_path)
+    store.create_project("p")
+    path = store._path("p", "note.json")
+    store._write(path, {"schema_version": 1, "text": "a"})
+    store.max_bytes = store.usage()["bytes"] + 9
+    with pytest.raises(StorageError, match="capacity exceeded"):
+        store._write(path, {"schema_version": 1, "text": "a" * 11})
+    assert store._read(path)["text"] == "a"
+    # Replacing a file counts only the bytes it adds.
+    store._write(path, {"schema_version": 1, "text": "a" * 10})
+    assert store._read(path)["text"] == "a" * 10
 
 
 def seed_store(tmp_path):

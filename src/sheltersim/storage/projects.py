@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -61,10 +62,16 @@ def digest(value: Any) -> str:
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+@functools.lru_cache(maxsize=4096)
+def _private_field(key: str) -> bool:
+    # Saved records reuse a small set of field names; match each name once (#47).
+    return _PRIVATE.search(key) is not None
+
+
 def safe_document(value: Any) -> Any:
     """Reject credential-bearing fields; redact conventional secrets/contact text."""
     if isinstance(value, dict):
-        if any(not isinstance(key, str) or _PRIVATE.search(key) for key in value):
+        if any(not isinstance(key, str) or _private_field(key) for key in value):
             raise StorageError("sensitive fields cannot be persisted")
         return {key: safe_document(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -73,12 +80,12 @@ def safe_document(value: Any) -> Any:
         return PHONE_NUMBER.sub("[redacted]", _SECRET.sub("[redacted]", value))
     if value is None or type(value) is bool:
         return value
-    if type(value) is float and math.isfinite(value):
-        # Finite built-in floats already satisfy the JSON scalar contract.
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        # Built-in ints and finite floats already satisfy the JSON scalar contract.
         # Avoid constructing a JSON encoder for every coefficient/KPI/history value.
         return value
-    if type(value) in (int, float):
-        canonical(value)
+    if type(value) is float:
+        canonical(value)  # Raises for NaN and infinities.
         return value
     raise StorageError("saved data must be finite JSON")
 
@@ -192,12 +199,29 @@ class ProjectStore:
             Path(name).unlink(missing_ok=True)
 
     def usage(self) -> dict[str, int]:
-        paths = [p for p in self.root.rglob("*") if p.is_file() and not p.is_symlink()]
-        return {
-            "bytes": sum(p.stat().st_size for p in paths),
-            "files": len(paths),
-            "limit_bytes": self.max_bytes,
-        }
+        """Measure the regular files on disk now, including other processes' writes.
+
+        Symlinks are neither counted nor followed. Directory entries carry their type,
+        so each file costs one stat (#47); a file or directory removed while it is
+        measured holds no bytes.
+        """
+        total = files = 0
+        directories = [os.fspath(self.root)]
+        while directories:
+            try:
+                entries = list(os.scandir(directories.pop()))
+            except (FileNotFoundError, PermissionError):
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        directories.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                        files += 1
+                except FileNotFoundError:
+                    continue
+        return {"bytes": total, "files": files, "limit_bytes": self.max_bytes}
 
     def create_project(self, project_id: str, *, _internal: bool = False) -> dict[str, Any]:
         if project_id == "runtime-accounts" and not _internal:
