@@ -3,10 +3,10 @@ new zone and survives a resume, and a reunion records the household. Each person
 chosen from the state at the fork, as an operator would pick them.
 
 A reunion that includes someone waiting for support keeps that request in its
-household (#179). The xfail tests are defects found while covering these paths (#178):
-a return into a zone someone is walking to (#180), and an exit that is approved but
-then fails (#181). A failed precondition calls pytest.fail, so it is never mistaken
-for the expected failure.
+household (#179), and a return or an arrival waits while someone walks to the full
+zone (#180). The xfail test is a defect found while covering these paths (#178): an
+exit that is approved but then fails (#181). A failed precondition calls pytest.fail,
+so it is never mistaken for the expected failure.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from sheltersim.core.world import StateInvariantError, WorldState
+from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
 from sheltersim.experiments.branch import BranchError
@@ -233,17 +233,26 @@ def test_an_approved_exit_of_someone_waiting_for_support_is_carried_out_or_refus
     assert leaver not in world.agents, "the approved exit never happened"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=StateInvariantError,
-    reason="#180: a return ignores people already walking to the zone",
-)
-def test_a_return_waits_while_someone_is_walking_to_the_full_zone(
-    tmp_path, monkeypatch, generated_previews, saved_timeline
-):
+@pytest.fixture
+def one_place_staff_zone(tmp_path, monkeypatch, generated_previews, saved_timeline):
+    """The generated Scenario with a one-place staff zone, at the fork minute."""
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
     _, timeline = saved_timeline(tmp_path / "projects", _scenario(generated_previews, staff=1))
-    world = timeline.advance("main", FORK_MINUTE, checkpoint_interval=FORK_MINUTE).world
+    timeline.advance("main", FORK_MINUTE, checkpoint_interval=FORK_MINUTE)
+    return timeline
+
+
+def _walking_to_empty_staff_zone(world: WorldState) -> list[str]:
+    walking = [key for key, agent in world.agents.items() if agent.target_id == "staff"]
+    if any(agent.zone_id == "staff" for agent in world.agents.values()) or not walking:
+        pytest.fail("the staff zone must be empty with someone walking to it")
+    return walking
+
+
+def test_a_return_waits_while_someone_is_walking_to_the_full_zone(one_place_staff_zone):
+    """The return used to take the place of the walker, whose arrival overfilled it (#180)."""
+    timeline = one_place_staff_zone
+    world = _at_fork(timeline)
     leaver = next(
         (
             key
@@ -261,9 +270,7 @@ def test_a_return_waits_while_someone_is_walking_to_the_full_zone(
         _presence("exit", _person(leaver), FORK_MINUTE, action="temporary_exit"),
     )
     away = timeline.advance("away", RETURN_MINUTE, checkpoint_interval=RETURN_MINUTE).world
-    walking = [key for key, agent in away.agents.items() if agent.target_id == "staff"]
-    if any(agent.zone_id == "staff" for agent in away.agents.values()) or not walking:
-        pytest.fail("the staff zone must be empty with someone walking to it")
+    _walking_to_empty_staff_zone(away)
     _fork(
         timeline,
         "away",
@@ -271,4 +278,60 @@ def test_a_return_waits_while_someone_is_walking_to_the_full_zone(
         _presence("back", _person(leaver), RETURN_MINUTE, action="return", zone_id="staff"),
     )
 
-    timeline.advance("back", END, checkpoint_interval=30)
+    world = timeline.advance("back", END, checkpoint_interval=30).world
+
+    history = [
+        (minute, action) for minute, agent_id, action in _history(world) if agent_id == leaver
+    ]
+    assert history[:2] == [(FORK_MINUTE, "temporary_exit"), (RETURN_MINUTE, "waiting")]
+    ((admitted_at, _),) = [row for row in history[2:] if row[1] == "admitted"]
+    assert admitted_at > RETURN_MINUTE
+    assert world.model_state["population_lifecycle_v1"]["pending_returns"] == []
+    assert timeline.seek("back", admitted_at + 1).world.agents[leaver].zone_id == "staff"
+
+
+def test_an_arrival_waits_while_someone_is_walking_to_the_full_zone(one_place_staff_zone):
+    """Arrival admission ignored the walker in the same way (#180)."""
+    timeline = one_place_staff_zone
+    away = timeline.advance("main", RETURN_MINUTE, checkpoint_interval=RETURN_MINUTE).world
+    walkers = _walking_to_empty_staff_zone(away)
+    residents = set(away.agents)
+    program = EffectProgram(
+        program_id="program-arrival",
+        narrative="arrival",
+        source_text="arrival",
+        simulation_start_minute=RETURN_MINUTE,
+        effects=[
+            TimedAction(
+                effect_id="arrival",
+                op="add_evacuees",
+                target_selector=TargetSelector(kind="zone", target_id="staff"),
+                start_minute=RETURN_MINUTE,
+                parameters={"count": 1, "household_size": 1},
+                units="evacuee",
+                source_id="TEST-ARRIVAL",
+                assumption_ids=[],
+                policy_dependencies=["population_dynamics_v1"],
+                reversible=False,
+            )
+        ],
+        assumptions=[],
+        support_mode=SupportMode.NATIVE,
+        compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
+    )
+    _fork(timeline, "main", "arrival", program)
+
+    world = timeline.advance("arrival", END, checkpoint_interval=30).world
+
+    (newcomer,) = set(world.agents) - residents
+    in_staff = [
+        (
+            item.minute_index,
+            sorted(key for key, agent in item.agents.items() if agent.zone_id == "staff"),
+        )
+        for item in timeline.iter_worlds("arrival", RETURN_MINUTE, END)
+    ]
+    first_walker_minute = next(minute for minute, ids in in_staff if set(ids) & set(walkers))
+    assert newcomer not in dict(in_staff)[first_walker_minute]
+    admitted = [minute for minute, ids in in_staff if newcomer in ids]
+    assert admitted and admitted[0] > first_walker_minute, "admitted once there is room"

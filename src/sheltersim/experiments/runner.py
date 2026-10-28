@@ -85,6 +85,7 @@ from sheltersim.domain.staff_operations import (
     schedule_staff_operation_relief,
     update_staff_operations,
 )
+from sheltersim.domain.temporary_spaces import incoming_travelers
 from sheltersim.domain.zones import ZoneGraph
 from sheltersim.events.effects import (
     EffectProgramEnvironmentHandler,
@@ -1367,12 +1368,7 @@ class OfflineSimulationController:
                 for other in self.world.agents.values()
                 if other.zone_id == route.destination_zone_id
             )
-            incoming = sum(
-                1
-                for other in self.world.agents.values()
-                if other.activity is Activity.MOVING
-                and self._travel_destination_zone(other.id) == route.destination_zone_id
-            )
+            incoming = incoming_travelers(self.world, route.destination_zone_id)
             if occupancy + incoming >= zone_capacity:
                 return False
 
@@ -1841,14 +1837,6 @@ class OfflineSimulationController:
         ingest_applied_shared_operation_records(world, (continuity,))
         finish_movement(world, agent.id)
         return False
-
-    def _travel_destination_zone(self, agent_id: str) -> str | None:
-        agent = self.world.agents[agent_id]
-        if agent.target_id in self.world.zones:
-            return agent.target_id
-        if agent.target_id in self.world.facilities:
-            return self.world.facilities[agent.target_id].zone_id
-        return None
 
     def _route(
         self, origin_zone_id: str, destination_zone_id: str, agent_id: str

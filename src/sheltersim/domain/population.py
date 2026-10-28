@@ -1244,13 +1244,14 @@ def _state(world: WorldState) -> dict[str, Any]:
 
 
 def _zone_has_room(world: WorldState, zone_id: str) -> bool:
-    from sheltersim.domain.temporary_spaces import effective_zone_capacity
+    from sheltersim.domain.temporary_spaces import effective_zone_capacity, incoming_travelers
 
     capacity = effective_zone_capacity(world, zone_id)
     if capacity is None:
         return True
     occupancy = sum(agent.zone_id == zone_id for agent in world.agents.values())
-    return occupancy < capacity
+    # People walking there hold their place, as travel admission counts them (#180).
+    return occupancy + incoming_travelers(world, zone_id) < capacity
 
 
 def _choose_admission_target(
