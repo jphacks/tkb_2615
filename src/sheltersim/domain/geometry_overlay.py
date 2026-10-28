@@ -512,6 +512,14 @@ def _bed_target_id(room_id: str, bed_index: int) -> str:
     return f"bed-{digest}"
 
 
+def parsed_facility_geometry(raw: Any) -> FacilityGeometry:
+    """The Scenario's facility geometry without runtime overrides; see effective_geometry.
+
+    Inside a config scope this shares the one parse of the same raw object (#45).
+    """
+    return _parsed_config("facility_geometry", raw, FacilityGeometry)
+
+
 def effective_geometry(world: Any) -> FacilityGeometry | None:
     raw = world.model_configs.get("facility_geometry")
     if raw is None:

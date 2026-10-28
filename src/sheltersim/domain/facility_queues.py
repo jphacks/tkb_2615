@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sheltersim.contracts.extensions import FacilityGeometry, FacilityServicePoint
+from sheltersim.contracts.extensions import FacilityServicePoint
 from sheltersim.core.world import WorldState
+from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
 
 FACILITY_QUEUES_STATE_KEY = "facility_queues_v1"
@@ -23,7 +24,7 @@ def service_points(world: WorldState) -> tuple[FacilityServicePoint, ...]:
     raw = world.model_configs.get("facility_geometry")
     if not isinstance(raw, dict):
         return ()
-    return FacilityGeometry.model_validate(raw).service_points
+    return parsed_facility_geometry(raw).service_points
 
 
 def independent_queues_required(configs: dict[str, Any]) -> bool:
@@ -31,7 +32,7 @@ def independent_queues_required(configs: dict[str, Any]) -> bool:
     raw = configs.get("facility_geometry")
     if not isinstance(raw, dict):
         return False
-    points = FacilityGeometry.model_validate(raw).service_points
+    points = parsed_facility_geometry(raw).service_points
     by_facility: dict[str, int] = {}
     for point in points:
         by_facility[point.facility_id] = by_facility.get(point.facility_id, 0) + 1

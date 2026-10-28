@@ -23,12 +23,14 @@ from sheltersim.domain.agent_dynamics import (
     ANNOUNCED_FACILITY_AGENT_DYNAMICS_POLICY_VERSION,
     INSTALLED_FACILITY_ANNOUNCEMENT_SOURCE_ID,
 )
+from sheltersim.domain.facility_queues import independent_queues_required, service_points
 from sheltersim.domain.geometry_overlay import (
     GEOMETRY_OVERLAY_KEY,
     INSTALLED_FACILITY_PLACEMENT_SOURCE_ID,
     effective_geometry,
     effective_spatial_constraints,
     geometry_config_scope,
+    parsed_facility_geometry,
     validate_geometry_change,
 )
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
@@ -103,6 +105,22 @@ def test_scope_parses_each_config_object_once(generated_scenario, count_validati
         assert effective_geometry(other) == expected
     assert geometry_calls == [id(raw), id(other.model_configs["facility_geometry"])]
     assert len(spatial_calls) == 1
+
+
+def test_the_scenario_geometry_shares_the_scopes_one_parse(generated_scenario, count_validations):
+    """Queues, arrivals and routes read the Scenario geometry from the same parse (#45)."""
+    world = WorldState.from_scenario(generated_scenario)
+    raw = world.model_configs["facility_geometry"]
+    geometry_calls = count_validations(FacilityGeometry)
+    with geometry_config_scope():
+        geometry = effective_geometry(world)
+        assert parsed_facility_geometry(raw) is geometry
+        assert service_points(world) == geometry.service_points
+        independent_queues_required(world.model_configs)
+    assert geometry_calls == [id(raw)]
+    # Outside a scope each call parses, so a config edit is seen at once.
+    assert parsed_facility_geometry(raw) == geometry
+    assert geometry_calls == [id(raw), id(raw)]
 
 
 def test_config_edits_outside_a_scope_are_always_seen(generated_scenario):

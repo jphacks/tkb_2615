@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable
 
-from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.contracts.policies import selected_models
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.rng import KeyedRandom
@@ -39,6 +38,7 @@ from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import facility_has_independent_queues
 from sheltersim.domain.geometry_overlay import (
     geometry_config_scope,
+    parsed_facility_geometry,
     release_sleep_bed,
     reserve_sleep_bed,
 )
@@ -1846,7 +1846,7 @@ class OfflineSimulationController:
         space = self.space
         geometry_raw = self.world.model_configs.get("facility_geometry")
         if agent is not None and geometry_raw is not None:
-            geometry = FacilityGeometry.model_validate(geometry_raw)
+            geometry = parsed_facility_geometry(geometry_raw)
             inaccessible = {
                 route.edge_id
                 for route in geometry.routes
