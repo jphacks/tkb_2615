@@ -8,6 +8,7 @@ The authoritative JSON/checkpoint hashes remain unchanged and independently read
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import sqlite3
@@ -35,6 +36,7 @@ CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key)
 CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
 PRAGMA user_version=1;
 """  # noqa: E501
+_WRITE_CACHE_KIB = 16_384
 
 
 def cursor_encode(value: dict[str, Any]) -> str:
@@ -196,6 +198,113 @@ def _virtual_utterance_example(
     return result
 
 
+class _RecordBatch:
+    """New index rows of one write transaction, inserted a few hundred records at a time.
+
+    Each table receives the new records' rows in the order they were put, as one insert
+    per record did before (#47). A key already stored or put earlier must carry the same
+    payload, and then adds only event links its stored record may lack.
+    """
+
+    _FLUSH_RECORDS = 500
+
+    def __init__(self, db: sqlite3.Connection, branch: str) -> None:
+        self.db, self.branch = db, branch
+        self.pending: dict[tuple[str, str], str] = {}
+        self.records: list[tuple[Any, ...]] = []
+        self.entities: list[tuple[Any, ...]] = []
+        self.tokens: list[tuple[Any, ...]] = []
+        self.references: list[tuple[Any, ...]] = []
+        self.added: dict[str, int] = {}
+
+    def __enter__(self) -> _RecordBatch:
+        return self
+
+    def __exit__(self, error: type[BaseException] | None, *_: Any) -> None:
+        if error is None:
+            self.flush()
+
+    def put(self, kind: str, row: dict[str, Any], *, key: str | None = None) -> None:
+        branch = self.branch
+        row = safe_document(row)
+        minute = row.get("minute", row.get("minute_index"))
+        if type(minute) is not int or minute < 0:
+            raise StorageError("invalid_index_record_minute")
+        encoded = canonical(row)
+        payload_hash = hashlib.sha256(encoded.encode()).hexdigest()  # digest(row)
+        key = key or payload_hash
+        existing = self.pending.get((kind, key))
+        if existing is None:
+            stored = self.db.execute(
+                "SELECT payload FROM records WHERE branch=? AND kind=? AND key=?",
+                (branch, kind, key),
+            ).fetchone()
+            existing = stored[0] if stored is not None else None
+        if existing is not None:
+            if existing != encoded:
+                raise StorageError("immutable_history_record_conflict")
+            self.references.extend(
+                (branch, kind, "@event:" + event, minute, key) for event in _event_references(row)
+            )
+            return
+        self.pending[(kind, key)] = encoded
+        self.records.append(
+            (
+                branch,
+                kind,
+                key,
+                minute,
+                row.get("event_id"),
+                row.get("causation_id"),
+                row.get("source_id"),
+                row.get("event_type", row.get("action", row.get("kind"))),
+                row.get("status"),
+                encoded,
+                payload_hash,
+            )
+        )
+        self.added[kind] = self.added.get(kind, 0) + 1
+        self.entities.extend((branch, kind, key, item, minute) for item in _identities(row))
+        # Index bounded metadata, never long answers, raw prompts or arbitrary prose.
+        words = _terms(
+            " ".join(
+                str(row.get(name, ""))
+                for name in (
+                    "event_type",
+                    "action",
+                    "kind",
+                    "status",
+                    "trigger",
+                    "topic_id",
+                    "task_kind",
+                )
+            )
+        )
+        words = sorted(set(words) | {"@event:" + event for event in _event_references(row)})
+        self.tokens.extend((branch, kind, token, minute, key) for token in words)
+        if len(self.records) >= self._FLUSH_RECORDS:
+            self.flush()
+
+    def flush(self) -> None:
+        db = self.db
+        db.executemany("INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)", self.records)
+        db.executemany("INSERT INTO entities VALUES(?,?,?,?,?)", self.entities)
+        db.executemany("INSERT INTO tokens VALUES(?,?,?,?,?)", self.tokens)
+        # Event links of records stored before; their own tokens are inserted above.
+        db.executemany("INSERT OR IGNORE INTO tokens VALUES(?,?,?,?,?)", self.references)
+        db.executemany(
+            "INSERT INTO generations VALUES(?,?,?) ON CONFLICT(branch,kind) DO UPDATE SET "
+            "value=value+excluded.value",
+            [(self.branch, kind, count) for kind, count in self.added.items()],
+        )
+        self.pending.clear()
+        self.records.clear()
+        self.entities.clear()
+        self.tokens.clear()
+        self.references.clear()
+        self.added.clear()
+
+
 class HistoryIndex:
     def __init__(self, store: ProjectStore, project_id: str, run_id: str) -> None:
         self.store, self.project_id, self.run_id = store, project_id, run_id
@@ -222,6 +331,10 @@ class HistoryIndex:
                 connection.execute(
                     f"PRAGMA max_page_count={max(1, self.store.max_bytes // page_size)}"
                 )
+                # Hold one ingest's changed pages in memory. With the 2 MiB default the
+                # growing index spills pages mid-transaction, each spill syncing the
+                # journal first (#47). The commit still syncs as before.
+                connection.execute(f"PRAGMA cache_size=-{_WRITE_CACHE_KIB}")
                 connection.execute("BEGIN IMMEDIATE")
             else:
                 if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
@@ -246,81 +359,6 @@ class HistoryIndex:
         finally:
             connection.close()
 
-    @staticmethod
-    def _put(
-        db: sqlite3.Connection,
-        branch: str,
-        kind: str,
-        row: dict[str, Any],
-        *,
-        key: str | None = None,
-    ) -> None:
-        row = safe_document(row)
-        minute = row.get("minute", row.get("minute_index"))
-        if type(minute) is not int or minute < 0:
-            raise StorageError("invalid_index_record_minute")
-        key = key or digest(row)
-        encoded = canonical(row)
-        existing = db.execute(
-            "SELECT payload FROM records WHERE branch=? AND kind=? AND key=?", (branch, kind, key)
-        ).fetchone()
-        if existing is not None:
-            if existing[0] != encoded:
-                raise StorageError("immutable_history_record_conflict")
-            db.executemany(
-                "INSERT OR IGNORE INTO tokens VALUES(?,?,?,?,?)",
-                [
-                    (branch, kind, "@event:" + event, minute, key)
-                    for event in _event_references(row)
-                ],
-            )
-            return
-        db.execute(
-            "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                branch,
-                kind,
-                key,
-                minute,
-                row.get("event_id"),
-                row.get("causation_id"),
-                row.get("source_id"),
-                row.get("event_type", row.get("action", row.get("kind"))),
-                row.get("status"),
-                encoded,
-                digest(row),
-            ),
-        )
-        db.execute(
-            "INSERT INTO generations VALUES(?,?,1) ON CONFLICT(branch,kind) DO UPDATE SET "
-            "value=value+1",
-            (branch, kind),
-        )
-        db.executemany(
-            "INSERT INTO entities VALUES(?,?,?,?,?)",
-            [(branch, kind, key, item, minute) for item in _identities(row)],
-        )
-        # Index bounded metadata, never long answers, raw prompts or arbitrary prose.
-        words = _terms(
-            " ".join(
-                str(row.get(name, ""))
-                for name in (
-                    "event_type",
-                    "action",
-                    "kind",
-                    "status",
-                    "trigger",
-                    "topic_id",
-                    "task_kind",
-                )
-            )
-        )
-        words = sorted(set(words) | {"@event:" + event for event in _event_references(row)})
-        db.executemany(
-            "INSERT INTO tokens VALUES(?,?,?,?,?)",
-            [(branch, kind, token, minute, key) for token in words],
-        )
-
     def ingest(
         self,
         branch: str,
@@ -330,7 +368,7 @@ class HistoryIndex:
         rebuild: bool = False,
     ) -> None:
         """Append only new immutable records; checkpoint lists are already in writer memory."""
-        with self.connect(write=True) as db:
+        with self.connect(write=True) as db, _RecordBatch(db, branch) as records:
             prior = db.execute("SELECT * FROM heads WHERE branch=?", (branch,)).fetchone()
             if rebuild:
                 # This index is a replaceable read model of immutable source logs.
@@ -405,7 +443,7 @@ class HistoryIndex:
                     "detail": record.get("detail"),
                     "time_semantics": "recorded_event_minute",
                 }
-                self._put(db, branch, "events", row, key=digest(record))
+                records.put("events", row, key=digest(record))
                 if record["status"] == "applied":
                     event_type = event.get("event_type")
                     payload = event.get("payload", {})
@@ -465,7 +503,7 @@ class HistoryIndex:
                         state_context = payload.get("conversation_state_context")
                         if isinstance(state_context, dict):
                             social["conversation_state_context"] = state_context
-                        self._put(db, branch, "social", social, key="event:" + event["event_id"])
+                        records.put("social", social, key="event:" + event["event_id"])
                         if event_type == "social_interaction":
                             # A deterministic, explicitly fictional example may help readers
                             # understand the applied typed intent. It is never a stored quote.
@@ -483,9 +521,7 @@ class HistoryIndex:
                             dialogue.update(
                                 _virtual_utterance_example(social, observed_model_effects) or {}
                             )
-                            self._put(
-                                db, branch, "dialogue", dialogue, key="event:" + event["event_id"]
-                            )
+                            records.put("dialogue", dialogue, key="event:" + event["event_id"])
                     from sheltersim.inspection.action_history import applied_action_record
 
                     action = applied_action_record(event, record["realized_minute"])
@@ -499,9 +535,7 @@ class HistoryIndex:
                             "care": "care",
                             "operations": "operations",
                         }.get(action.get("record_kind"), "actions")
-                        self._put(
-                            db, branch, index_kind, action, key="applied:" + event["event_id"]
-                        )
+                        records.put(index_kind, action, key="applied:" + event["event_id"])
                     if event["event_type"] in {
                         "care_support_transition",
                         "staff_support_continuity",
@@ -536,9 +570,7 @@ class HistoryIndex:
                             or receipt.minute != record["realized_minute"]
                         ):
                             raise StorageError("operation_event_receipt_time_or_id_mismatch")
-                        self._put(
-                            db,
-                            branch,
+                        records.put(
                             "care" if row["record_type"] == "care" else "operations",
                             row,
                             key=f"{row['record_type']}:{receipt.event_id}",
@@ -583,9 +615,7 @@ class HistoryIndex:
                             raise StorageError("facility_queue_event_receipt_provenance_mismatch")
                         row = receipt.model_dump(mode="json")
                         row["source_id"] = event.get("source_id")
-                        self._put(
-                            db, branch, "operations", row, key=f"operations:{receipt.event_id}"
-                        )
+                        records.put("operations", row, key=f"operations:{receipt.event_id}")
             counts["events"] = len(events)
             snapshots = metrics["snapshots"]
             start = counts.get("kpis", 0)
@@ -596,7 +626,7 @@ class HistoryIndex:
                 if resource_rows:
                     row.update(resource_rows[index])
                 row["time_semantics"] = "end_of_tick"
-                self._put(db, branch, "kpis", row, key=str(row["minute_index"]))
+                records.put("kpis", row, key=str(row["minute_index"]))
             counts["kpis"] = len(snapshots)
             counts["model_namespaces"] = sorted(world["model_state"])
             counts.setdefault("first_indexed_checkpoint_minute", checkpoint.simulation_minute)
@@ -614,9 +644,9 @@ class HistoryIndex:
                     history, max(0, previous_minute - 1), key=lambda row: row[field]
                 )
                 for record in history[first:]:
-                    self._put(db, branch, kind, {**record, "minute": record[field]})
+                    records.put(kind, {**record, "minute": record[field]})
             for row in observations or []:
-                self._put(db, branch, row.get("record_kind", "actions"), row)
+                records.put(row.get("record_kind", "actions"), row)
             db.execute(
                 "INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?)",
                 (
@@ -637,8 +667,8 @@ class HistoryIndex:
             )
 
     def add_turn(self, branch: str, turn: dict[str, Any]) -> None:
-        with self.connect(write=True) as db:
-            self._put(db, branch, "conversations", turn, key=turn["turn_id"])
+        with self.connect(write=True) as db, _RecordBatch(db, branch) as records:
+            records.put("conversations", turn, key=turn["turn_id"])
 
     def ready(self, db: sqlite3.Connection, branch: str, anchor: str) -> None:
         row = db.execute("SELECT hash FROM heads WHERE branch=?", (branch,)).fetchone()
