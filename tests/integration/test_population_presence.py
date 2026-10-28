@@ -2,11 +2,11 @@
 new zone and survives a resume, and a reunion records the household. Each person is
 chosen from the state at the fork, as an operator would pick them.
 
-A reunion that includes someone waiting for support keeps that request in its
-household (#179), and a return or an arrival waits while someone walks to the full
-zone (#180). The xfail test is a defect found while covering these paths (#178): an
-exit that is approved but then fails (#181). A failed precondition calls pytest.fail,
-so it is never mistaken for the expected failure.
+Defects found while covering these paths (#178) are fixed and checked here: a
+reunion that includes someone waiting for support keeps that request in its household
+(#179), a return or an arrival waits while someone walks to the full zone (#180), and
+an exit of someone busy waits until they are free (#181). A failed precondition calls
+pytest.fail, so it is never mistaken for a defect.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import pytest
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity
 from sheltersim.events.effects import EffectProgram, SupportMode, TargetSelector, TimedAction
-from sheltersim.experiments.branch import BranchError
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.projects import digest
@@ -210,12 +209,8 @@ def test_a_reunion_keeps_an_open_support_request_in_its_household(main_line):
     assert {item for _, item in transitions} == {request_household}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#181: an approved exit of someone busy fails at run time and is not retried",
-)
-def test_an_approved_exit_of_someone_waiting_for_support_is_carried_out_or_refused(main_line):
+def test_an_exit_of_someone_waiting_for_support_waits_until_they_are_free(main_line):
+    """The exit used to fail at once and never happen (#181)."""
     _, timeline = main_line
     world = _at_fork(timeline)
     leaver = next(
@@ -223,14 +218,62 @@ def test_an_approved_exit_of_someone_waiting_for_support_is_carried_out_or_refus
     )
     if leaver is None:
         pytest.fail("nobody waits for support at the fork minute")
+    request_id = world.agents[leaver].support_request_id
     program = _presence("exit-waiting", _person(leaver), FORK_MINUTE, action="temporary_exit")
 
-    try:
-        _fork(timeline, "main", "exit-waiting", program)
-    except BranchError:
-        return  # Refused before approval: acceptable.
+    _fork(timeline, "main", "exit-waiting", program)
     world = timeline.advance("exit-waiting", END, checkpoint_interval=30).world
-    assert leaver not in world.agents, "the approved exit never happened"
+
+    assert leaver not in world.agents
+    ((exit_minute, _, _),) = [row for row in _history(world) if row[1] == leaver]
+    attempts = [
+        record
+        for record in world.event_log.records
+        if record.event.event_type == "effect_program_population"
+        and record.realized_minute >= FORK_MINUTE
+    ]
+    assert attempts[0].realized_minute == FORK_MINUTE
+    assert {record.status.value for record in attempts[:-1]} == {"suppressed"}
+    assert "waits until the person is free" in attempts[0].detail
+    assert (attempts[-1].status.value, attempts[-1].realized_minute) == ("applied", exit_minute)
+    request_ends = [
+        row["minute"]
+        for row in world.model_state["shared_operations_v1"]["history"]
+        if row.get("request_id") == request_id and row["status"] in {"completed", "interrupted"}
+    ]
+    assert request_ends and request_ends[0] <= exit_minute, "left only after the request ended"
+
+
+def test_an_exit_still_waiting_at_its_expected_return_is_dropped(main_line):
+    """Leaving after the time to be back makes no sense, so the deferred exit ends (#181)."""
+    _, timeline = main_line
+    world = _at_fork(timeline)
+    leaver = next(
+        (key for key, agent in sorted(world.agents.items()) if agent.support_request_id), None
+    )
+    if leaver is None:
+        pytest.fail("nobody waits for support at the fork minute")
+    program = _presence(
+        "exit-short",
+        _person(leaver),
+        FORK_MINUTE,
+        action="temporary_exit",
+        expected_return_minute=FORK_MINUTE + 1,
+    )
+
+    _fork(timeline, "main", "exit-short", program)
+    world = timeline.advance("exit-short", FORK_MINUTE + 5, checkpoint_interval=30).world
+
+    assert leaver in world.agents
+    attempts = [
+        record
+        for record in world.event_log.records
+        if record.event.event_type == "effect_program_population"
+        and record.realized_minute >= FORK_MINUTE
+    ]
+    assert [record.realized_minute for record in attempts] == [10, 11, 12]
+    assert {record.status.value for record in attempts} == {"suppressed"}
+    assert "not free before the expected return" in attempts[-1].detail
 
 
 @pytest.fixture

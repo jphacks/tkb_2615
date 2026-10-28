@@ -772,7 +772,7 @@ def queue_departures(
         or world.agents[agent_id].support_request_id is not None
     ]
     if busy:
-        _schedule_departure_retry(world, event)
+        schedule_population_retry(world, event)
         raise EventSuppressed("departure waits for the selected residents' active tasks")
     for agent_id in selected:
         _depart_agent(world, agent_id, event, state)
@@ -1197,17 +1197,28 @@ def _event_agent_ids(event: ScheduledEvent) -> set[str]:
     }
 
 
-def _schedule_departure_retry(world: WorldState, event: ScheduledEvent) -> None:
+def schedule_population_retry(
+    world: WorldState,
+    event: ScheduledEvent,
+    *,
+    id_prefix: str = "departure-retry",
+    subject: str = "departure",
+) -> None:
+    """Retry an approved population event next minute, at most 1440 times.
+
+    The retry joins the approved program's scheduled events, so it passes the same
+    approval check. The caller then raises EventSuppressed for this minute.
+    """
     due = world.minute_index + 1
     if due >= world.duration_minutes:
-        raise EventSuppressed("departure could not complete before the scenario ended")
+        raise EventSuppressed(f"{subject} could not complete before the scenario ended")
     retry = event.provenance.get("population_retry", {})
     retry_count = retry.get("count", 0) if isinstance(retry, Mapping) else 0
     if not isinstance(retry_count, int) or retry_count >= 1440:
-        raise EventSuppressed("departure reached the bounded deferral limit")
+        raise EventSuppressed(f"{subject} reached the bounded deferral limit")
     sequence = world.allocate_event_sequence()
     digest = hashlib.sha256(f"{event.event_id}:{sequence}".encode()).hexdigest()[:24]
-    next_id = f"departure-retry-{digest}"
+    next_id = f"{id_prefix}-{digest}"
     provenance = {
         **dict(event.provenance),
         "deferred_from": event.event_id,

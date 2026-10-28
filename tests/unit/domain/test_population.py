@@ -21,7 +21,7 @@ from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import record_action_proposal
 from sheltersim.domain.care_receipts import care_source_ids_for_agent, support_kind_for_agent
-from sheltersim.domain.population import _schedule_departure_retry, admit_pending_arrivals
+from sheltersim.domain.population import admit_pending_arrivals, schedule_population_retry
 from sheltersim.events.effects import (
     EffectProgram,
     EffectProgramGeometryHandler,
@@ -69,7 +69,7 @@ def test_each_retry_counts_one_more_than_the_departure_it_retries(
 ) -> None:
     world = WorldState.from_scenario(generated_scenario)
 
-    _schedule_departure_retry(world, _departure(retry_count))
+    schedule_population_retry(world, _departure(retry_count))
 
     (retry,) = _retries(world)
     assert retry.provenance["population_retry"]["count"] == expected
@@ -82,7 +82,7 @@ def test_a_departure_stops_waiting_after_a_day_of_retries(generated_scenario) ->
     world = WorldState.from_scenario(generated_scenario)
 
     with pytest.raises(EventSuppressed, match="bounded deferral limit"):
-        _schedule_departure_retry(world, _departure(1440))
+        schedule_population_retry(world, _departure(1440))
 
     assert _retries(world) == []
 
