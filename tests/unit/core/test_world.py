@@ -307,3 +307,26 @@ def test_world_rejects_psychology_values_outside_zero_to_one(field: str, value: 
 
     with pytest.raises(StateInvariantError, match=f"invalid {field}"):
         world.validate()
+
+
+def test_state_digest_is_the_storage_digest_of_the_world_document(live_checkpoint_world) -> None:
+    """state_digest() hashes canonical_json() directly; re-encoding to_dict() gives the
+    same text, including escaped and non-ASCII strings and floats."""
+    from sheltersim.events.handlers import EventDispatcher
+    from sheltersim.events.models import EventKind, ScheduledEvent
+    from sheltersim.storage.projects import digest
+
+    world = live_checkpoint_world
+    world.schedule_event(
+        ScheduledEvent(
+            event_id="digest-event",
+            kind=EventKind.EXOGENOUS,
+            due_minute=world.minute_index,
+            priority=0,
+            sequence=world.allocate_event_sequence(),
+            event_type="unknown_digest_test_event",
+            payload={"text": 'quote " back \\\\ line\\n tab\\t 避難所 \\u2028', "x": 0.1 + 0.2},
+        )
+    )
+    EventDispatcher().dispatch_due(world, world.minute_index)
+    assert world.state_digest() == digest(world.to_dict())

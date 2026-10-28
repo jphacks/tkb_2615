@@ -587,7 +587,7 @@ def evaluate_models(
                     "model_versions": model_signatures(scenario.model_configs),
                     "model_configs": scenario.model_configs,
                     "metrics": metrics,
-                    "final_state_hash": digest(world.to_dict()),
+                    "final_state_hash": world.state_digest(),
                     "dataset_checks": [
                         check_dataset(data, scenario, metrics)
                         for data in context["dataset_registry"]["datasets"]

@@ -547,7 +547,7 @@ class ProjectWorkspace:
                         "run_id": run_id,
                         "branch_id": branch_id,
                         "minute": body["minute"],
-                        "state_hash": digest(runtime.world.to_dict()),
+                        "state_hash": runtime.world.state_digest(),
                         "program": program,
                         "hash": result["approved_program_hash"],
                         "can_apply": result["can_apply"],
@@ -594,7 +594,7 @@ class ProjectWorkspace:
                     current = TimelineStore(self.store, project_id, run_id).seek(
                         branch_id, preview["minute"]
                     )
-                    if digest(current.world.to_dict()) != preview["state_hash"]:
+                    if current.world.state_digest() != preview["state_hash"]:
                         raise StorageError("source state changed; preview the intervention again")
                     result = self.api.post(
                         [project_id, "runs", run_id, "branches", branch_id, "fork"],
@@ -644,7 +644,7 @@ class ProjectWorkspace:
                 "schema_version": 1,
                 "branch_id": branch_id,
                 "minute": runtime.world.minute_index,
-                "state_hash": digest(runtime.world.to_dict()),
+                "state_hash": runtime.world.state_digest(),
                 "status": result.status,
                 "markdown": render_review_markdown(result),
                 "review": result.to_dict(),

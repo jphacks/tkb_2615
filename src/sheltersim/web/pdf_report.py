@@ -167,7 +167,7 @@ def collect_report(
                 "branch_id": key,
                 "minute": minute,
                 "population": len(runtime.world.agents),
-                "state_hash": digest(runtime.world.to_dict()),
+                "state_hash": runtime.world.state_digest(),
                 "final": {m[0]: final.get(m[0]) for m in METRICS},
                 "series": series,
                 "events": events,
