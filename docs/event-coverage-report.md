@@ -60,4 +60,4 @@ proxyは限定的です。Zone内action選択や休息回復のmodifierは、来
 - 評価module自体は0.46秒。fake Providerはlatency/costを発生させません。
 - 変更がevaluation fixture/compiler testのみだったため、その時点では7日long_simulation suiteを省略しました。simulation core、Scenario入力、event、Policy、Branch、Checkpoint、replay fixture、test設定は変更していません。
 
-上記は2026-10-12時点の過去記録です。現行HEAD全体のtest結果はtesting.mdを参照してください。
+上記は2026-10-12時点の過去記録です。テストの実行方法と結果の見方はtesting.mdを参照してください。

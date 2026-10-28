@@ -125,4 +125,4 @@ live連携testは標準testとは別で、`tests/live/test_live_api.py`にあり
 ~~~shell
 SHELTERSIM_ALLOW_LIVE_API_TESTS=1 scripts/test-live-api.sh -k opus_sonnet_and_haiku
 SHELTERSIM_ALLOW_LIVE_API_TESTS=1 scripts/test-live-api.sh --collect-only -q
-~~~offline test結果はtesting.mdを参照してください。
+~~~offline testの実行方法と結果の見方はtesting.mdを参照してください。
