@@ -45,20 +45,19 @@ def record_distress_monitor_tick(
 
         was_high = previous >= threshold
         is_high = current >= threshold
+        if run > 0.0 and not (was_high and is_high):
+            # Distress fell below the threshold in this update or, when the previous
+            # value is already low, while events were handled before it (#159).
+            recovered_total += run
+            recovered_count += 1.0
+            run = 0.0
         if is_high:
             if run == 0.0:
                 run = 1.0
                 episodes += 1.0
-            elif was_high:
-                run += 1.0
             else:
-                run = 1.0
-                episodes += 1.0
+                run += 1.0
             longest = max(longest, run)
-        elif was_high and run > 0.0:
-            recovered_total += run
-            recovered_count += 1.0
-            run = 0.0
 
         metrics[f"{key}:current_run"] = run
         metrics[f"{key}:longest_run"] = longest

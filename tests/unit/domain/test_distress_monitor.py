@@ -90,3 +90,44 @@ def test_online_distress_monitor_tracks_high_runs_recovery_and_reascent() -> Non
     assert summary["longest_high_distress_run_minutes"] == 2
     assert summary["completed_recovery_count"] == 1
     assert summary["mean_completed_recovery_minutes"] == 2.0
+
+
+def test_a_fall_below_the_threshold_during_event_handling_closes_the_run() -> None:
+    """Staff support can lower distress before the psychology update (#159)."""
+    metrics: dict[str, float] = {}
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A001": 0.8}, current_by_agent={"A001": 0.75}, threshold=0.7
+    )
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A001": 0.75}, current_by_agent={"A001": 0.72}, threshold=0.7
+    )
+    # An event lowered distress to 0.69 between the two updates.
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A001": 0.69}, current_by_agent={"A001": 0.68}, threshold=0.7
+    )
+
+    summary = distress_monitor_summary(metrics)
+    assert summary["completed_recovery_count"] == 1
+    assert summary["mean_completed_episode_duration_minutes"] == 2.0
+    assert summary["ongoing_high_distress_episode_count"] == 0
+
+
+def test_a_fall_during_event_handling_and_a_rise_in_the_same_update_are_two_episodes() -> None:
+    """The fall is observed before the update, so the earlier run ends there (#159)."""
+    metrics: dict[str, float] = {}
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A001": 0.8}, current_by_agent={"A001": 0.75}, threshold=0.7
+    )
+    # An event lowered distress to 0.69; the update raises it above the threshold again.
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A001": 0.69}, current_by_agent={"A001": 0.71}, threshold=0.7
+    )
+
+    summary = distress_monitor_summary(metrics)
+    assert summary["high_distress_episode_count"] == 2
+    assert summary["completed_recovery_count"] == 1
+    assert summary["mean_completed_episode_duration_minutes"] == 1.0
+    assert summary["ongoing_episode_elapsed_minutes_by_agent"] == [
+        {"agent_id": "A001", "elapsed_minutes": 1}
+    ]
+    assert summary["high_distress_reascent_count"] == 1
