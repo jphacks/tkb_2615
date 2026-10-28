@@ -15,7 +15,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from http.client import IncompleteRead
+from http.client import HTTPException, IncompleteRead
 from threading import RLock
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -114,7 +114,9 @@ def _get_json(url: str) -> Any:
             body = response.read(_MAX_RESPONSE_BYTES + 1)
     except HTTPError as exc:
         raise RegionProviderError(f"public-data endpoint returned HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, socket.timeout) as exc:
+    except (URLError, TimeoutError, socket.timeout, OSError, HTTPException) as exc:
+        # urllib wraps only connection errors; a connection dropped before the response
+        # (RemoteDisconnected) or a body cut short (IncompleteRead) arrive raw (#208).
         raise RegionProviderError("public-data endpoint could not be reached") from exc
     if len(body) > _MAX_RESPONSE_BYTES:
         raise RegionProviderError("public-data response exceeded the 2 MB safety limit")
@@ -128,6 +130,13 @@ def _get_json(url: str) -> Any:
         while len(_JSON_CACHE) > _CACHE_MAX_ENTRIES:
             _JSON_CACHE.popitem(last=False)
     return deepcopy(document)
+
+
+def _get_json_object(url: str) -> dict[str, Any]:
+    document = _get_json(url)
+    if not isinstance(document, dict):
+        raise RegionProviderError("public-data endpoint returned JSON that is not an object")
+    return document
 
 
 @dataclass(frozen=True)
@@ -574,7 +583,7 @@ class EStatProvider:
             f"{self.base_url}/getStatsList?"
             f"{urlencode({'appId': self.app_id, 'searchWord': query, 'limit': limit})}"
         )
-        root = _get_json(url).get("GET_STATS_LIST", {})
+        root = _get_json_object(url).get("GET_STATS_LIST", {})
         if not isinstance(root, dict):
             return ()
         data = root.get("DATALIST_INF", {})
@@ -607,7 +616,7 @@ class EStatProvider:
             return {}
         if not table_id.strip():
             raise ValueError("an e-Stat table ID must be selected")
-        document = _get_json(
+        document = _get_json_object(
             f"{self.base_url}/getMetaInfo?"
             f"{urlencode({'appId': self.app_id, 'statsDataId': table_id})}"
         )
@@ -705,7 +714,7 @@ class EStatProvider:
                     "e-Stat category selections must use a catNN dimension and a class code"
                 )
             params[f"cdCat{match.group(1)}"] = code
-        response_document = _get_json(f"{self.base_url}/getStatsData?{urlencode(params)}")
+        response_document = _get_json_object(f"{self.base_url}/getStatsData?{urlencode(params)}")
         response_sha256 = hashlib.sha256(
             json.dumps(
                 response_document, sort_keys=True, ensure_ascii=False, separators=(",", ":")
