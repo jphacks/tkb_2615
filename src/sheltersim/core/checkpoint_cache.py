@@ -55,6 +55,12 @@ class CanonicalEncoder:
         for container in containers:
             self._containers[id(container)] = container
 
+    def remember(self, value: Any, raw: bytes, *containers: dict[str, Any]) -> None:
+        """Use raw, the canonical_bytes() of value, for value inside containers."""
+        self._encoded[id(value)] = (value, raw)
+        for container in containers:
+            self._containers[id(container)] = container
+
     def spliced_lists(self) -> list[list[Any]]:
         """The spliced lists; their item documents are never changed."""
         return [value for value, _ in self._lists.values()]
