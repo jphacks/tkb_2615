@@ -40,11 +40,12 @@ def _branch_frames(
     timeline: TimelineStore, run_id: str, ref: Any, start: int, end: int
 ) -> list[dict[str, Any]]:
     # Each replayed minute's state hash is world.state_digest(). The history cache of
-    # Checkpoint saves (#44) gives the same bytes and converts only the history added
-    # since the previous minute instead of encoding the whole world each minute.
+    # Checkpoint saves (#44), seeded with the EventLog of the Checkpoint the replay
+    # starts from, gives the same bytes and converts only the history added since
+    # instead of encoding the whole world each minute.
     history = CheckpointHistoryCache()
     frames = []
-    for world in timeline.iter_worlds(ref.branch_id, start, end):
+    for world in timeline.iter_worlds(ref.branch_id, start, end, history_cache=history):
         world.validate()
         document, _, encoder = history.documents(world, None)
         frames.append(
