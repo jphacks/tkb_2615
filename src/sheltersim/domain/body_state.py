@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import re
@@ -201,6 +202,24 @@ def create_body_state(world: WorldState) -> dict[str, Any]:
     }
 
 
+def _relationship_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
+    """None if key is not JSON, else (its two items if it is a list of two, whether
+    key is their compact JSON)."""
+    try:
+        pair = json.loads(key)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(pair, list) or len(pair) != 2:
+        return None, False
+    return tuple(pair), json.dumps(pair, separators=(",", ":")) == key
+
+
+# Every validation, which runs at every tick, parses the same relationship keys, and
+# the parse depends on the key alone (#228). Whether the people exist is checked
+# every time.
+_cached_relationship_key = functools.lru_cache(maxsize=65_536)(_relationship_key)
+
+
 def validate_body_state(world: WorldState, *, validate_event_history: bool = True) -> None:
     """Reject partial state, unknown people, out-of-range values and malformed evidence."""
     state = world.model_state.get(BODY_STATE_KEY)
@@ -310,16 +329,15 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
             ):
                 raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
     for key, record in state["relationships"].items():
-        try:
-            pair = json.loads(key)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("body_state_v1 relationship key is invalid") from exc
+        parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
+        if parsed is None:
+            raise ValueError("body_state_v1 relationship key is invalid")
+        pair, compact = parsed
         if (
-            not isinstance(pair, list)
-            or len(pair) != 2
+            pair is None
             or any(item not in world.agents for item in pair)
             or pair[0] == pair[1]
-            or json.dumps(pair, separators=(",", ":")) != key
+            or not compact
             or not isinstance(record, dict)
             or set(record)
             != {

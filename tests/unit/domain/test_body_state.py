@@ -106,3 +106,60 @@ def test_a_saved_config_is_accepted_as_the_reduced_canonical_configs_were(body_w
         accepted += expected
     # Both outcomes occur.
     assert 0 < accepted < len(candidates)
+
+
+def _relationship_outcome_before(world: WorldState, key: object) -> str:
+    """The key check before #228, which parsed and wrote back every key."""
+    import json
+
+    try:
+        pair = json.loads(key)  # type: ignore[arg-type]
+    except (TypeError, json.JSONDecodeError):
+        return "body_state_v1 relationship key is invalid"
+    if (
+        not isinstance(pair, list)
+        or len(pair) != 2
+        or any(item not in world.agents for item in pair)
+        or pair[0] == pair[1]
+        or json.dumps(pair, separators=(",", ":")) != key
+    ):
+        return "body_state_v1 relationship record is invalid"
+    return "valid"
+
+
+def test_each_relationship_key_is_judged_as_before_every_time(body_world) -> None:
+    """A key's parse is remembered; whether its people exist is checked every time."""
+    world = body_world
+    first, second = sorted(world.agents)[:2]
+    record = {
+        "contact_count": 1,
+        "trust": 0.5,
+        "contact_minutes": 2,
+        "last_contact_minute": 0,
+        "last_interaction": None,
+        "topic_ids": [],
+    }
+    keys = [
+        f'["{first}","{second}"]',
+        f'["{second}","{first}"]',
+        f'["{first}","{first}"]',
+        f'["{first}","nobody"]',
+        f'[ "{first}","{second}"]',
+        f'["{first}"]',
+        f'["{first}","{second}","{first}"]',
+        f'{{"{first}":"{second}"}}',
+        "[",
+        "",
+        7,
+    ]
+    state = world.model_state[BODY_STATE_KEY]
+    for key in keys:
+        expected = _relationship_outcome_before(world, key)
+        for _ in range(2):
+            state["relationships"] = {key: dict(record)}
+            try:
+                validate_body_state(world)
+                outcome = "valid"
+            except ValueError as error:
+                outcome = str(error)
+            assert outcome == expected, key
