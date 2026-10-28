@@ -140,8 +140,8 @@ def test_a_traced_drawing_is_approved_and_read_back_bound_to_its_raster(drawn_pl
 def test_reviewed_candidates_become_a_geometry_of_the_accepted_features_only(
     ui_project_api, upload_plan
 ):
-    # Three rooms side by side; only the middle one is a room candidate (#200).
-    api, asset = ui_project_api, upload_plan(ui_project_api, rooms_plan_png(2))
+    # One room inside the outer walls, which is its only room candidate.
+    api, asset = ui_project_api, upload_plan(ui_project_api, rooms_plan_png(0))
     extracted = _plan_preview(api, asset, {"operation": "extract"})
     features = extracted["value"]["features"]
     (room,) = [item for item in features if item["feature_kind"] == "zone"]

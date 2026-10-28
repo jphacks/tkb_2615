@@ -50,9 +50,6 @@ def test_walls_and_doorways_of_a_drawn_plan_are_pending_low_confidence_candidate
     assert doorways == [(200, 70, 200, 90), (200, 200, 200, 220)]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="#200: a room bounded by an outer wall is never a room candidate"
-)
 @pytest.mark.parametrize("partitions", [0, 1, 2])
 def test_every_room_of_a_drawn_plan_is_a_room_candidate(partitions):
     proposal = _extract(rooms_plan_png(partitions))
@@ -74,7 +71,8 @@ def test_a_pdf_plan_is_extracted_from_the_chosen_page():
     second = _extract(content, "application/pdf", page_index=1)
 
     assert {item.page_index for item in first.features} == {0}
-    assert len(first.features) == 10
+    # The walls and doorways, and the whole building as a room: the partition has doors.
+    assert len(first.features) == 11
     assert second.features == ()
     with pytest.raises(ValueError, match="selected PDF page does not exist"):
         _extract(content, "application/pdf", page_index=2)
