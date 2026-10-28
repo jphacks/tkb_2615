@@ -16,7 +16,6 @@ from sheltersim.domain.population_lifecycle import current_household_id
 from sheltersim.domain.resources import resource_metric_values
 from sheltersim.domain.staff import support_wait_reason_codes, support_waited_minutes
 from sheltersim.experiments.metrics import MetricSnapshot
-from sheltersim.storage.projects import digest
 
 
 def world_frame(
@@ -211,7 +210,7 @@ def world_frame(
         branch_id=branch_id,
         minute=world.minute_index,
         computed_until=computed_until,
-        state_hash=state_hash if state_hash is not None else digest(world.to_dict()),
+        state_hash=state_hash if state_hash is not None else world.state_digest(),
         agents=tuple(agents),
         kpis=kpis,
         events=tuple(events),

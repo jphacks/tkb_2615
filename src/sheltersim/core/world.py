@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 from copy import deepcopy
@@ -1432,6 +1433,11 @@ class WorldState:
     def to_dict(self) -> dict[str, Any]:
         """Return a detached JSON-compatible snapshot of the whole world."""
         return json.loads(self.canonical_json())
+
+    def state_digest(self) -> str:
+        """The SHA-256 of canonical_json(): storage digest(to_dict()), whose canonical
+        JSON is the same text, without parsing it back and encoding it again."""
+        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
 
     @classmethod
     def from_dict(
