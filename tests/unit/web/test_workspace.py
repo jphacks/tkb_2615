@@ -583,20 +583,11 @@ def test_a_preview_survives_a_public_service_dropping_the_connection(
     assert len(preview["research"]["shelters"]) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#209: a total row makes the selected statistics unused, and nobody is told",
-)
-def test_selected_statistics_with_a_total_row_are_used_or_reported(
-    researching_project_api, generated_request, public_data
-) -> None:
+def _selected_statistics_preview(api, generated_request) -> dict:
     from support.public_data import ESTAT_PERIOD_CODE, ESTAT_TABLE_ID, MUNICIPALITY_CODE
 
-    # Most e-Stat population tables count everyone in a 総数 class of the age axis.
-    public_data.age_classes.insert(0, ("000", "総数", "5000"))
-
-    preview = _researched_preview(
-        researching_project_api,
+    return _researched_preview(
+        api,
         generated_request,
         municipality_code=MUNICIPALITY_CODE,
         estat_stats_data_id=ESTAT_TABLE_ID,
@@ -604,10 +595,44 @@ def test_selected_statistics_with_a_total_row_are_used_or_reported(
         estat_period_code=ESTAT_PERIOD_CODE,
     )
 
-    if len(preview["research"]["population_observations"]) != 4:
-        pytest.fail("the total row and the three age rows must be fetched")
-    distribution = preview["scenario"]["provenance"]["population_generation"][
-        "evacuee_age_distribution"
+
+def test_selected_statistics_with_a_total_row_are_used_without_it(
+    researching_project_api, generated_request, public_data
+) -> None:
+    # Most e-Stat population tables count everyone in a 総数 class of the age axis.
+    # Before #209 the statistics were then dropped for assumed ages, and nobody was told.
+    public_data.age_classes.insert(0, ("000", "総数", "5000"))
+
+    preview = _selected_statistics_preview(researching_project_api, generated_request)
+
+    assert len(preview["research"]["population_observations"]) == 4
+    generation = preview["scenario"]["provenance"]["population_generation"]
+    assert generation["evacuee_age_distribution"]["65歳以上"] == 1.0
+    assert "統計の合計の行（総数）を除いて年齢構成に使いました。" in preview["warnings"]
+
+
+def test_selected_statistics_with_subtotals_are_unused_and_reported(
+    researching_project_api, generated_request, public_data
+) -> None:
+    # Five-year bands beside their subtotal 15歳未満 overlap. Before #209 they reached
+    # the population generator, which refused them and failed the whole preview.
+    public_data.age_classes[:] = [
+        ("101", "0～4歳", "10"),
+        ("102", "5～9歳", "10"),
+        ("103", "10～14歳", "10"),
+        ("150", "15歳未満", "30"),
+        ("200", "15～64歳", "50"),
+        ("300", "65歳以上", "20"),
     ]
-    told = any("e-Stat" in warning or "統計" in warning for warning in preview["warnings"])
-    assert distribution.get("65歳以上") == 1.0 or told
+
+    preview = _selected_statistics_preview(researching_project_api, generated_request)
+
+    assert preview["can_start"], preview["approval_blockers"]
+    generation = preview["scenario"]["provenance"]["population_generation"]
+    assert {source for band in generation["age_bands"] for source in band["source_ids"]} == {
+        "ASM-SYNTHETIC-AGE-BANDS-V1"
+    }
+    assert any(
+        warning.startswith("取得した統計（6行）は、年齢構成にも世帯人数にも使えません")
+        for warning in preview["warnings"]
+    )

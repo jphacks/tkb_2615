@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from typing import Iterable, Literal
 
 from pydantic import Field, model_validator
@@ -1604,25 +1605,38 @@ def _draw_age_with_constraints(
     return lower + min(span - 1, int(rng.random("population", profile_id, "age_years") * span))
 
 
-def age_bands_from_observations(
-    observations: Iterable[StatisticalObservation], *, dimension_id: str | None = None
-) -> tuple[AgeBand, ...]:
-    """Use e-Stat age rows only when labels and counts form one unambiguous age axis."""
-    rows = tuple(observations)
-    if not rows:
-        return ()
-    candidate_dimensions = (
-        (dimension_id,)
-        if dimension_id is not None
-        else tuple(sorted({key for row in rows for key in row.category_labels}))
-    )
-    valid: list[tuple[AgeBand, ...]] = []
-    for candidate in candidate_dimensions:
+# e-Stat lists the total of an axis as one more class. It is not a band, and counting
+# it would double the population, so a row labelled exactly so is left out (#209).
+_TOTAL_LABELS = frozenset({"総数", "総計", "合計", "計"})
+
+
+def _is_total(label: str) -> bool:
+    return unicodedata.normalize("NFKC", label).strip() in _TOTAL_LABELS
+
+
+def _candidate_dimensions(
+    rows: tuple[StatisticalObservation, ...], dimension_id: str | None
+) -> tuple[str, ...]:
+    if dimension_id is not None:
+        return (dimension_id,)
+    return tuple(sorted({key for row in rows for key in row.category_labels}))
+
+
+def _age_axes(
+    rows: tuple[StatisticalObservation, ...], dimension_id: str | None
+) -> list[tuple[tuple[AgeBand, ...], tuple[str, ...]]]:
+    """Each dimension whose rows form one age axis, with the total rows it left out."""
+    valid: list[tuple[tuple[AgeBand, ...], tuple[str, ...]]] = []
+    for candidate in _candidate_dimensions(rows, dimension_id):
         bands: list[AgeBand] = []
-        seen_ranges: set[tuple[int, int]] = set()
+        totals: list[str] = []
+        seen_ranges: list[tuple[int, int]] = []
         source_valid = True
         for row in rows:
             label = row.category_labels.get(candidate, "")
+            if _is_total(label):
+                totals.append(label)
+                continue
             age_range = _parse_age_range(label)
             unit = (row.unit or "").casefold()
             scale = {
@@ -1643,11 +1657,12 @@ def age_bands_from_observations(
             ):
                 source_valid = False
                 break
-            if age_range in seen_ranges:
-                # Repeated age bands often mean an unselected sex or other dimension.
+            if any(low <= age_range[1] and age_range[0] <= high for low, high in seen_ranges):
+                # A repeated band often means an unselected sex or other dimension, and
+                # an overlapping one a subtotal such as 15歳未満 beside 0～4歳.
                 source_valid = False
                 break
-            seen_ranges.add(age_range)
+            seen_ranges.append(age_range)
             bands.append(
                 AgeBand(
                     label=label,
@@ -1658,30 +1673,39 @@ def age_bands_from_observations(
                 )
             )
         if source_valid and bands:
-            valid.append(tuple(sorted(bands, key=lambda item: item.age_min)))
-    if len(valid) != 1:
-        return ()
-    return valid[0] if sum(item.population_count for item in valid[0]) > 0 else ()
+            valid.append((tuple(sorted(bands, key=lambda item: item.age_min)), tuple(totals)))
+    return valid
 
 
-def household_mix_from_observations(
+def age_bands_from_observations(
     observations: Iterable[StatisticalObservation], *, dimension_id: str | None = None
-) -> HouseholdSizeMix | None:
-    """Convert an unambiguous count of households by household-size category to weights."""
-    rows = tuple(observations)
-    if not rows:
-        return None
-    candidate_dimensions = (
-        (dimension_id,)
-        if dimension_id is not None
-        else tuple(sorted({key for row in rows for key in row.category_labels}))
-    )
-    valid: list[HouseholdSizeMix] = []
-    for candidate in candidate_dimensions:
+) -> tuple[AgeBand, ...]:
+    """Use e-Stat age rows only when labels and counts form one unambiguous age axis.
+
+    Rows of the axis's total (総数) are left out; any other row that is not an age band,
+    or bands that repeat or overlap, leave the statistics unused.
+    """
+    axes = _age_axes(tuple(observations), dimension_id)
+    if len(axes) != 1:
+        return ()
+    bands = axes[0][0]
+    return bands if sum(item.population_count for item in bands) > 0 else ()
+
+
+def _household_axes(
+    rows: tuple[StatisticalObservation, ...], dimension_id: str | None
+) -> list[tuple[HouseholdSizeMix, tuple[str, ...]]]:
+    """Each dimension whose rows count households by size, with the total rows left out."""
+    valid: list[tuple[HouseholdSizeMix, tuple[str, ...]]] = []
+    for candidate in _candidate_dimensions(rows, dimension_id):
         counts: dict[int, float] = {}
+        totals: list[str] = []
         source_ids: set[str] = set()
         for row in rows:
             label = row.category_labels.get(candidate, "").strip()
+            if _is_total(label):
+                totals.append(label)
+                continue
             match = re.fullmatch(r"(\d+)\s*人(?:世帯)?", label)
             unit = (row.unit or "").casefold()
             if (
@@ -1712,12 +1736,51 @@ def household_mix_from_observations(
             source_ids.add(row.source_id)
         if counts and sum(counts.values()) > 0:
             valid.append(
-                HouseholdSizeMix(
-                    size_weights=counts,
-                    source_ids=tuple(sorted(source_ids)),
+                (
+                    HouseholdSizeMix(size_weights=counts, source_ids=tuple(sorted(source_ids))),
+                    tuple(totals),
                 )
             )
-    return valid[0] if len(valid) == 1 else None
+    return valid
+
+
+def household_mix_from_observations(
+    observations: Iterable[StatisticalObservation], *, dimension_id: str | None = None
+) -> HouseholdSizeMix | None:
+    """Convert an unambiguous count of households by household-size category to weights.
+
+    Rows of the axis's total (総数) are left out, as for age bands.
+    """
+    axes = _household_axes(tuple(observations), dimension_id)
+    return axes[0][0] if len(axes) == 1 else None
+
+
+def population_statistics_notes(observations: Iterable[StatisticalObservation]) -> tuple[str, ...]:
+    """Tell the operator how fetched statistics shaped the population, or that they did not.
+
+    A Scenario falls back to assumed ages and household sizes when the statistics cannot
+    be read, so saying nothing would let the operator believe they were used (#209).
+    """
+    rows = tuple(observations)
+    if not rows:
+        return ()
+    used: list[tuple[str, tuple[str, ...]]] = []
+    if age_bands_from_observations(rows):
+        used.append(("年齢構成", _age_axes(rows, None)[0][1]))
+    if household_mix_from_observations(rows) is not None:
+        used.append(("世帯人数", _household_axes(rows, None)[0][1]))
+    if not used:
+        return (
+            f"取得した統計（{len(rows)}行）は、年齢構成にも世帯人数にも使えませんでした。"
+            "Scenarioは仮定の年齢構成・世帯人数を使っています。年齢・世帯人数として読めない区分"
+            "（不詳など）、範囲が重なる区分（小計など）、同じ区分の重なり（男女別など選んでいない"
+            "分類）がないかを確かめ、分類を選んで取り直してください。",
+        )
+    return tuple(
+        f"統計の合計の行（{'、'.join(sorted(set(totals)))}）を除いて{kind}に使いました。"
+        for kind, totals in used
+        if totals
+    )
 
 
 def _draw_weighted_size(draw: float, mix: HouseholdSizeMix) -> int:
