@@ -53,6 +53,7 @@ from sheltersim.region.population import (
     HouseholdSizeMix,
     PopulationConditionInput,
     SyntheticPopulationGenerator,
+    population_statistics_notes,
 )
 
 
@@ -1673,7 +1674,11 @@ class InitialScenarioBuilder:
 def _research_warnings(research: RegionResearchResult | None) -> tuple[str, ...]:
     if research is None:
         return ("地域調査結果が添付されていません。自治体・災害情報は未確認です。",)
-    return tuple((*research.unknowns, *research.warnings))
+    return (
+        *research.unknowns,
+        *research.warnings,
+        *population_statistics_notes(research.population_observations),
+    )
 
 
 def _apply_selected_policy_parameter_overrides(
