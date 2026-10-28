@@ -240,6 +240,17 @@ class Checkpoint:
     @classmethod
     def from_dict(cls, document: dict[str, Any]) -> Checkpoint:
         """Load a checkpoint only when both independent schemas and hashes match."""
+        return cls._load(deepcopy(document))[0]
+
+    @classmethod
+    def _load(
+        cls, document: dict[str, Any]
+    ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder]]:
+        """from_dict() of a document the caller hands over, and the restore it checked.
+
+        The Checkpoint keeps document's objects, so the caller must not use them
+        afterwards. The restored world and metrics are what restore_state() returns.
+        """
         expected_fields = {
             "schema_version",
             "world_state_schema_version",
@@ -258,9 +269,8 @@ class Checkpoint:
             raise CheckpointError(
                 f"unsupported checkpoint schema version: {document.get('schema_version')!r}"
             )
-        checkpoint = cls(**deepcopy(document))
-        checkpoint._validate()
-        return checkpoint
+        checkpoint = cls(**document)
+        return checkpoint, checkpoint._validate()
 
     @classmethod
     def from_json(cls, value: str) -> Checkpoint:

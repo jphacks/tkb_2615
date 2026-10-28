@@ -24,6 +24,8 @@ from sheltersim.contracts.api import BranchReference, EvidenceReference, RunRefe
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import CheckpointArchive
 
@@ -635,26 +637,45 @@ class ProjectStore:
     def load_branch(
         self, project_id: str, run_id: str, branch_id: str
     ) -> tuple[BranchReference, Checkpoint]:
+        reference, checkpoint, _ = self.load_restored_branch(project_id, run_id, branch_id)
+        # load_checkpoint already validated hashes, model compatibility and the
+        # WorldState/metrics restore; callers restore again only if they need objects.
+        return reference, checkpoint
+
+    def load_restored_branch(
+        self, project_id: str, run_id: str, branch_id: str
+    ) -> tuple[BranchReference, Checkpoint, tuple[WorldState, MetricsRecorder]]:
+        """load_branch(), and the world and metrics restored from its head."""
         reference = BranchReference.model_validate(
             self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json"))
         )
-        checkpoint = self.load_checkpoint(project_id, run_id, reference.checkpoint_hash)
+        checkpoint, restored = self.load_restored_checkpoint(
+            project_id, run_id, reference.checkpoint_hash
+        )
         if (
             checkpoint.checkpoint_hash != reference.checkpoint_hash
             or checkpoint.simulation_minute != reference.computed_until
         ):
             raise StorageError("branch checkpoint pointer is corrupt")
-        # load_checkpoint already validated hashes, model compatibility and the
-        # WorldState/metrics restore; callers restore again only if they need objects.
-        return reference, checkpoint
+        return reference, checkpoint, restored
 
     def load_checkpoint(self, project_id: str, run_id: str, checkpoint_hash: str) -> Checkpoint:
+        return self.load_restored_checkpoint(project_id, run_id, checkpoint_hash)[0]
+
+    def load_restored_checkpoint(
+        self, project_id: str, run_id: str, checkpoint_hash: str
+    ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder]]:
+        """load_checkpoint(), and the world and metrics its validation restored.
+
+        They are what restore_state() returns, without restoring the Checkpoint again.
+        """
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         document = self._read(path)
         try:
             if document.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
-                return CheckpointArchive(path.parent).decode(document)
-            return Checkpoint.from_dict(document)
+                return CheckpointArchive(path.parent).decode_restored(document)
+            # _read parsed the file just now, so the document is not shared.
+            return Checkpoint._load(document)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
 

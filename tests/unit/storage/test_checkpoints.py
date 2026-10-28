@@ -104,3 +104,33 @@ def test_archive_of_a_cached_capture_is_byte_identical(
         assert (tmp_path / "cached" / "chunks" / name).read_bytes() == (
             tmp_path / "plain" / "chunks" / name
         ).read_bytes()
+
+
+def test_a_loaded_checkpoint_is_restored_once_and_shares_nothing_with_its_restore(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """A load hands over the world its validation restored instead of restoring twice."""
+    from sheltersim.experiments.branch import BranchRuntime
+
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    reference = store.branch_reference("p", "r", "main")
+    expected = store.load_checkpoint("p", "r", reference.checkpoint_hash)
+    original = WorldState.from_dict.__func__
+    restores = []
+
+    def from_dict(cls, document, **kwargs):
+        restores.append(document["minute_index"])
+        return original(cls, document, **kwargs)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
+    checkpoint, restored = store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
+    runtime = BranchRuntime.from_checkpoint(checkpoint, branch_id="main", _restored=restored)
+    assert restores == [30]
+    assert checkpoint.to_json() == expected.to_json()
+    world, metrics = expected.restore_state()
+    assert runtime.world.canonical_json() == world.canonical_json()
+    assert runtime.metrics.to_dict() == metrics.to_dict()
+    runtime.world.metric_state["test_only"] = 1.0
+    runtime.metrics.snapshots.clear()
+    assert checkpoint.to_json() == expected.to_json()

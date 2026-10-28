@@ -272,8 +272,8 @@ class BranchRuntime:
     ) -> BranchRuntime:
         """Create an isolated child; no mutable world structures are shared.
 
-        _restored is the world and metrics Checkpoint.capture_restored() built for
-        this checkpoint; they are used instead of restoring it again.
+        _restored is the world and metrics Checkpoint.capture_restored() or a load
+        built for this checkpoint; they are used instead of restoring it again.
         """
         branch_id = _validate_identifier("branch_id", branch_id)
         metadata = checkpoint.runtime_state.get("branch", {})

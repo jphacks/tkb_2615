@@ -15,7 +15,8 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_time
     store, _ = saved_timeline(tmp_path)
     head = store.branch_reference("p", "r", "main").checkpoint_hash
     loads, validations = [], []
-    load, validate = ProjectStore.load_checkpoint, Checkpoint._validate
+    # Every load, load_branch() included, decodes through load_restored_checkpoint().
+    load, validate = ProjectStore.load_restored_checkpoint, Checkpoint._validate
 
     def counted_load(self, project_id, run_id, checkpoint_hash):
         loads.append(checkpoint_hash)
@@ -26,7 +27,7 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_time
             validations.append(1)
         return validate(self, *args, **kwargs)
 
-    monkeypatch.setattr(ProjectStore, "load_checkpoint", counted_load)
+    monkeypatch.setattr(ProjectStore, "load_restored_checkpoint", counted_load)
     monkeypatch.setattr(Checkpoint, "_validate", counted_validate)
     api = ProjectAPI(store)
     # The pool has one worker. Holding it keeps the queued computation from starting, so
@@ -43,6 +44,6 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_time
         release.set()
         api.close()
     assert store.branch_reference("p", "r", "main").computed_until == 5
-    # One decode with its validation, then one restore into the runtime.
+    # One decode; its validation restores the world the runtime continues (#46).
     assert loads == [head]
-    assert len(validations) == 2
+    assert len(validations) == 1

@@ -14,6 +14,8 @@ from typing import Any, Callable
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.world import WorldState
+from sheltersim.experiments.metrics import MetricsRecorder
 
 _HASH = re.compile(r"^[a-f0-9]{64}$")
 
@@ -237,11 +239,18 @@ class CheckpointArchive:
         raise CheckpointError("unsupported checkpoint archive node")
 
     def decode(self, record: dict[str, Any]) -> Checkpoint:
+        return self.decode_restored(record)[0]
+
+    def decode_restored(
+        self, record: dict[str, Any]
+    ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder]]:
+        """decode(), and the world and metrics its restore check built."""
         self._validate_manifest(record)
-        checkpoint = Checkpoint.from_dict(self._unpack(record["document"]))
+        # Each chunk is parsed anew, so the unpacked document is not shared.
+        checkpoint, restored = Checkpoint._load(self._unpack(record["document"]))
         if checkpoint.checkpoint_hash != record["checkpoint_hash"]:
             raise CheckpointError("checkpoint archive pointer hash mismatch")
-        return checkpoint
+        return checkpoint, restored
 
     def document(self, record: dict[str, Any]) -> dict[str, Any]:
         """Verify original logical hashes without interpreting a newer model schema.
