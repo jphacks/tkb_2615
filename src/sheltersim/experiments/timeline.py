@@ -412,6 +412,10 @@ class TimelineStore:
         return nearest
 
     def seek(self, branch_id: str, minute: int) -> BranchRuntime:
+        return self._seek(branch_id, minute)[0]
+
+    def _seek(self, branch_id: str, minute: int) -> tuple[BranchRuntime, Checkpoint]:
+        """seek(), and the saved Checkpoint its runtime was restored from."""
         reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
         if (
             type(minute) is not int
@@ -431,7 +435,7 @@ class TimelineStore:
             _restored=restored,
         )
         if minute == checkpoint.simulation_minute:
-            return runtime
+            return runtime, checkpoint
         start = checkpoint.runtime_state.get("llm")
         head_fields = self.store.checkpoint_fields(
             self.project_id, self.run_id, reference.checkpoint_hash, ("runtime_state",)
@@ -454,14 +458,28 @@ class TimelineStore:
         )
         if router is not None:
             runtime.runtime_state["llm"] = router.snapshot_state()
-        return runtime
+        return runtime, checkpoint
 
-    def iter_worlds(self, branch_id: str, start: int, end: int) -> Any:
-        """Sequential observational replay. Yielded worlds are reused; consume immediately."""
+    def iter_worlds(
+        self,
+        branch_id: str,
+        start: int,
+        end: int,
+        *,
+        history_cache: CheckpointHistoryCache | None = None,
+    ) -> Any:
+        """Sequential observational replay. Yielded worlds are reused; consume immediately.
+
+        A history_cache is seeded with the EventLog of the Checkpoint the replay
+        starts from, for a caller that captures documents of the yielded worlds.
+        """
         reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
         if not reference.fork_minute <= start <= end <= reference.computed_until:
             raise TimelineError("replay interval outside computed range")
-        runtime = self.seek(branch_id, start)
+        runtime, checkpoint = self._seek(branch_id, start)
+        if history_cache is not None:
+            events = checkpoint.world_state["event_log"]
+            history_cache.seed_events(runtime.world.event_log.records[: len(events)], events)
         # Observe the exact saved boundary before controller initialization can
         # install any missing optional state. A one-frame read needs no controller.
         yield runtime.world
