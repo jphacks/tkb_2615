@@ -2,10 +2,11 @@
 new zone and survives a resume, and a reunion records the household. Each person is
 chosen from the state at the fork, as an operator would pick them.
 
-The xfail tests are defects found while covering these paths (#178): a reunion that
-includes someone waiting for support (#179), a return into a zone someone is walking
-to (#180), and an exit that is approved but then fails (#181). A failed precondition
-calls pytest.fail, so it is never mistaken for the expected failure.
+A reunion that includes someone waiting for support keeps that request in its
+household (#179). The xfail tests are defects found while covering these paths (#178):
+a return into a zone someone is walking to (#180), and an exit that is approved but
+then fails (#181). A failed precondition calls pytest.fail, so it is never mistaken
+for the expected failure.
 """
 
 from __future__ import annotations
@@ -174,21 +175,18 @@ def test_a_reunion_records_the_household_of_everyone_in_it(main_line):
     assert {people[agent_id]["household_id"] for agent_id in pair} == {household}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="#179: a reunion changes the household of an open support request",
-)
-def test_a_reunion_with_someone_waiting_for_support_keeps_running(main_line):
+def test_a_reunion_keeps_an_open_support_request_in_its_household(main_line):
+    """The run used to stop when staff took up the request after the reunion (#179)."""
     _, timeline = main_line
     world = _at_fork(timeline)
     pair = _co_located_pair(world, waiting_for_support=True)
     waiting = next(item for item in pair if world.agents[item].support_request_id)
-    household = next(
-        world.agents[item].profile.group_id
-        for item in pair
-        if world.agents[item].profile.group_id != world.agents[waiting].profile.group_id
-    )
+    other = next(item for item in pair if item != waiting)
+    request_household = world.agents[waiting].profile.group_id
+    household = world.agents[other].profile.group_id
+    if household == request_household:
+        pytest.fail("the reunion must move the waiting person to another household")
+    request_id = world.agents[waiting].support_request_id
     program = _presence(
         "reunite-waiting",
         TargetSelector(kind="person", candidate_ids=pair),
@@ -197,11 +195,19 @@ def test_a_reunion_with_someone_waiting_for_support_keeps_running(main_line):
         household_id=household,
     )
 
-    try:
-        _fork(timeline, "main", "reunited-waiting", program)
-    except BranchError:
-        return  # Refused before approval: acceptable, and not the defect's ValueError.
-    timeline.advance("reunited-waiting", END, checkpoint_interval=30)
+    _fork(timeline, "main", "reunited-waiting", program)
+    world = timeline.advance("reunited-waiting", END, checkpoint_interval=30).world
+
+    people = world.model_state["population_presence_v1"]["people"]
+    assert people[waiting]["household_id"] == household
+    transitions = [
+        (row["status"], row["household_id"])
+        for row in world.model_state["shared_operations_v1"]["history"]
+        if row.get("request_id") == request_id
+    ]
+    assert len(transitions) > 1, "staff never took up the request after the reunion"
+    assert {status for status, _ in transitions} >= {"requested", "assigned"}
+    assert {item for _, item in transitions} == {request_household}
 
 
 @pytest.mark.xfail(

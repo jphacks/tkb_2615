@@ -442,6 +442,8 @@ class OfflineSimulationController:
                             request_id = outcome.event.payload.get("request_id")
                             request = world.support_requests.get(request_id)
                             prior = care_receipt_for_request(world, request_id)
+                            # A request keeps the household it was made in, as its
+                            # completion does; a later reunion must not change it (#179).
                             if (
                                 request is not None
                                 and prior is not None
@@ -454,7 +456,7 @@ class OfflineSimulationController:
                                     world,
                                     request_id=request.id,
                                     agent_id=request.agent_id,
-                                    household_id=current_household_id(world, request.agent_id),
+                                    household_id=prior.get("household_id"),
                                     support_kind=prior["support_kind"],
                                     status="started",
                                     staff_id=request.assigned_staff_id,
@@ -478,7 +480,7 @@ class OfflineSimulationController:
                                 world,
                                 request_id=request.id,
                                 agent_id=request.agent_id,
-                                household_id=current_household_id(world, request.agent_id),
+                                household_id=prior.get("household_id"),
                                 support_kind=prior["support_kind"],
                                 status="interrupted",
                                 causation_id=outcome.event.event_id,
@@ -613,11 +615,12 @@ class OfflineSimulationController:
                 request = world.support_requests.get(request_id)
                 if prior is None or request is None or request.assigned_staff_id is None:
                     continue
+                # Recorded with the request's household, not the current one (#179).
                 append_applied_care_transition(
                     world,
                     request_id=request.id,
                     agent_id=request.agent_id,
-                    household_id=current_household_id(world, request.agent_id),
+                    household_id=prior.get("household_id"),
                     support_kind=prior["support_kind"],
                     status="assigned",
                     staff_id=request.assigned_staff_id,
@@ -629,7 +632,7 @@ class OfflineSimulationController:
                         world,
                         request_id=request.id,
                         agent_id=request.agent_id,
-                        household_id=current_household_id(world, request.agent_id),
+                        household_id=prior.get("household_id"),
                         support_kind=prior["support_kind"],
                         status="started",
                         staff_id=request.assigned_staff_id,
