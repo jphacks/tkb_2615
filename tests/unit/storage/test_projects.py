@@ -288,3 +288,16 @@ def test_run_writer_lease_works_without_fcntl_or_nofollow(
     finally:
         store.release_run(lease)
     ProjectStore(tmp_path).release_run(ProjectStore(tmp_path).claim_run("project", "run"))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="#187: a model signature with a decimal after '@' is taken for an email address",
+)
+def test_model_signatures_are_kept_while_email_addresses_are_redacted():
+    from sheltersim.storage.projects import safe_document
+
+    signature = "distance-sampled-proximity-v1@1:state1:distance=1.5:interval=15:pairs=500"
+    assert safe_document("contact name@example.com today") == "contact [redacted] today"
+    assert safe_document(signature) == signature
