@@ -276,14 +276,17 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
     }
     if not registry_selected_affect:
         optional_compatibility_fields.add("affect_policy")
-    legacy_configs = [config]
-    for field in sorted(optional_compatibility_fields):
-        legacy_configs.extend(
-            {key: value for key, value in candidate.items() if key != field}
-            for candidate in tuple(legacy_configs)
-            if field in candidate
-        )
-    if state["config"] not in legacy_configs:
+    # The saved config may be the canonical one without some optional fields that
+    # older versions did not write. Checking the fields directly accepts the same
+    # configs as comparing with every such reduced config (up to 2**14), which ran
+    # at every tick (#228).
+    saved = state["config"]
+    if (
+        not isinstance(saved, dict)
+        or not set(saved) <= set(config)
+        or not set(config) - set(saved) <= optional_compatibility_fields
+        or any(saved[key] is not config[key] and saved[key] != config[key] for key in saved)
+    ):
         raise ValueError("body_state_v1 config is not canonical")
     fields = {
         "sleep_debt_minutes",
