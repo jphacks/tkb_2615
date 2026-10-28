@@ -232,14 +232,22 @@ class ProjectWorkspace:
                 plan.asset.media_type,
             ):
                 raise StorageError("plan_asset_manifest_mismatch")
-        draft = InitialScenarioBuilder().build(
-            request,
-            research=research,
-            selected_shelter_id=body.get("selected_shelter_id"),
-            plan_override=plan,
-            age_bands=age_bands_from_observations(research.population_observations),
-            household_mix=household_mix_from_observations(research.population_observations),
-        )
+        try:
+            draft = InitialScenarioBuilder().build(
+                request,
+                research=research,
+                selected_shelter_id=body.get("selected_shelter_id"),
+                plan_override=plan,
+                age_bands=age_bands_from_observations(research.population_observations),
+                household_mix=household_mix_from_observations(research.population_observations),
+            )
+        except ValueError as exc:
+            if plan is None or isinstance(exc, StorageError):
+                raise
+            from sheltersim.web.plan_services import plan_rejection_reason
+
+            # Tell the operator what the selected plan lacks, e.g. a sleeping zone (#204).
+            raise StorageError(f"scenario_plan_invalid: {plan_rejection_reason(exc)}") from exc
         document = draft.scenario.model_dump(mode="json")
         # A public building's address is not needed in anonymous stored experiments.
         document["provenance"].get("selected_shelter", {}).pop("address", None)

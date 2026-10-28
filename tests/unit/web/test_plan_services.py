@@ -1,10 +1,10 @@
 """The plan preview routes of the Project screen accept a reviewed plan and refuse mistakes.
 
 A plan is input the operator draws or uploads, so every mistake must be refused with
-a reason: a StorageError (HTTP 409) or a ValueError, including a contract
-ValidationError (HTTP 400). Any other exception is an HTTP 500. The routes are called
-on the ProjectAPI with the synthetic shelter of tests/support/plans.py, uploaded as a
-drawing or as GeoJSON.
+a reason the screen can show: a StorageError, which the server returns as HTTP 409 with
+its message (#204). A bare ValueError is only "invalid project request" (HTTP 400), and
+any other exception is an HTTP 500 (#202). The routes are called on the ProjectAPI with
+the synthetic shelter of tests/support/plans.py, uploaded as a drawing or as GeoJSON.
 """
 
 from __future__ import annotations
@@ -19,11 +19,6 @@ import pytest
 from support.plans import SHELTER_TRACE, rooms_plan_png, shelter_plan_geojson, shelter_plan_png
 
 from sheltersim.storage.projects import StorageError
-
-REFUSED = (StorageError, ValueError)
-_FAILS_WITHOUT_REASON = pytest.mark.xfail(
-    raises=(StopIteration, TypeError), strict=True, reason="#202: fails without a reason"
-)
 
 
 @pytest.fixture
@@ -97,16 +92,13 @@ TRACE_MISTAKES: dict[str, Callable[[dict], object]] = {
             }
         ]
     ),
-    "footprint of a facility in an unknown zone": pytest.param(
-        lambda t: (
-            t["facilities"][0].update(zone_id="nowhere"),
-            t.update(
-                equipment_footprints=[
-                    _footprint("water_station_main", [[250, 40], [270, 40], [270, 60], [250, 60]])
-                ]
-            ),
+    "footprint of a facility in an unknown zone": lambda t: (
+        t["facilities"][0].update(zone_id="nowhere"),
+        t.update(
+            equipment_footprints=[
+                _footprint("water_station_main", [[250, 40], [270, 40], [270, 60], [250, 60]])
+            ]
         ),
-        marks=_FAILS_WITHOUT_REASON,
     ),
 }
 
@@ -191,7 +183,7 @@ def test_reviewed_candidates_become_a_geometry_of_the_accepted_features_only(
     pixels = {(round(x / 10, 1), round(y / 10, 1)) for x, y in room["coordinates_px"]}
     assert (zone["zone_id"], corners) == ("sleeping", pixels)
     assert geometry["value"]["editable_geometry"] is None, "rejected walls are left out"
-    with pytest.raises(ValueError, match="cannot be reviewed again"):
+    with pytest.raises(StorageError, match="plan_review_invalid: .*cannot be reviewed again"):
         _plan_preview(
             api,
             asset,
@@ -209,12 +201,42 @@ def test_a_mistaken_trace_is_refused_with_a_reason(drawn_plan, change):
     trace = copy.deepcopy(SHELTER_TRACE)
     change(trace)
 
-    with pytest.raises(REFUSED):
+    with pytest.raises(StorageError):
         _plan_preview(
             api,
             asset,
             {"operation": "trace", "trace": trace, "raster_preview_id": extracted["preview_id"]},
         )
+
+
+def test_a_refused_trace_names_the_rule_it_breaks(drawn_plan):
+    api, asset, extracted = drawn_plan
+    trace = copy.deepcopy(SHELTER_TRACE)
+    trace["route_openings"] = trace["route_openings"][1:]
+
+    with pytest.raises(StorageError) as refused:
+        _plan_preview(
+            api,
+            asset,
+            {"operation": "trace", "trace": trace, "raster_preview_id": extracted["preview_id"]},
+        )
+
+    assert refused.value.code == "plan_trace_invalid"
+    assert str(refused.value) == (
+        "plan_trace_invalid: route 'sleeping_food' crosses closed wall 'partition'"
+    )
+
+
+def test_a_refused_trace_field_is_named_without_its_value(drawn_plan):
+    api, asset, _ = drawn_plan
+    trace = copy.deepcopy(SHELTER_TRACE)
+    trace["facilities"][0]["capacity"] = "a private note"
+
+    with pytest.raises(StorageError) as refused:
+        _plan_preview(api, asset, {"operation": "trace", "trace": trace})
+
+    assert str(refused.value).startswith("plan_trace_invalid: facilities.0.capacity: ")
+    assert "a private note" not in str(refused.value)
 
 
 REQUEST_MISTAKES: dict[str, Callable[[str], dict[str, Any]]] = {
@@ -290,7 +312,7 @@ REQUEST_MISTAKES: dict[str, Callable[[str], dict[str, Any]]] = {
 def test_a_mistaken_plan_request_is_refused_with_a_reason(drawn_plan, body):
     api, asset, extracted = drawn_plan
 
-    with pytest.raises(REFUSED):
+    with pytest.raises(StorageError):
         _plan_preview(api, asset, body(extracted["preview_id"]))
 
 
@@ -301,9 +323,9 @@ def test_a_plan_page_that_does_not_exist_is_refused(ui_project_api, upload_plan)
     Image.new("RGB", (400, 300), "white").save(stream, format="PDF")
     asset = upload_plan(ui_project_api, stream.getvalue(), "application/pdf")
 
-    with pytest.raises(ValueError, match="selected PDF page does not exist"):
+    with pytest.raises(StorageError, match="plan_extract_invalid: selected PDF page does not"):
         _plan_preview(ui_project_api, asset, {"operation": "extract", "page_index": 1})
-    with pytest.raises(ValueError, match="PDF plan trace requires its zero-based source page"):
+    with pytest.raises(StorageError, match="plan_trace_invalid: PDF plan trace requires its"):
         _plan_preview(ui_project_api, asset, {"operation": "trace", "trace": SHELTER_TRACE})
 
 
@@ -364,28 +386,14 @@ GEOJSON_MISTAKES: dict[str, Callable[[dict], object]] = {
         d.clear(),
         d.update(units="m", origin="top_left", geometry=[]),
     ),
-    "width that is an object": pytest.param(
-        lambda d: d.update(width_m={"metres": 40}), marks=_FAILS_WITHOUT_REASON
-    ),
-    "usable area null": pytest.param(
-        lambda d: _feature(d, "zone")["properties"].update(usable_area_m2=None),
-        marks=_FAILS_WITHOUT_REASON,
-    ),
-    "usable area list": pytest.param(
-        lambda d: _feature(d, "zone")["properties"].update(usable_area_m2=[100]),
-        marks=_FAILS_WITHOUT_REASON,
-    ),
-    "route coordinates number": pytest.param(
-        lambda d: _feature(d, "route")["geometry"].update(coordinates=5),
-        marks=_FAILS_WITHOUT_REASON,
-    ),
-    "route coordinates null": pytest.param(
-        lambda d: _feature(d, "route")["geometry"].update(coordinates=None),
-        marks=_FAILS_WITHOUT_REASON,
-    ),
-    "envelope zones that are a number": pytest.param(
-        lambda d: (d.clear(), d.update(units="m", origin="top_left", zones=5, geometry={})),
-        marks=_FAILS_WITHOUT_REASON,
+    "width that is an object": lambda d: d.update(width_m={"metres": 40}),
+    "usable area null": lambda d: _feature(d, "zone")["properties"].update(usable_area_m2=None),
+    "usable area list": lambda d: _feature(d, "zone")["properties"].update(usable_area_m2=[100]),
+    "route coordinates number": lambda d: _feature(d, "route")["geometry"].update(coordinates=5),
+    "route coordinates null": lambda d: _feature(d, "route")["geometry"].update(coordinates=None),
+    "envelope zones that are a number": lambda d: (
+        d.clear(),
+        d.update(units="m", origin="top_left", zones=5, geometry={}),
     ),
 }
 
@@ -418,7 +426,7 @@ def test_a_mistaken_geojson_plan_is_refused_with_a_reason(ui_project_api, upload
     change(document)
     asset = upload_plan(ui_project_api, json.dumps(document).encode(), "application/geo+json")
 
-    with pytest.raises(REFUSED):
+    with pytest.raises(StorageError):
         _plan_preview(ui_project_api, asset, {"operation": "geojson"})
 
 
@@ -426,5 +434,5 @@ def test_a_mistaken_geojson_plan_is_refused_with_a_reason(ui_project_api, upload
 def test_a_json_upload_that_is_not_an_object_is_refused_when_it_finishes(
     ui_project_api, upload_plan, content
 ):
-    with pytest.raises(REFUSED):
+    with pytest.raises(StorageError):
         upload_plan(ui_project_api, content, "application/geo+json")
