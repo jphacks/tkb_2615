@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Protocol
 
 RNGKeyPart = str | int
+
+# Text that JSON writes between quotes unchanged (ensure_ascii=False escapes only
+# control characters, backslashes and quotes).
+_PLAIN_TEXT = re.compile(r'[^\x00-\x1f\\"]*')
 
 
 class KeyedRandom(Protocol):
@@ -37,11 +42,19 @@ class CounterRNG:
         """Return the same value for a seed/key pair, independent of call order."""
         if not key_parts:
             raise ValueError("at least one stable RNG key part is required")
-        if any(not isinstance(part, (str, int)) or isinstance(part, bool) for part in key_parts):
-            raise TypeError("RNG key parts must be strings or integers")
-        encoded_key = json.dumps(
-            list(key_parts), ensure_ascii=False, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
+        # The key is json.dumps(list(key_parts), ensure_ascii=False,
+        # separators=(",", ":")), written part by part without building an encoder.
+        encoded = []
+        for part in key_parts:
+            if type(part) is str and _PLAIN_TEXT.fullmatch(part):
+                encoded.append('"' + part + '"')
+            elif type(part) is int:
+                encoded.append(str(part))
+            elif not isinstance(part, (str, int)) or isinstance(part, bool):
+                raise TypeError("RNG key parts must be strings or integers")
+            else:
+                encoded.append(json.dumps(part, ensure_ascii=False, allow_nan=False))
+        encoded_key = ("[" + ",".join(encoded) + "]").encode("utf-8")
         seed_bytes = str(self.seed).encode("ascii")
         digest = hashlib.sha256(
             b"sheltersim:sha256-keyed-v1\0" + seed_bytes + b"\0" + encoded_key
