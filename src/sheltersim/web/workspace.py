@@ -440,6 +440,19 @@ class ProjectWorkspace:
     def comparison(
         self, project_id: str, run_id: str, branch_ids: list[str], minute: int
     ) -> dict[str, Any]:
+        common_range, receipts, paired = self.comparison_context(
+            project_id, run_id, branch_ids, minute
+        )
+        timeline = TimelineStore(self.store, project_id, run_id)
+        frames = [timeline.frame(key, minute) for key in branch_ids]
+        from sheltersim.web.replay import comparison_projection
+
+        return comparison_projection(run_id, minute, common_range, frames, receipts, paired)
+
+    def comparison_context(
+        self, project_id: str, run_id: str, branch_ids: list[str], minute: int
+    ) -> tuple[list[int], list[Any], bool]:
+        """A comparison's common range, fork receipts and shared origin, without frames."""
         if not 2 <= len(branch_ids) <= 8 or len(set(branch_ids)) != len(branch_ids):
             raise StorageError("comparison requires 2–8 distinct project branches")
         refs = {b["branch_id"]: b for b in self.store.branches(project_id, run_id)}
@@ -449,8 +462,6 @@ class ProjectWorkspace:
         upper = min(refs[key]["computed_until"] for key in branch_ids)
         if type(minute) is not int or not lower <= minute <= upper:
             raise StorageError("comparison minute is outside the common computed range")
-        timeline = TimelineStore(self.store, project_id, run_id)
-        frames = [timeline.frame(key, minute) for key in branch_ids]
         receipts = []
         for key in branch_ids:
             # Only the fork receipt is needed; read the head's verified runtime_state
@@ -468,9 +479,7 @@ class ProjectWorkspace:
             )
         else:
             paired = False
-        from sheltersim.web.replay import comparison_projection
-
-        return comparison_projection(run_id, minute, [lower, upper], frames, receipts, paired)
+        return [lower, upper], receipts, paired
 
     def intervention(
         self, project_id: str, run_id: str, branch_id: str, body: dict[str, Any]
