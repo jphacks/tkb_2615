@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.contracts.operations import (
     MAX_SHARED_OPERATION_HISTORY,
     SHARED_OPERATIONS_KEY,
@@ -23,6 +22,7 @@ from sheltersim.contracts.operations import (
 )
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import WorldState
+from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.events.models import EventStatus
 
 _CARE_TRANSITIONS = {
@@ -491,7 +491,7 @@ def operational_demand_snapshot(world: WorldState) -> dict[str, Any]:
     from sheltersim.contracts.spatial import occupancy_snapshot
 
     geometry_raw = world.model_configs.get("facility_geometry")
-    geometry = FacilityGeometry.model_validate(geometry_raw) if geometry_raw else None
+    geometry = parsed_facility_geometry(geometry_raw) if geometry_raw else None
     explicit_points = geometry.service_points if geometry is not None else ()
     independent_queue_state = world.model_state.get("facility_queues_v1", {})
     services = []

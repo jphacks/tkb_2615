@@ -29,7 +29,6 @@ from pydantic import (
     model_validator,
 )
 
-from sheltersim.contracts.extensions import FacilityGeometry
 from sheltersim.contracts.operations import (
     SHARED_OPERATIONS_KEY,
     EquipmentTransferParameters,
@@ -66,6 +65,7 @@ from sheltersim.domain.geometry_overlay import (
     RouteAccessParameters,
     installed_facility_placement_enabled,
     installed_facility_point,
+    parsed_facility_geometry,
     place_installed_facility,
     validate_geometry_change,
 )
@@ -1197,7 +1197,7 @@ def validate_effect_program(
                     geometry_raw = world.model_configs.get("facility_geometry")
                     if not isinstance(geometry_raw, dict):
                         raise ValueError("arrival approach requires approved physical Geometry")
-                    geometry = FacilityGeometry.model_validate(geometry_raw)
+                    geometry = parsed_facility_geometry(geometry_raw)
                     route = next(
                         (
                             item

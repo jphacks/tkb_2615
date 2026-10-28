@@ -9,6 +9,7 @@ from typing import Any
 
 from sheltersim.contracts.api import AgentPosition
 from sheltersim.contracts.extensions import FacilityGeometry, Point2D, point_in_polygon
+from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.world import WorldState
 from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY
 from sheltersim.domain.models import Activity
@@ -764,7 +765,7 @@ def _geometry(world: WorldState) -> FacilityGeometry | None:
     return effective_geometry(world)
 
 
-def _spatial_constraints(world: WorldState) -> dict[str, Any] | None:
+def _spatial_constraints(world: WorldState) -> SpatialConstraints | None:
     if (
         "spatial_constraints" not in world.model_configs
         and "geometry_overlay_v1" not in world.model_state
@@ -772,7 +773,9 @@ def _spatial_constraints(world: WorldState) -> dict[str, Any] | None:
         return None
     from sheltersim.domain.geometry_overlay import effective_spatial_constraints
 
-    return effective_spatial_constraints(world).model_dump(mode="json")
+    # The effective constraints are built from validated parts, so they are used as
+    # they are; a JSON dump parsed again gave the same model at each call (#45).
+    return effective_spatial_constraints(world)
 
 
 def _zone_center(geometry: FacilityGeometry | None, zone_id: str) -> Point2D | None:
@@ -890,11 +893,8 @@ def _queue_slot_position(
         start = occupied[-1]
     start = start or anchor
     blocked_polygons: tuple[tuple[Point2D, ...], ...] = ()
-    raw_constraints = _spatial_constraints(world)
-    if raw_constraints is not None:
-        from sheltersim.contracts.spatial import SpatialConstraints
-
-        constraints = SpatialConstraints.model_validate(raw_constraints)
+    constraints = _spatial_constraints(world)
+    if constraints is not None:
         blocked_polygons = tuple(item.polygon for item in constraints.obstacles) + tuple(
             item.polygon for item in constraints.equipment_footprints
         )
@@ -1311,16 +1311,13 @@ def _room_path_is_clear(
     journey: dict[str, Any],
 ) -> bool:
     """Check only the not-yet-traversed portion against current walls and footprints."""
-    raw_constraints = _spatial_constraints(world)
+    constraints = _spatial_constraints(world)
     geometry = _geometry(world)
-    if raw_constraints is None or geometry is None:
+    if constraints is None or geometry is None:
         return True
     zone = next((item for item in geometry.zones if item.zone_id == zone_id), None)
     if zone is None:
         return False
-    from sheltersim.contracts.spatial import SpatialConstraints
-
-    constraints = SpatialConstraints.model_validate(raw_constraints)
     movement = world.model_state[MOVEMENT_STATE_KEY]
     position = movement["positions"].get(agent_id, {})
     raw_point = position.get("point") if isinstance(position, dict) else None
@@ -1497,12 +1494,9 @@ def route_is_physically_clear(
         return False
     if route.width_m + 1e-9 < 2.0 * clearance:
         return False
-    raw = _spatial_constraints(world)
-    if raw is None:
+    constraints = _spatial_constraints(world)
+    if constraints is None:
         return True
-    from sheltersim.contracts.spatial import SpatialConstraints
-
-    constraints = SpatialConstraints.model_validate(raw)
     blocked_polygons = tuple(item.polygon for item in constraints.obstacles) + tuple(
         item.polygon for item in constraints.equipment_footprints
     )
@@ -1544,17 +1538,14 @@ def plan_in_room_route(
     zone = next((item for item in geometry.zones if item.zone_id == zone_id), None)
     if zone is None:
         return None
-    raw = _spatial_constraints(world)
-    if raw is None:
+    constraints = _spatial_constraints(world)
+    if constraints is None:
         origin = start or _zone_center(geometry, zone_id)
         return (
             (origin, destination)
             if origin is not None and _segment_inside_polygon(origin, destination, zone.polygon)
             else None
         )
-    from sheltersim.contracts.spatial import SpatialConstraints
-
-    constraints = SpatialConstraints.model_validate(raw)
     clearance = {"independent": 0.25, "assisted": 0.4, "wheelchair": 0.45}.get(mobility)
     if clearance is None:
         return None
@@ -1671,8 +1662,6 @@ def facility_approach_route(
     service_point_id: str | None = None,
 ) -> tuple[ZoneRoute, tuple[Point2D, ...]] | None:
     """Plan an in-room route to a walkable service point beside the facility footprint."""
-    from sheltersim.contracts.spatial import SpatialConstraints
-
     agent = world.agents[agent_id]
     facility = world.facilities[facility_id]
     geometry = _geometry(world)
@@ -1698,9 +1687,8 @@ def facility_approach_route(
     if facility_point is None:
         return None
     candidates = [facility_point]
-    constraints_raw = _spatial_constraints(world)
-    if constraints_raw is not None:
-        constraints = SpatialConstraints.model_validate(constraints_raw)
+    constraints = _spatial_constraints(world)
+    if constraints is not None:
         footprint = next(
             (item for item in constraints.equipment_footprints if item.facility_id == facility_id),
             None,

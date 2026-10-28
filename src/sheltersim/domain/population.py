@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from sheltersim.contracts.extensions import FacilityGeometry, PersonTraits
+from sheltersim.contracts.extensions import PersonTraits
 from sheltersim.contracts.population import (
     DynamicArrivalPersonContext,
     PersonContext,
@@ -26,6 +26,7 @@ from sheltersim.domain.agent_dynamics import (
     remove_agent as remove_agent_dynamics,
 )
 from sheltersim.domain.body_state import add_body_agent, remove_body_agent
+from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.models import (
     Activity,
@@ -197,7 +198,7 @@ def validate_population_dynamics_state(world: WorldState) -> None:
                 pending["approach_route_id"]
                 not in {
                     route.route_id
-                    for route in FacilityGeometry.model_validate(
+                    for route in parsed_facility_geometry(
                         world.model_configs.get("facility_geometry", {})
                     ).arrival_approach_routes
                 }
@@ -209,7 +210,7 @@ def validate_population_dynamics_state(world: WorldState) -> None:
                 raise ValueError("pending arrival approach route/timing is invalid")
             route = next(
                 item
-                for item in FacilityGeometry.model_validate(
+                for item in parsed_facility_geometry(
                     world.model_configs.get("facility_geometry", {})
                 ).arrival_approach_routes
                 if item.route_id == pending["approach_route_id"]
@@ -293,9 +294,7 @@ def queue_arrivals(
                 "one arrival approach route cannot combine with alternate admission zones"
             )
         try:
-            geometry = FacilityGeometry.model_validate(
-                world.model_configs.get("facility_geometry", {})
-            )
+            geometry = parsed_facility_geometry(world.model_configs.get("facility_geometry", {}))
             approach_route = next(
                 item
                 for item in geometry.arrival_approach_routes
@@ -592,7 +591,7 @@ def apply_arrival_approach_completion(world: WorldState, event: ScheduledEvent) 
     route = next(
         (
             item
-            for item in FacilityGeometry.model_validate(
+            for item in parsed_facility_geometry(
                 world.model_configs.get("facility_geometry", {})
             ).arrival_approach_routes
             if item.route_id == event.payload["route_id"]
@@ -977,7 +976,7 @@ def _record_waiting_presence(world: WorldState, item: dict[str, Any]) -> None:
     household_id = (item.get("traits") or {}).get("household_id", profile.get("group_id"))
     route_sources: tuple[str, ...] = ()
     if "approach_route_id" in item:
-        geometry = FacilityGeometry.model_validate(world.model_configs["facility_geometry"])
+        geometry = parsed_facility_geometry(world.model_configs["facility_geometry"])
         route = next(
             route
             for route in geometry.arrival_approach_routes
@@ -1046,7 +1045,7 @@ def _record_approach_completed(
                     POPULATION_SOURCE_ID,
                     *next(
                         route.source_ids
-                        for route in FacilityGeometry.model_validate(
+                        for route in parsed_facility_geometry(
                             world.model_configs["facility_geometry"]
                         ).arrival_approach_routes
                         if route.route_id == item["approach_route_id"]

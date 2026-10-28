@@ -1,6 +1,7 @@
 """Physical queues: the positioned head moves up and is served while others walk.
 
-In-room routes keep their start point too. The day-long runs are checked in
+In-room routes keep their start point too, and movement reads the effective walls,
+obstacles and footprints from one parse per tick phase. The day-long runs are checked in
 tests/integration/test_physical_queues.py (a queue longer than its room),
 tests/integration/test_queue_service.py (one meal station for a hundred people)
 and tests/integration/test_entered_stock.py (entered stock).
@@ -13,6 +14,7 @@ import math
 from sheltersim.contracts.extensions import Point2D
 from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.world import WorldState
+from sheltersim.domain.geometry_overlay import GEOMETRY_OVERLAY_KEY, geometry_config_scope
 from sheltersim.domain.movement import (
     MOVEMENT_STATE_KEY,
     _geometry,
@@ -24,6 +26,7 @@ from sheltersim.domain.movement import (
     plan_in_room_route,
     progress_physical_queue_head_to_service,
     progress_physical_queue_positions,
+    route_is_physically_clear,
 )
 from sheltersim.domain.resource_service import ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
@@ -179,7 +182,7 @@ def test_in_room_route_keeps_a_start_that_rounds_onto_a_door_node(generated_scen
     world = WorldState.from_scenario(generated_scenario)
     initialize_simulator_extensions(world)
     geometry = _geometry(world)
-    constraints = SpatialConstraints.model_validate(_spatial_constraints(world))
+    constraints = _spatial_constraints(world)
     blocked = tuple(item.polygon for item in constraints.obstacles) + tuple(
         item.polygon for item in constraints.equipment_footprints
     )
@@ -207,3 +210,49 @@ def test_in_room_route_keeps_a_start_that_rounds_onto_a_door_node(generated_scen
                     assert path[-1] == destination
                     checked += 1
     assert checked
+
+
+def test_movement_reads_the_effective_constraints_from_one_parse_per_phase(
+    generated_scenario, count_validations
+) -> None:
+    """The constraints with a runtime partition and a moved station equal the JSON round
+    trip movement used to parse at every call, and are parsed once per scope (#45)."""
+    world = WorldState.from_scenario(generated_scenario)
+    initialize_simulator_extensions(world)
+    facility_id, point = next(
+        iter(world.model_configs["facility_geometry"]["facility_points"].items())
+    )
+    x, y = point["x"], point["y"]
+    world.model_configs["spatial_constraints"]["equipment_footprints"] = [
+        {
+            "facility_id": facility_id,
+            "polygon": [
+                {"x": x - 0.2, "y": y - 0.2},
+                {"x": x + 0.2, "y": y - 0.2},
+                {"x": x + 0.2, "y": y + 0.2},
+                {"x": x - 0.2, "y": y + 0.2},
+            ],
+            "area_m2": 0.16,
+        }
+    ]
+    footprint = _spatial_constraints(world).equipment_footprints[0]
+    overlay = world.model_state.setdefault(GEOMETRY_OVERLAY_KEY, {})
+    overlay["facility_points"] = {facility_id: {"point_m": {"x": x + 0.5, "y": y}}}
+    overlay["partitions"] = {
+        "partition-test": {
+            "polygon_m": [{"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 1.0}, {"x": 2.0, "y": 2.0}],
+            "source_ids": ["ASM-TEST-PARTITION"],
+        }
+    }
+    constraints = _spatial_constraints(world)
+    assert constraints.obstacles[-1].id == "partition-test"
+    assert constraints.equipment_footprints[0] != footprint
+    assert constraints == SpatialConstraints.model_validate(constraints.model_dump(mode="json"))
+
+    edges = [route.edge_id for route in _geometry(world).routes]
+    spatial_calls = count_validations(SpatialConstraints)
+    with geometry_config_scope():
+        for _ in range(20):
+            for edge_id in edges:
+                route_is_physically_clear(world, edge_id)
+    assert len(spatial_calls) == 1
