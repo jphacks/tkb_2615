@@ -55,19 +55,28 @@ class AnthropicProvider:
     def __init__(self, api_key: str, *, client: object | None = None) -> None:
         if not api_key:
             raise LLMProviderError("ANTHROPIC_API_KEY is required for Claude API mode")
-        if client is None:
+        self._api_key = api_key
+        self._sdk_client = client
+
+    @property
+    def _client(self) -> object:
+        """The SDK client, made at the first call: a router can be built, and its provider
+        replaced, where the optional SDK is not installed."""
+        if self._sdk_client is None:
             try:
                 import anthropic
             except ImportError as exc:
                 raise LLMProviderError(
                     "install the optional LLM dependencies with `pip install .[llm]`"
                 ) from exc
-            client = anthropic.Anthropic(api_key=api_key, max_retries=0)
-        self._client = client
+            self._sdk_client = anthropic.Anthropic(api_key=self._api_key, max_retries=0)
+        return self._sdk_client
 
     def complete(
         self, *, model_id: str, task: LLMTask, max_output_tokens: int, timeout_seconds: float
     ) -> ProviderResponse:
+        # A missing SDK is reported as such, not as a failed request.
+        client = self._client
         started = time.perf_counter()
         try:
             request: dict[str, object] = dict(
@@ -94,7 +103,7 @@ class AnthropicProvider:
                         "allowed_domains": list(task.web_search_allowed_domains),
                     }
                 ]
-            messages = self._client.messages
+            messages = client.messages  # type: ignore[attr-defined]
             stream = getattr(messages, "stream", None)
             if callable(stream):
                 # Keep long generations and server-tool execution on the SDK's SSE
