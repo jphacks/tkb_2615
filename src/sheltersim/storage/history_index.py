@@ -38,9 +38,6 @@ CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, toke
 PRAGMA user_version=1;
 """  # noqa: E501
 _WRITE_CACHE_KIB = 16_384
-# The write-ahead log is truncated to this size whenever its pages return to the index
-# file, including the automatic returns during a long write.
-_WAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024
 
 
 @functools.cache
@@ -398,11 +395,10 @@ class HistoryIndex:
         connection.row_factory = sqlite3.Row
         try:
             if write:
-                # Writes go to a write-ahead log, so readers keep reading the last commit
-                # while a long write (a fork copying a parent's rows) is in progress. The
-                # mode stays with the file; synchronous stays FULL, as before.
-                connection.execute("PRAGMA journal_mode=WAL")
-                connection.execute(f"PRAGMA journal_size_limit={_WAL_SIZE_LIMIT_BYTES}")
+                # An index written while #268 used a write-ahead log keeps that mode in
+                # the file; return it to the rollback journal (#269). With readers open
+                # the mode stays until a later write; on other files this does nothing.
+                connection.execute("PRAGMA journal_mode=DELETE")
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 if version not in (0, 1):
                     raise StorageError("history_index_version_unsupported")
@@ -428,9 +424,6 @@ class HistoryIndex:
                     connection.rollback()
                     raise StorageError("storage_capacity_exceeded")
                 connection.commit()
-                # Return the logged pages to the index file and empty the log now, so a
-                # long write does not leave a large log while readers keep it open.
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.Error as exc:
             if write:
                 connection.rollback()

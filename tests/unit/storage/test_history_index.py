@@ -3,8 +3,7 @@ whether a write holds a few records or more than one batch of them (#47).
 
 A record already stored, or put earlier in the same write, adds nothing again, and a
 different payload under its key is refused. A refused write and a write over the
-storage capacity leave the index as it was. A read is not blocked by a write in progress
-and reads the last commit. That a saved Run's index answers every
+storage capacity leave the index as it was. That a saved Run's index answers every
 history kind is checked in tests/integration/test_project_evidence_routes.py.
 """
 
@@ -113,16 +112,13 @@ def test_an_index_write_over_the_storage_capacity_is_refused_and_rolled_back(ind
     assert _counts(index) == before
 
 
-def test_a_read_during_a_long_write_reads_the_last_commit_without_waiting(index):
-    """The index keeps a write-ahead log, so a write that spills its pages to the file
-    no longer locks readers out until it commits."""
+def test_an_index_left_in_wal_mode_returns_to_the_rollback_journal(index):
+    """#268 wrote indexes with a write-ahead log, a mode kept in the file; the next
+    write returns them to the rollback journal (#269)."""
+    with sqlite3.connect(index.path) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
     _put(index, ("events", _record(1), None))
-    with index.connect(write=True) as db:
-        db.execute("PRAGMA cache_size=1")  # Spill pages to the file during the write.
-        with _RecordBatch(db, "main") as records:
-            for number in range(2, 3_000):
-                records.put("events", _record(number))
-        with index.connect() as reader:
-            assert reader.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-            assert reader.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 1
-    assert _counts(index)["records"] == 2_999
+    with sqlite3.connect(index.path.as_uri() + "?mode=ro", uri=True) as db:
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert not index.path.with_name(index.path.name + "-wal").exists()
+    assert _counts(index)["records"] == 1
