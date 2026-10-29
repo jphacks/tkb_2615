@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from sheltersim.contracts.workspace import ComparisonQuery, HistoryQuery
+from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest
 
@@ -329,18 +330,26 @@ class ProjectQueries:
                 )["items"]
                 streams.append({row["minute_index"]: row for row in rows})
         else:
+            # World samples are compared by digest(world.to_dict()). The history cache of
+            # Checkpoint saves (#44), seeded with the EventLog each replay starts from,
+            # gives the same bytes and converts only what each minute added.
+            histories = [CheckpointHistoryCache() for _ in query.targets]
             streams = [
                 iter(
                     TimelineStore(self.store, project, t.run_id).iter_worlds(
-                        t.branch_id, start, end
+                        t.branch_id,
+                        start,
+                        end,
+                        history_cache=history if query.mode == "world" else None,
                     )
                 )
-                for t in query.targets
+                for t, history in zip(query.targets, histories, strict=True)
             ]
         found = None
         missing = []
         for minute in range(start, end + 1):
             samples = []
+            world_hashes = []
             for index, stream in enumerate(streams):
                 if query.mode == "kpis":
                     row = stream.get(minute)
@@ -359,14 +368,17 @@ class ProjectQueries:
                 else:
                     world = next(stream)
                     if query.mode == "world":
-                        samples.append(world.to_dict())
+                        world.validate()
+                        document, _, encoder = histories[index].documents(world, None)
+                        world_hashes.append(encoder.digest(document))
+                        samples.append(True)
                     else:
                         from sheltersim.inspection.frames import person_projection
 
                         samples.append(person_projection(world, query.agent_id))
             if any(sample is None for sample in samples):
                 continue
-            hashes = [digest(sample) for sample in samples]
+            hashes = world_hashes or [digest(sample) for sample in samples]
             if len(set(hashes)) > 1:
                 found = {
                     "minute": minute,
