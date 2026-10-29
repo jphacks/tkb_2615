@@ -95,9 +95,10 @@ class ProjectAPI:
         worker: str = "thread",
         max_jobs: int = 1,
     ) -> None:
-        """worker="process" computes each run and creates each fork in its own process
-        (the server, #48), up to max_jobs Runs at once; "thread" computes one run at a
-        time on a thread of this process and forks in the caller (tests and CLI)."""
+        """worker="process" computes each branch and creates each fork in its own process
+        (the server, #48), up to max_jobs at once, across Runs and their branches;
+        "thread" computes one branch at a time on a thread of this process and forks in
+        the caller (tests and CLI)."""
         if worker not in {"thread", "process"}:
             raise ValueError("worker must be 'thread' or 'process'")
         if type(max_jobs) is not int or max_jobs < 1:
@@ -110,9 +111,9 @@ class ProjectAPI:
         self._max_jobs = max_jobs if worker == "process" else 1
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sheltersim-project")
         self._lock = threading.RLock()
-        # The job of each Run with a computation or fork, by (project, run). A Run has
-        # at most one, as its writer lease allows (#48).
-        self._jobs: dict[tuple[str, str], _Job] = {}
+        # The job of each branch being computed or created by a fork, by (project, run,
+        # branch). A branch has at most one, as its writer lease allows (#48).
+        self._jobs: dict[tuple[str, str, str], _Job] = {}
         # The outcome of the last fork started in this server process, by Run.
         self._fork_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
         self._closed = False
@@ -150,9 +151,9 @@ class ProjectAPI:
             if watcher.is_alive():
                 raise TimeoutError("the background job is still running")
 
-    def _admit(self, project_id: str, run_id: str) -> None:
-        """Refuse a job for a Run that has one, or beyond max_jobs; holds self._lock."""
-        if self._closed or (project_id, run_id) in self._jobs:
+    def _admit(self, project_id: str, run_id: str, branch_id: str) -> None:
+        """Refuse a job for a branch that has one, or beyond max_jobs; holds self._lock."""
+        if self._closed or (project_id, run_id, branch_id) in self._jobs:
             raise StorageError("background worker is busy; wait or pause the active run")
         if len(self._jobs) >= self._max_jobs:
             raise StorageError("background workers are busy; wait until a running computation ends")
@@ -375,7 +376,7 @@ class ProjectAPI:
             if action == "delete":
                 fields(document, {"confirmation"})
                 with self._lock:
-                    if (project_id, run_id) in self._jobs:
+                    if any(key[:2] == (project_id, run_id) for key in self._jobs):
                         raise StorageError("cannot delete an active run")
                     self.store.delete_run(project_id, run_id, confirmation=document["confirmation"])
                 return {"deleted": run_id}
@@ -392,12 +393,18 @@ class ProjectAPI:
                     measure_performance=measure,
                 )
             if action == "cancel":
-                fields(document, set())
+                # Without branch_id, every computation of the Run stops (#48).
+                fields(document, set(), {"branch_id"})
                 with self._lock:
-                    job = self._jobs.get((project_id, run_id))
-                    if job is not None:
+                    jobs = [
+                        job
+                        for key, job in self._jobs.items()
+                        if key[:2] == (project_id, run_id)
+                        and document.get("branch_id") in {None, key[2]}
+                    ]
+                    for job in jobs:
                         job.cancel.set()
-                    elif self.store.run(project_id, run_id)["status"] == "running":
+                    if not jobs and self.store.run(project_id, run_id)["status"] == "running":
                         raise StorageError(
                             "run_worker_busy: cancellation must reach the owning worker"
                         )
@@ -426,7 +433,8 @@ class ProjectAPI:
         if document["approved"] is not True:
             raise StorageError("branch creation needs explicit human approval")
         with self._lock:
-            if (project_id, run_id) in self._jobs:
+            # Another branch of the Run may compute meanwhile (#48).
+            if (project_id, run_id, branch_id) in self._jobs:
                 raise StorageError("pause background calculation before forking")
             program = (
                 EffectProgram.model_validate(document["program"])
@@ -434,7 +442,7 @@ class ProjectAPI:
                 else None
             )
             if self._worker == "process":
-                self._admit(project_id, run_id)
+                self._admit(project_id, run_id, document["child_id"])
                 return self._fork_process(
                     project_id, run_id, branch_id, document, program, expected_state_hash
                 )
@@ -468,7 +476,7 @@ class ProjectAPI:
         measure_performance: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
-            self._admit(project_id, run_id)
+            self._admit(project_id, run_id, branch_id)
             # The pointer and the immutable Scenario bound the range without decoding
             # the history; the worker loads and validates the checkpoint once.
             reference = self.store.branch_reference(project_id, run_id, branch_id)
@@ -483,11 +491,11 @@ class ProjectAPI:
                 return self._submit_process(
                     project_id, run_id, branch_id, target_minute, measure_performance
                 )
-            lease = self.store.claim_run(project_id, run_id)
+            lease = self.store.claim_branch(project_id, run_id, branch_id)
             try:
                 job = _Job(branch_id, threading.Event())
-                self._jobs[(project_id, run_id)] = job
-                self.store.set_status(project_id, run_id, "running")
+                self._jobs[(project_id, run_id, branch_id)] = job
+                self.store.set_branch_status(project_id, run_id, branch_id, "running")
                 self._pool.submit(
                     self._advance,
                     project_id,
@@ -499,9 +507,9 @@ class ProjectAPI:
                     measure_performance,
                 )
             except BaseException:
-                self._jobs.pop((project_id, run_id), None)
+                self._jobs.pop((project_id, run_id, branch_id), None)
                 try:
-                    self.store.set_status(project_id, run_id, "interrupted")
+                    self.store.set_branch_status(project_id, run_id, branch_id, "interrupted")
                 finally:
                     self.store.release_run(lease)
                 raise
@@ -542,6 +550,8 @@ class ProjectAPI:
         ):
             raise TimelineError("EffectProgram approval hash does not match preview")
         previous = self.store.run(project_id, run_id)["status"]
+        # The Run's status once no branch computes; a fork itself computes nothing.
+        idle = previous if previous != "running" else "paused"
         self._fork_outcomes.pop((project_id, run_id), None)
         self._start_process(
             {
@@ -553,7 +563,7 @@ class ProjectAPI:
                 "expected_state_hash": expected_state_hash,
             },
             (project_id, run_id, child_id),
-            previous,
+            idle,
         )
         return {"status": "running", "branch_id": child_id, "minute": minute}
 
@@ -594,11 +604,11 @@ class ProjectAPI:
         running = _Job(active[2], cancel)
         running.watcher = threading.Thread(
             target=self._watch,
-            args=(process, outcome, job["kind"], active[0], active[1], restore, running),
+            args=(process, outcome, job["kind"], *active, restore, running),
             name=f"sheltersim-watch-{active[1]}",
             daemon=True,
         )
-        self._jobs[active[:2]] = running
+        self._jobs[active] = running
         running.watcher.start()
 
     def _watch(
@@ -608,12 +618,14 @@ class ProjectAPI:
         kind: str,
         project_id: str,
         run_id: str,
+        branch_id: str,
         restore: str | None,
         job: _Job,
     ) -> None:
         """Wait for a job's process. A process that ended without recording an
-        outcome (killed, crashed) leaves a computation interrupted, as a restart
-        would, and a fork's Run as it was."""
+        outcome (killed, crashed) leaves its branch interrupted, as a restart would. A
+        fork's child is paused once created, its status is forgotten otherwise, and
+        the Run returns to restore unless another branch computes."""
         result = None
         try:
             while True:
@@ -636,20 +648,34 @@ class ProjectAPI:
                 with self._lock:
                     self._fork_outcomes[(project_id, run_id)] = recorded
             try:
-                lease = self.store.claim_run(project_id, run_id)
+                lease = self.store.claim_branch(project_id, run_id, branch_id)
             except StorageError:
-                # Another process owns the Run now, or it was deleted; nothing to recover.
+                # Another process owns the branch now, or the Run was deleted.
                 pass
             else:
                 try:
-                    if self.store.run(project_id, run_id)["status"] in {"queued", "running"}:
-                        self.store.set_status(project_id, run_id, restore or "interrupted")
+                    if kind == "fork":
+                        created = self.store._path(
+                            project_id, "runs", run_id, "branches", branch_id, "branch.json"
+                        ).exists()
+                        if created:
+                            self.store.set_branch_status(
+                                project_id, run_id, branch_id, "paused", run_status=restore
+                            )
+                        else:
+                            self.store.forget_branch_status(project_id, run_id, branch_id)
+                            self.store.settle_run_status(project_id, run_id, restore or "paused")
+                    elif self.store.branch_status(project_id, run_id, branch_id) in {
+                        "queued",
+                        "running",
+                    }:
+                        self.store.set_branch_status(project_id, run_id, branch_id, "interrupted")
                 finally:
                     self.store.release_run(lease)
         finally:
             with self._lock:
-                if self._jobs.get((project_id, run_id)) is job:
-                    del self._jobs[(project_id, run_id)]
+                if self._jobs.get((project_id, run_id, branch_id)) is job:
+                    del self._jobs[(project_id, run_id, branch_id)]
 
     def _advance(
         self,
@@ -749,11 +775,11 @@ class ProjectAPI:
                         # A full disk can also prevent recording the optional report failure.
                         # Keep the already durable completed simulation and its status.
                         pass
-            self.store.set_status(project_id, run_id, status)
+            self.store.set_branch_status(project_id, run_id, branch_id, status)
         except Exception as exc:
             # Provider errors may contain secrets; only a fixed failure code is persisted.
             failure_code = type(exc).__name__
-            self.store.set_status(project_id, run_id, "failed")
+            self.store.set_branch_status(project_id, run_id, branch_id, "failed")
         finally:
             wall_seconds = time.perf_counter() - wall_started
             cpu_seconds = max(0.0, cpu_clock() - cpu_started)
@@ -815,4 +841,4 @@ class ProjectAPI:
                     pass
             self.store.release_run(lease)
             with self._lock:
-                self._jobs.pop((project_id, run_id), None)
+                self._jobs.pop((project_id, run_id, branch_id), None)

@@ -4,6 +4,7 @@ cancelled, refuses a Run another process owns, and leaves a killed run interrupt
 from __future__ import annotations
 
 import multiprocessing
+import time
 
 import pytest
 
@@ -229,3 +230,76 @@ def test_a_run_forks_and_cancels_while_another_computes(tmp_path, monkeypatch, s
         api.close()
     assert store.run("p", "r2")["status"] == "paused"
     assert store.branch_reference("p", "r", "c").computed_until == 15
+
+
+def _with_child(tmp_path, saved_timeline):
+    """Run r with main and a child forked from it at minute 0."""
+    store, _ = saved_timeline(tmp_path)
+    api = ProjectAPI(store, recover=False)
+    try:
+        api.fork("p", "r", "main", {"minute": 0, "child_id": "child", "approved": True})
+    finally:
+        api.close()
+    return store
+
+
+def test_two_branches_of_a_run_compute_at_once(tmp_path, monkeypatch, saved_timeline):
+    """Branches of one Run compute in parallel processes; the Run is running while
+    either is and each branch shows its own status (#48)."""
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store = _with_child(tmp_path, saved_timeline)
+    api = ProjectAPI(store, recover=False, worker="process", max_jobs=2)
+    try:
+        api.submit("p", "r", "main", 30)
+        api.submit("p", "r", "child", 30)
+        assert len(multiprocessing.active_children()) == 2
+        run = api.get(["p", "runs", "r"], {})
+        assert run["status"] == "running"
+        assert {branch["branch_id"]: branch["status"] for branch in run["branches"]} == {
+            "main": "running",
+            "child": "running",
+        }
+        api.wait_idle(timeout=300)
+    finally:
+        api.close()
+    run = store.run("p", "r")
+    assert run["status"] == "paused"
+    assert {
+        branch["branch_id"]: (branch["status"], branch["computed_until"])
+        for branch in run["branches"]
+    } == {
+        "main": ("paused", 30),
+        "child": ("paused", 30),
+    }
+
+
+def test_a_branch_forks_and_cancels_while_another_branch_computes(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """A fork needs only its source branch to be still; cancelling one branch leaves
+    the other computing (#48)."""
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store = _with_child(tmp_path, saved_timeline)
+    duration = _duration(store)
+    api = ProjectAPI(store, recover=False, worker="process", max_jobs=3)
+    try:
+        api.submit("p", "r", "child", duration)
+        api.submit("p", "r", "main", duration)
+        with pytest.raises(StorageError, match="pause background calculation"):
+            api.fork("p", "r", "main", {"minute": 0, "child_id": "c2", "approved": True})
+        api.post(["p", "runs", "r", "cancel"], {"branch_id": "main"})
+        # The branch's job ends once its process has ended, after it saved its status.
+        deadline = time.monotonic() + 300
+        while ("p", "r", "main") in api._jobs and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert store.branch_status("p", "r", "main") == "paused"
+        assert store.branch_status("p", "r", "child") == "running"
+        api.fork("p", "r", "main", {"minute": 0, "child_id": "c2", "approved": True})
+        api.post(["p", "runs", "r", "cancel"], {})
+        api.wait_idle(timeout=300)
+        assert api.get(["p", "runs", "r"], {})["last_fork"]["status"] == "created"
+    finally:
+        api.close()
+    statuses = {branch["branch_id"]: branch["status"] for branch in store.run("p", "r")["branches"]}
+    assert statuses == {"main": "paused", "child": "paused", "c2": "paused"}
+    assert store.run("p", "r")["status"] == "paused"

@@ -519,7 +519,7 @@ class TimelineStore:
         checkpoint_interval: int = 30,
         cancelled: Any = None,
     ) -> BranchRuntime:
-        lease = self.store.claim_run(self.project_id, self.run_id)
+        lease = self.store.claim_branch(self.project_id, self.run_id, branch_id)
         try:
             return self._advance_locked(
                 branch_id,

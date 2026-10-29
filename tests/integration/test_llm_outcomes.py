@@ -181,15 +181,17 @@ def test_project_report_exists_before_the_run_is_marked_completed(
         BranchRuntime.from_world(WorldState.from_scenario(scenario))
     )
     report_present_at_completion = []
-    real_set_status = store.set_status
+    # A computation records completion as its branch's status, which the Run's status
+    # summarizes (#48).
+    real_set_branch_status = store.set_branch_status
 
-    def spy(project_id, run_id, status):
+    def spy(project_id, run_id, branch_id, status, **options):
         if status == "completed":
-            report = store._path(project_id, "runs", run_id, "branches", "main", "report.json")
+            report = store._path(project_id, "runs", run_id, "branches", branch_id, "report.json")
             report_present_at_completion.append(report.exists())
-        return real_set_status(project_id, run_id, status)
+        return real_set_branch_status(project_id, run_id, branch_id, status, **options)
 
-    monkeypatch.setattr(store, "set_status", spy)
+    monkeypatch.setattr(store, "set_branch_status", spy)
     api = ProjectAPI(store, recover=False)
     try:
         api.submit("project", "run", "main", 30)

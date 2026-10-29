@@ -237,14 +237,15 @@ def execute(arguments: Any) -> dict[str, Any]:
                 branch_id=arguments.branch_id,
                 settings=settings,
             )
-        lease = store.claim_run(project_id, arguments.run_id)
+        lease = store.claim_branch(project_id, arguments.run_id, arguments.branch_id)
         review_status = "not_requested"
         try:
-            store.set_status(project_id, arguments.run_id, "running")
+            store.set_branch_status(project_id, arguments.run_id, arguments.branch_id, "running")
             runtime = timeline._advance_locked(arguments.branch_id, arguments.minute, router=router)
-            store.set_status(
+            store.set_branch_status(
                 project_id,
                 arguments.run_id,
+                arguments.branch_id,
                 "completed"
                 if runtime.world.minute_index == runtime.world.duration_minutes
                 else "paused",
@@ -264,7 +265,9 @@ def execute(arguments: Any) -> dict[str, Any]:
                 finally:
                     api.close()
         except BaseException:
-            store.set_status(project_id, arguments.run_id, "interrupted")
+            store.set_branch_status(
+                project_id, arguments.run_id, arguments.branch_id, "interrupted"
+            )
             raise
         finally:
             store.release_run(lease)
