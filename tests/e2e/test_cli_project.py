@@ -39,9 +39,13 @@ def test_a_project_is_prepared_computed_forked_and_cleaned_up_from_the_cli(
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
     project = ProjectCli(tmp_path / "projects", capsys)
     request = tmp_path / "request.json"
-    request.write_text(json.dumps({"request": generated_request()}, ensure_ascii=False))
+    request.write_text(
+        json.dumps({"request": generated_request()}, ensure_ascii=False), encoding="utf-8"
+    )
     history_query = tmp_path / "history.json"
-    history_query.write_text(json.dumps({"kind": "kpis", "start": 0, "end": 30, "limit": 100}))
+    history_query.write_text(
+        json.dumps({"kind": "kpis", "start": 0, "end": 30, "limit": 100}), encoding="utf-8"
+    )
     p = ("--project-id", "p")
 
     project("create", *p)

@@ -16,6 +16,7 @@ ruff format --check .
 ~~~
 
 - `ruff check .`と`ruff format --check .`は指摘なしで通る状態を保ちます。1行100桁を超える文字列は、文言を変えずに、隣り合う文字列リテラルの連結に分けます。分けると値が変わる複数行の文字列（SQLiteの表定義など）だけ、閉じる引用符の行に`# noqa: E501`を付けます。
+- テキストのファイルの読み書き（`Path.read_text`・`write_text`、`open`）と、`subprocess`の出力を文字列で受け取るとき（`text=True`）は、`encoding="utf-8"`を明示します。指定しないとOSの既定の文字コード（Windowsではcp1252やcp932）になり、日本語を読み書きできません。
 - 一括整形のcommitは`.git-blame-ignore-revs`に登録してあります。手元の`git blame`で整形前の変更をたどるには、一度だけ`git config blame.ignoreRevsFile .git-blame-ignore-revs`を設定します。GitHubのblame表示はこのファイルを自動で使います。
 - 有料APIを呼ぶテスト（`live_api`の印）は、`SHELTERSIM_ALLOW_LIVE_API_TESTS`と`ANTHROPIC_API_KEY`の両方を明示した場合だけ実行されます。通常の実行とCIでは設定しません。
 - `tests/conftest.py`は、テストごとにProjectの保存先（`SHELTERSIM_PROJECTS_DIR`）、状態の保存先（`XDG_STATE_HOME`）、LLMのcache（`SHELTERSIM_LLM_CACHE_PATH`）を一時ディレクトリに向けます。並列のworkerがこれらを共有せず、開発者のRunやPC全体の利用記録にも書き込みません。テストの中で設定した値が優先されます。`live_api`のテストは、実費をPC全体の利用記録に残すため対象外です。

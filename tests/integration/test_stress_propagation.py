@@ -53,7 +53,7 @@ def test_enabled_policy_is_checkpointable_and_writes_compact_contact_trace(
     restored = Checkpoint.capture(world).restore_world()
     assert restored.model_state == world.model_state
     assert restored.canonical_json() == world.canonical_json()
-    manifest = json.loads((tmp_path / "social-run" / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "social-run" / "manifest.json").read_text(encoding="utf-8"))
     assert (
         manifest["model_assumptions"]["social_propagation"]["source_id"]
         == "ASM-SOCIAL-PROPAGATION-V1"
@@ -97,7 +97,7 @@ def test_generated_scenario_propagation_is_checkpointable_and_writes_compact_con
     restored = Checkpoint.capture(world).restore_world()
     assert restored.model_state == world.model_state
     assert restored.canonical_json() == world.canonical_json()
-    manifest = json.loads((tmp_path / "social-run" / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "social-run" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["model_assumptions"]["social_propagation"]["source_id"] == config["source_id"]
     traces = [
         json.loads(line)

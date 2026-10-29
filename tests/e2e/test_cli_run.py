@@ -144,4 +144,7 @@ def test_run_executes_a_scenario_offline_and_writes_artifacts(tmp_path: Path, ca
     assert result["final_state_hash"] == manifest["final_state_hash"]
     assert manifest["execution_mode"] == "offline"
     assert manifest["run_status"] == "completed"
-    assert len(json.loads((output / "agents_initial.json").read_text())["profiles"]) == 5
+    assert (
+        len(json.loads((output / "agents_initial.json").read_text(encoding="utf-8"))["profiles"])
+        == 5
+    )

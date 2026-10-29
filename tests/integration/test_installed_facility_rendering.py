@@ -145,6 +145,7 @@ def _drawn(frames: dict[str, dict], tmp_path: Path) -> dict[str, list[dict]]:
         [_NODE, "-e", _HARNESS, str(_STATIC), str(path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
         timeout=60,
     )
