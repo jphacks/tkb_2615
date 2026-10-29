@@ -25,7 +25,7 @@ ruff format --check .
 
 - `-n auto`（pytest-xdist）で並列に実行します。`pyproject.toml`の`--dist worksteal`で、手の空いたworkerが残りのテストを引き取ります。
 - `long_simulation`の印は、7日間のsimulationを実行するテストと、1件で30秒以上（直列）かかるテストに付けます。`tests/conftest.py`の`pytest_collection_modifyitems`が、並列のときにこれらを各workerの塊の先頭に1本ずつ置くので、長いテストは最初から並んで走ります。
-- 開発中は`-m "not long_simulation"`で長いテストを除けます。印のない`pytest`は全件を実行します。手動実行のCIでは、`オフラインCI`（`.github/workflows/ci.yml`）が長いテストを除き、`長時間simulation回帰`（`.github/workflows/long-regression.yml`）の`long`が長いテストだけを実行します。
+- 開発中は`-m "not long_simulation"`で長いテストを除けます。印のない`pytest`は全件を実行します。`オフラインCI`（`.github/workflows/ci.yml`）は、developへのPull Requestごとに自動で、または手動で、Linux・Windows・macOSの3つで長いテストを除いた全件を`-n auto`で実行します（lintとformatの確認はLinuxだけ）。3つのOSで動くことを確かめるためです（#48）。結果がそろうまで、Windowsで13〜15分ほどかかります。手動実行の`長時間simulation回帰`（`.github/workflows/long-regression.yml`）の`long`は、長いテストだけをLinuxで実行します。
 
 ### 結果の残り方と見方
 
@@ -43,7 +43,7 @@ test results: 1 failed, 967 passed, 4 skipped; failed: tests/unit/x/test_y.py::t
 
 失敗の原因は、もう一度実行せずに`summary.txt`で確かめます。`.pytest_cache`の失敗記録（`--lf`）は、次に全件が通ると消えるので、記録としては使いません。コーディングエージェントも、`| tail -1`などで集計行だけを見て判断しないでください。失敗があったら、この最後の行で名前を、`summary.txt`で原因を確かめ、テストの名前と原因を報告します。結果を残したくない実行では`-p no:results_log`を付けます。
 
-手動実行のCIでも同じファイルが書かれますが、artifactとして保存していません。保存するにはworkflowの変更が要るので、チームで合意してから行います。
+`オフラインCI`は、OSごとの`.test-results/`を`test-results-<OS>`のartifactとして7日間保存します。失敗したときは、そのartifactの`summary.txt`で原因を確かめます。
 
 ### 網羅率の計測
 

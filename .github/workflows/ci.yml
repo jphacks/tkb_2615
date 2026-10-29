@@ -1,7 +1,10 @@
-# offline CI on Linux, Windows and macOS (#48). Started by hand for now.
+# offline CI on Linux, Windows and macOS (#48), on every pull request to develop and
+# by hand.
 name: オフラインCI
 
 on:
+  pull_request:
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
