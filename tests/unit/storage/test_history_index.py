@@ -110,3 +110,15 @@ def test_an_index_write_over_the_storage_capacity_is_refused_and_rolled_back(ind
     with pytest.raises(StorageError, match="storage_capacity_exceeded"):
         _put(index, *(("events", _record(number), None) for number in range(2, 2_000)))
     assert _counts(index) == before
+
+
+def test_an_index_left_in_wal_mode_returns_to_the_rollback_journal(index):
+    """#268 wrote indexes with a write-ahead log, a mode kept in the file; the next
+    write returns them to the rollback journal (#269)."""
+    with sqlite3.connect(index.path) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    _put(index, ("events", _record(1), None))
+    with sqlite3.connect(index.path.as_uri() + "?mode=ro", uri=True) as db:
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert not index.path.with_name(index.path.name + "-wal").exists()
+    assert _counts(index)["records"] == 1

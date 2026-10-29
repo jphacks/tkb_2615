@@ -395,6 +395,10 @@ class HistoryIndex:
         connection.row_factory = sqlite3.Row
         try:
             if write:
+                # An index written while #268 used a write-ahead log keeps that mode in
+                # the file; return it to the rollback journal (#269). With readers open
+                # the mode stays until a later write; on other files this does nothing.
+                connection.execute("PRAGMA journal_mode=DELETE")
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 if version not in (0, 1):
                     raise StorageError("history_index_version_unsupported")
