@@ -1001,13 +1001,25 @@ class ProjectStore:
         """An explicit run-ID confirmation is required; no cascading project deletion."""
         import shutil
 
+        directory = self._path(project_id, "runs", run_id)
         lease = self.claim_run(project_id, run_id)
         try:
             with self.transaction():
                 run = self.run(project_id, run_id)
                 if confirmation != run_id or run["status"] not in _TERMINAL | {"paused", "queued"}:
                     raise StorageError("deletion needs run ID confirmation and an inactive run")
-                shutil.rmtree(self._path(project_id, "runs", run_id))
+                # Windows cannot remove a file this process holds open, so the lease file
+                # goes after the lease is released.
+                for entry in directory.iterdir():
+                    if entry.name == "worker-lock":
+                        continue
+                    if entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
                 self._checkpoint_write_bytes.pop((project_id, run_id), None)
         finally:
             self.release_run(lease)
+        with self.transaction():
+            # Without run.json no one can claim the Run again before it is gone.
+            shutil.rmtree(directory)
