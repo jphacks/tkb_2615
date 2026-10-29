@@ -1,7 +1,7 @@
-"""Run one ProjectAPI computation in its own process (#48).
+"""Run one ProjectAPI computation or fork in its own process (#48).
 
 The server process keeps answering HTTP requests without sharing the GIL with the
-simulation, and the memory a computation used returns to the OS when it ends.
+simulation, and the memory a job used returns to the OS when it ends.
 """
 
 from __future__ import annotations
@@ -23,35 +23,23 @@ _START_TIMEOUT_SECONDS = 120.0
 
 
 def start_worker(
-    store: ProjectStore,
-    project_id: str,
-    run_id: str,
-    branch_id: str,
-    target_minute: int,
-    measure_performance: bool,
-) -> tuple[SpawnProcess, Event]:
+    store: ProjectStore, job: dict[str, Any]
+) -> tuple[SpawnProcess, Event, Connection]:
     """Start a worker and return it once it owns the Run's writer lease.
 
-    The worker claims the lease itself, so a server that stops abnormally never
-    leaves a computation writing without one. A Run another process owns is
-    refused with the same error as before.
+    job is {"kind": "advance", ...} or {"kind": "fork", ...} with the arguments of
+    ProjectAPI._advance or ProjectAPI.fork. The worker claims the lease itself, so a
+    server that stops abnormally never leaves a job writing without one. A Run
+    another process owns is refused with the same error as before. The returned
+    connection receives the job's outcome; it reaches end of file when the worker
+    ends.
     """
     cancel = _CONTEXT.Event()
     receiver, sender = _CONTEXT.Pipe(duplex=False)
     process = _CONTEXT.Process(
         target=run_worker,
-        args=(
-            str(store.root),
-            store.max_bytes,
-            project_id,
-            run_id,
-            branch_id,
-            target_minute,
-            measure_performance,
-            cancel,
-            sender,
-        ),
-        name=f"sheltersim-run-{run_id}",
+        args=(str(store.root), store.max_bytes, job, cancel, sender),
+        name=f"sheltersim-{job['kind']}-{job['run_id']}",
     )
     process.start()
     sender.close()
@@ -65,41 +53,38 @@ def start_worker(
         except EOFError:
             process.join()
             raise StorageError("run_worker_start_failed") from None
-    finally:
+    except BaseException:
         receiver.close()
+        raise
     if state != "running":
+        receiver.close()
         process.join()
         raise StorageError(detail)
-    return process, cancel
+    return process, cancel, receiver
 
 
 def run_worker(
-    root: str,
-    max_bytes: int,
-    project_id: str,
-    run_id: str,
-    branch_id: str,
-    target_minute: int,
-    measure_performance: bool,
-    cancel: Event,
-    ready: Connection,
+    root: str, max_bytes: int, job: dict[str, Any], cancel: Event, outcome: Connection
 ) -> None:
     from sheltersim.web.projects import ProjectAPI
 
+    project_id, run_id = job["project_id"], job["run_id"]
     store = ProjectStore(root, max_bytes=max_bytes)
     try:
         lease = store.claim_run(project_id, run_id)
     except StorageError as exc:
-        ready.send(("refused", str(exc)))
+        outcome.send(("refused", str(exc)))
         return
     try:
+        previous = store.run(project_id, run_id)["status"]
         store.set_status(project_id, run_id, "running")
     except BaseException as exc:
         store.release_run(lease)
-        ready.send(("refused", str(exc) if isinstance(exc, StorageError) else "run_worker_failed"))
+        outcome.send(
+            ("refused", str(exc) if isinstance(exc, StorageError) else "run_worker_failed")
+        )
         return
-    ready.send(("running", None))
-    ready.close()
+    outcome.send(("running", None))
     parent: Any = multiprocessing.parent_process()
 
     def stopped() -> bool:
@@ -108,15 +93,43 @@ def run_worker(
 
     api = ProjectAPI(store, recover=False)
     try:
-        api._advance(
-            project_id,
-            run_id,
-            branch_id,
-            target_minute,
-            stopped,
-            lease,
-            measure_performance,
-            own_process=True,
-        )
+        if job["kind"] == "advance":
+            api._advance(
+                project_id,
+                run_id,
+                job["branch_id"],
+                job["target_minute"],
+                stopped,
+                lease,
+                job["measure_performance"],
+                own_process=True,
+            )
+            return
+        try:
+            result = api.fork(
+                project_id,
+                run_id,
+                job["branch_id"],
+                job["document"],
+                expected_state_hash=job["expected_state_hash"],
+            )
+        except StorageError as exc:
+            outcome.send(("fork_failed", {"error": str(exc), "code": exc.code}))
+        except ValueError:
+            outcome.send(("fork_failed", {"error": "invalid project request", "code": None}))
+        except Exception:
+            outcome.send(("fork_failed", {"error": "project operation failed", "code": None}))
+        else:
+            outcome.send(("forked", result))
+        finally:
+            # A fork leaves the Run as it found it. The server restores the status
+            # after it records the outcome, so a client that sees the Run leave
+            # running also sees why; without a server, the worker restores it.
+            try:
+                if parent is None or not parent.is_alive():
+                    store.set_status(project_id, run_id, previous)
+            finally:
+                store.release_run(lease)
     finally:
+        outcome.close()
         api.close()
