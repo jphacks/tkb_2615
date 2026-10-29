@@ -23,11 +23,42 @@ def money(value: float) -> int:
 
 def process_identity(pid: int) -> str | None:
     try:
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-        start = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[19]
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        start = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rpartition(")")[2].split()[19]
         return digest({"boot": boot, "start": start, "pid": pid})
     except (OSError, IndexError):
         return None
+
+
+def process_exists(pid: int) -> bool | None:
+    """Whether a process with this ID is running; None when the system will not say.
+
+    os.kill(pid, 0) tests a process on POSIX, but on Windows signal 0 is CTRL_C_EVENT
+    and interrupts every process of the console, so Windows asks the process itself.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        process_query_limited_information, still_active = 0x1000, 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            # ERROR_ACCESS_DENIED: the process exists but belongs to someone else.
+            return None if ctypes.get_last_error() == 5 else False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return None
+            return code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    return True
 
 
 class UsageLedger:
@@ -179,12 +210,11 @@ class UsageLedger:
             receipts = list(document["receipts"].values())
             for receipt in receipts:
                 if receipt["status"] == "pending":
-                    try:
-                        os.kill(receipt["pid"], 0)
-                    except ProcessLookupError:
-                        receipt["status"] = "uncertain"
-                    except PermissionError:
+                    running = process_exists(receipt["pid"])
+                    if running is None:
                         continue
+                    if not running:
+                        receipt["status"] = "uncertain"
                     current = process_identity(receipt["pid"])
                     if current is not None and receipt.get("process_identity") not in {
                         None,
