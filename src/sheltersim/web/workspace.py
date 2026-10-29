@@ -600,13 +600,12 @@ class ProjectWorkspace:
                         raise StorageError("intervention preview expired or has another scope")
                     if not preview["can_apply"] or body["approved_program_hash"] != preview["hash"]:
                         raise StorageError("intervention approval does not match validated preview")
-                    current = TimelineStore(self.store, project_id, run_id).seek(
-                        branch_id, preview["minute"]
-                    )
-                    if current.world.state_digest() != preview["state_hash"]:
-                        raise StorageError("source state changed; preview the intervention again")
-                    result = self.api.post(
-                        [project_id, "runs", run_id, "branches", branch_id, "fork"],
+                    # The fork checks the source state against the preview's while it
+                    # restores the source, instead of restoring it once more here.
+                    result = self.api.fork(
+                        project_id,
+                        run_id,
+                        branch_id,
                         {
                             "minute": preview["minute"],
                             "child_id": body["child_id"],
@@ -614,6 +613,7 @@ class ProjectWorkspace:
                             "program": preview["program"].model_dump(mode="json"),
                             "approved_program_hash": preview["hash"],
                         },
+                        expected_state_hash=preview["state_hash"],
                     )
                     self.drafts.pop(body["preview_id"], None)
                     return result
