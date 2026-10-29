@@ -109,6 +109,8 @@ class _TargetResolution:
     selector: TargetSelector | None
     ambiguity: Ambiguity | None = None
     issue: ParseIssue | None = None
+    # Why an unnamed target was chosen from the scenario data, shown as an assumption.
+    assumption: str | None = None
 
 
 def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseResult:
@@ -147,6 +149,7 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
         )
 
     effects: list[TimedAction] = []
+    assumptions: list[PlanAssumption] = []
     ambiguities: list[Ambiguity] = []
     issues: list[ParseIssue] = []
     seen_ops: set[str] = set()
@@ -235,6 +238,17 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
             dependencies = ["operational_events_v1", "resource_service_v1"]
 
         effect_id = f"effect-{index}-{op}"
+        effect_assumptions = []
+        if target.assumption is not None:
+            assumption_id = f"assumption-{index}-target"
+            effect_assumptions.append(assumption_id)
+            assumptions.append(
+                PlanAssumption(
+                    assumption_id=assumption_id,
+                    description=target.assumption,
+                    source_id=PARSER_SOURCE_ID,
+                )
+            )
         effects.append(
             TimedAction(
                 effect_id=effect_id,
@@ -247,7 +261,7 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
                 parameters=parameters,
                 units=units,
                 source_id=PARSER_SOURCE_ID,
-                assumption_ids=[],
+                assumption_ids=effect_assumptions,
                 policy_dependencies=dependencies,
                 causation_id=None,
                 reversible=True,
@@ -299,7 +313,7 @@ def parse_natural_language(request: ParseRequest | dict[str, object]) -> ParseRe
         source_text=request.text,
         simulation_start_minute=fork_at_minute,
         effects=effects,
-        assumptions=[],
+        assumptions=assumptions,
         support_mode=support_mode,
         compiler_provenance=CompilerProvenance(
             compiler_kind="offline_rule",
@@ -477,8 +491,12 @@ def _resolve_target(text: str, op: str, summary: ScenarioSummary) -> _TargetReso
     named_zones = [
         zone
         for zone in candidates
-        if _contains_label(text, zone.id) or _contains_label(text, zone.name)
+        if _contains_label(text, zone.id)
+        or _contains_label(text, zone.name)
+        or _names_zone_area(text, zone.name)
     ]
+    # Without a named zone, the zones the scenario data ties to the operation (#35).
+    eligible, basis = _zones_for_operation(op, summary)
     explicit_zone_id = _explicit_zone_id(text)
     if explicit_zone_id is not None:
         matches = [zone for zone in candidates if zone.id == explicit_zone_id]
@@ -495,6 +513,8 @@ def _resolve_target(text: str, op: str, summary: ScenarioSummary) -> _TargetReso
         matches = named_zones
     elif summary.default_zone_id is not None:
         matches = [zone for zone in candidates if zone.id == summary.default_zone_id]
+    elif eligible:
+        matches = eligible
     else:
         matches = candidates
     if not matches:
@@ -506,7 +526,15 @@ def _resolve_target(text: str, op: str, summary: ScenarioSummary) -> _TargetReso
             ),
         )
     if len(matches) == 1:
-        return _TargetResolution(selector=TargetSelector(kind=target_kind, target_id=matches[0].id))
+        chosen = matches[0]
+        return _TargetResolution(
+            selector=TargetSelector(kind=target_kind, target_id=chosen.id),
+            assumption=(
+                f"追加先が書かれていないため、{basis}「{chosen.name}」（{chosen.id}）を対象にしました。"
+                if matches is eligible and basis
+                else None
+            ),
+        )
     candidate_ids = [zone.id for zone in matches]
     ambiguity = Ambiguity(
         code="ambiguous_target",
@@ -518,6 +546,45 @@ def _resolve_target(text: str, op: str, summary: ScenarioSummary) -> _TargetReso
         selector=TargetSelector(kind=target_kind, candidate_ids=candidate_ids),
         ambiguity=ambiguity,
     )
+
+
+def _zones_for_operation(op: str, summary: ScenarioSummary) -> tuple[list[ZoneTarget], str]:
+    """The zones the scenario data ties to a zone operation, and how they were chosen.
+
+    Toilets go where toilets are, arrivals where people are received, staff where staff
+    are stationed, and departures leave from where evacuees are. An operation with no
+    such zone keeps every zone as a candidate.
+    """
+    facility_zones = {
+        kind: {item.zone_id for item in summary.facilities if item.zone_id and match(item.kind)}
+        for kind, match in (
+            ("toilet", _is_toilet),
+            ("intake", lambda kind: kind.casefold() in {"intake", "reception"}),
+        )
+    }
+    if op == "add_toilet":
+        zones, basis = (
+            [z for z in summary.zones if z.id in facility_zones["toilet"]],
+            "既存トイレのあるZone",
+        )
+    elif op == "add_evacuees":
+        zones, basis = (
+            [z for z in summary.zones if z.id in facility_zones["intake"]],
+            "受付のあるZone",
+        )
+    elif op == "add_staff":
+        zones, basis = [z for z in summary.zones if z.staff_count], "スタッフの配置されているZone"
+    elif op == "depart_evacuees":
+        zones, basis = [z for z in summary.zones if z.evacuee_count], "避難者のいるZone"
+    else:
+        zones, basis = [], ""
+    return zones, basis
+
+
+def _names_zone_area(text: str, name: str) -> bool:
+    """A generic zone name such as トイレ names the zone when followed by ゾーン or エリア."""
+    normalized = unicodedata.normalize("NFKC", name).casefold().strip()
+    return bool(normalized) and any(normalized + word in text for word in ("ゾーン", "エリア"))
 
 
 def _is_toilet(kind: str) -> bool:
@@ -820,6 +887,8 @@ def scenario_summary_from_world(
                 facility.kind == "water_station" and facility.zone_id == zone.id
                 for facility in world.facilities.values()
             ),
+            staff_count=sum(member.zone_id == zone.id for member in world.staff.values()),
+            evacuee_count=sum(agent.zone_id == zone.id for agent in world.agents.values()),
         )
         for zone in sorted(world.zones.values(), key=lambda item: item.id)
     ]
@@ -1009,6 +1078,30 @@ def compile_natural_language(
             reason=failure_reason,
         )
 
+    zone_ids = {zone.id for zone in summary.zones}
+    if (
+        accepted["status"] == "clarification_required"
+        and accepted["choices"]
+        and set(accepted["choices"]) <= zone_ids
+        and offline_result.status == "parsed"
+        and offline_result.draft_plan is not None
+        and _offline_fallback_covers_all_clauses(request.text)
+    ):
+        # Opus asked which zone, but the rules choose it from the scenario data the
+        # same way every time (#35); the plan says which data chose it.
+        return _validated_offline_plan(
+            offline_result.draft_plan,
+            request,
+            registry=registry,
+            eligible=eligible,
+            target_ids=target_ids,
+            usage=usage,
+            reason="Opus asked for the zone, which the scenario data determines",
+            mechanism_summary=(
+                "Opusは対象Zoneを聞き返しましたが、シナリオのデータから一意に決まるため、"
+                "認識済みのオフライン規則で対象と作用を構成しました。"
+            ),
+        )
     return _compiler_result_from_output(
         accepted,
         request,
@@ -1321,10 +1414,10 @@ def _parse_compiler_output(
             raise ValueError("clarification output cannot contain executable effects")
         if not document["questions"] and not document["choices"]:
             raise ValueError("clarification output must ask a question or offer choices")
-        if not set(document["choices"]) <= {
-            target_id for values in target_ids.values() for target_id in values
-        }:
-            raise ValueError("clarification choices must be existing scenario IDs")
+        # Choices answer one question, so they are IDs of one target kind (#35).
+        choices = set(document["choices"])
+        if choices and not any(choices <= set(values) for values in target_ids.values()):
+            raise ValueError("clarification choices must be existing IDs of one target kind")
     elif status == "compiled":
         if support_mode not in {
             SupportMode.NATIVE,
@@ -1729,6 +1822,9 @@ def _validated_offline_plan(
     target_ids: dict[str, list[str]],
     usage: CompilerUsage,
     reason: str,
+    mechanism_summary: str = (
+        "Opusが利用できないため、認識済みのオフライン規則で対象と作用を構成しました。"
+    ),
 ) -> CompilerResult:
     try:
         _validate_existing_plan(
@@ -1745,9 +1841,7 @@ def _validated_offline_plan(
             status="compiled",
             support_mode=plan.support_mode,
             draft_plan=plan,
-            mechanism_summary=(
-                "Opusが利用できないため、認識済みのオフライン規則で対象と作用を構成しました。"
-            ),
+            mechanism_summary=mechanism_summary,
             limitations=_with_fallback_reason(
                 ["これは規則ベースのfallbackで、自由文全体をOpusが解釈した結果ではありません。"],
                 reason,

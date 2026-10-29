@@ -1100,3 +1100,154 @@ def test_unknown_zone_stays_rejected_and_unqualified_text_requires_choice():
     assert unknown.issues[0].code == "unknown_target"
     ambiguous = parse_target("トイレを2基追加する")
     assert ambiguous.status == "clarification_required"
+
+
+def shelter_summary(*, with_facilities: bool = True) -> ScenarioSummary:
+    """Zones as in the generated Scenario: toilets, reception, staff and evacuees (#35)."""
+    facilities = [
+        FacilityTarget(
+            id=facility_id,
+            name=facility_id,
+            kind=kind,
+            zone_id=zone_id,
+            capacity=1,
+            working_units=1,
+        )
+        for facility_id, kind, zone_id in (
+            ("toilet_01", "toilet", "toilet"),
+            ("intake_desk", "intake", "intake"),
+            ("water_station_main", "water_station", "food"),
+        )
+    ]
+    return ScenarioSummary(
+        duration_minutes=1440,
+        facilities=facilities if with_facilities else [],
+        zones=[
+            ZoneTarget(id="food", name="食事・給水スペース", staff_count=5, evacuee_count=52),
+            ZoneTarget(id="intake", name="受付"),
+            ZoneTarget(id="sleeping", name="避難スペース", evacuee_count=38),
+            ZoneTarget(id="staff", name="運営本部", staff_count=1, evacuee_count=7),
+            ZoneTarget(id="toilet", name="トイレ", evacuee_count=3),
+        ],
+        available_policies=["facility_capacity", "population_dynamics_v1", "staff_operations"],
+    )
+
+
+def parse_in_shelter(text: str, **options):
+    return parse_natural_language(
+        ParseRequest(
+            text=text,
+            branch_id="main",
+            selected_minute=60,
+            scenario_summary=shelter_summary(**options),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "target", "basis"),
+    [
+        ("トイレを1基追加", "toilet", "既存トイレのあるZone"),
+        ("避難者が5人到着", "intake", "受付のあるZone"),
+    ],
+)
+def test_an_unnamed_zone_comes_from_the_scenario_data_and_is_an_assumption(text, target, basis):
+    """Additions with an obvious zone used to ask about every zone (#35)."""
+    result = parse_in_shelter(text)
+    assert result.status == "parsed"
+    (effect,) = result.draft_plan.effects
+    assert effect.target_selector.target_id == target
+    (assumption,) = result.draft_plan.assumptions
+    assert effect.assumption_ids == [assumption.assumption_id]
+    assert basis in assumption.description
+
+
+@pytest.mark.parametrize(
+    ("text", "choices"),
+    [
+        ("スタッフを2人追加", ["food", "staff"]),
+        ("避難者が3人帰宅", ["food", "sleeping", "staff", "toilet"]),
+    ],
+)
+def test_several_zones_from_the_scenario_data_are_the_only_choices(text, choices):
+    result = parse_in_shelter(text)
+    assert result.status == "clarification_required"
+    assert result.draft_plan.ambiguities[0].choices == choices
+
+
+@pytest.mark.parametrize(
+    ("text", "target"),
+    [
+        ("トイレゾーンにトイレを1基追加", "toilet"),
+        ("トイレエリアに仮設トイレを1基追加", "toilet"),
+        ("避難スペースに仮設トイレを1基追加", "sleeping"),
+    ],
+)
+def test_a_named_zone_is_kept_and_needs_no_assumption(text, target):
+    result = parse_in_shelter(text)
+    assert result.status == "parsed"
+    assert result.draft_plan.effects[0].target_selector.target_id == target
+    assert result.draft_plan.assumptions == []
+
+
+def test_without_data_for_the_operation_every_zone_stays_a_choice():
+    result = parse_in_shelter("トイレを1基追加", with_facilities=False)
+    assert result.status == "clarification_required"
+    assert result.draft_plan.ambiguities[0].choices == [
+        "food",
+        "intake",
+        "sleeping",
+        "staff",
+        "toilet",
+    ]
+
+
+def clarification_response(choices: list[str]) -> str:
+    return json.dumps(
+        {
+            "status": "clarification_required",
+            "support_mode": "clarification_required",
+            "mechanism_summary": "追加先を確認します。",
+            "effects": [],
+            "assumptions": [],
+            "limitations": [],
+            "questions": ["設置先を一意に特定できません。"],
+            "choices": choices,
+        },
+        ensure_ascii=False,
+    )
+
+
+def shelter_request(text: str) -> ParseRequest:
+    return ParseRequest(
+        text=text, branch_id="main", selected_minute=60, scenario_summary=shelter_summary()
+    )
+
+
+def test_an_opus_zone_question_the_scenario_data_answers_is_filled_by_the_rules():
+    provider = FakeProvider(clarification_response(["food", "intake", "toilet"]))
+    result = compile_natural_language(shelter_request("トイレを1基追加"), router(provider))
+    assert len(provider.calls) == 1
+    assert result.status == "compiled"
+    assert result.fallback_used is True
+    assert "聞き返しました" in result.mechanism_summary
+    assert result.draft_plan.effects[0].target_selector.target_id == "toilet"
+    assert "既存トイレのあるZone" in result.draft_plan.assumptions[0].description
+
+
+def test_an_opus_zone_question_with_several_data_zones_stays_a_question():
+    provider = FakeProvider(clarification_response(["food", "staff"]))
+    result = compile_natural_language(shelter_request("スタッフを2人追加"), router(provider))
+    assert result.status == "clarification_required"
+    assert result.choices == ["food", "staff"]
+
+
+def test_opus_choices_of_several_target_kinds_are_not_accepted():
+    """Zone and facility IDs in one question used to pass and were sent back as zone_id."""
+    provider = FakeProvider(
+        clarification_response(["toilet", "toilet_01"]),
+        clarification_response(["toilet", "toilet_01"]),
+    )
+    result = compile_natural_language(shelter_request("スタッフを2人追加"), router(provider))
+    assert result.fallback_used is True
+    assert "one target kind" in " ".join(result.limitations)
