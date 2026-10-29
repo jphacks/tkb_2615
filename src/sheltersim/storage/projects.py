@@ -131,6 +131,9 @@ class ProjectStore:
             raise StorageError("max_bytes must be positive")
         self.max_bytes = max_bytes
         self._mutex = threading.RLock()
+        # A save in progress on this thread: the usage measured at its start plus
+        # what it has written since (#237).
+        self._measured = threading.local()
         self._checkpoint_write_bytes: dict[tuple[str, str], int] = {}
 
     @contextmanager
@@ -202,6 +205,7 @@ class ProjectStore:
             raise StorageError("storage capacity exceeded; export then delete saved runs")
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
+        added = (len(encoded) - previous_size, 0 if previous_size else 1)
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(encoded)
@@ -213,6 +217,7 @@ class ProjectStore:
                 except FileExistsError as exc:
                     if path.read_bytes() != encoded:
                         raise StorageError("immutable saved artifact already exists") from exc
+                    added = (0, 0)
             else:
                 os.replace(name, path)
             if os.name != "nt":
@@ -223,8 +228,36 @@ class ProjectStore:
                     os.close(directory_fd)
         finally:
             Path(name).unlink(missing_ok=True)
+        self._wrote(*added)
 
     def usage(self) -> dict[str, int]:
+        """The disk usage now; within a save, measured at its start plus its own writes."""
+        measured = getattr(self._measured, "usage", None)
+        return dict(measured) if measured is not None else self._measure_usage()
+
+    @contextmanager
+    def _usage_measured_once(self) -> Iterator[None]:
+        """Within a save, measure the disk once and count this thread's writes on it.
+
+        Files another process writes during the save are counted from the next
+        measurement on.
+        """
+        if getattr(self._measured, "usage", None) is not None:
+            yield
+            return
+        self._measured.usage = self._measure_usage()
+        try:
+            yield
+        finally:
+            self._measured.usage = None
+
+    def _wrote(self, byte_count: int, file_count: int = 0) -> None:
+        measured = getattr(self._measured, "usage", None)
+        if measured is not None:
+            measured["bytes"] += byte_count
+            measured["files"] += file_count
+
+    def _measure_usage(self) -> dict[str, int]:
         """Measure the regular files on disk now, including other processes' writes.
 
         Symlinks are neither counted nor followed. Directory entries carry their type,
@@ -465,7 +498,7 @@ class ProjectStore:
         expected_checkpoint_hash: str | None,
         encoder: CanonicalEncoder | None = None,
     ) -> None:
-        with self.transaction():
+        with self.transaction(), self._usage_measured_once():
             run = self.run(project_id, reference.run_id)
             scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
             document = document_source()
@@ -543,6 +576,7 @@ class ProjectStore:
                 },
             )
             archive._write_prepared()
+            self._wrote(archive.new_bytes, archive.new_files)
             new_manifest = not checkpoint_path.exists()
             self._write(checkpoint_path, encoded_archive, immutable=True)
             manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0
@@ -561,7 +595,9 @@ class ProjectStore:
                 },
             )
             self._checkpoint_write_bytes[key] = written_bytes
+            pending_size = pending_ledger_path.stat().st_size
             pending_ledger_path.unlink(missing_ok=True)
+            self._wrote(-pending_size, -1)
             self._write(
                 path,
                 {
