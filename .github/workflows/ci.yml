@@ -42,6 +42,8 @@ jobs:
           path: .test-results/
           retention-days: 7
           if-no-files-found: ignore
+          # .test-results is a dot directory, which upload-artifact skips by default.
+          include-hidden-files: true
       - name: lintを確認
         if: matrix.os == 'ubuntu-latest'
         run: ruff check .
