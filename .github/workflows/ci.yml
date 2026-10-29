@@ -30,6 +30,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - name: Windowsのリアルタイムスキャンを止める
+        # The disposable runner scans every file the tests write; the saves of a Run
+        # write thousands. This runs only on the CI virtual machine.
+        if: runner.os == 'Windows'
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: pwsh
       - name: packageと開発toolを導入
         run: python -m pip install -e ".[dev]"
       - name: 短時間offline test
