@@ -36,6 +36,10 @@ def canonical_bytes(value: Any) -> bytes:
     ).encode()
 
 
+# Items of a spliced list joined at a time when only a hash of the bytes is needed.
+_HASH_BATCH = 512
+
+
 class CanonicalEncoder:
     """canonical_bytes() of one captured document, splicing cached history bytes.
 
@@ -109,16 +113,26 @@ class CanonicalEncoder:
         self._encoded[id(value)] = (value, raw)
         return raw
 
-    def parts(self, value: Any) -> Iterator[bytes]:
-        """Fragments whose concatenation is canonical_bytes(value)."""
+    def parts(self, value: Any, *, joined: bool = True) -> Iterator[bytes]:
+        """Fragments whose concatenation is canonical_bytes(value).
+
+        Without joined, a spliced list comes in batches of items, so a hash need not
+        build one copy of a whole history (about 45 MB for a day's EventLog).
+        """
         items = self.list_items(value)
         if items is not None:
-            yield b"[" + b",".join(items) + b"]"
+            if joined:
+                yield b"[" + b",".join(items) + b"]"
+            else:
+                yield b"["
+                for start in range(0, len(items), _HASH_BATCH):
+                    yield (b"," if start else b"") + b",".join(items[start : start + _HASH_BATCH])
+                yield b"]"
         elif self._is_container(value):
             yield b"{"
             for index, key in enumerate(sorted(value)):
                 yield (b"," if index else b"") + canonical_bytes(key) + b":"
-                yield from self.parts(value[key])
+                yield from self.parts(value[key], joined=joined)
             yield b"}"
         else:
             yield self._leaf(value)
@@ -140,7 +154,7 @@ class CanonicalEncoder:
 
     def digest(self, value: Any) -> str:
         hasher = hashlib.sha256()
-        for part in self.parts(value):
+        for part in self.parts(value, joined=False):
             hasher.update(part)
         return hasher.hexdigest()
 
