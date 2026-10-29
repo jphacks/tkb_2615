@@ -105,12 +105,7 @@ class CheckpointArchive:
             return {
                 "kind": "list_v2",
                 "chunks": [
-                    self._put(
-                        value[i : i + self.chunk_records],
-                        None
-                        if items is None
-                        else b"[" + b",".join(items[i : i + self.chunk_records]) + b"]",
-                    )
+                    self._put_slice(value, items, i)
                     for i in range(0, len(value), self.chunk_records)
                 ],
                 "starts": list(range(0, len(value), self.chunk_records)),
@@ -137,6 +132,20 @@ class CheckpointArchive:
             "kind": "value",
             "chunk": self._put(value, None if self.encoder is None else self.encoder.encode(value)),
         }
+
+    def _put_slice(self, value: list[Any], items: list[bytes] | None, start: int) -> str:
+        count = min(self.chunk_records, len(value) - start)
+        if items is None or self.encoder is None:
+            return self._put(value[start : start + count])
+        key = self.encoder.chunk_key(items, start, count)
+        if key is not None and (self.chunk_directory / f"{key}.json.gz").exists():
+            # The same item bytes as a chunk saved before by this writer.
+            return key
+        key = self._put(
+            value[start : start + count], b"[" + b",".join(items[start : start + count]) + b"]"
+        )
+        self.encoder.remember_chunk(items, start, count, key)
+        return key
 
     def _size(self, value: Any) -> int:
         return len(_encoded(value)) if self.encoder is None else self.encoder.size(value)
