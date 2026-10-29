@@ -719,3 +719,33 @@ def test_task_input_byte_limit_never_lowers_a_larger_setting() -> None:
 def test_task_input_byte_limit_must_be_a_positive_integer(value) -> None:
     with pytest.raises(ValueError, match="input_byte_limit"):
         LLMTask(**{**task().__dict__, "input_byte_limit": value})
+
+
+def test_a_router_is_built_without_the_optional_sdk_and_reports_it_when_called(
+    monkeypatch,
+) -> None:
+    """The SDK is imported at the first call, so a router whose provider a test or a
+    usage account replaces needs no SDK; a real call still says to install it."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_sdk(name, *args, **kwargs):
+        if name == "anthropic":
+            raise ImportError("anthropic is not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_sdk)
+    provider = AnthropicProvider("test-key")
+    with pytest.raises(LLMProviderError, match=r"pip install \.\[llm\]"):
+        provider.complete(
+            model_id="claude-test",
+            task=LLMTask(
+                stage=LLMStage.RUNTIME,
+                input_text="{}",
+                state_hash="test",
+                prompt_version="test-v1",
+            ),
+            max_output_tokens=16,
+            timeout_seconds=1.0,
+        )
