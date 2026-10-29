@@ -230,6 +230,9 @@
     publishView();
   }
   function selectedReference() { return view.runData?.branches.find(b => b.branch_id === view.branch); }
+  // Each branch has its own computation status (#48); a Run computed before that has
+  // none on any branch, and its own status stands for all of them.
+  function branchState(data, branch) { return branch?.status || (data?.branches.some(b => b.status) ? null : data?.status) || null; }
   async function openRun() {
     view.pendingFork=null;
     ++view.scopeSerial; ++view.interventionSerial; ++view.compareSerial; ++view.chatSerial; el("ask").disabled=false; view.playing = false; view.context = null; view.intervention = null; view.comparison = null; view.comparisonFrames = null; view.compareIds = null; view.comparisonRange = null; clearTimeout(view.polling);
@@ -252,19 +255,22 @@
   async function refreshRun(follow) {
     const previous = selectedReference();
     const atHead = previous && view.minute === previous.computed_until;
-    const oldStatus = view.runData?.status;
+    const oldStatus = branchState(view.runData, previous);
     const data = await request(runRoot()); view.runData = data;
     let forkNote=null;
-    if(view.pendingFork&&data.status!=="running"){
-      const child=view.pendingFork;view.pendingFork=null;
-      if(data.branches.some(b=>b.branch_id===child)){view.branch=child;await openRun();return;}
-      forkNote=`分岐を作成できませんでした: ${data.last_fork?.error||"理由を取得できませんでした"}`;
+    if(view.pendingFork){
+      // Other branches may compute meanwhile, so the fork ends when its child is listed and still, or its outcome failed (#48).
+      const child=view.pendingFork,created=data.branches.find(b=>b.branch_id===child);
+      if(created&&branchState(data,created)!=="running"){view.pendingFork=null;view.branch=child;await openRun();return;}
+      if(data.last_fork?.status==="failed"||(!created&&data.status!=="running")){view.pendingFork=null;forkNote=`分岐を作成できませんでした: ${data.last_fork?.error||"理由を取得できませんでした"}`;}
     }
-    const calculationActive = data.status === "running";
+    if (!data.branches.some(b => b.branch_id === view.branch)) view.branch = data.branches[0]?.branch_id;
+    const selectedState = branchState(data, data.branches.find(b => b.branch_id === view.branch));
+    const calculationActive = selectedState === "running";
     el("intervention-preview").disabled = calculationActive;
     el("fork").disabled = calculationActive;
-    if (!data.branches.some(b => b.branch_id === view.branch)) view.branch = data.branches[0]?.branch_id;
-    options(el("branch"), data.branches.map(b => ({value:b.branch_id,label:`${b.branch_id} · ${b.fork_minute}–${b.computed_until}`})), view.branch);
+    el("compute").disabled = calculationActive;
+    options(el("branch"), data.branches.map(b => ({value:b.branch_id,label:`${b.branch_id} · ${b.fork_minute}–${b.computed_until}${branchState(data,b)==="running"?" · 計算中":""}`})), view.branch);
     const comparisons = new Set([...el("compare-ids").selectedOptions].map(o => o.value));
     options(el("compare-ids"), data.branches.map(b => ({value:b.branch_id,label:b.branch_id})), null);
     for (const option of el("compare-ids").options) option.selected = comparisons.has(option.value);
@@ -283,15 +289,15 @@
     const visibleRange=view.comparisonRange||[ref.fork_minute,ref.computed_until];
     el("seek").min = el("minute").min = visibleRange[0];
     el("seek").max = el("minute").max = visibleRange[1];
-    el("range").textContent = view.comparisonRange?`同期計算済み ${visibleRange.join("–")}分 · / ${duration}分 · ${data.status}`:`計算済み ${ref.fork_minute}–${ref.computed_until} / ${duration}分 · ${data.status}`;
+    el("range").textContent = view.comparisonRange?`同期計算済み ${visibleRange.join("–")}分 · / ${duration}分 · ${selectedState||"未計算"}`:`計算済み ${ref.fork_minute}–${ref.computed_until} / ${duration}分 · ${selectedState||"未計算"}`;
     if (follow && atHead) await seek(visibleRange[1]);
     else if(view.minute<visibleRange[0]||view.minute>visibleRange[1])await seek(Math.max(visibleRange[0],Math.min(visibleRange[1],view.minute)));
-    if (oldStatus === "running" && data.status !== "running") {
+    if (oldStatus === "running" && selectedState !== "running") {
       const report = await request(`${branchRoot()}/report`);
       el("report").textContent = report.markdown || json(report);
     }
     if(forkNote||view.pendingFork)status(forkNote||`分岐 ${view.pendingFork} を作成しています…`);
-    else status(`Run ${view.run} · Branch ${view.branch} · ${data.status} · PREPARE/RUNTIME/REVIEWの費用・工程別明細は保存Project台帳から確認できます。キー有無はサーバー側で判定し、ブラウザに秘密値を出しません。`);
+    else status(`Run ${view.run} · ${data.status} · Branch ${view.branch} · ${selectedState||"未計算"} · PREPARE/RUNTIME/REVIEWの費用・工程別明細は保存Project台帳から確認できます。キー有無はサーバー側で判定し、ブラウザに秘密値を出しません。`);
     if (data.status === "running") {
       clearTimeout(view.polling); view.polling = setTimeout(() => refreshRun(true).catch(e => {if(e!==STALE)status(e.message);}), 1500);
     } else { clearTimeout(view.polling); }
@@ -663,7 +669,7 @@
   on("measure-render","change",()=>{if(!frameMeter)throw new Error("画面計測機能を読み込めません。");if(el("measure-render").checked){frameMeterScope=`${view.run}/${view.branch}`;frameMeter.start(drawMeasured);el("telemetry-status").textContent="可視タブで地図・比較CanvasをrequestAnimationFrameごとに再描画して計測中です。測定負荷を含む参考値です。";}else{frameMeter.stop();el("telemetry-status").textContent="画面FPS収集を停止しました。保存を押すまで計測値はサーバーへ送られません。";}});
   on("telemetry-load","click",async()=>{if(!view.run)throw new Error("Runを選択してください。");renderTelemetry(await request(`${runRoot()}/telemetry`));});
   on("render-telemetry-save","click",async()=>{if(!view.run||!frameMeter)throw new Error("Runまたは画面計測機能がありません。");if(!el("measure-render").checked)throw new Error("先に画面FPS収集を有効にしてください。");const report=frameMeter.report();const saved=await request(`${runRoot()}/telemetry`,{kind:"render",branch_id:view.branch,samples:report.samples,fps:report.fps,p95_frame_ms:report.p95_frame_ms,visibility:report.visibility});renderTelemetry(saved);el("telemetry-status").textContent=`Branch ${view.branch} の描画測定を保存しました。user agent等の端末識別情報は保存していません。`;frameMeter.reset();frameMeterScope=`${view.run}/${view.branch}`;});
-  on("cancel","click",async()=>{await request(`${runRoot()}/cancel`,{});status("現在のtick完了後に計算を中断し、保存します。");});
+  on("cancel","click",async()=>{await request(`${runRoot()}/cancel`,{branch_id:view.branch});status(`Branch ${view.branch} の計算を、現在のtick完了後に中断し、保存します。`);});
   on("minute","change",()=>seek(Number(el("minute").value)));on("seek","change",()=>seek(Number(el("seek").value)));
   on("play","click",async()=>{if(view.playing||!selectedReference())return;view.playing=true;try{while(view.playing){const limit=(view.comparisonRange||[selectedReference().fork_minute,selectedReference().computed_until])[1];const next=Math.min(limit,view.minute+Number(el("speed").value));if(next===view.minute)break;await seek(next);await new Promise(resolve=>setTimeout(resolve,500));}}finally{view.playing=false;}});
   on("pause","click",()=>{view.playing=false;});
