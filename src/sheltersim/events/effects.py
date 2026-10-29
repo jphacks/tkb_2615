@@ -793,12 +793,11 @@ def _toilet_placement_issues(world: WorldState, additions: list[tuple[str, str, 
             "geometry_overlay schema_version=4 (create the Scenario again)"
             for label, _, _ in additions
         ]
-    from copy import deepcopy
 
     from sheltersim.core.world import WorldState as MutableWorldState
     from sheltersim.domain.models import FacilityState
 
-    candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+    candidate = MutableWorldState.from_dict(world.to_dict())
     for label, zone_id, count in additions:
         if zone_id not in candidate.zones:
             continue
@@ -2131,11 +2130,9 @@ class EffectProgramTemporarySpaceHandler:
         self.expire = expire
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
-        from copy import deepcopy
-
         from sheltersim.core.world import WorldState as MutableWorldState
 
-        candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+        candidate = MutableWorldState.from_dict(world.to_dict())
         self._apply(candidate, event)
         candidate.validate()
         world.__dict__.clear()
@@ -2350,8 +2347,6 @@ class EffectProgramStructureHandler:
     """Apply typed structural primitives using existing WorldState domain records."""
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[Any, ...] | None:
-        from copy import deepcopy
-
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.models import FacilityState, StaffState
 
@@ -2399,7 +2394,7 @@ class EffectProgramStructureHandler:
                     f"staff task order parameters are invalid: {exc}"
                 ) from exc
             effect_event_guard_or_suppress(world, event)
-            candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+            candidate = MutableWorldState.from_dict(world.to_dict())
             from sheltersim.domain.staff_operations import order_staff_operation
 
             order_staff_operation(
@@ -2461,7 +2456,7 @@ class EffectProgramStructureHandler:
             ):
                 raise EventApplicationError("staff handoff participants or task are invalid")
             effect_event_guard_or_suppress(world, event)
-            candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+            candidate = MutableWorldState.from_dict(world.to_dict())
             operations = candidate.model_state.get("staff_operations_v1")
             task = candidate.active_tasks[handoff.task_id]
             old_record = (
@@ -2662,7 +2657,7 @@ class EffectProgramStructureHandler:
                 role = _StaffRoleParameters.model_validate({"skills": event.payload.get("skills")})
             except ValueError as exc:
                 raise EventApplicationError(f"staff-role event skills are invalid: {exc}") from exc
-            candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+            candidate = MutableWorldState.from_dict(world.to_dict())
             staff = candidate.staff[staff_id]
             operations = (
                 candidate.model_state.get("staff_operations_v1", {}).get("staff", {}).get(staff_id)
@@ -2706,7 +2701,7 @@ class EffectProgramStructureHandler:
             or zone_id not in world.zones
         ):
             raise EventApplicationError("structural primitive target or operation is invalid")
-        candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+        candidate = MutableWorldState.from_dict(world.to_dict())
         suffix = event.payload["modifier_id"].removeprefix("modifier-")
         if op == "add_staff":
             if len(candidate.staff) + count > 100:
@@ -2776,11 +2771,9 @@ class EffectProgramEnvironmentHandler:
         self.expire = expire
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
-        from copy import deepcopy
-
         from sheltersim.core.world import WorldState as MutableWorldState
 
-        candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+        candidate = MutableWorldState.from_dict(world.to_dict())
         try:
             self._apply(candidate, event)
             candidate.validate()

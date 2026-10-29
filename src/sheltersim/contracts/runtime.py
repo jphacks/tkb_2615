@@ -104,7 +104,7 @@ def apply_model_proposal(world: Any, proposal: ModelStateProposal) -> None:
             or after != contribution.after
         ):
             raise ValueError("contribution values disagree with proposed state")
-    candidate = type(world).from_dict(deepcopy(world.to_dict()))
+    candidate = type(world).from_dict(world.to_dict())
     candidate.model_state[proposal.namespace] = deepcopy(proposal.proposed_state)
     candidate.validate()
     world.model_state[proposal.namespace] = deepcopy(candidate.model_state[proposal.namespace])
