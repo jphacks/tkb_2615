@@ -43,7 +43,7 @@ serverは型付きrequest契約と、許可されたfield/queryだけを受け�
 | /api/v1/projects/{project} | Project、Scenario、Run、asset、証拠を参照します |
 | /api/v1/projects/{project}/scenario-preview | Scenario案を作成・検証します |
 | /api/v1/projects/{project}/scenario-approve | preview hashを承認し、保存ScenarioとRunを作成します |
-| /api/v1/projects/{project}/runs/{run} | Runを再開・取消し、telemetryや比較を参照します |
+| /api/v1/projects/{project}/runs/{run} | Runを再開・取消し、telemetryや比較を参照します。取消し（`POST …/cancel`）は `branch_id` を渡すとそのBranchの計算だけを、渡さなければRunのすべての計算を止めます。Runの参照の `branches` には、Branchごとの計算の状態（`status`）が付きます（#48） |
 | /api/v1/projects/{project}/runs/{run}/branches/{branch} | timeline、履歴、report、会話、LLM fallback集計（llm-status）を参照し、型付きBranch操作を送ります |
 | /api/v1/runs | read-only Inspectorから保存Run成果物を検索します |
 | /api/v1/demo | process内DemoとBranchを参照します |
