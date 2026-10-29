@@ -201,3 +201,45 @@ def test_a_computation_keeps_no_copy_of_the_checkpoint_it_starts_from(
     reference = store.branch_reference("p", "r", "main")
     store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
     assert list(store._restored) == [("p", "r", reference.checkpoint_hash)]
+
+
+def test_kept_worlds_are_dropped_once_no_read_used_them_for_a_while(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """#46: the local server does not hold the kept worlds' memory after the reads."""
+    from sheltersim.storage import projects
+
+    store, _ = saved_timeline(tmp_path)
+    store._restored_idle_seconds = 60.0
+    head = store.branch_reference("p", "r", "main").checkpoint_hash
+    now = [1000.0]
+    monkeypatch.setattr(projects.time, "monotonic", lambda: now[0])
+    store.load_restored_checkpoint("p", "r", head)
+    store._restored_timer.cancel()
+    now[0] += 50
+    store.load_restored_checkpoint("p", "r", head)
+    # A read 50 seconds later keeps the world for another minute from then.
+    now[0] += 50
+    store._expire_restored()
+    assert list(store._restored) == [("p", "r", head)]
+    store._restored_timer.cancel()
+    now[0] += 11
+    store._expire_restored()
+    assert store._restored == {}
+    assert store._restored_timer is None
+
+
+def test_the_timer_drops_the_kept_worlds(tmp_path, saved_timeline):
+    import time
+
+    store, _ = saved_timeline(tmp_path)
+    store._restored_idle_seconds = 0.05
+    head = store.branch_reference("p", "r", "main").checkpoint_hash
+    store.load_restored_checkpoint("p", "r", head)
+    deadline = time.monotonic() + 10
+    while store._restored and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert store._restored == {}
+    # A later read keeps the world again, from a new restore.
+    store.load_restored_checkpoint("p", "r", head)
+    assert list(store._restored) == [("p", "r", head)]
