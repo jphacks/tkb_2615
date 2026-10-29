@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -312,6 +313,13 @@ def apply_population_presence_command(
         agent = candidate.agents.get(agent_id)
         if agent is None:
             raise EventApplicationError("temporary exit requires an admitted person")
+        returns = _program_presence_minutes(world, event, agent_id, "return")
+        if any(due <= minute for due in returns):
+            # Deferred while busy (#181) until the return of the same program (#185).
+            raise EventSuppressed(
+                "temporary exit dropped: the person was not free before the return in the "
+                "same EffectProgram"
+            )
         _defer_while_busy(world, event, agent_id)
         _archive_person(candidate, agent_id, event, state)
         presence = _presence_state(candidate)
@@ -358,6 +366,15 @@ def apply_population_presence_command(
         )
     elif typed.action == "return":
         agent_id = ids[0]
+        if agent_id in candidate.agents and any(
+            due < minute
+            for due in _program_presence_minutes(world, event, agent_id, "temporary_exit")
+        ):
+            # The exit of the same program was deferred past this return and is dropped.
+            raise EventSuppressed(
+                "return skipped: the person had not left before the return in the same "
+                "EffectProgram"
+            )
         if agent_id in candidate.agents or agent_id not in state["people"]:
             raise EventApplicationError("return requires a retained absent person")
         presence = _presence_state(candidate)
@@ -1168,6 +1185,34 @@ def _append_history(state: dict[str, Any], row: dict[str, Any]) -> None:
     state["history"].append(row)
     if len(state["history"]) > MAX_LIFECYCLE_HISTORY:
         del state["history"][: len(state["history"]) - MAX_LIFECYCLE_HISTORY]
+
+
+def _program_presence_minutes(
+    world: WorldState, event: ScheduledEvent, agent_id: str, action: str
+) -> list[int]:
+    """Due minutes of the commands with this action for this person that the
+    EffectProgram which scheduled event also scheduled (#185)."""
+    # Event payloads and provenance are frozen mappings.
+    marker = event.provenance.get("effect_program_v1")
+    programs = world.model_state.get("effect_program_v1", {}).get("programs", {})
+    program = programs.get(marker.get("program_id")) if isinstance(marker, Mapping) else None
+    if not isinstance(program, dict):
+        return []
+    pending = {item.event_id: item for item in world.event_queue.pending()}
+    minutes = []
+    for event_id in program.get("scheduled_event_ids", []):
+        record = None if event_id in pending else world.event_log.find(event_id)
+        scheduled = pending.get(event_id) or (record.event if record is not None else None)
+        if scheduled is None or scheduled.event_type != "effect_program_population":
+            continue
+        command = scheduled.payload.get("command")
+        if (
+            isinstance(command, Mapping)
+            and command.get("action") == action
+            and command.get("agent_id") == agent_id
+        ):
+            minutes.append(scheduled.due_minute)
+    return minutes
 
 
 def _defer_while_busy(world: WorldState, event: ScheduledEvent, agent_id: str) -> None:
