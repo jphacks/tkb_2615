@@ -70,14 +70,12 @@ class ProjectQueries:
         if query.kind not in {"people", "households"}:
             from sheltersim.storage.history_index import HistoryIndex
 
+            # The search reads one index transaction and names the indexed head it
+            # answers as of, so a save that moves the pointer meanwhile changes
+            # nothing it returns (#262).
             result = HistoryIndex(self.store, project_id, run_id).search(
-                branch_id, query, reference.checkpoint_hash
+                branch_id, query, reference.checkpoint_hash, reference.computed_until
             )
-            if (
-                self.store.branch_reference(project_id, run_id, branch_id).checkpoint_hash
-                != reference.checkpoint_hash
-            ):
-                raise StorageError("history_changed_during_query: retry")
             time_semantics = "end_of_tick" if query.kind == "kpis" else "recorded_event_minute"
             for item in result.get("items", []):
                 if isinstance(item, dict):
@@ -327,6 +325,7 @@ class ProjectQueries:
                     target.branch_id,
                     HistoryQuery(kind="kpis", start=start, end=end, limit=100),
                     ref.checkpoint_hash,
+                    ref.computed_until,
                 )["items"]
                 streams.append({row["minute_index"]: row for row in rows})
         else:

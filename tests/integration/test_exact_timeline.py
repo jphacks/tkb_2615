@@ -170,3 +170,61 @@ def test_frames_read_while_a_save_is_indexed_match_the_frames_after(
     assert set(during) == set(minutes)
     for minute in minutes:
         assert during[minute] == TimelineStore(store, "p", "r").frame("main", minute)
+
+
+def test_history_read_while_a_save_is_indexed_answers_as_of_the_indexed_head(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """#262: between a save and its indexing, history, its next page, the checkpoint
+    list and conversations answer as of the previous head, and say so."""
+    from sheltersim.storage.history_index import HistoryIndex
+
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    previous = store.branch_reference("p", "r", "main").checkpoint_hash
+    api = ProjectAPI(store, recover=False)
+    branch = ["p", "runs", "r", "branches", "main"]
+    first = {"kind": ["events"], "start": ["0"], "end": ["30"], "limit": ["5"]}
+
+    def history(page=None):
+        return api.get([*branch, "history"], {**first, **({"cursor": [page]} if page else {})})
+
+    def checkpoints():
+        query = {"branch_id": ["main"], "start": ["0"], "end": ["60"], "limit": ["10"]}
+        return api.get(["p", "runs", "r", "checkpoints"], query)
+
+    before = history()
+    before_next = history(before["next_cursor"])
+    during = {}
+    original = HistoryIndex.ingest
+
+    def ingest(self, branch_id, checkpoint, **options):
+        if checkpoint.simulation_minute == 60:
+            page = history()
+            during.update(
+                page=page,
+                next=history(page["next_cursor"]),
+                checkpoints=checkpoints(),
+                conversations=api.get([*branch, "conversations"], {}),
+            )
+        return original(self, branch_id, checkpoint, **options)
+
+    monkeypatch.setattr(HistoryIndex, "ingest", ingest)
+    try:
+        timeline.advance("main", 60)
+    finally:
+        monkeypatch.setattr(HistoryIndex, "ingest", original)
+        after = history()
+        api.close()
+    page = during["page"]
+    assert (page["anchor_hash"], page["indexed_through_minute"]) == (previous, 30)
+    assert page["computed_until"] == 60
+    assert page["items"] == before["items"] == after["items"]
+    # A page cursor names the head it was made at, as before.
+    assert during["next"]["items"] == before_next["items"]
+    assert [row["minute"] for row in during["checkpoints"]["items"]] == [0, 30]
+    assert during["checkpoints"]["indexed_through_minute"] == 30
+    assert during["conversations"]["turns"] == []
+    assert (after["anchor_hash"], after["indexed_through_minute"]) != (previous, 30)
+    assert after["indexed_through_minute"] == 60

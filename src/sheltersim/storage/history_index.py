@@ -748,27 +748,32 @@ class HistoryIndex:
         if row is None or row[0] != anchor:
             raise StorageError("history_index_stale: explicitly resume index rebuild")
 
+    def answering_head(
+        self, db: sqlite3.Connection, branch: str, anchor: str, anchor_minute: int | None
+    ) -> tuple[str, int]:
+        """The indexed head to answer as of, and its minute, for a branch whose pointer
+        is at anchor (at anchor_minute).
+
+        A save moves the branch pointer before it indexes the new head, so a read in
+        between finds the index behind the pointer (#259, #262). Saved Checkpoints never
+        change and a branch only grows, so the index still answers as of its own head.
+        An index ahead of the pointer, or without the branch, is stale.
+        """
+        head = db.execute("SELECT hash,minute FROM heads WHERE branch=?", (branch,)).fetchone()
+        if head is None or (
+            head[0] != anchor and (anchor_minute is None or head[1] >= anchor_minute)
+        ):
+            raise StorageError("history_index_stale: explicitly resume index rebuild")
+        return head[0], head[1]
+
     def nearest(
         self, branch: str, minute: int, anchor: str, anchor_minute: int | None = None
     ) -> tuple[int, str] | None:
-        """The latest saved Checkpoint at or before minute on a branch whose head is anchor.
-
-        A save moves the branch pointer before it indexes the new head, so a read in
-        between finds the index behind the pointer (#259). Saved Checkpoints never change
-        and a branch only grows, so the index still answers up to its head, and the
-        anchor itself is the head at anchor_minute.
-        """
+        """The latest saved Checkpoint at or before minute on a branch whose head is anchor;
+        the anchor itself is the head at anchor_minute."""
         with self.connect() as db:
-            head = db.execute("SELECT hash,minute FROM heads WHERE branch=?", (branch,)).fetchone()
-            behind = (
-                head is not None
-                and head[0] != anchor
-                and anchor_minute is not None
-                and head[1] < anchor_minute
-            )
-            if not behind:
-                self.ready(db, branch, anchor)
-            elif minute >= anchor_minute:
+            answered, _ = self.answering_head(db, branch, anchor, anchor_minute)
+            if answered != anchor and anchor_minute is not None and minute >= anchor_minute:
                 return anchor_minute, anchor
             row = db.execute(
                 "SELECT minute,hash FROM checkpoints WHERE branch=? AND minute<=? ORDER BY "
@@ -777,7 +782,11 @@ class HistoryIndex:
             ).fetchone()
             return (row[0], row[1]) if row else None
 
-    def search(self, branch: str, query: Any, anchor: str) -> dict[str, Any]:
+    def search(
+        self, branch: str, query: Any, anchor: str, anchor_minute: int | None = None
+    ) -> dict[str, Any]:
+        """Records of a branch whose pointer is at anchor (at anchor_minute), as of the
+        indexed head that answering_head() gives; the answer names that head."""
         scope = digest(
             {
                 "project": self.project_id,
@@ -785,9 +794,6 @@ class HistoryIndex:
                 "branch": branch,
                 **query.model_dump(mode="json", exclude={"cursor", "limit"}),
             }
-        )
-        after = (
-            cursor_decode(query.cursor, scope, anchor) if query.kind != "conversations" else None
         )
         kind = "events" if query.kind == "causal" else query.kind
         kinds = (
@@ -815,14 +821,6 @@ class HistoryIndex:
         if kind == "kpis":
             where.append("(r.minute-?) % ? = 0")
             args.extend([query.start, query.step])
-        if after:
-            if ":" not in after[1]:
-                raise StorageError("stale_or_foreign_cursor")
-            after_kind, after_key = after[1].split(":", 1)
-            if after_kind not in kinds:
-                raise StorageError("stale_or_foreign_cursor")
-            where.append("(r.minute,r.kind,r.key)>(?,?,?)")
-            args.extend((after[0], after_kind, after_key))
         for identity in (
             query.agent_id,
             query.household_id,
@@ -858,7 +856,20 @@ class HistoryIndex:
             args.append(term)
         graph = None
         with self.connect() as db:
-            self.ready(db, branch, anchor)
+            anchor, indexed_minute = self.answering_head(db, branch, anchor, anchor_minute)
+            after = (
+                cursor_decode(query.cursor, scope, anchor)
+                if query.kind != "conversations"
+                else None
+            )
+            if after:
+                if ":" not in after[1]:
+                    raise StorageError("stale_or_foreign_cursor")
+                after_kind, after_key = after[1].split(":", 1)
+                if after_kind not in kinds:
+                    raise StorageError("stale_or_foreign_cursor")
+                where.append("(r.minute,r.kind,r.key)>(?,?,?)")
+                args.extend((after[0], after_kind, after_key))
             if query.kind == "causal":
                 visited, frontier = {query.event_id}, [query.event_id]
                 link_limit_hit = False
@@ -959,6 +970,7 @@ class HistoryIndex:
             ],
             "next_cursor": following,
             "anchor_hash": anchor,
+            "indexed_through_minute": indexed_minute,
             "total_items": None,
             "count_status": "not_calculated",
             "query_strategy": "indexed_keyset",
@@ -1062,9 +1074,11 @@ class HistoryIndex:
                 "kind": "checkpoints",
             }
         )
-        after = cursor_decode(cursor, scope, reference.checkpoint_hash)
         with self.connect() as db:
-            self.ready(db, branch, reference.checkpoint_hash)
+            anchor, indexed_minute = self.answering_head(
+                db, branch, reference.checkpoint_hash, reference.computed_until
+            )
+            after = cursor_decode(cursor, scope, anchor)
             rows = db.execute(
                 "SELECT minute,hash,state_hash FROM checkpoints WHERE branch=? AND minute "
                 "BETWEEN ? AND ? AND minute>? ORDER BY minute LIMIT ?",
@@ -1074,11 +1088,12 @@ class HistoryIndex:
         return {
             "schema_version": 1,
             "items": [dict(row) for row in selected],
-            "anchor_hash": reference.checkpoint_hash,
+            "anchor_hash": anchor,
+            "indexed_through_minute": indexed_minute,
             "next_cursor": cursor_encode(
                 {
                     "scope": scope,
-                    "anchor": reference.checkpoint_hash,
+                    "anchor": anchor,
                     "minute": selected[-1]["minute"],
                     "key": "",
                 }
@@ -1096,7 +1111,7 @@ class HistoryIndex:
             raise StorageError("invalid_page_limit")
         reference = self.store.branch_reference(self.project_id, self.run_id, branch)
         with self.connect() as db:
-            self.ready(db, branch, reference.checkpoint_hash)
+            self.answering_head(db, branch, reference.checkpoint_hash, reference.computed_until)
             if conversation_id:
                 rows = db.execute(
                     "SELECT r.payload,r.payload_hash FROM entities e JOIN records r ON "
