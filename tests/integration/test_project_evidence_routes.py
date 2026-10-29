@@ -186,3 +186,19 @@ def test_people_history_replayed_between_minutes_equals_restoring_each_minute(
     restored = _history(api, "capacity", **query)
     assert replayed == restored
     assert replayed["items"]
+
+
+def test_world_divergence_hashes_are_the_digests_of_each_branch_world(evidence_api):
+    """World samples are hashed from the history cache; they equal digest(world.to_dict())."""
+    from sheltersim.experiments.timeline import TimelineStore
+
+    api, _ = evidence_api
+    body = {"targets": TARGETS, "start": FORK_MINUTE, "end": END, "mode": "world"}
+
+    divergence = api.post(["p", "first-divergence"], body)["first_divergence"]
+
+    timeline = TimelineStore(api.store, "p", "r")
+    minute = divergence["minute"]
+    assert divergence["sample_hashes"] == [
+        digest(timeline.seek(target["branch_id"], minute).world.to_dict()) for target in TARGETS
+    ]
