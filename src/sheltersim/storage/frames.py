@@ -16,6 +16,7 @@ import re
 import tempfile
 from typing import Any
 
+from sheltersim.core.checkpoint_cache import CanonicalEncoder
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical
 
 # Bump when world_frame output changes so older cached frames are recomputed.
@@ -41,15 +42,18 @@ class FrameCache:
         path = self._file(checkpoint_hash)
         if path.exists():
             return True
-        encoded_frame = canonical(frame)
+        encoded_frame = canonical(frame).encode()
         document = {
             "schema_version": 1,
             "projection_version": FRAME_PROJECTION_VERSION,
             "checkpoint_hash": checkpoint_hash,
-            "frame_hash": hashlib.sha256(encoded_frame.encode()).hexdigest(),
+            "frame_hash": hashlib.sha256(encoded_frame).hexdigest(),
             "frame": frame,
         }
-        data = gzip.compress((canonical(document) + "\n").encode(), compresslevel=3, mtime=0)
+        # The document's JSON holds the frame's JSON; encode the frame once.
+        encoder = CanonicalEncoder()
+        encoder.remember(frame, encoded_frame, document)
+        data = gzip.compress(encoder.encode(document) + b"\n", compresslevel=3, mtime=0)
         if self.store.usage()["bytes"] + len(data) > self.store.max_bytes:
             return False
         if self.directory.is_symlink():
