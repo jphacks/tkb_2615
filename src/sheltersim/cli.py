@@ -298,6 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one offline CLI action and return its process status."""
+    # The CLI prints JSON with Japanese text. Piped or redirected on Windows, stdout
+    # would use the locale's code page, which cannot hold it.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command == "usage":

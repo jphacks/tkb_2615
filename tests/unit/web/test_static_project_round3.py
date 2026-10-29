@@ -36,7 +36,12 @@ def _render(result: dict[str, object]) -> list[list[str | None]]:
         + f"renderEffectExplanation({detail});process.stdout.write(JSON.stringify(lines));"
     )
     completed = subprocess.run(
-        [_NODE, "-e", harness], capture_output=True, text=True, check=True, timeout=30
+        [_NODE, "-e", harness],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=30,
     )
     return json.loads(completed.stdout)
 

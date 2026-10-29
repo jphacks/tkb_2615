@@ -23,7 +23,12 @@ def _map_note(map_data: dict[str, object]) -> str:
     assert match is not None
     harness = match.group(0) + f"process.stdout.write(mapNote({json.dumps(map_data)}));"
     completed = subprocess.run(
-        [_NODE, "-e", harness], capture_output=True, text=True, check=True, timeout=30
+        [_NODE, "-e", harness],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=30,
     )
     return completed.stdout
 
