@@ -104,3 +104,61 @@ def test_a_killed_process_leaves_the_run_interrupted(tmp_path, monkeypatch, save
     finally:
         api.close()
     assert store.branch_reference("p", "r", "main").computed_until == head.computed_until + 30
+
+
+def _forked(tmp_path, saved_timeline, worker, **options):
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    status = store.run("p", "r")["status"]
+    api = ProjectAPI(store, recover=False, worker=worker)
+    try:
+        result = api.fork(
+            "p", "r", "main", {"minute": 15, "child_id": "child", "approved": True}, **options
+        )
+        api.wait_idle(timeout=300)
+        run = api.get(["p", "runs", "r"], {})
+    finally:
+        api.close()
+    assert run["status"] == status
+    return store, result, run
+
+
+def test_a_process_fork_creates_the_child_a_thread_fork_creates(
+    tmp_path, monkeypatch, saved_timeline
+):
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    thread, expected, _ = _forked(tmp_path / "thread", saved_timeline, "thread")
+    process, result, run = _forked(tmp_path / "process", saved_timeline, "process")
+    # The request returns at once; the outcome is the run's last fork.
+    assert result == {"status": "running", "branch_id": "child", "minute": 15}
+    assert run["last_fork"] == {"status": "created", **expected}
+    assert (
+        process.branch_reference("p", "r", "child").checkpoint_hash
+        == thread.branch_reference("p", "r", "child").checkpoint_hash
+    )
+
+
+def test_a_failed_process_fork_is_reported_and_creates_nothing(
+    tmp_path, monkeypatch, saved_timeline
+):
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, _, run = _forked(tmp_path, saved_timeline, "process", expected_state_hash="0" * 64)
+    assert run["last_fork"]["status"] == "failed"
+    assert run["last_fork"]["error"] == "source state changed; preview the intervention again"
+    assert [branch["branch_id"] for branch in run["branches"]] == ["main"]
+
+
+def test_a_process_fork_checks_what_needs_no_restore_at_once(tmp_path, monkeypatch, saved_timeline):
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    api = ProjectAPI(store, recover=False, worker="process")
+    try:
+        with pytest.raises(StorageError, match="computed range"):
+            api.fork("p", "r", "main", {"minute": 45, "child_id": "c", "approved": True})
+        with pytest.raises(StorageError, match="already exists"):
+            api.fork("p", "r", "main", {"minute": 15, "child_id": "main", "approved": True})
+        assert not multiprocessing.active_children()
+        assert "last_fork" not in api.get(["p", "runs", "r"], {})
+    finally:
+        api.close()

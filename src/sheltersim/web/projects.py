@@ -12,11 +12,11 @@ from sheltersim.core.world import WorldState
 from sheltersim.events.effects import EffectProgram
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.experiments.timeline import TimelineStore
+from sheltersim.experiments.timeline import TimelineError, TimelineStore
 from sheltersim.experiments.validation import evidence_context
 from sheltersim.llm.accounting import accounted_router, usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
-from sheltersim.storage.projects import ProjectStore, StorageError
+from sheltersim.storage.projects import ProjectStore, StorageError, digest
 from sheltersim.storage.telemetry import RunTelemetryStore
 from sheltersim.storage.usage import UsageLedger
 
@@ -37,8 +37,9 @@ class ProjectAPI:
     def __init__(
         self, store: ProjectStore, *, recover: bool = True, worker: str = "thread"
     ) -> None:
-        """worker="process" computes each run in its own process (the server, #48);
-        "thread" computes on a thread of this process (tests and CLI)."""
+        """worker="process" computes each run and creates each fork in its own process
+        (the server, #48); "thread" computes on a thread of this process and forks in
+        the caller (tests and CLI)."""
         if worker not in {"thread", "process"}:
             raise ValueError("worker must be 'thread' or 'process'")
         self.store = store
@@ -49,8 +50,10 @@ class ProjectAPI:
         self._lock = threading.RLock()
         self._active: tuple[str, str, str] | None = None
         self._cancel: Any = threading.Event()
-        # In process mode, the thread that waits for the active run's process to end.
+        # In process mode, the thread that waits for the active job's process to end,
+        # and the outcome of the last fork started in this server process by Run.
         self._watcher: threading.Thread | None = None
+        self._fork_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
         self._closed = False
         from sheltersim.web.workspace import ProjectWorkspace
 
@@ -72,7 +75,7 @@ class ProjectAPI:
         self._pool.shutdown(wait=True)
 
     def wait_idle(self, timeout: float | None = None) -> None:
-        """Wait until the computation submitted so far has ended."""
+        """Wait until the computation or fork submitted so far has ended."""
         if self._worker == "thread":
             self._pool.submit(lambda: None).result(timeout=timeout)
             return
@@ -81,7 +84,7 @@ class ProjectAPI:
         if watcher is not None:
             watcher.join(timeout)
             if watcher.is_alive():
-                raise TimeoutError("the background computation is still running")
+                raise TimeoutError("the background job is still running")
 
     def get(self, parts: list[str], query: dict[str, list[str]]) -> dict[str, Any]:
         shared = self.services.get(parts, query)
@@ -99,7 +102,10 @@ class ProjectAPI:
         if len(parts) == 2 and parts[1] == "runs" and not query:
             return {"runs": self.store.runs(project_id)}
         if len(parts) == 3 and parts[1] == "runs" and not query:
-            return self.store.run(project_id, parts[2])
+            run = self.store.run(project_id, parts[2])
+            with self._lock:
+                outcome = self._fork_outcomes.get((project_id, parts[2]))
+            return {**run, "last_fork": outcome} if outcome is not None else run
         if len(parts) == 4 and parts[1] == "runs" and parts[3] == "telemetry" and not query:
             self.store.run(project_id, parts[2])
             return RunTelemetryStore(self.store, project_id, parts[2]).read()
@@ -355,6 +361,10 @@ class ProjectAPI:
                 if document.get("program") is not None
                 else None
             )
+            if self._worker == "process":
+                return self._fork_process(
+                    project_id, run_id, branch_id, document, program, expected_state_hash
+                )
             timeline = TimelineStore(self.store, project_id, run_id)
             child = timeline.fork(
                 branch_id,
@@ -430,6 +440,51 @@ class ProjectAPI:
                 "target_minute": target_minute,
             }
 
+    def _fork_process(
+        self,
+        project_id: str,
+        run_id: str,
+        branch_id: str,
+        document: dict[str, Any],
+        program: EffectProgram | None,
+        expected_state_hash: str | None,
+    ) -> dict[str, Any]:
+        """Start the fork in its own process; called with self._lock held.
+
+        The checks that need no restore answer at once; the fork's outcome is the
+        run's last_fork once the Run's status leaves running.
+        """
+        reference = self.store.branch_reference(project_id, run_id, branch_id)
+        minute = document["minute"]
+        if (
+            type(minute) is not int
+            or not reference.fork_minute <= minute <= reference.computed_until
+        ):
+            raise TimelineError("minute is outside this branch's computed range")
+        child_id = document["child_id"]
+        child = self.store._path(project_id, "runs", run_id, "branches", child_id, "branch.json")
+        if child.exists():
+            raise TimelineError("child branch already exists")
+        if program is not None and document.get("approved_program_hash") != digest(
+            program.model_dump(mode="json")
+        ):
+            raise TimelineError("EffectProgram approval hash does not match preview")
+        previous = self.store.run(project_id, run_id)["status"]
+        self._fork_outcomes.pop((project_id, run_id), None)
+        self._start_process(
+            {
+                "kind": "fork",
+                "project_id": project_id,
+                "run_id": run_id,
+                "branch_id": branch_id,
+                "document": document,
+                "expected_state_hash": expected_state_hash,
+            },
+            (project_id, run_id, child_id),
+            previous,
+        )
+        return {"status": "running", "branch_id": child_id, "minute": minute}
+
     def _submit_process(
         self,
         project_id: str,
@@ -439,20 +494,18 @@ class ProjectAPI:
         measure_performance: bool,
     ) -> dict[str, Any]:
         """Start the run's process; called with self._lock held."""
-        from sheltersim.web.worker_process import start_worker
-
-        process, cancel = start_worker(
-            self.store, project_id, run_id, branch_id, target_minute, measure_performance
+        self._start_process(
+            {
+                "kind": "advance",
+                "project_id": project_id,
+                "run_id": run_id,
+                "branch_id": branch_id,
+                "target_minute": target_minute,
+                "measure_performance": measure_performance,
+            },
+            (project_id, run_id, branch_id),
+            None,
         )
-        self._active = (project_id, run_id, branch_id)
-        self._cancel = cancel
-        self._watcher = threading.Thread(
-            target=self._watch,
-            args=(process, project_id, run_id),
-            name=f"sheltersim-watch-{run_id}",
-            daemon=True,
-        )
-        self._watcher.start()
         return {
             "status": "running",
             "run_id": run_id,
@@ -460,21 +513,66 @@ class ProjectAPI:
             "target_minute": target_minute,
         }
 
-    def _watch(self, process: Any, project_id: str, run_id: str) -> None:
-        """Wait for a run's process; a process that ended without recording an
-        outcome (killed, crashed) leaves the run interrupted, as a restart would."""
+    def _start_process(
+        self, job: dict[str, Any], active: tuple[str, str, str], restore: str | None
+    ) -> None:
+        from sheltersim.web.worker_process import start_worker
+
+        process, cancel, outcome = start_worker(self.store, job)
+        self._active = active
+        self._cancel = cancel
+        self._watcher = threading.Thread(
+            target=self._watch,
+            args=(process, outcome, job["kind"], active[0], active[1], restore),
+            name=f"sheltersim-watch-{active[1]}",
+            daemon=True,
+        )
+        self._watcher.start()
+
+    def _watch(
+        self,
+        process: Any,
+        outcome: Any,
+        kind: str,
+        project_id: str,
+        run_id: str,
+        restore: str | None,
+    ) -> None:
+        """Wait for a job's process. A process that ended without recording an
+        outcome (killed, crashed) leaves a computation interrupted, as a restart
+        would, and a fork's Run as it was."""
+        result = None
+        try:
+            while True:
+                result = outcome.recv()
+        except (EOFError, OSError):
+            pass
+        finally:
+            outcome.close()
         process.join()
         try:
-            lease = self.store.claim_run(project_id, run_id)
-        except StorageError:
-            # Another process owns the Run now, or it was deleted; nothing to recover.
-            pass
-        else:
+            if kind == "fork":
+                state, detail = result if result is not None else (None, None)
+                recorded = (
+                    {"status": "created", **detail}
+                    if state == "forked"
+                    else {"status": "failed", **detail}
+                    if state == "fork_failed"
+                    else {"status": "failed", "error": "run_worker_ended", "code": None}
+                )
+                with self._lock:
+                    self._fork_outcomes[(project_id, run_id)] = recorded
             try:
-                if self.store.run(project_id, run_id)["status"] in {"queued", "running"}:
-                    self.store.set_status(project_id, run_id, "interrupted")
-            finally:
-                self.store.release_run(lease)
+                lease = self.store.claim_run(project_id, run_id)
+            except StorageError:
+                # Another process owns the Run now, or it was deleted; nothing to recover.
+                pass
+            else:
+                try:
+                    if self.store.run(project_id, run_id)["status"] in {"queued", "running"}:
+                        self.store.set_status(project_id, run_id, restore or "interrupted")
+                finally:
+                    self.store.release_run(lease)
         finally:
             with self._lock:
                 self._active = None
