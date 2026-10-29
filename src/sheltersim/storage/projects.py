@@ -24,6 +24,7 @@ from sheltersim.contracts.api import BranchReference, EvidenceReference, RunRefe
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.collection import fewer_collections
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -683,10 +684,14 @@ class ProjectStore:
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         document = self._read(path)
         try:
-            if document.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
-                return CheckpointArchive(path.parent).decode_restored(document)
-            # _read parsed the file just now, so the document is not shared.
-            return Checkpoint._load(document)
+            with fewer_collections():
+                if document.get("storage_type") in {
+                    "checkpoint_archive_v1",
+                    "checkpoint_archive_v2",
+                }:
+                    return CheckpointArchive(path.parent).decode_restored(document)
+                # _read parsed the file just now, so the document is not shared.
+                return Checkpoint._load(document)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
 
