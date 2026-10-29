@@ -256,3 +256,26 @@ def test_project_apply_needs_an_applicable_preview_its_hash_and_approval(
     assert [branch["branch_id"] for branch in project_api.store.branches("project", "run")] == [
         "main"
     ]
+
+
+def test_project_apply_is_refused_when_the_source_changed_after_the_preview(
+    project_api, monkeypatch
+) -> None:
+    """The fork compares the source state it restores with the preview's (#46)."""
+    before = _saved_state(project_api)
+    preview = _preview(project_api, {"text": ARRIVALS})
+    # Stand in for a source branch that changed after the preview.
+    saved_preview = project_api.workspace._preview
+    monkeypatch.setattr(
+        project_api.workspace,
+        "_preview",
+        lambda *args: {**saved_preview(*args), "state_hash": "0" * 64},
+    )
+
+    with pytest.raises(StorageError, match="source state changed"):
+        _apply(project_api, preview, "arrivals")
+
+    assert "arrivals" not in {
+        branch["branch_id"] for branch in project_api.store.branches("project", "run")
+    }
+    assert _saved_state(project_api) == before

@@ -303,40 +303,53 @@ class ProjectAPI:
         if len(parts) == 6 and parts[1] == "runs" and parts[3] == "branches":
             run_id, branch_id, action = parts[2], parts[4], parts[5]
             if action == "fork":
-                fields(
-                    document,
-                    {"minute", "child_id", "approved"},
-                    {"program", "approved_program_hash"},
-                )
-                if document["approved"] is not True:
-                    raise StorageError("branch creation needs explicit human approval")
-                with self._lock:
-                    if self._active is not None:
-                        raise StorageError("pause background calculation before forking")
-                    program = (
-                        EffectProgram.model_validate(document["program"])
-                        if document.get("program") is not None
-                        else None
-                    )
-                    timeline = TimelineStore(self.store, project_id, run_id)
-                    child = timeline.fork(
-                        branch_id,
-                        document["minute"],
-                        document["child_id"],
-                        program=program,
-                        approved_program_hash=document.get("approved_program_hash"),
-                    )
-                    # The child's saved head holds the hash of its world.
-                    head = self.store.branch_reference(project_id, run_id, child.branch_id)
-                    saved = self.store.checkpoint_fields(
-                        project_id, run_id, head.checkpoint_hash, ("state_hash",)
-                    )
-                return {
-                    "branch_id": child.branch_id,
-                    "minute": child.world.minute_index,
-                    "state_hash": saved["state_hash"],
-                }
+                return self.fork(project_id, run_id, branch_id, document)
         raise StorageError("unknown project operation")
+
+    def fork(
+        self,
+        project_id: str,
+        run_id: str,
+        branch_id: str,
+        document: dict[str, Any],
+        *,
+        expected_state_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """The fork route; an intervention apply also passes the state its preview saw."""
+        fields(
+            document,
+            {"minute", "child_id", "approved"},
+            {"program", "approved_program_hash"},
+        )
+        if document["approved"] is not True:
+            raise StorageError("branch creation needs explicit human approval")
+        with self._lock:
+            if self._active is not None:
+                raise StorageError("pause background calculation before forking")
+            program = (
+                EffectProgram.model_validate(document["program"])
+                if document.get("program") is not None
+                else None
+            )
+            timeline = TimelineStore(self.store, project_id, run_id)
+            child = timeline.fork(
+                branch_id,
+                document["minute"],
+                document["child_id"],
+                program=program,
+                approved_program_hash=document.get("approved_program_hash"),
+                expected_state_hash=expected_state_hash,
+            )
+            # The child's saved head holds the hash of its world.
+            head = self.store.branch_reference(project_id, run_id, child.branch_id)
+            saved = self.store.checkpoint_fields(
+                project_id, run_id, head.checkpoint_hash, ("state_hash",)
+            )
+        return {
+            "branch_id": child.branch_id,
+            "minute": child.world.minute_index,
+            "state_hash": saved["state_hash"],
+        }
 
     def submit(
         self,
