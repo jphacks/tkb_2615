@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import gc
 import hashlib
 import json
 import math
@@ -10,6 +11,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
@@ -117,6 +119,11 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+# Kept restored worlds are dropped once no read has used them for this long, so the
+# local server does not hold their memory after the reads (#46).
+_RESTORED_IDLE_SECONDS = 60.0
+
+
 def _copy_restored(
     world: WorldState, metrics: MetricsRecorder
 ) -> tuple[WorldState, MetricsRecorder]:
@@ -148,6 +155,10 @@ class ProjectStore:
         # Checkpoints this store loaded (a comparison or replay reads two branches),
         # by checkpoint hash (#46). The same verified document restores the same state.
         self._restored: dict[tuple[str, str, str], tuple[WorldState, MetricsRecorder]] = {}
+        self._restored_lock = threading.Lock()
+        self._restored_idle_seconds = _RESTORED_IDLE_SECONDS
+        self._restored_used = 0.0
+        self._restored_timer: threading.Timer | None = None
         self._checkpoint_write_bytes: dict[tuple[str, str], int] = {}
 
     @contextmanager
@@ -735,10 +746,11 @@ class ProjectStore:
         key = (project_id, run_id, checkpoint_hash)
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         document = self._read(path)
-        with self._mutex:
+        with self._restored_lock:
             kept = self._restored.pop(key, None)
             if kept is not None:
                 self._restored[key] = kept
+                self._use_restored()
         archived = document.get("storage_type") in {
             "checkpoint_archive_v1",
             "checkpoint_archive_v2",
@@ -773,11 +785,36 @@ class ProjectStore:
                 copy = _copy_restored(*restored)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
-        with self._mutex:
+        with self._restored_lock:
             self._restored[key] = copy
             while len(self._restored) > 2:
                 del self._restored[next(iter(self._restored))]
+            self._use_restored()
         return checkpoint, restored
+
+    def _use_restored(self) -> None:
+        """Note a use of the kept worlds and make sure they expire; holds _restored_lock."""
+        self._restored_used = time.monotonic()
+        if self._restored_timer is None:
+            self._start_restored_timer(self._restored_idle_seconds)
+
+    def _start_restored_timer(self, delay: float) -> None:
+        self._restored_timer = threading.Timer(delay, self._expire_restored)
+        self._restored_timer.daemon = True
+        self._restored_timer.start()
+
+    def _expire_restored(self) -> None:
+        """Drop the kept worlds if no read used them for _restored_idle_seconds."""
+        with self._restored_lock:
+            remaining = self._restored_used + self._restored_idle_seconds - time.monotonic()
+            if remaining > 0 and self._restored:
+                self._start_restored_timer(remaining)
+                return
+            dropped, self._restored, self._restored_timer = self._restored, {}, None
+        del dropped
+        # Return the freed objects' memory now; an idle server allocates nothing that
+        # would trigger a collection.
+        gc.collect()
 
     def checkpoint_document(
         self, project_id: str, run_id: str, checkpoint_hash: str
