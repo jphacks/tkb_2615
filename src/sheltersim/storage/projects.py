@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 try:  # POSIX lock for macOS/Linux.
     import fcntl
@@ -92,6 +92,25 @@ def _redact(value: str) -> str:
 
 # Saved records repeat the same IDs, labels and short texts; redact each one once.
 _redact_short = functools.lru_cache(maxsize=16_384)(_redact)
+
+
+def retry_while_shared(action: Callable[[], Any], *, attempts: int = 50) -> Any:
+    """Run a file action, retrying briefly on Windows while another handle shares the file.
+
+    Windows cannot open a file while it is being replaced, nor replace a file another
+    thread or process has open; either lasts a moment. POSIX allows both, so there the
+    action runs once.
+    """
+    if os.name != "nt":
+        return action()
+    for attempt in range(attempts):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.01)
+    raise AssertionError("unreachable")
 
 
 def safe_document(value: Any) -> Any:
@@ -200,7 +219,7 @@ class ProjectStore:
         if path.is_symlink() or not path.resolve().is_relative_to(self.root):
             raise StorageError("unsafe artifact path")
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(retry_while_shared(lambda: path.read_text(encoding="utf-8")))
         except (FileNotFoundError, json.JSONDecodeError) as exc:
             raise StorageError("saved artifact is missing or corrupt") from exc
         # Conversation v2 adds scalar proof/scope records. Other artifact envelopes
@@ -244,7 +263,7 @@ class ProjectStore:
                         raise StorageError("immutable saved artifact already exists") from exc
                     added = (0, 0)
             else:
-                os.replace(name, path)
+                retry_while_shared(lambda: os.replace(name, path))
             if os.name != "nt":
                 directory_fd = os.open(path.parent, os.O_RDONLY)
                 try:
