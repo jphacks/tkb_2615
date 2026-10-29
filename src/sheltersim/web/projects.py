@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from sheltersim.core.world import WorldState
@@ -31,28 +32,46 @@ def fields(document: dict[str, Any], required: set[str], optional: set[str] | No
         raise StorageError("request fields do not match this operation")
 
 
+@dataclass
+class _Job:
+    """A computation or fork running for one Run."""
+
+    branch_id: str
+    cancel: Any
+    # In process mode, the thread that waits for the job's process to end.
+    watcher: threading.Thread | None = None
+
+
 class ProjectAPI:
     """Saved-run application operations, separate from the legacy read-only Inspector."""
 
     def __init__(
-        self, store: ProjectStore, *, recover: bool = True, worker: str = "thread"
+        self,
+        store: ProjectStore,
+        *,
+        recover: bool = True,
+        worker: str = "thread",
+        max_jobs: int = 1,
     ) -> None:
         """worker="process" computes each run and creates each fork in its own process
-        (the server, #48); "thread" computes on a thread of this process and forks in
-        the caller (tests and CLI)."""
+        (the server, #48), up to max_jobs Runs at once; "thread" computes one run at a
+        time on a thread of this process and forks in the caller (tests and CLI)."""
         if worker not in {"thread", "process"}:
             raise ValueError("worker must be 'thread' or 'process'")
+        if type(max_jobs) is not int or max_jobs < 1:
+            raise ValueError("max_jobs must be a positive integer")
         self.store = store
         if recover:
             self.store.recover_interrupted()
         self._worker = worker
+        # A thread shares the GIL, so only processes compute Runs in parallel.
+        self._max_jobs = max_jobs if worker == "process" else 1
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sheltersim-project")
         self._lock = threading.RLock()
-        self._active: tuple[str, str, str] | None = None
-        self._cancel: Any = threading.Event()
-        # In process mode, the thread that waits for the active job's process to end,
-        # and the outcome of the last fork started in this server process by Run.
-        self._watcher: threading.Thread | None = None
+        # The job of each Run with a computation or fork, by (project, run). A Run has
+        # at most one, as its writer lease allows (#48).
+        self._jobs: dict[tuple[str, str], _Job] = {}
+        # The outcome of the last fork started in this server process, by Run.
         self._fork_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
         self._closed = False
         from sheltersim.web.workspace import ProjectWorkspace
@@ -68,23 +87,33 @@ class ProjectAPI:
     def close(self) -> None:
         with self._lock:
             self._closed = True
-            self._cancel.set()
-            watcher = self._watcher
-        if watcher is not None:
-            watcher.join()
+            jobs = list(self._jobs.values())
+            for job in jobs:
+                job.cancel.set()
+        for job in jobs:
+            if job.watcher is not None:
+                job.watcher.join()
         self._pool.shutdown(wait=True)
 
     def wait_idle(self, timeout: float | None = None) -> None:
-        """Wait until the computation or fork submitted so far has ended."""
+        """Wait until the computations and forks submitted so far have ended."""
         if self._worker == "thread":
             self._pool.submit(lambda: None).result(timeout=timeout)
             return
         with self._lock:
-            watcher = self._watcher
-        if watcher is not None:
-            watcher.join(timeout)
+            watchers = [job.watcher for job in self._jobs.values() if job.watcher is not None]
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for watcher in watchers:
+            watcher.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
             if watcher.is_alive():
                 raise TimeoutError("the background job is still running")
+
+    def _admit(self, project_id: str, run_id: str) -> None:
+        """Refuse a job for a Run that has one, or beyond max_jobs; holds self._lock."""
+        if self._closed or (project_id, run_id) in self._jobs:
+            raise StorageError("background worker is busy; wait or pause the active run")
+        if len(self._jobs) >= self._max_jobs:
+            raise StorageError("background workers are busy; wait until a running computation ends")
 
     def get(self, parts: list[str], query: dict[str, list[str]]) -> dict[str, Any]:
         shared = self.services.get(parts, query)
@@ -304,7 +333,7 @@ class ProjectAPI:
             if action == "delete":
                 fields(document, {"confirmation"})
                 with self._lock:
-                    if self._active is not None and self._active[:2] == (project_id, run_id):
+                    if (project_id, run_id) in self._jobs:
                         raise StorageError("cannot delete an active run")
                     self.store.delete_run(project_id, run_id, confirmation=document["confirmation"])
                 return {"deleted": run_id}
@@ -323,8 +352,9 @@ class ProjectAPI:
             if action == "cancel":
                 fields(document, set())
                 with self._lock:
-                    if self._active is not None and self._active[:2] == (project_id, run_id):
-                        self._cancel.set()
+                    job = self._jobs.get((project_id, run_id))
+                    if job is not None:
+                        job.cancel.set()
                     elif self.store.run(project_id, run_id)["status"] == "running":
                         raise StorageError(
                             "run_worker_busy: cancellation must reach the owning worker"
@@ -354,7 +384,7 @@ class ProjectAPI:
         if document["approved"] is not True:
             raise StorageError("branch creation needs explicit human approval")
         with self._lock:
-            if self._active is not None:
+            if (project_id, run_id) in self._jobs:
                 raise StorageError("pause background calculation before forking")
             program = (
                 EffectProgram.model_validate(document["program"])
@@ -362,6 +392,7 @@ class ProjectAPI:
                 else None
             )
             if self._worker == "process":
+                self._admit(project_id, run_id)
                 return self._fork_process(
                     project_id, run_id, branch_id, document, program, expected_state_hash
                 )
@@ -395,8 +426,7 @@ class ProjectAPI:
         measure_performance: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
-            if self._closed or self._active is not None:
-                raise StorageError("background worker is busy; wait or pause the active run")
+            self._admit(project_id, run_id)
             # The pointer and the immutable Scenario bound the range without decoding
             # the history; the worker loads and validates the checkpoint once.
             reference = self.store.branch_reference(project_id, run_id, branch_id)
@@ -413,8 +443,8 @@ class ProjectAPI:
                 )
             lease = self.store.claim_run(project_id, run_id)
             try:
-                self._active = (project_id, run_id, branch_id)
-                self._cancel = threading.Event()
+                job = _Job(branch_id, threading.Event())
+                self._jobs[(project_id, run_id)] = job
                 self.store.set_status(project_id, run_id, "running")
                 self._pool.submit(
                     self._advance,
@@ -422,12 +452,12 @@ class ProjectAPI:
                     run_id,
                     branch_id,
                     target_minute,
-                    self._cancel.is_set,
+                    job.cancel.is_set,
                     lease,
                     measure_performance,
                 )
             except BaseException:
-                self._active = None
+                self._jobs.pop((project_id, run_id), None)
                 try:
                     self.store.set_status(project_id, run_id, "interrupted")
                 finally:
@@ -519,15 +549,15 @@ class ProjectAPI:
         from sheltersim.web.worker_process import start_worker
 
         process, cancel, outcome = start_worker(self.store, job)
-        self._active = active
-        self._cancel = cancel
-        self._watcher = threading.Thread(
+        running = _Job(active[2], cancel)
+        running.watcher = threading.Thread(
             target=self._watch,
-            args=(process, outcome, job["kind"], active[0], active[1], restore),
+            args=(process, outcome, job["kind"], active[0], active[1], restore, running),
             name=f"sheltersim-watch-{active[1]}",
             daemon=True,
         )
-        self._watcher.start()
+        self._jobs[active[:2]] = running
+        running.watcher.start()
 
     def _watch(
         self,
@@ -537,6 +567,7 @@ class ProjectAPI:
         project_id: str,
         run_id: str,
         restore: str | None,
+        job: _Job,
     ) -> None:
         """Wait for a job's process. A process that ended without recording an
         outcome (killed, crashed) leaves a computation interrupted, as a restart
@@ -575,7 +606,8 @@ class ProjectAPI:
                     self.store.release_run(lease)
         finally:
             with self._lock:
-                self._active = None
+                if self._jobs.get((project_id, run_id)) is job:
+                    del self._jobs[(project_id, run_id)]
 
     def _advance(
         self,
@@ -744,4 +776,4 @@ class ProjectAPI:
                     pass
             self.store.release_run(lease)
             with self._lock:
-                self._active = None
+                self._jobs.pop((project_id, run_id), None)

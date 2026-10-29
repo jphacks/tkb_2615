@@ -162,3 +162,70 @@ def test_a_process_fork_checks_what_needs_no_restore_at_once(tmp_path, monkeypat
         assert "last_fork" not in api.get(["p", "runs", "r"], {})
     finally:
         api.close()
+
+
+def _second_run(store):
+    """A second Run of the same Scenario beside Run r, at minute 0."""
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.timeline import TimelineStore
+
+    run = store.run("p", "r")
+    store.create_run("p", "r2", run["scenario_id"], run["scenario_version"])
+    scenario = store.scenario("p", run["scenario_id"], run["scenario_version"])
+    TimelineStore(store, "p", "r2").record(
+        BranchRuntime.from_world(WorldState.from_scenario(scenario))
+    )
+
+
+def test_two_runs_compute_at_once_up_to_the_limit(tmp_path, monkeypatch, saved_timeline):
+    """Different Runs compute in parallel processes, up to max_jobs (#48)."""
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, _ = saved_timeline(tmp_path)
+    _second_run(store)
+    duration = _duration(store)
+    api = ProjectAPI(store, recover=False, worker="process", max_jobs=2)
+    try:
+        api.submit("p", "r", "main", 30)
+        api.submit("p", "r2", "main", 30)
+        assert {store.run("p", run)["status"] for run in ("r", "r2")} == {"running"}
+        assert len(multiprocessing.active_children()) == 2
+        api.wait_idle(timeout=300)
+    finally:
+        api.close()
+    heads = {store.branch_reference("p", run, "main").checkpoint_hash for run in ("r", "r2")}
+    assert len(heads) == 1
+    assert {store.branch_reference("p", run, "main").computed_until for run in ("r", "r2")} == {30}
+    api = ProjectAPI(store, recover=False, worker="process", max_jobs=1)
+    try:
+        api.submit("p", "r", "main", duration)
+        with pytest.raises(StorageError, match="workers are busy"):
+            api.submit("p", "r2", "main", 60)
+        with pytest.raises(StorageError, match="workers are busy"):
+            api.fork("p", "r2", "main", {"minute": 30, "child_id": "c", "approved": True})
+        assert store.run("p", "r2")["status"] == "paused"
+    finally:
+        api.close()
+
+
+def test_a_run_forks_and_cancels_while_another_computes(tmp_path, monkeypatch, saved_timeline):
+    """A computation holds only its own Run: another Run forks, and cancelling one Run
+    leaves the other computing."""
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    _second_run(store)
+    duration = _duration(store)
+    api = ProjectAPI(store, recover=False, worker="process", max_jobs=2)
+    try:
+        api.submit("p", "r2", "main", duration)
+        with pytest.raises(StorageError, match="pause background calculation"):
+            api.fork("p", "r2", "main", {"minute": 0, "child_id": "c", "approved": True})
+        api.fork("p", "r", "main", {"minute": 15, "child_id": "c", "approved": True})
+        api.post(["p", "runs", "r2", "cancel"], {})
+        api.wait_idle(timeout=300)
+        assert api.get(["p", "runs", "r"], {})["last_fork"]["status"] == "created"
+    finally:
+        api.close()
+    assert store.run("p", "r2")["status"] == "paused"
+    assert store.branch_reference("p", "r", "c").computed_until == 15
