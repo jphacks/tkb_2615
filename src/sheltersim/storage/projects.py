@@ -705,14 +705,14 @@ class ProjectStore:
         return reference, checkpoint
 
     def load_restored_branch(
-        self, project_id: str, run_id: str, branch_id: str
+        self, project_id: str, run_id: str, branch_id: str, *, keep: bool = True
     ) -> tuple[BranchReference, Checkpoint, tuple[WorldState, MetricsRecorder]]:
         """load_branch(), and the world and metrics restored from its head."""
         reference = BranchReference.model_validate(
             self._read(self._path(project_id, "runs", run_id, "branches", branch_id, "branch.json"))
         )
         checkpoint, restored = self.load_restored_checkpoint(
-            project_id, run_id, reference.checkpoint_hash
+            project_id, run_id, reference.checkpoint_hash, keep=keep
         )
         if (
             checkpoint.checkpoint_hash != reference.checkpoint_hash
@@ -725,11 +725,12 @@ class ProjectStore:
         return self.load_restored_checkpoint(project_id, run_id, checkpoint_hash)[0]
 
     def load_restored_checkpoint(
-        self, project_id: str, run_id: str, checkpoint_hash: str
+        self, project_id: str, run_id: str, checkpoint_hash: str, *, keep: bool = True
     ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder]]:
         """load_checkpoint(), and the world and metrics its validation restored.
 
         They are what restore_state() returns, without restoring the Checkpoint again.
+        With keep=False a Checkpoint not kept already is not kept for later reads.
         """
         key = (project_id, run_id, checkpoint_hash)
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
@@ -767,6 +768,8 @@ class ProjectStore:
                 else:
                     # _read parsed the file just now, so the document is not shared.
                     checkpoint, restored = Checkpoint._load(document)
+                if not keep:
+                    return checkpoint, restored
                 copy = _copy_restored(*restored)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc

@@ -97,9 +97,9 @@ def no_checkpoint_decode(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     # Every load, load_checkpoint() and load_branch() included, decodes through here.
     original = ProjectStore.load_restored_checkpoint
 
-    def load(self, project_id, run_id, checkpoint_hash):
+    def load(self, project_id, run_id, checkpoint_hash, **options):
         decoded.append(checkpoint_hash)
-        return original(self, project_id, run_id, checkpoint_hash)
+        return original(self, project_id, run_id, checkpoint_hash, **options)
 
     monkeypatch.setattr(ProjectStore, "load_restored_checkpoint", load)
     return decoded
