@@ -32,6 +32,48 @@ def fields(document: dict[str, Any], required: set[str], optional: set[str] | No
         raise StorageError("request fields do not match this operation")
 
 
+def _peak_rss_bytes() -> int:
+    """This process's peak resident memory in bytes, or 0 where it cannot be read."""
+    if _resource is not None:
+        peak = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+        return int(peak if sys.platform == "darwin" else peak * 1024)
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class _Counters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        # Handles are pointer-sized; without these types ctypes passes a C int.
+        kernel32 = ctypes.WinDLL("kernel32")
+        psapi = ctypes.WinDLL("psapi")
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_Counters),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        counters = _Counters()
+        counters.cb = ctypes.sizeof(counters)
+        if psapi.GetProcessMemoryInfo(
+            kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+        ):
+            return int(counters.PeakWorkingSetSize)
+    return 0
+
+
 @dataclass
 class _Job:
     """A computation or fork running for one Run."""
@@ -720,10 +762,7 @@ class ProjectAPI:
                     storage_snapshot = self.store.usage()
                     storage_after = storage_snapshot["bytes"]
                     storage_limit = storage_snapshot["limit_bytes"]
-                    peak_rss = 0
-                    if _resource is not None:
-                        peak = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
-                        peak_rss = int(peak if sys.platform == "darwin" else peak * 1024)
+                    peak_rss = _peak_rss_bytes()
                     if computed_until == 0:
                         try:
                             computed_until = self.store.branch_reference(

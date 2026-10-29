@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -246,6 +247,11 @@ def test_usage_sees_another_stores_writes_at_once(tmp_path):
     assert (after["bytes"], after["files"]) == (before["bytes"] + size, before["files"] + 1)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows keeps each entry's size from the directory listing, so a file "
+    "removed while it is measured still counts",
+)
 def test_usage_skips_a_file_removed_while_it_is_measured(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path)
     (tmp_path / "kept").write_bytes(b"12")
@@ -481,3 +487,28 @@ def test_another_writer_during_a_save_overshoots_by_at_most_that_save(
     with pytest.raises(StorageError, match="capacity"):
         store.save_branch("p", refused, checkpoint)
     assert store.usage()["bytes"] == after
+
+
+def test_a_file_shared_for_a_moment_on_windows_is_tried_again(monkeypatch):
+    """Windows cannot open a file being replaced, nor replace one open elsewhere; a
+    status read during a save answered HTTP 500 there."""
+    from sheltersim.storage import projects
+
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(projects.time, "sleep", lambda _seconds: None)
+    tries = []
+
+    def shared_twice():
+        tries.append(1)
+        if len(tries) < 3:
+            raise PermissionError("the file is being used by another process")
+        return "read"
+
+    assert projects.retry_while_shared(shared_twice) == "read"
+    assert len(tries) == 3
+
+    def always_shared():
+        raise PermissionError("the file is being used by another process")
+
+    with pytest.raises(PermissionError):
+        projects.retry_while_shared(always_shared, attempts=3)

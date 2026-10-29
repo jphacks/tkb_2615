@@ -166,3 +166,16 @@ def test_ledger_keeps_requested_calls_free_for_later_work(project_store_at, tmp_
         cost_usd=0.0001,
         keep_calls_free=3,
     )
+
+
+def test_process_exists_knows_a_running_and_an_ended_process_on_every_platform() -> None:
+    """os.kill(pid, 0) sent CTRL_C_EVENT to the whole console on Windows."""
+    import subprocess
+    import sys
+
+    from sheltersim.storage.usage import process_exists
+
+    assert process_exists(os.getpid()) is True
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    assert process_exists(child.pid) is False

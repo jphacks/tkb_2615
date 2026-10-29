@@ -17,7 +17,12 @@ import tempfile
 from typing import Any
 
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
-from sheltersim.storage.projects import ProjectStore, StorageError, canonical
+from sheltersim.storage.projects import (
+    ProjectStore,
+    StorageError,
+    canonical,
+    retry_while_shared,
+)
 
 # Bump when world_frame output changes so older cached frames are recomputed.
 FRAME_PROJECTION_VERSION = "timeline-frame-v1"
@@ -63,7 +68,7 @@ class FrameCache:
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(data)
-            os.replace(name, path)
+            retry_while_shared(lambda: os.replace(name, path))
         finally:
             if os.path.exists(name):
                 os.unlink(name)
