@@ -18,6 +18,8 @@ SHELTERSIM_LLM_MODE=offline sheltersim web \
 - http://127.0.0.1:8765/demo-v2: 独立した4画面の「避難所IF！」バックアップUI（[操作・API対応・検証](ui-backup.md)）。
 - http://127.0.0.1:8765/admin: 保存Runの参照画面。
 
+Project workspaceの計算と分岐は、Runごとに別プロセスで動きます。異なるRunは、既定で2つまで同時に計算できます。`--max-parallel-runs N` で変えられます。計算1本で、1日分のRun（100人）なら約0.5〜0.9 GBのメモリを使うので、PCのメモリに合わせて決めてください。
+
 このserverはローカル用途で、loginを持ちません。別途確認済みのaccess controlがない限りloopbackにbindしてください。
 
 ## デモデータ

@@ -25,8 +25,12 @@ def serve_inspector(
     host: str = "127.0.0.1",
     port: int = 8765,
     demo_scenario: str | Path | None = None,
+    max_parallel_runs: int = 2,
 ) -> None:
-    """Serve the saved-run Inspector and packaged offline demo until interrupted."""
+    """Serve the saved-run Inspector and packaged offline demo until interrupted.
+
+    Up to max_parallel_runs Runs compute or fork at once, each in its own process.
+    """
     service = InspectorService(runs_directory)
     frozen_scenario_path = Path(runs_directory) / ".demo-scenarios" / "frozen.json"
     project_store = ProjectStore(Path(runs_directory) / ".projects")
@@ -40,7 +44,7 @@ def serve_inspector(
         )
     )
     job_manager = DemoJobManager(demo, Path(runs_directory) / ".demo-jobs")
-    projects = ProjectAPI(project_store, worker="process")
+    projects = ProjectAPI(project_store, worker="process", max_jobs=max_parallel_runs)
     handler = _handler_for(service, demo, job_manager, projects)
     server = HTTPServer((host, port), handler)
     print(f"ShelterSim inspector: http://{host}:{server.server_port}/")

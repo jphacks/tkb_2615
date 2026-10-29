@@ -89,6 +89,16 @@ def _cli_accounted_router(
     )
 
 
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the offline inspection command parser."""
     parser = argparse.ArgumentParser(
@@ -277,6 +287,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="optional local JSON scenario for the offline intervention demo",
     )
+    web.add_argument(
+        "--max-parallel-runs",
+        type=_positive_int,
+        default=2,
+        help="Runs computed at once, each in its own process (default: 2)",
+    )
     return parser
 
 
@@ -348,6 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             host=arguments.host,
             port=arguments.port,
             demo_scenario=arguments.demo_scenario,
+            max_parallel_runs=arguments.max_parallel_runs,
         )
         return 0
     if arguments.command == "profiles-preview":
