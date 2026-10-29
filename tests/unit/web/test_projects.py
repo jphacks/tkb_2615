@@ -61,7 +61,7 @@ def test_corrupt_head_still_fails_closed_in_the_worker(tmp_path, monkeypatch, sa
     api = ProjectAPI(store)
     try:
         api.submit("p", "r", "main", 5)
-        api._pool.submit(lambda: None).result(timeout=60)
+        api.wait_idle(timeout=60)
     finally:
         api.close()
     assert store.run("p", "r")["status"] == "failed"

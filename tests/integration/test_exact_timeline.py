@@ -73,7 +73,7 @@ def test_fork_saves_the_child_of_the_source_checkpoint(
             },
         )
         api.submit("p", "r", "main", COMPUTED_UNTIL)
-        api._pool.submit(lambda: None).result(timeout=120)
+        api.wait_idle(timeout=120)
         timeline = TimelineStore(store, "p", "r")
         parent_before = store.load_branch("p", "r", "main")[1].to_json()
         source = timeline.seek("main", minute)

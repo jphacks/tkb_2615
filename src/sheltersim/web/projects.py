@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Callable
 
 from sheltersim.core.world import WorldState
 from sheltersim.events.effects import EffectProgram
@@ -34,14 +34,23 @@ def fields(document: dict[str, Any], required: set[str], optional: set[str] | No
 class ProjectAPI:
     """Saved-run application operations, separate from the legacy read-only Inspector."""
 
-    def __init__(self, store: ProjectStore, *, recover: bool = True) -> None:
+    def __init__(
+        self, store: ProjectStore, *, recover: bool = True, worker: str = "thread"
+    ) -> None:
+        """worker="process" computes each run in its own process (the server, #48);
+        "thread" computes on a thread of this process (tests and CLI)."""
+        if worker not in {"thread", "process"}:
+            raise ValueError("worker must be 'thread' or 'process'")
         self.store = store
         if recover:
             self.store.recover_interrupted()
+        self._worker = worker
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sheltersim-project")
         self._lock = threading.RLock()
         self._active: tuple[str, str, str] | None = None
-        self._cancel = threading.Event()
+        self._cancel: Any = threading.Event()
+        # In process mode, the thread that waits for the active run's process to end.
+        self._watcher: threading.Thread | None = None
         self._closed = False
         from sheltersim.web.workspace import ProjectWorkspace
 
@@ -57,7 +66,22 @@ class ProjectAPI:
         with self._lock:
             self._closed = True
             self._cancel.set()
+            watcher = self._watcher
+        if watcher is not None:
+            watcher.join()
         self._pool.shutdown(wait=True)
+
+    def wait_idle(self, timeout: float | None = None) -> None:
+        """Wait until the computation submitted so far has ended."""
+        if self._worker == "thread":
+            self._pool.submit(lambda: None).result(timeout=timeout)
+            return
+        with self._lock:
+            watcher = self._watcher
+        if watcher is not None:
+            watcher.join(timeout)
+            if watcher.is_alive():
+                raise TimeoutError("the background computation is still running")
 
     def get(self, parts: list[str], query: dict[str, list[str]]) -> dict[str, Any]:
         shared = self.services.get(parts, query)
@@ -373,6 +397,10 @@ class ProjectAPI:
                 or not reference.computed_until < target_minute <= scenario.duration_minutes
             ):
                 raise StorageError("target minute must be in the uncomputed remaining range")
+            if self._worker == "process":
+                return self._submit_process(
+                    project_id, run_id, branch_id, target_minute, measure_performance
+                )
             lease = self.store.claim_run(project_id, run_id)
             try:
                 self._active = (project_id, run_id, branch_id)
@@ -384,7 +412,7 @@ class ProjectAPI:
                     run_id,
                     branch_id,
                     target_minute,
-                    self._cancel,
+                    self._cancel.is_set,
                     lease,
                     measure_performance,
                 )
@@ -402,15 +430,66 @@ class ProjectAPI:
                 "target_minute": target_minute,
             }
 
+    def _submit_process(
+        self,
+        project_id: str,
+        run_id: str,
+        branch_id: str,
+        target_minute: int,
+        measure_performance: bool,
+    ) -> dict[str, Any]:
+        """Start the run's process; called with self._lock held."""
+        from sheltersim.web.worker_process import start_worker
+
+        process, cancel = start_worker(
+            self.store, project_id, run_id, branch_id, target_minute, measure_performance
+        )
+        self._active = (project_id, run_id, branch_id)
+        self._cancel = cancel
+        self._watcher = threading.Thread(
+            target=self._watch,
+            args=(process, project_id, run_id),
+            name=f"sheltersim-watch-{run_id}",
+            daemon=True,
+        )
+        self._watcher.start()
+        return {
+            "status": "running",
+            "run_id": run_id,
+            "branch_id": branch_id,
+            "target_minute": target_minute,
+        }
+
+    def _watch(self, process: Any, project_id: str, run_id: str) -> None:
+        """Wait for a run's process; a process that ended without recording an
+        outcome (killed, crashed) leaves the run interrupted, as a restart would."""
+        process.join()
+        try:
+            lease = self.store.claim_run(project_id, run_id)
+        except StorageError:
+            # Another process owns the Run now, or it was deleted; nothing to recover.
+            pass
+        else:
+            try:
+                if self.store.run(project_id, run_id)["status"] in {"queued", "running"}:
+                    self.store.set_status(project_id, run_id, "interrupted")
+            finally:
+                self.store.release_run(lease)
+        finally:
+            with self._lock:
+                self._active = None
+
     def _advance(
         self,
         project_id: str,
         run_id: str,
         branch_id: str,
         target_minute: int,
-        cancel: threading.Event,
+        cancelled: Callable[[], bool],
         lease: int,
         measure_performance: bool = False,
+        *,
+        own_process: bool = False,
     ) -> None:
         telemetry = (
             RunTelemetryStore(self.store, project_id, run_id) if measure_performance else None
@@ -463,7 +542,7 @@ class ProjectAPI:
                     settings=settings,
                 )
             runtime = TimelineStore(self.store, project_id, run_id)._advance_locked(
-                branch_id, target_minute, router=router, cancelled=cancel.is_set
+                branch_id, target_minute, router=router, cancelled=cancelled
             )
             status = (
                 "completed"
@@ -532,11 +611,24 @@ class ProjectAPI:
                             "wall_seconds": wall_seconds,
                             "thread_cpu_seconds": cpu_seconds,
                             "process_peak_rss_bytes": peak_rss,
-                            "run_peak_memory_bytes": None,
-                            "memory_attribution_status": "unavailable",
-                            "memory_attribution_reason": (
-                                "Runs execute in the shared server process; process-wide RSS "
-                                "cannot be attributed to this Run."
+                            **(
+                                {
+                                    "run_peak_memory_bytes": peak_rss,
+                                    "memory_attribution_status": "measured",
+                                    "memory_attribution_reason": (
+                                        "The Run executed in its own worker process; this is "
+                                        "that process's peak RSS."
+                                    ),
+                                }
+                                if own_process and peak_rss
+                                else {
+                                    "run_peak_memory_bytes": None,
+                                    "memory_attribution_status": "unavailable",
+                                    "memory_attribution_reason": (
+                                        "Runs execute in the shared server process; "
+                                        "process-wide RSS cannot be attributed to this Run."
+                                    ),
+                                }
                             ),
                             "project_storage_before_bytes": storage_before,
                             "project_storage_after_bytes": storage_after,

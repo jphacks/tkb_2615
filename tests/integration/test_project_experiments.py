@@ -50,7 +50,7 @@ def project_api(tmp_path, monkeypatch, generated_previews, saved_timeline):
 def _compute(api: ProjectAPI, run_id: str) -> None:
     api.post(["p", "runs", run_id, "resume"], {"branch_id": "main", "target_minute": END})
     # The worker is single; this waits for the resume queued above (#143).
-    api._pool.submit(lambda: None).result(timeout=120)
+    api.wait_idle(timeout=120)
     assert api.get(["p", "runs", run_id], {})["status"] == "completed"
 
 
