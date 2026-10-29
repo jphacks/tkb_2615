@@ -676,7 +676,26 @@
   el("map").addEventListener("pointerup",e=>{if(drag&&!drag.moved){const canvas=el("map"),r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*canvas.width/r.width,y=(e.clientY-r.top)*canvas.height/r.height,hit=view.hits.findLast(h=>Math.hypot(h.x-x,h.y-y)<18);if(hit?.kind==="cluster"){const previous=view.zoom;view.zoom=Math.min(12,Math.max(previous*1.8,previous+.8));const ratio=view.zoom/previous;view.panX=canvas.width/2-20-(hit.x-20-view.panX)*ratio;view.panY=canvas.height/2-20-(hit.y-20-view.panY)*ratio;status(`${hit.ids.length}件を地図上で集約表示しています。絞り込み検索または一覧から個別記録を開けます。`);draw();}else if(hit)setSelected(hit);}drag=null;});
   el("map").addEventListener("wheel",e=>{e.preventDefault();view.zoom=Math.max(.5,Math.min(12,view.zoom*(e.deltaY<0?1.15:1/1.15)));draw();},{passive:false});
   el("map").addEventListener("keydown",e=>{if(e.key==="+"||e.key==="=")view.zoom=Math.min(12,view.zoom*1.15);else if(e.key==="-")view.zoom=Math.max(.5,view.zoom/1.15);else if(e.key==="ArrowLeft")view.panX+=24;else if(e.key==="ArrowRight")view.panX-=24;else if(e.key==="ArrowUp")view.panY+=24;else if(e.key==="ArrowDown")view.panY-=24;else return;e.preventDefault();draw();});
-  on("intervention-preview","click",async()=>{const requestSerial=++view.interventionSerial,requestText=el("intervention").value,requestProgram=el("intervention-program").value,requestMinute=view.minute,requestBranch=view.branch,inputKey=json([requestText,requestProgram]);if(requestText.trim()&&requestProgram.trim())throw new Error("自然言語とEffectProgram JSONはどちらか一方を指定してください。");const body={minute:requestMinute,...(requestProgram.trim()?{program:JSON.parse(requestProgram)}:{text:requestText})};const result=await request(`${branchRoot()}/intervention-preview`,body);if(requestSerial!==view.interventionSerial||inputKey!==json([el("intervention").value,el("intervention-program").value])||requestMinute!==view.minute||requestBranch!==view.branch)return;view.intervention=result;view.interventionInputKey=inputKey;el("intervention-result").textContent=json(view.intervention);el("fork-check").checked=false;window.dispatchEvent(new CustomEvent("sheltersim:intervention-preview",{detail:{result,minute:view.minute,run:view.run,branch:view.branch}}));});
+  // A clarification's choices become buttons; a choice adds a zone_id line (or the ID
+  // of another target) to the request and previews it again, as /demo-v2 does (#35).
+  function renderInterventionChoices(result) {
+    const box = el("intervention-choices"); box.replaceChildren();
+    if (result?.status !== "clarification_required" || !result.choices?.length) return;
+    const zones = new Map((view.frame?.zones || []).map(zone => [zone.id, zone.name]));
+    for (const choice of result.choices) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "compact";
+      button.textContent = zones.has(choice) ? `${zones.get(choice)} (${choice})` : choice;
+      button.addEventListener("click", () => {
+        const line = zones.has(choice) ? `zone_id: ${choice}` : `対象ID: ${choice}`;
+        el("intervention").value = `${el("intervention").value.replace(/\n(?:zone_id|対象ID): [^\n]+/g, "")}\n${line}`;
+        el("intervention").dispatchEvent(new Event("input"));
+        el("intervention-preview").click();
+      });
+      box.append(button);
+    }
+  }
+  on("intervention-preview","click",async()=>{const requestSerial=++view.interventionSerial,requestText=el("intervention").value,requestProgram=el("intervention-program").value,requestMinute=view.minute,requestBranch=view.branch,inputKey=json([requestText,requestProgram]);if(requestText.trim()&&requestProgram.trim())throw new Error("自然言語とEffectProgram JSONはどちらか一方を指定してください。");const body={minute:requestMinute,...(requestProgram.trim()?{program:JSON.parse(requestProgram)}:{text:requestText})};const result=await request(`${branchRoot()}/intervention-preview`,body);if(requestSerial!==view.interventionSerial||inputKey!==json([el("intervention").value,el("intervention-program").value])||requestMinute!==view.minute||requestBranch!==view.branch)return;view.intervention=result;view.interventionInputKey=inputKey;el("intervention-result").textContent=json(view.intervention);renderInterventionChoices(result);el("fork-check").checked=false;window.dispatchEvent(new CustomEvent("sheltersim:intervention-preview",{detail:{result,minute:view.minute,run:view.run,branch:view.branch}}));});
   on("fork","click",async()=>{if(!el("fork-check").checked)throw new Error("分岐条件を確認して承認してください。");const child=`branch-${crypto.randomUUID()}`;let result;const requestText=el("intervention").value,requestProgram=el("intervention-program").value;if(requestText.trim()||requestProgram.trim()){if(view.interventionInputKey!==json([requestText,requestProgram]))throw new Error("入力内容がPreview後に変更されています。作用を再プレビューしてください。");if(!view.intervention?.can_apply)throw new Error("作用のプレビューと検証が必要です。");result=await request(`${branchRoot()}/intervention-apply`,{preview_id:view.intervention.preview_id,approved_program_hash:view.intervention.approved_program_hash,approved:true,child_id:child});}else result=await request(`${branchRoot()}/fork`,{minute:view.minute,child_id:child,approved:true});view.interventionInputKey=null;
     // The server creates the fork in a worker process and returns at once; the Run stays running until the child exists (#48).
     if(result.status==="running"){view.pendingFork=child;await refreshRun(false);}else{view.branch=child;await openRun();}});
@@ -835,6 +854,6 @@
     if(window.ShelterSimPlanEditor?.restore)await window.ShelterSimPlanEditor.restore(content.plan_editor||null);
     draftRevision={project:view.project,id,hash:saved.content_hash};el("draft-status").textContent=`草案 ${id} · revision ${saved.revision} を復旧しました。図面候補・採否・縮尺・トレースは未承認草案として戻しました。実行には再プレビューと明示承認が必要です。`;window.dispatchEvent(new CustomEvent("sheltersim:draft-restored",{detail:{staff_unavailability:content.staff_unavailability||[]}}));
   });
-  on("intervention","input",()=>{++view.interventionSerial;view.intervention=null;el("intervention-result").textContent="入力が変わりました。もう一度作用をプレビューしてください。";el("fork-check").checked=false;});
+  on("intervention","input",()=>{++view.interventionSerial;view.intervention=null;el("intervention-choices").replaceChildren();el("intervention-result").textContent="入力が変わりました。もう一度作用をプレビューしてください。";el("fork-check").checked=false;});
   el("project").value=view.project;openProject().catch(e=>status(e.message));
 })();

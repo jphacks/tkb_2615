@@ -38,6 +38,8 @@ body.legacy-mode #project-workspace { display:none; }
 #ws-kpi-chart { width:100%; height:auto; background:#fbfcfb; border:1px solid #cbd8d4; }
 #ws-plan-json { width:100%; box-sizing:border-box; }
 #ws-map:focus-visible { outline:3px solid #267baf; outline-offset:2px; }
+#ws-intervention-choices { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+#ws-intervention-choices:empty { display:none; }
 #project-workspace textarea { width:100%; box-sizing:border-box; }
 #project-workspace input[type="range"] { width:100%; }
 #project-workspace button { cursor:pointer; }

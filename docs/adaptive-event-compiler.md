@@ -57,6 +57,8 @@ CIと標準pytestはfake Providerまたはoffline modeだけを使います。21
 - **composed:** 2つ以上の導入primitiveを組み合わせ、専用source codeを増やさずにeventを表す。
 - **approximate:** staff taskや環境proxyなど、明示的に限定した代替表現を使う。近似ラベル、係数の不確実性、表現しない内容を示す。
 - **clarification_required:** 対象・時刻・範囲が曖昧な場合に選択を求める。重大な仮定を隠して選ばない。
+
+追加先のZoneを書かない指示は、操作ごとにScenarioのデータで候補を絞ります（#35）。トイレ追加は既存トイレのあるZone、避難者の到着は受付（`intake`）のあるZone、スタッフ追加はスタッフの配置されているZone、避難者の帰宅は避難者のいるZoneです。該当するZoneがないScenarioでは、すべてのZoneを候補にします。候補が1つなら自動で選び、その理由を仮定（assumption）としてPreviewに示します。反映には従来どおり承認が要ります。Zoneを名前・ID・`zone_id:`で明示した指示は、そのZoneを使います。「トイレゾーン」「トイレエリア」のように、一般名の名前に「ゾーン」「エリア」を付けて書いたものも、その名前のZoneを指します。Opusが追加先のZoneを聞き返した場合でも、この規則で1つに決まり、規則が文全体を解釈できるなら、規則の案で補います（`fallback_used: true`、理由をlimitationsに記載）。Opusの聞き返しの選択肢は、1種類の対象（Zoneだけ、設備だけ、など）のIDに限ります。Project画面とDemo画面（/demo-v2）は、選択肢をボタンで示し、押すと指示文に`zone_id:`の行を足して再Previewします。Project画面では、Zone以外のIDは`対象ID:`の行として足します。compilerに渡すScenarioの要約には、Zoneごとのスタッフ数と避難者数が入ります。
 - **not_simulatable:** 根拠ある経路がない、必須機構がない、または疫学等の高リスク主張を含む要求を拒否する。必要なsubsystemを説明し、利用者承認の下で比較用proxyを提案する場合がある。
 
 将来、LLMにPolicy/plugin案を作らせる場合は、隔離sandbox、code review、test、明示登録、版管理、restartが必要です。live serverで未信頼コードを即時実行してはいけません。

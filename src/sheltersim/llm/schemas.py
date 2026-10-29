@@ -81,6 +81,9 @@ class ZoneTarget(StrictContract):
     id: StableId
     name: Annotated[str, StringConstraints(strict=True, min_length=1, max_length=120)]
     has_water_station: bool = False
+    # Staff stationed in, and evacuees present in, the zone at the selected minute (#35).
+    staff_count: Annotated[int, Field(strict=True, ge=0, le=10_000)] = 0
+    evacuee_count: Annotated[int, Field(strict=True, ge=0, le=10_000)] = 0
 
 
 class ShipmentTarget(StrictContract):
