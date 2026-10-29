@@ -33,7 +33,7 @@ def test_an_interrupted_run_resumes_to_the_uninterrupted_world(
         restarted = api.get(["p", "runs", "r"], {})["status"]
         api.post(["p", "runs", "r", "resume"], {"branch_id": "main", "target_minute": END})
         # The worker is single; this waits for the resume queued above (#143).
-        api._pool.submit(lambda: None).result(timeout=120)
+        api.wait_idle(timeout=120)
         finished = api.get(["p", "runs", "r"], {})["status"]
     finally:
         api.close()

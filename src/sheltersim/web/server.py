@@ -40,7 +40,7 @@ def serve_inspector(
         )
     )
     job_manager = DemoJobManager(demo, Path(runs_directory) / ".demo-jobs")
-    projects = ProjectAPI(project_store)
+    projects = ProjectAPI(project_store, worker="process")
     handler = _handler_for(service, demo, job_manager, projects)
     server = HTTPServer((host, port), handler)
     print(f"ShelterSim inspector: http://{host}:{server.server_port}/")

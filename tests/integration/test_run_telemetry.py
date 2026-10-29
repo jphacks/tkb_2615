@@ -45,7 +45,7 @@ def _compute(api: ProjectAPI, minute: int, *, measure: bool) -> None:
         {"branch_id": "main", "target_minute": minute, "measure_performance": measure},
     )
     # The worker is single; this waits for the resume queued above (#143).
-    api._pool.submit(lambda: None).result(timeout=120)
+    api.wait_idle(timeout=120)
 
 
 def test_measured_computations_are_recorded_beside_the_run(run_api):

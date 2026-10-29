@@ -39,7 +39,7 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_time
         assert loads == []
         release.set()
         assert held.result(timeout=60)
-        api._pool.submit(lambda: None).result(timeout=60)
+        api.wait_idle(timeout=60)
     finally:
         release.set()
         api.close()

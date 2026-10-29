@@ -194,7 +194,7 @@ def test_project_report_exists_before_the_run_is_marked_completed(
     try:
         api.submit("project", "run", "main", 30)
         # The single worker finishes the run before this no-op (#143).
-        api._pool.submit(lambda: None).result(timeout=120)
+        api.wait_idle(timeout=120)
     finally:
         api.close()
 
