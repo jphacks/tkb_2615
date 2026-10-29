@@ -19,6 +19,30 @@ from sheltersim.web.results_chat import ResultsChatService
 _STATIC = Path(__file__).with_name("static")
 
 
+# The types of the files the server sends. mimetypes reads them from the system (the
+# registry on Windows, which calls JavaScript application/javascript), so the files
+# of the app are fixed here and every platform sends the same.
+_CONTENT_TYPES = {
+    ".css": "text/css",
+    ".html": "text/html",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".js": "text/javascript",
+    ".json": "application/json",
+    ".mjs": "text/javascript",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ttf": "font/ttf",
+    ".wasm": "application/wasm",
+    ".woff2": "font/woff2",
+}
+
+
+def _content_type(name: str) -> str:
+    suffix = Path(name).suffix.lower()
+    return _CONTENT_TYPES.get(suffix) or mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
 def serve_inspector(
     runs_directory: str | Path,
     *,
@@ -425,16 +449,7 @@ def _handler_for(
                     self._json_response(404, {"error": "PDF renderer asset not found"})
                     return
                 payload = candidate.read_bytes()
-                content_type = (
-                    "text/javascript"
-                    if candidate.suffix == ".mjs"
-                    else (
-                        "font/ttf"
-                        if candidate.suffix == ".ttf"
-                        else mimetypes.guess_type(candidate.name)[0]
-                    )
-                    or "application/octet-stream"
-                )
+                content_type = _content_type(candidate.name)
                 self.send_response(200)
                 self.send_header(
                     "Content-Type",
@@ -483,7 +498,7 @@ def _handler_for(
                 mode = "admin" if request_path == "/admin" else "demo"
                 payload = payload.replace(b'data-mode="demo"', f'data-mode="{mode}"'.encode())
             self.send_response(200)
-            content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            content_type = _content_type(filename)
             self.send_header("Content-Type", f"{content_type}; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
