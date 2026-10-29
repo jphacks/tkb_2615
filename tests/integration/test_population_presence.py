@@ -4,9 +4,10 @@ chosen from the state at the fork, as an operator would pick them.
 
 Defects found while covering these paths (#178) are fixed and checked here: a
 reunion that includes someone waiting for support keeps that request in its household
-(#179), a return or an arrival waits while someone walks to the full zone (#180), and
-an exit of someone busy waits until they are free (#181). A failed precondition calls
-pytest.fail, so it is never mistaken for a defect.
+(#179), a return or an arrival waits while someone walks to the full zone (#180), an
+exit of someone busy waits until they are free (#181), and one program can take a
+person out and bring them back (#185). A failed precondition calls pytest.fail, so it
+is never mistaken for a defect.
 """
 
 from __future__ import annotations
@@ -378,3 +379,85 @@ def test_an_arrival_waits_while_someone_is_walking_to_the_full_zone(one_place_st
     assert newcomer not in dict(in_staff)[first_walker_minute]
     admitted = [minute for minute, ids in in_staff if newcomer in ids]
     assert admitted and admitted[0] > first_walker_minute, "admitted once there is room"
+
+
+def _out_and_back(agent_id: str, exit_minute: int, return_minute: int) -> EffectProgram:
+    """One program that takes a person out and brings them back (#185)."""
+    single = [
+        _presence("out", _person(agent_id), exit_minute, action="temporary_exit"),
+        _presence("back", _person(agent_id), return_minute, action="return"),
+    ]
+    return single[0].model_copy(
+        update={
+            "program_id": "program-out-and-back",
+            "effects": [program.effects[0] for program in single],
+        }
+    )
+
+
+def test_one_program_takes_a_person_out_and_brings_them_back(main_line):
+    """The return used to be refused because the person was still present at the fork
+    (#185)."""
+    from sheltersim.events.effects import validate_effect_program
+
+    _, timeline = main_line
+    world = _at_fork(timeline)
+    leaver = next(
+        (
+            key
+            for key, agent in sorted(world.agents.items())
+            if agent.activity in FREE and not agent.support_request_id
+        ),
+        None,
+    )
+    if leaver is None:
+        pytest.fail("nobody is free to leave at the fork minute")
+    returning_alone = _presence("back", _person(leaver), RETURN_MINUTE, action="return")
+    assert any(
+        "return target" in issue for issue in validate_effect_program(world, returning_alone)
+    )
+    backwards = _out_and_back(leaver, RETURN_MINUTE, FORK_MINUTE + 5)
+    assert any("return target" in issue for issue in validate_effect_program(world, backwards))
+    program = _out_and_back(leaver, FORK_MINUTE, RETURN_MINUTE)
+    assert validate_effect_program(world, program) == ()
+
+    _fork(timeline, "main", "out-and-back", program)
+    world = timeline.advance("out-and-back", END, checkpoint_interval=30).world
+
+    history = [
+        (minute, action) for minute, agent_id, action in _history(world) if agent_id == leaver
+    ]
+    assert history == [(FORK_MINUTE, "temporary_exit"), (RETURN_MINUTE, "returned")]
+    assert leaver in world.agents
+
+
+def test_an_exit_still_waiting_at_the_return_of_its_program_is_dropped_with_it(main_line):
+    """Leaving after the time to be back makes no sense (#181), and the return finds the
+    person still present; both end without a failure (#185)."""
+    _, timeline = main_line
+    world = _at_fork(timeline)
+    leaver = next(
+        (key for key, agent in sorted(world.agents.items()) if agent.support_request_id), None
+    )
+    if leaver is None:
+        pytest.fail("nobody waits for support at the fork minute")
+    program = _out_and_back(leaver, FORK_MINUTE, FORK_MINUTE + 1)
+
+    _fork(timeline, "main", "out-and-back-busy", program)
+    world = timeline.advance("out-and-back-busy", FORK_MINUTE + 5, checkpoint_interval=30).world
+
+    assert leaver in world.agents
+    assert [row for row in _history(world) if row[1] == leaver] == []
+    attempts = [
+        record
+        for record in world.event_log.records
+        if record.event.event_type == "effect_program_population"
+        and record.realized_minute >= FORK_MINUTE
+    ]
+    assert {record.status.value for record in attempts} == {"suppressed"}
+    details = [record.detail for record in attempts if record.realized_minute == FORK_MINUTE + 1]
+    assert any("return skipped" in detail for detail in details)
+    assert any(
+        "not free before the return in the same EffectProgram" in detail for detail in details
+    )
+    assert all(record.realized_minute <= FORK_MINUTE + 1 for record in attempts)

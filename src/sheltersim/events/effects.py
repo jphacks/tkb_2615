@@ -1027,8 +1027,20 @@ def validate_effect_program(
             if parameters.action == "return":
                 if "population_lifecycle_v1" not in world.model_state:
                     issues.append(f"{label} requires population_lifecycle_v1 state")
-                if selected_ids[0] in world.agents or selected_ids[0] not in archived:
-                    issues.append(f"{label} return target must be a retained absent person")
+                absent = selected_ids[0] not in world.agents and selected_ids[0] in archived
+                # The same program may take the person out first (#185).
+                leaves_first = selected_ids[0] in world.agents and any(
+                    other.op == "population_presence"
+                    and other.parameters.get("action") == "temporary_exit"
+                    and other.target_selector.target_id == selected_ids[0]
+                    and other.start_minute < effect.start_minute
+                    for other in program.effects
+                )
+                if not (absent or leaves_first):
+                    issues.append(
+                        f"{label} return target must be a retained absent person or one "
+                        "this program takes out earlier"
+                    )
             elif parameters.action == "reunite":
                 if any(person_id not in world.agents for person_id in selected_ids):
                     issues.append(f"{label} reunion candidates must be admitted people")
