@@ -9,6 +9,7 @@ from typing import Any
 from sheltersim.contracts.api import BranchReference
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+from sheltersim.core.collection import fewer_collections
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.domain.population_lifecycle import current_household_id
 from sheltersim.experiments.branch import BranchRuntime
@@ -534,6 +535,24 @@ class TimelineStore:
         cancelled: Any = None,
     ) -> BranchRuntime:
         """Caller must hold the Run writer lease (Project jobs or advance())."""
+        with fewer_collections():
+            return self._advance_collecting_less(
+                branch_id,
+                target_minute,
+                router=router,
+                checkpoint_interval=checkpoint_interval,
+                cancelled=cancelled,
+            )
+
+    def _advance_collecting_less(
+        self,
+        branch_id: str,
+        target_minute: int,
+        *,
+        router: LLMRouter | None,
+        checkpoint_interval: int,
+        cancelled: Any,
+    ) -> BranchRuntime:
         reference, head, restored = self.store.load_restored_branch(
             self.project_id, self.run_id, branch_id
         )
@@ -635,7 +654,9 @@ class TimelineStore:
         *,
         program: Any = None,
         approved_program_hash: str | None = None,
+        expected_state_hash: str | None = None,
     ) -> BranchRuntime:
+        """expected_state_hash, when given, is the source state an approved preview saw."""
         # A destination identity must be new, even if its content would match.
         if self.store._path(
             self.project_id, "runs", self.run_id, "branches", child_id, "branch.json"
@@ -645,6 +666,8 @@ class TimelineStore:
         # The child is taken from this Checkpoint, which also holds both hashes of
         # the source.
         child, checkpoint = source.fork_with_checkpoint(child_id)
+        if expected_state_hash is not None and checkpoint.state_hash != expected_state_hash:
+            raise TimelineError("source state changed; preview the intervention again")
         child.runtime_state["fork_origin"] = {
             "branch_id": branch_id,
             "minute": minute,

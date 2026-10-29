@@ -116,3 +116,48 @@ def test_project_chat_accepts_verbatim_string_evidence(tmp_path) -> None:
 
     assert answer["usage"]["rejected_fact_batch"] is False
     assert answer["usage"]["accepted_fact_count"] == 2
+
+
+def test_project_evidence_compares_branches_as_the_comparison_route_does(tmp_path) -> None:
+    """The chat's comparison evidence reuses the frame it read for its own branch."""
+    import json
+
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.benchmark import build_benchmark_scenario
+    from sheltersim.experiments.branch import BranchRuntime
+    from sheltersim.experiments.scenario import ScenarioSpec
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore, digest
+    from sheltersim.web.projects import ProjectAPI
+    from sheltersim.web.results_chat import ResultsChatService
+
+    scenario = build_benchmark_scenario(
+        ScenarioSpec.load(BASELINE_100_7D), agent_count=10, seed=7, duration_minutes=30
+    )
+    store = ProjectStore(tmp_path)
+    store.create_project("project")
+    saved = store.save_scenario(
+        "project", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+    )
+    store.create_run("project", "run", scenario.id, saved["scenario_version"])
+    timeline = TimelineStore(store, "project", "run")
+    timeline.record(BranchRuntime.from_world(WorldState.from_scenario(scenario)))
+    timeline.advance("main", 30)
+    timeline.fork("main", 10, "child")
+    timeline.advance("child", 30)
+    api = ProjectAPI(store, recover=False)
+    try:
+        evidence, _, _ = ResultsChatService(None, None, api)._project_evidence(
+            "project", "run", "main", 20, None, ["child"]
+        )
+        expected = api.workspace.comparison("project", "run", ["main", "child"], 20)
+    finally:
+        api.close()
+    compared = [item for item in evidence if item.get("kind") == "comparison"]
+    assert len(compared) == 1
+    data = compared[0]["data"]
+    assert data["kpis"] == {
+        key: value for key, value in expected["frames"][1]["kpis"].items() if key in data["kpis"]
+    }
+    assert data["shared_origin"] == expected["shared_origin"]
+    assert data["interpretation"] == expected["interpretation"]
