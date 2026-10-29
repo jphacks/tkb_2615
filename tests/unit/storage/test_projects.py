@@ -417,8 +417,8 @@ def test_texts_are_redacted_as_by_the_secret_and_phone_patterns() -> None:
 
 
 def test_a_save_counts_its_own_writes_onto_one_measurement(tmp_path, saved_timeline) -> None:
-    """Draft for #237: a save measures the disk once, and the usage it reaches by
-    counting its own writes equals measuring the disk again at its end."""
+    """#237: a save measures the disk once, and the usage it reaches by counting its
+    own writes equals measuring the disk again at its end."""
     from contextlib import contextmanager
 
     store, timeline = saved_timeline(tmp_path)
@@ -445,3 +445,39 @@ def test_a_save_counts_its_own_writes_onto_one_measurement(tmp_path, saved_timel
     for measurements, counted, again in ends:
         assert measurements == 1
         assert (counted["bytes"], counted["files"]) == (again["bytes"], again["files"])
+
+
+def test_another_writer_during_a_save_overshoots_by_at_most_that_save(
+    tmp_path, monkeypatch, saved_timeline
+) -> None:
+    """#237: a file another process writes during a save is counted from the next
+    measurement on. That process measures the disk itself before writing, so the
+    store exceeds the capacity by at most what the save writes."""
+    store, _ = saved_timeline(tmp_path)
+    _, head = store.load_branch("p", "r", "main")
+    checkpoint = Checkpoint.capture(head.restore_world())
+    reference = BranchReference(run_id="r", branch_id="other", fork_minute=0, computed_until=0)
+    other = ProjectStore(tmp_path)
+    size = 1_000_000
+    before = store.usage()["bytes"]
+    original = CheckpointArchive._write_prepared
+
+    def write_prepared(archive):
+        # Another process writes a file as FrameCache.put does, measuring the disk
+        # itself and without the store lock; the capacity leaves room just for it.
+        store.max_bytes = other.max_bytes = other.usage()["bytes"] + size
+        assert other.usage()["bytes"] + size <= other.max_bytes
+        (tmp_path / "p" / "runs" / "r" / "other-process").write_bytes(b"0" * size)
+        original(archive)
+
+    monkeypatch.setattr(CheckpointArchive, "_write_prepared", write_prepared)
+    store.save_branch("p", reference, checkpoint)
+    after = store.usage()["bytes"]
+    saved = after - size - before
+    assert 0 < after - store.max_bytes <= saved
+    # The next save measures the disk again and is refused.
+    monkeypatch.setattr(CheckpointArchive, "_write_prepared", original)
+    refused = BranchReference(run_id="r", branch_id="third", fork_minute=0, computed_until=0)
+    with pytest.raises(StorageError, match="capacity"):
+        store.save_branch("p", refused, checkpoint)
+    assert store.usage()["bytes"] == after
