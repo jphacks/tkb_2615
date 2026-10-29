@@ -33,13 +33,7 @@ def assert_on_the_floor_plan(frame):
 
 
 def files(store):
-    """Saved files; SQLite's shared-memory and log files beside the history index are
-    opened by every reader of its write-ahead log and are not saved data."""
-    return sorted(
-        (str(p), p.stat().st_mtime_ns)
-        for p in store.root.rglob("*")
-        if p.is_file() and not p.name.endswith(("-shm", "-wal"))
-    )
+    return sorted((str(p), p.stat().st_mtime_ns) for p in store.root.rglob("*") if p.is_file())
 
 
 def test_saved_boundaries_are_served_from_the_writer_cache(
