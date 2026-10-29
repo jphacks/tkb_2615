@@ -557,8 +557,10 @@ class TimelineStore:
         checkpoint_interval: int,
         cancelled: Any,
     ) -> BranchRuntime:
+        # The head is replaced as the computation saves, so it is seldom read again;
+        # keeping a copy of its world would hold memory for the whole computation.
         reference, head, restored = self.store.load_restored_branch(
-            self.project_id, self.run_id, branch_id
+            self.project_id, self.run_id, branch_id, keep=False
         )
         if (
             type(target_minute) is not int

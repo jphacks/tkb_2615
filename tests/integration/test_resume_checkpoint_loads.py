@@ -18,9 +18,9 @@ def test_resume_loads_the_head_checkpoint_once(tmp_path, monkeypatch, saved_time
     # Every load, load_branch() included, decodes through load_restored_checkpoint().
     load, validate = ProjectStore.load_restored_checkpoint, Checkpoint._validate
 
-    def counted_load(self, project_id, run_id, checkpoint_hash):
+    def counted_load(self, project_id, run_id, checkpoint_hash, **options):
         loads.append(checkpoint_hash)
-        return load(self, project_id, run_id, checkpoint_hash)
+        return load(self, project_id, run_id, checkpoint_hash, **options)
 
     def counted_validate(self, *args, **kwargs):
         if self.checkpoint_hash == head:

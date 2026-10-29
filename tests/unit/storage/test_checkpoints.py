@@ -141,7 +141,7 @@ def test_a_loaded_checkpoint_is_restored_once_and_shares_nothing_with_its_restor
 def test_a_checkpoint_read_again_is_an_independent_copy_of_the_first_restore(
     tmp_path, saved_timeline
 ):
-    """Draft for #46: a Checkpoint read again is decoded and checked anew, and its world is
+    """#46: a Checkpoint read again is decoded and checked anew, and its world is
     a copy of the one restored before."""
     store, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 30)
@@ -164,7 +164,7 @@ def test_a_checkpoint_read_again_is_an_independent_copy_of_the_first_restore(
 
 
 def test_a_checkpoint_read_again_still_detects_a_corrupt_chunk(tmp_path, saved_timeline):
-    """Draft for #46: reusing the restored world never skips checking the disk."""
+    """#46: reusing the restored world never skips checking the disk."""
     import gzip
 
     from sheltersim.storage.projects import StorageError
@@ -177,3 +177,27 @@ def test_a_checkpoint_read_again_still_detects_a_corrupt_chunk(tmp_path, saved_t
         chunk.write_bytes(gzip.compress(b'["tampered"]'))
     with pytest.raises(StorageError, match="checkpoint_incompatible_or_corrupt"):
         store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
+
+
+def test_a_computation_keeps_no_copy_of_the_checkpoint_it_starts_from(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """#46: advancing reads its head without keeping a copy of the restored world, which
+    would hold memory for the whole computation; reads still keep one."""
+    from sheltersim.storage import projects
+
+    store, timeline = saved_timeline(tmp_path)
+    copies = []
+    original = projects._copy_restored
+
+    def copy_restored(*restored):
+        copies.append(1)
+        return original(*restored)
+
+    monkeypatch.setattr(projects, "_copy_restored", copy_restored)
+    timeline.advance("main", 30)
+    assert copies == []
+    assert store._restored == {}
+    reference = store.branch_reference("p", "r", "main")
+    store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
+    assert list(store._restored) == [("p", "r", reference.checkpoint_hash)]
