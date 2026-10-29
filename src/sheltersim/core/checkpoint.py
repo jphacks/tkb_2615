@@ -338,10 +338,7 @@ class Checkpoint:
             raise CheckpointError("checkpoint minute does not match its WorldState")
         world_raw = None
         if not hashes_verified:
-            # The body hash covers the same world bytes, so the world is encoded once.
-            world_raw = canonical_bytes(self.world_state)
-            if hashlib.sha256(world_raw).hexdigest() != self.state_hash:
-                raise CheckpointError("checkpoint WorldState integrity hash mismatch")
+            world_raw = self._verified_world_bytes()
         try:
             if restored_events is None:
                 world = WorldState.from_dict(self._world_document_for_restore(raw=world_raw))
@@ -360,12 +357,27 @@ class Checkpoint:
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         if world_raw is not None:
-            body = self._body_dict()
-            encoder = CanonicalEncoder()
-            encoder.remember(self.world_state, world_raw, body)
-            if encoder.digest(body) != self.checkpoint_hash:
-                raise CheckpointError("checkpoint integrity hash mismatch")
+            self._verify_body_hash(world_raw)
         return world, metrics
+
+    def _verified_world_bytes(self) -> bytes:
+        """The canonical JSON of world_state, after checking it against state_hash."""
+        # The body hash covers the same world bytes, so the world is encoded once.
+        world_raw = canonical_bytes(self.world_state)
+        if hashlib.sha256(world_raw).hexdigest() != self.state_hash:
+            raise CheckpointError("checkpoint WorldState integrity hash mismatch")
+        return world_raw
+
+    def _verify_body_hash(self, world_raw: bytes) -> None:
+        body = self._body_dict()
+        encoder = CanonicalEncoder()
+        encoder.remember(self.world_state, world_raw, body)
+        if encoder.digest(body) != self.checkpoint_hash:
+            raise CheckpointError("checkpoint integrity hash mismatch")
+
+    def _verify_hashes(self) -> None:
+        """Check both hashes without restoring, for a document restored before."""
+        self._verify_body_hash(self._verified_world_bytes())
 
     def _body_dict(self) -> dict[str, Any]:
         return {

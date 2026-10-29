@@ -11,6 +11,7 @@ import re
 import tempfile
 import threading
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -24,6 +25,7 @@ from sheltersim.contracts.api import BranchReference, EvidenceReference, RunRefe
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.collection import fewer_collections
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -115,6 +117,15 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+def _copy_restored(
+    world: WorldState, metrics: MetricsRecorder
+) -> tuple[WorldState, MetricsRecorder]:
+    """An independent copy; EventLog records and scheduled events are frozen and shared."""
+    memo: dict[int, Any] = {id(record): record for record in world.event_log.records}
+    memo.update({id(event): event for event in world.event_queue.pending()})
+    return deepcopy(world, memo), deepcopy(metrics)
+
+
 def _reject_sensitive_checkpoint_content(value: Any) -> None:
     if safe_document(value) != value:
         raise StorageError("checkpoint contains sensitive data")
@@ -130,6 +141,13 @@ class ProjectStore:
             raise StorageError("max_bytes must be positive")
         self.max_bytes = max_bytes
         self._mutex = threading.RLock()
+        # A save in progress on this thread: the usage measured at its start plus
+        # what it has written since (#237).
+        self._measured = threading.local()
+        # Untouched copies of the worlds and metrics restored from the last two
+        # Checkpoints this store loaded (a comparison or replay reads two branches),
+        # by checkpoint hash (#46). The same verified document restores the same state.
+        self._restored: dict[tuple[str, str, str], tuple[WorldState, MetricsRecorder]] = {}
         self._checkpoint_write_bytes: dict[tuple[str, str], int] = {}
 
     @contextmanager
@@ -201,6 +219,7 @@ class ProjectStore:
             raise StorageError("storage capacity exceeded; export then delete saved runs")
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
+        added = (len(encoded) - previous_size, 0 if previous_size else 1)
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(encoded)
@@ -212,6 +231,7 @@ class ProjectStore:
                 except FileExistsError as exc:
                     if path.read_bytes() != encoded:
                         raise StorageError("immutable saved artifact already exists") from exc
+                    added = (0, 0)
             else:
                 os.replace(name, path)
             if os.name != "nt":
@@ -222,8 +242,36 @@ class ProjectStore:
                     os.close(directory_fd)
         finally:
             Path(name).unlink(missing_ok=True)
+        self._wrote(*added)
 
     def usage(self) -> dict[str, int]:
+        """The disk usage now; within a save, measured at its start plus its own writes."""
+        measured = getattr(self._measured, "usage", None)
+        return dict(measured) if measured is not None else self._measure_usage()
+
+    @contextmanager
+    def _usage_measured_once(self) -> Iterator[None]:
+        """Within a save, measure the disk once and count this thread's writes on it.
+
+        Files another process writes during the save are counted from the next
+        measurement on.
+        """
+        if getattr(self._measured, "usage", None) is not None:
+            yield
+            return
+        self._measured.usage = self._measure_usage()
+        try:
+            yield
+        finally:
+            self._measured.usage = None
+
+    def _wrote(self, byte_count: int, file_count: int = 0) -> None:
+        measured = getattr(self._measured, "usage", None)
+        if measured is not None:
+            measured["bytes"] += byte_count
+            measured["files"] += file_count
+
+    def _measure_usage(self) -> dict[str, int]:
         """Measure the regular files on disk now, including other processes' writes.
 
         Symlinks are neither counted nor followed. Directory entries carry their type,
@@ -464,7 +512,7 @@ class ProjectStore:
         expected_checkpoint_hash: str | None,
         encoder: CanonicalEncoder | None = None,
     ) -> None:
-        with self.transaction():
+        with self.transaction(), self._usage_measured_once():
             run = self.run(project_id, reference.run_id)
             scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
             document = document_source()
@@ -542,6 +590,7 @@ class ProjectStore:
                 },
             )
             archive._write_prepared()
+            self._wrote(archive.new_bytes, archive.new_files)
             new_manifest = not checkpoint_path.exists()
             self._write(checkpoint_path, encoded_archive, immutable=True)
             manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0
@@ -560,7 +609,9 @@ class ProjectStore:
                 },
             )
             self._checkpoint_write_bytes[key] = written_bytes
+            pending_size = pending_ledger_path.stat().st_size
             pending_ledger_path.unlink(missing_ok=True)
+            self._wrote(-pending_size, -1)
             self._write(
                 path,
                 {
@@ -680,15 +731,50 @@ class ProjectStore:
 
         They are what restore_state() returns, without restoring the Checkpoint again.
         """
+        key = (project_id, run_id, checkpoint_hash)
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         document = self._read(path)
+        with self._mutex:
+            kept = self._restored.pop(key, None)
+            if kept is not None:
+                self._restored[key] = kept
+        archived = document.get("storage_type") in {
+            "checkpoint_archive_v1",
+            "checkpoint_archive_v2",
+        }
+        if kept is not None and archived:
+            # Seeks, comparisons and replays read the same Checkpoint again. Its document
+            # is still decoded and its hashes checked, but the world is a copy of the one
+            # restored before instead of a new restore.
+            try:
+                unpacked = CheckpointArchive(path.parent).unpack_document(document)
+                if (
+                    not isinstance(unpacked, dict)
+                    or unpacked.get("checkpoint_hash") != checkpoint_hash
+                    or document.get("checkpoint_hash") != checkpoint_hash
+                ):
+                    raise CheckpointError("checkpoint archive pointer hash mismatch")
+                checkpoint = Checkpoint(**unpacked)
+                checkpoint._verify_hashes()
+            except (CheckpointError, ValueError, TypeError, KeyError) as exc:
+                raise StorageError("checkpoint_incompatible_or_corrupt") from exc
+            with fewer_collections():
+                return checkpoint, _copy_restored(*kept)
         try:
-            if document.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
-                return CheckpointArchive(path.parent).decode_restored(document)
-            # _read parsed the file just now, so the document is not shared.
-            return Checkpoint._load(document)
+            with fewer_collections():
+                if archived:
+                    checkpoint, restored = CheckpointArchive(path.parent).decode_restored(document)
+                else:
+                    # _read parsed the file just now, so the document is not shared.
+                    checkpoint, restored = Checkpoint._load(document)
+                copy = _copy_restored(*restored)
         except (CheckpointError, ValueError, TypeError, KeyError) as exc:
             raise StorageError("checkpoint_incompatible_or_corrupt") from exc
+        with self._mutex:
+            self._restored[key] = copy
+            while len(self._restored) > 2:
+                del self._restored[next(iter(self._restored))]
+        return checkpoint, restored
 
     def checkpoint_document(
         self, project_id: str, run_id: str, checkpoint_hash: str
