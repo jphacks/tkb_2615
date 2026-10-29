@@ -400,7 +400,9 @@ class TimelineStore:
 
         index = HistoryIndex(self.store, self.project_id, self.run_id)
         try:
-            nearest = index.nearest(branch_id, minute, reference.checkpoint_hash)
+            nearest = index.nearest(
+                branch_id, minute, reference.checkpoint_hash, reference.computed_until
+            )
         except StorageError as exc:
             if exc.code not in {"history_index_required", "history_index_stale"}:
                 raise

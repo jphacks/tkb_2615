@@ -141,3 +141,32 @@ def test_a_forked_branch_index_inherits_the_rows_a_fresh_ingest_derives(
     inherited, fresh = rows("child"), rows("fresh")
     assert inherited == fresh
     assert len(inherited["records"]) > 0
+
+
+def test_frames_read_while_a_save_is_indexed_match_the_frames_after(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """#259: a save moves the branch pointer before it indexes the new head; a frame
+    read in between is the same as one read after the save."""
+    from sheltersim.storage.history_index import HistoryIndex
+
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    minutes = (0, 15, 30, 45, 60)
+    during = {}
+    original = HistoryIndex.ingest
+
+    def ingest(self, branch, checkpoint, **options):
+        if checkpoint.simulation_minute == 60:
+            assert store.branch_reference("p", "r", "main").computed_until == 60
+            reader = TimelineStore(store, "p", "r")
+            during.update({minute: reader.frame("main", minute) for minute in minutes})
+        return original(self, branch, checkpoint, **options)
+
+    monkeypatch.setattr(HistoryIndex, "ingest", ingest)
+    timeline.advance("main", 60)
+    monkeypatch.setattr(HistoryIndex, "ingest", original)
+    assert set(during) == set(minutes)
+    for minute in minutes:
+        assert during[minute] == TimelineStore(store, "p", "r").frame("main", minute)

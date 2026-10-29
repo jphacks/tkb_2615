@@ -748,9 +748,28 @@ class HistoryIndex:
         if row is None or row[0] != anchor:
             raise StorageError("history_index_stale: explicitly resume index rebuild")
 
-    def nearest(self, branch: str, minute: int, anchor: str) -> tuple[int, str] | None:
+    def nearest(
+        self, branch: str, minute: int, anchor: str, anchor_minute: int | None = None
+    ) -> tuple[int, str] | None:
+        """The latest saved Checkpoint at or before minute on a branch whose head is anchor.
+
+        A save moves the branch pointer before it indexes the new head, so a read in
+        between finds the index behind the pointer (#259). Saved Checkpoints never change
+        and a branch only grows, so the index still answers up to its head, and the
+        anchor itself is the head at anchor_minute.
+        """
         with self.connect() as db:
-            self.ready(db, branch, anchor)
+            head = db.execute("SELECT hash,minute FROM heads WHERE branch=?", (branch,)).fetchone()
+            behind = (
+                head is not None
+                and head[0] != anchor
+                and anchor_minute is not None
+                and head[1] < anchor_minute
+            )
+            if not behind:
+                self.ready(db, branch, anchor)
+            elif minute >= anchor_minute:
+                return anchor_minute, anchor
             row = db.execute(
                 "SELECT minute,hash FROM checkpoints WHERE branch=? AND minute<=? ORDER BY "
                 "minute DESC LIMIT 1",
