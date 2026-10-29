@@ -111,3 +111,33 @@ def test_fork_saves_the_child_of_the_source_checkpoint(
         "state_hash": digest(expected.world.to_dict()),
     }
     assert store.load_branch("p", "r", "main")[1].to_json() == parent_before
+
+
+def test_a_forked_branch_index_inherits_the_rows_a_fresh_ingest_derives(
+    tmp_path, generated_scenario, saved_timeline
+):
+    """Draft for #223: rows copied from the parent equal the rows derived from scratch."""
+    import sqlite3
+
+    from sheltersim.storage.history_index import HistoryIndex
+
+    store, timeline = saved_timeline(tmp_path, generated_scenario)
+    timeline.advance("main", COMPUTED_UNTIL, checkpoint_interval=CHECKPOINT_INTERVAL)
+    timeline.fork("main", SEEK_MINUTE, "child")
+    _, head = store.load_branch("p", "r", "child")
+    index = HistoryIndex(store, "p", "r")
+    index.ingest("fresh", head)
+    db = sqlite3.connect(index.path)
+
+    def rows(branch):
+        tables = {}
+        for table in ("records", "entities", "tokens", "generations"):
+            found = db.execute(f"SELECT * FROM {table} WHERE branch=?", (branch,)).fetchall()
+            tables[table] = sorted(row[1:] for row in found)
+        heads = db.execute("SELECT minute,counts FROM heads WHERE branch=?", (branch,))
+        tables["heads"] = heads.fetchall()
+        return tables
+
+    inherited, fresh = rows("child"), rows("fresh")
+    assert inherited == fresh
+    assert len(inherited["records"]) > 0

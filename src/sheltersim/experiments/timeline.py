@@ -323,6 +323,7 @@ class TimelineStore:
         router: LLMRouter | None = None,
         observations: list[dict[str, Any]] | None = None,
         history_cache: CheckpointHistoryCache | None = None,
+        inherit_index_from: str | None = None,
     ) -> Checkpoint:
         if router is not None:
             runtime.runtime_state["llm"] = router.snapshot_state()
@@ -359,7 +360,10 @@ class TimelineStore:
         from sheltersim.storage.history_index import HistoryIndex
 
         HistoryIndex(self.store, self.project_id, self.run_id).ingest(
-            runtime.branch_id, checkpoint, observations=observations
+            runtime.branch_id,
+            checkpoint,
+            observations=observations,
+            inherit_from=inherit_index_from,
         )
         self._cache_frame(runtime, checkpoint)
         return checkpoint
@@ -693,7 +697,9 @@ class TimelineStore:
             child.world.event_log.records[: len(checkpoint.world_state["event_log"])],
             checkpoint.world_state["event_log"],
         )
-        self.record(child, fork_minute=minute, history_cache=history_cache)
+        self.record(
+            child, fork_minute=minute, history_cache=history_cache, inherit_index_from=branch_id
+        )
         return child
 
     def frame(self, branch_id: str, minute: int) -> dict[str, Any]:

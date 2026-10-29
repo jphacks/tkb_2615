@@ -236,6 +236,8 @@ class _RecordBatch:
         self.tokens: list[tuple[Any, ...]] = []
         self.references: list[tuple[Any, ...]] = []
         self.added: dict[str, int] = {}
+        # Rows copied from the parent branch (#223), which put() does not derive again.
+        self.inherited: set[tuple[str, str]] = set()
 
     def __enter__(self) -> _RecordBatch:
         return self
@@ -245,6 +247,8 @@ class _RecordBatch:
             self.flush()
 
     def put(self, kind: str, row: dict[str, Any], *, key: str | None = None) -> None:
+        if key is not None and (kind, key) in self.inherited:
+            return
         branch = self.branch
         row = safe_document(row)
         minute = row.get("minute", row.get("minute_index"))
@@ -325,6 +329,55 @@ class _RecordBatch:
         self.added.clear()
 
 
+def _inherit_rows(
+    db: sqlite3.Connection, parent: str, branch: str, checkpoint: Any
+) -> set[tuple[str, str]]:
+    """Copy the parent's rows for this checkpoint's events and KPI samples."""
+    pairs = []
+    for record in checkpoint.world_state["event_log"]:
+        event_id = record["event"]["event_id"]
+        pairs.append(("events", digest(record)))
+        pairs.append(("social", "event:" + event_id))
+        for kind in ("actions", "care", "operations"):
+            pairs.append((kind, "applied:" + event_id))
+        pairs.append(("care", "care:" + event_id))
+        pairs.append(("operations", "operations:" + event_id))
+    pairs.extend(
+        ("kpis", str(sample["minute_index"])) for sample in checkpoint.metrics_state["snapshots"]
+    )
+    db.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS inherit(kind TEXT, key TEXT, PRIMARY KEY(kind,key))"
+    )
+    db.execute("DELETE FROM temp.inherit")
+    db.executemany("INSERT OR IGNORE INTO temp.inherit VALUES(?,?)", pairs)
+    db.execute(
+        "INSERT INTO records SELECT ?,r.kind,r.key,r.minute,r.event_id,r.cause,r.source,"
+        "r.event_type,r.status,r.payload,r.payload_hash FROM records r JOIN temp.inherit i "
+        "ON r.kind=i.kind AND r.key=i.key WHERE r.branch=?",
+        (branch, parent),
+    )
+    for table, columns in (("entities", "e.entity,e.minute"), ("tokens", "e.token,e.minute")):
+        selected = (
+            f"?,e.kind,e.key,{columns}" if table == "entities" else f"?,e.kind,{columns},e.key"
+        )
+        db.execute(
+            f"INSERT INTO {table} SELECT {selected} FROM {table} e JOIN temp.inherit i "
+            "ON e.kind=i.kind AND e.key=i.key WHERE e.branch=?",
+            (branch, parent),
+        )
+    db.execute(
+        "INSERT INTO generations SELECT ?,kind,count(*) FROM records WHERE branch=? "
+        "GROUP BY kind ON CONFLICT(branch,kind) DO UPDATE SET value=value+excluded.value",
+        (branch, branch),
+    )
+    inherited = {
+        (row[0], row[1])
+        for row in db.execute("SELECT kind,key FROM records WHERE branch=?", (branch,))
+    }
+    db.execute("DELETE FROM temp.inherit")
+    return inherited
+
+
 class HistoryIndex:
     def __init__(self, store: ProjectStore, project_id: str, run_id: str) -> None:
         self.store, self.project_id, self.run_id = store, project_id, run_id
@@ -386,10 +439,18 @@ class HistoryIndex:
         *,
         observations: list[dict[str, Any]] | None = None,
         rebuild: bool = False,
+        inherit_from: str | None = None,
     ) -> None:
-        """Append only new immutable records; checkpoint lists are already in writer memory."""
+        """Append only new immutable records; checkpoint lists are already in writer memory.
+
+        A new branch forked from inherit_from copies the parent's rows derived from
+        the events and KPI samples they share, instead of deriving them again (#223).
+        Rows derived from model_state histories, whose windows differ, are derived.
+        """
         with self.connect(write=True) as db, _RecordBatch(db, branch) as records:
             prior = db.execute("SELECT * FROM heads WHERE branch=?", (branch,)).fetchone()
+            if inherit_from is not None and prior is None and not rebuild:
+                records.inherited = _inherit_rows(db, inherit_from, branch, checkpoint)
             if rebuild:
                 # This index is a replaceable read model of immutable source logs.
                 # Clear only the requested branch so a new projection version can
