@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 from typing import Any, Mapping
@@ -74,6 +75,28 @@ def create_social_network_state() -> dict[str, Any]:
     }
 
 
+def _pair_key_problem(pair_key: Any) -> str | None:
+    """None for the compact JSON of two different strings, else what is wrong."""
+    try:
+        pair = json.loads(pair_key)
+    except (TypeError, json.JSONDecodeError):
+        return "unparsable"
+    if (
+        not isinstance(pair, list)
+        or len(pair) != 2
+        or any(not isinstance(item, str) for item in pair)
+        or pair[0] == pair[1]
+        or json.dumps(pair, separators=(",", ":")) != pair_key
+    ):
+        return "not a pair"
+    return None
+
+
+# Every validation, which runs at every tick, checks the same relationship keys, and a
+# key's check depends on the key alone (#228).
+_cached_pair_key_problem = functools.lru_cache(maxsize=65_536)(_pair_key_problem)
+
+
 def validate_social_network_state(world: WorldState) -> None:
     """Validate sparse directed edges without requiring every possible Agent pair."""
     state = world.model_state.get(SOCIAL_NETWORK_STATE_KEY)
@@ -96,16 +119,15 @@ def validate_social_network_state(world: WorldState) -> None:
     ):
         raise ValueError("social_network_v1 has an invalid exact schema")
     for pair_key, record in state["relationships"].items():
-        try:
-            pair = json.loads(pair_key)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("social_network_v1 relationship key is invalid") from exc
+        problem = (
+            _cached_pair_key_problem(pair_key)
+            if type(pair_key) is str
+            else _pair_key_problem(pair_key)
+        )
+        if problem == "unparsable":
+            raise ValueError("social_network_v1 relationship key is invalid")
         if (
-            not isinstance(pair, list)
-            or len(pair) != 2
-            or any(not isinstance(item, str) for item in pair)
-            or pair[0] == pair[1]
-            or json.dumps(pair, separators=(",", ":")) != pair_key
+            problem is not None
             or not isinstance(record, dict)
             or set(record)
             != {

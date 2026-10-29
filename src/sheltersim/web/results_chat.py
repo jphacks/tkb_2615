@@ -780,7 +780,17 @@ class ResultsChatService:
             raise WebQueryError("comparison context must contain at most seven Branch IDs")
         if comparisons:
             branches = list(dict.fromkeys([branch_id, *comparisons]))
-            comparison = self.projects.workspace.comparison(project_id, run_id, branches, minute)
+            from sheltersim.web.replay import comparison_projection
+
+            # The comparison of this minute, reusing the frame of branch_id read above.
+            common_range, receipts, paired = self.projects.workspace.comparison_context(
+                project_id, run_id, branches, minute
+            )
+            timeline = TimelineStore(self.projects.store, project_id, run_id)
+            frames = [frame, *(timeline.frame(key, minute) for key in branches[1:])]
+            comparison = comparison_projection(
+                run_id, minute, common_range, frames, receipts, paired
+            )
             for other in comparison["frames"][1:]:
                 add(
                     "comparison",

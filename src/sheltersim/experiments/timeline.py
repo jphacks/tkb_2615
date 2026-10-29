@@ -654,7 +654,9 @@ class TimelineStore:
         *,
         program: Any = None,
         approved_program_hash: str | None = None,
+        expected_state_hash: str | None = None,
     ) -> BranchRuntime:
+        """expected_state_hash, when given, is the source state an approved preview saw."""
         # A destination identity must be new, even if its content would match.
         if self.store._path(
             self.project_id, "runs", self.run_id, "branches", child_id, "branch.json"
@@ -664,6 +666,8 @@ class TimelineStore:
         # The child is taken from this Checkpoint, which also holds both hashes of
         # the source.
         child, checkpoint = source.fork_with_checkpoint(child_id)
+        if expected_state_hash is not None and checkpoint.state_hash != expected_state_hash:
+            raise TimelineError("source state changed; preview the intervention again")
         child.runtime_state["fork_origin"] = {
             "branch_id": branch_id,
             "minute": minute,

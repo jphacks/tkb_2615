@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
@@ -1706,8 +1705,6 @@ class EffectProgramPopulationHandler:
     """Apply typed population primitives through the approved EffectProgram record."""
 
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
-        from copy import deepcopy
-
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.population import (
             apply_arrival_approach_completion,
@@ -1777,7 +1774,7 @@ class EffectProgramPopulationHandler:
                 event.payload["command"],
             )
             return
-        candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
+        candidate = MutableWorldState.from_dict(world.to_dict())
         try:
             if op == "add_evacuees":
                 queue_arrivals(
@@ -2743,7 +2740,7 @@ def _apply_operational_transaction(
     operation: Callable[[WorldState], Any],
 ) -> Any:
     """Run an H03 handler on a detached state and commit only after validation."""
-    candidate = WorldState.from_dict(deepcopy(world.to_dict()))
+    candidate = WorldState.from_dict(world.to_dict())
     result = operation(candidate)
     if isinstance(result, tuple) and result:
         if any(not isinstance(record, EventLogRecord) for record in result):
