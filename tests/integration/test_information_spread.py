@@ -158,10 +158,10 @@ def test_rumor_spreads_only_through_local_contacts_and_correction_resolves_truth
     )
 
     artifact_dir = tmp_path / "correction-full"
-    artifact = json.loads((artifact_dir / "information_spread.json").read_text())
+    artifact = json.loads((artifact_dir / "information_spread.json").read_text(encoding="utf-8"))
     assert artifact["summary"]["message_count"] == 1
     assert artifact["source_id"] == "ASM-INFORMATION-SPREAD-V1"
-    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     information = manifest["model_assumptions"]["information_spread"]
     assert information["source_id"] == "ASM-INFORMATION-SPREAD-V1"
     assert information["policy_version"] == "evidence-aware-rumor-v1"
@@ -215,7 +215,7 @@ def test_trace_level_does_not_change_information_state_and_default_run_stays_off
     assert not (tmp_path / "baseline" / "information_contacts.jsonl").exists()
     assert (
         "information_spread"
-        not in json.loads((tmp_path / "baseline" / "manifest.json").read_text())[
+        not in json.loads((tmp_path / "baseline" / "manifest.json").read_text(encoding="utf-8"))[
             "model_assumptions"
         ]
     )

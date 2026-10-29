@@ -102,8 +102,12 @@ def test_100_agent_seven_day_combined_scenario_preserves_operational_invariants(
         facility["id"] == "water_station_main" and facility["capacity"] == 1
         for facility in manifest["facilities"]
     )
-    initial_profiles = json.loads((output / "agents_initial.json").read_text())["profiles"]
-    planned_events = json.loads((output / "events_planned.json").read_text())["events"]
+    initial_profiles = json.loads((output / "agents_initial.json").read_text(encoding="utf-8"))[
+        "profiles"
+    ]
+    planned_events = json.loads((output / "events_planned.json").read_text(encoding="utf-8"))[
+        "events"
+    ]
     assert len(initial_profiles) == 100
     assert {event["id"] for event in planned_events} >= {
         "delivery-delay-day1",

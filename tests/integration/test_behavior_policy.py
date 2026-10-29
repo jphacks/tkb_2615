@@ -52,7 +52,9 @@ def test_priority_policy_checkpoint_noop_fork_replays_with_same_variant(tmp_path
     assert outputs[0][0].world.canonical_json() == outputs[1][0].world.canonical_json()
     assert outputs[0][0].world.event_log.records == outputs[1][0].world.event_log.records
     assert outputs[0][1].metrics.to_dict() == outputs[1][1].metrics.to_dict()
-    trace = json.loads((tmp_path / "branch-0" / "decisions.jsonl").read_text().splitlines()[0])
+    trace = json.loads(
+        (tmp_path / "branch-0" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
     assert trace["policy_version"] == "priority-rule-v1"
     assert trace["source_id"] == "ASM-PRIORITY-RULE-BEHAVIOR-V1"
 
@@ -92,7 +94,9 @@ def test_priority_policy_chosen_on_the_project_screen_replays_from_a_mid_trip_fo
     assert continued.metrics.to_dict() == forked.metrics.to_dict()
     decisions = [
         json.loads(line)
-        for line in (tmp_path / "source" / "decisions.jsonl").read_text().splitlines()
+        for line in (tmp_path / "source" / "decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert decisions
     # Unlike the first test's priority-rule-v1, the generated Scenario's people

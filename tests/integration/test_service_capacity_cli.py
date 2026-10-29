@@ -13,7 +13,7 @@ from sheltersim.experiments.service_capacity import SERVICE_CAPACITY_SOURCE_ID
 
 def test_cli_prints_the_capacity_report(generated_scenario_with, tmp_path, capsys) -> None:
     path = tmp_path / "scenario.json"
-    path.write_text(generated_scenario_with(evacuees=100).canonical_json())
+    path.write_text(generated_scenario_with(evacuees=100).canonical_json(), encoding="utf-8")
     assert main(["service-capacity-diagnostic", "--scenario", str(path)]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["source_id"] == SERVICE_CAPACITY_SOURCE_ID

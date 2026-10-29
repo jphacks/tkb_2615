@@ -25,7 +25,9 @@ def test_trace_levels_and_social_policy_replay_deterministically(
         if level is TraceLevel.OFF:
             assert not trace_path.exists()
         else:
-            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            records = [
+                json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
+            ]
             assert records
             assert all(record["social_propagation_is_separate"] for record in records)
     final_hashes = {world.canonical_json() for world in worlds.values()}

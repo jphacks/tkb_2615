@@ -110,7 +110,9 @@ def test_a_passing_run_names_its_summary_on_the_last_line(project: Path) -> None
 
 
 def test_a_collection_error_is_kept(project: Path) -> None:
-    (project / "test_broken.py").write_text("import missing_module_for_results_log\n")
+    (project / "test_broken.py").write_text(
+        "import missing_module_for_results_log\n", encoding="utf-8"
+    )
 
     completed = _run(project, "test_broken.py")
 

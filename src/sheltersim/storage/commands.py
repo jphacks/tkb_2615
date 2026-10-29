@@ -119,7 +119,11 @@ def execute(arguments: Any) -> dict[str, Any]:
         api = ProjectAPI(store, recover=False)
         try:
             if action == "prepare":
-                body = json.loads(arguments.input_json.read_text()) if arguments.input_json else {}
+                body = (
+                    json.loads(arguments.input_json.read_text(encoding="utf-8"))
+                    if arguments.input_json
+                    else {}
+                )
                 body["text"] = arguments.text
                 if arguments.draft_id:
                     body["draft_id"] = arguments.draft_id
@@ -156,7 +160,7 @@ def execute(arguments: Any) -> dict[str, Any]:
                     project_id,
                     arguments.draft_id,
                     DraftInput(
-                        content=json.loads(arguments.input_json.read_text()),
+                        content=json.loads(arguments.input_json.read_text(encoding="utf-8")),
                         expected_hash=arguments.expected_hash,
                     ),
                 )
@@ -164,7 +168,9 @@ def execute(arguments: Any) -> dict[str, Any]:
                 project_id,
                 arguments.run_id,
                 arguments.branch_id,
-                HistoryQuery.model_validate(json.loads(arguments.input_json.read_text())),
+                HistoryQuery.model_validate(
+                    json.loads(arguments.input_json.read_text(encoding="utf-8"))
+                ),
             )
         finally:
             api.close()

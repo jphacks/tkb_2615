@@ -140,7 +140,7 @@ def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path, saved_
     timeline.advance("main", 31)
     _, head = store.load_branch("p", "r", "main")
     directory = store._path("p", "runs", "r", "checkpoints")
-    manifest = json.loads((directory / f"{head.checkpoint_hash}.json").read_text())
+    manifest = json.loads((directory / f"{head.checkpoint_hash}.json").read_text(encoding="utf-8"))
     other = tmp_path / "public"
     assert CheckpointArchive(other).encode(head) == manifest
     for chunk in (other / "chunks").iterdir():
@@ -174,7 +174,9 @@ def test_every_save_matches_a_full_capture_and_the_public_encoder(
     assert [item.simulation_minute for item in saved] == [10, 20, 30, 40, 50, 60, 70, 40, 50, 60]
     directory = store._path("p", "runs", "r", "checkpoints")
     for checkpoint in saved:
-        manifest = json.loads((directory / f"{checkpoint.checkpoint_hash}.json").read_text())
+        manifest = json.loads(
+            (directory / f"{checkpoint.checkpoint_hash}.json").read_text(encoding="utf-8")
+        )
         other = tmp_path / "public" / checkpoint.checkpoint_hash
         assert CheckpointArchive(other).encode(checkpoint) == manifest
         for chunk in (other / "chunks").iterdir():
