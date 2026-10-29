@@ -429,40 +429,142 @@ class ProjectStore:
             path = self._path(project_id, "runs", run_id, "status.json")
             self._write(path, {**self._read(path), "status": status})
 
-    def claim_run(self, project_id: str, run_id: str) -> int:
-        """Cross-process writer lease. Closing the FD/crashing releases ownership.
+    def set_branch_status(
+        self,
+        project_id: str,
+        run_id: str,
+        branch_id: str,
+        status: str,
+        *,
+        run_status: str | None = None,
+    ) -> None:
+        """Record a branch's computation status and keep the Run's status its summary.
 
-        The lock file survives restarts, but the lease does not. Never infer stale
-        ownership from a reused PID or interrupt a live worker at server startup.
+        The Run is running while any of its branches is; otherwise it takes run_status,
+        or this branch's status (#48). Each branch's status is its own file, version 1;
+        a branch without one has had no computation since branches got a status.
+        """
+        if status not in _TERMINAL | {"queued", "running", "paused"}:
+            raise StorageError("unsupported run status")
+        with self.transaction():
+            self._read(self._path(project_id, "runs", run_id, "run.json"))
+            self._write(
+                self._path(project_id, "runs", run_id, "branches", branch_id, "status.json"),
+                {"schema_version": 1, "status": status},
+            )
+            self._settle_run_status_locked(project_id, run_id, run_status or status)
+
+    def settle_run_status(self, project_id: str, run_id: str, idle_status: str) -> None:
+        """Set the Run's status to running while any branch is, else to idle_status."""
+        with self.transaction():
+            self._settle_run_status_locked(project_id, run_id, idle_status)
+
+    def _settle_run_status_locked(self, project_id: str, run_id: str, idle_status: str) -> None:
+        # transaction() is not reentrant: its lock file is opened again on each entry.
+        if idle_status not in _TERMINAL | {"queued", "running", "paused"}:
+            raise StorageError("unsupported run status")
+        running = any(
+            self._read(path)["status"] in {"queued", "running"}
+            for path in self._path(project_id, "runs", run_id, "branches").glob("*/status.json")
+        )
+        path = self._path(project_id, "runs", run_id, "status.json")
+        self._write(path, {**self._read(path), "status": "running" if running else idle_status})
+
+    def forget_branch_status(self, project_id: str, run_id: str, branch_id: str) -> None:
+        """Remove the status of a branch that was never created (a failed fork)."""
+        with self.transaction():
+            directory = self._path(project_id, "runs", run_id, "branches", branch_id)
+            if not (directory / "branch.json").exists():
+                (directory / "status.json").unlink(missing_ok=True)
+
+    def branch_status(self, project_id: str, run_id: str, branch_id: str) -> str | None:
+        """A branch's recorded computation status, or None before its first one."""
+        path = self._path(project_id, "runs", run_id, "branches", branch_id, "status.json")
+        return self._read(path)["status"] if path.exists() else None
+
+    @staticmethod
+    def _lock_without_waiting(path: Path) -> int:
+        """Open path and hold an exclusive lock on it, or raise BlockingIOError at once.
+
+        Closing the descriptor, or the process ending, releases the lock. Only exclusive
+        locks are used, so Linux, macOS and Windows behave alike (#48).
+        """
+        # O_NOFOLLOW/O_BINARY exist only on some platforms; Windows has no symlink flag here.
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                # Windows: lock the first byte without waiting; the lock ends when the
+                # FD closes.
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b"\0")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                try:
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                except OSError as exc:
+                    raise BlockingIOError(str(exc)) from exc
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def claim_run(self, project_id: str, run_id: str) -> int:
+        """Cross-process lease of a whole Run, for operations on all of it (deletion, an
+        index rebuild, recovery). Closing the FD/crashing releases ownership.
+
+        It holds the Run's gate (`worker-lock`), so no branch writer starts meanwhile,
+        and refuses while any branch writer holds its branch (#48). The lock file
+        survives restarts, but the lease does not. Never infer stale ownership from a
+        reused PID or interrupt a live worker at server startup.
         """
         with self.transaction():
             self.run(project_id, run_id)
-            path = self._path(project_id, "runs", run_id, "worker-lock")
-            # O_NOFOLLOW/O_BINARY exist only on some platforms; Windows has no symlink flag here.
-            flags = (
-                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-            )
-            descriptor = os.open(path, flags, 0o600)
             try:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:
-                    # Windows: lock the first byte without waiting; the lock ends when the
-                    # FD closes.
-                    if os.fstat(descriptor).st_size == 0:
-                        os.write(descriptor, b"\0")
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    try:
-                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                    except OSError as exc:
-                        raise BlockingIOError(str(exc)) from exc
+                gate = self._lock_without_waiting(
+                    self._path(project_id, "runs", run_id, "worker-lock")
+                )
             except BlockingIOError as exc:
-                os.close(descriptor)
                 raise StorageError("run_worker_busy: another process owns this Run") from exc
+            try:
+                for path in sorted(
+                    self._path(project_id, "runs", run_id, "branches").glob("*/worker-lock")
+                ):
+                    try:
+                        os.close(self._lock_without_waiting(path))
+                    except BlockingIOError as exc:
+                        raise StorageError(
+                            "run_worker_busy: a branch of this Run is being written"
+                        ) from exc
             except BaseException:
-                os.close(descriptor)
+                os.close(gate)
                 raise
-            return descriptor
+            return gate
+
+    def claim_branch(self, project_id: str, run_id: str, branch_id: str) -> int:
+        """Cross-process writer lease of one branch: a computation of the branch, or a
+        fork creating it. Writers of different branches of a Run work at once (#48).
+
+        The Run's gate is held only while the branch is locked, so a whole-Run lease
+        (claim_run) and a branch lease never start together.
+        """
+        with self.transaction():
+            self.run(project_id, run_id)
+            directory = self._path(project_id, "runs", run_id, "branches", branch_id)
+            try:
+                gate = self._lock_without_waiting(
+                    self._path(project_id, "runs", run_id, "worker-lock")
+                )
+            except BlockingIOError as exc:
+                raise StorageError("run_worker_busy: another process owns this Run") from exc
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                return self._lock_without_waiting(directory / "worker-lock")
+            except BlockingIOError as exc:
+                raise StorageError("run_worker_busy: another process writes this branch") from exc
+            finally:
+                os.close(gate)
 
     @staticmethod
     def release_run(descriptor: int) -> None:
@@ -474,6 +576,42 @@ class ProjectStore:
             for run in self.runs(project["project_id"]):
                 if run["status"] not in {"queued", "running"}:
                     continue
+                # A branch left running with no writer was interrupted (#48). A fork that
+                # ended before its child existed leaves only the child's status.
+                interrupted = False
+                statuses = self._path(project["project_id"], "runs", run["run_id"], "branches")
+                for path in sorted(statuses.glob("*/status.json")):
+                    branch_id = path.parent.name
+                    if self._read(path)["status"] not in {"queued", "running"}:
+                        continue
+                    try:
+                        lease = self.claim_branch(project["project_id"], run["run_id"], branch_id)
+                    except StorageError as exc:
+                        if exc.code == "run_worker_busy":
+                            continue
+                        raise
+                    try:
+                        if self.branch_status(
+                            project["project_id"], run["run_id"], branch_id
+                        ) not in {"queued", "running"}:
+                            continue
+                        if (path.parent / "branch.json").exists():
+                            self.set_branch_status(
+                                project["project_id"], run["run_id"], branch_id, "interrupted"
+                            )
+                        else:
+                            self.forget_branch_status(
+                                project["project_id"], run["run_id"], branch_id
+                            )
+                            self.settle_run_status(
+                                project["project_id"], run["run_id"], "interrupted"
+                            )
+                        interrupted = True
+                    finally:
+                        self.release_run(lease)
+                if interrupted:
+                    recovered.append((project["project_id"], run["run_id"]))
+                # A Run left running by a writer from before branches had a status.
                 try:
                     lease = self.claim_run(project["project_id"], run["run_id"])
                 except StorageError as exc:
@@ -484,7 +622,8 @@ class ProjectStore:
                     current = self.run(project["project_id"], run["run_id"])
                     if current["status"] in {"queued", "running"}:
                         self.set_status(project["project_id"], run["run_id"], "interrupted")
-                        recovered.append((project["project_id"], run["run_id"]))
+                        if not interrupted:
+                            recovered.append((project["project_id"], run["run_id"]))
                 finally:
                     self.release_run(lease)
         return recovered
@@ -713,12 +852,17 @@ class ProjectStore:
         return sum(path.stat().st_size for path in paths if path.is_file())
 
     def branches(self, project_id: str, run_id: str) -> list[dict[str, Any]]:
-        return [
-            self._read(p)
-            for p in sorted(
-                self._path(project_id, "runs", run_id, "branches").glob("*/branch.json")
-            )
-        ]
+        """Each branch's pointer, with its computation status when one is recorded."""
+        listed = []
+        for path in sorted(
+            self._path(project_id, "runs", run_id, "branches").glob("*/branch.json")
+        ):
+            branch = self._read(path)
+            status = path.with_name("status.json")
+            if status.exists():
+                branch["status"] = self._read(status)["status"]
+            listed.append(branch)
+        return listed
 
     def branch_reference(self, project_id: str, run_id: str, branch_id: str) -> BranchReference:
         """Read the atomic pointer without decoding its potentially large checkpoint."""

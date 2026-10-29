@@ -69,15 +69,17 @@ def run_worker(
     from sheltersim.web.projects import ProjectAPI
 
     project_id, run_id = job["project_id"], job["run_id"]
+    # A computation writes its branch, a fork the child it creates (#48).
+    branch_id = job["branch_id"] if job["kind"] == "advance" else job["document"]["child_id"]
     store = ProjectStore(root, max_bytes=max_bytes)
     try:
-        lease = store.claim_run(project_id, run_id)
+        lease = store.claim_branch(project_id, run_id, branch_id)
     except StorageError as exc:
         outcome.send(("refused", str(exc)))
         return
     try:
         previous = store.run(project_id, run_id)["status"]
-        store.set_status(project_id, run_id, "running")
+        store.set_branch_status(project_id, run_id, branch_id, "running")
     except BaseException as exc:
         store.release_run(lease)
         outcome.send(
@@ -122,12 +124,21 @@ def run_worker(
         else:
             outcome.send(("forked", result))
         finally:
-            # A fork leaves the Run as it found it. The server restores the status
-            # after it records the outcome, so a client that sees the Run leave
-            # running also sees why; without a server, the worker restores it.
+            # A fork leaves the Run as it found it. The server settles the statuses
+            # after it records the outcome, so a client that sees the child leave
+            # running also sees why; without a server, the worker settles them.
             try:
                 if parent is None or not parent.is_alive():
-                    store.set_status(project_id, run_id, previous)
+                    idle = previous if previous != "running" else "paused"
+                    if store._path(
+                        project_id, "runs", run_id, "branches", branch_id, "branch.json"
+                    ).exists():
+                        store.set_branch_status(
+                            project_id, run_id, branch_id, "paused", run_status=idle
+                        )
+                    else:
+                        store.forget_branch_status(project_id, run_id, branch_id)
+                        store.settle_run_status(project_id, run_id, idle)
             finally:
                 store.release_run(lease)
     finally:

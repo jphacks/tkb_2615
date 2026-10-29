@@ -389,8 +389,12 @@ class HistoryIndex:
             raise StorageError("history_index_required: explicitly rebuild the saved Run index")
         if self.path.is_symlink():
             raise StorageError("unsafe_history_index")
+        # Branches of a Run index their saves at once (#48); a writer waits for another
+        # branch's write, up to a fork's copy of its parent's rows.
         connection = sqlite3.connect(
-            self.path.as_uri() + ("?mode=rwc" if write else "?mode=ro"), uri=True, timeout=10
+            self.path.as_uri() + ("?mode=rwc" if write else "?mode=ro"),
+            uri=True,
+            timeout=120 if write else 10,
         )
         connection.row_factory = sqlite3.Row
         try:

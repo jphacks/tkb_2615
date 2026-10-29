@@ -354,6 +354,107 @@ def test_run_writer_lease_works_without_fcntl_or_nofollow(
     ProjectStore(tmp_path).release_run(ProjectStore(tmp_path).claim_run("project", "run"))
 
 
+@needs_ofd_locks
+def test_branch_writer_leases_work_without_fcntl_or_nofollow(
+    tmp_path: Path, windows_like: None
+) -> None:
+    """The branch leases use exclusive locks only, as Windows offers (#48)."""
+    store = _store_with_run(tmp_path)
+    main = store.claim_branch("project", "run", "main")
+    child = ProjectStore(tmp_path).claim_branch("project", "run", "child")
+    try:
+        with pytest.raises(StorageError, match="run_worker_busy"):
+            ProjectStore(tmp_path).claim_branch("project", "run", "main")
+        with pytest.raises(StorageError, match="run_worker_busy"):
+            ProjectStore(tmp_path).claim_run("project", "run")
+    finally:
+        store.release_run(main)
+        store.release_run(child)
+    whole = ProjectStore(tmp_path).claim_run("project", "run")
+    try:
+        with pytest.raises(StorageError, match="run_worker_busy"):
+            ProjectStore(tmp_path).claim_branch("project", "run", "main")
+    finally:
+        store.release_run(whole)
+
+
+def test_branches_of_a_run_are_written_at_once_but_not_with_the_whole_run(tmp_path):
+    """Writers of different branches work together; a whole-Run operation waits for
+    none of them and starts none meanwhile (#48)."""
+    store = _store_with_run(tmp_path)
+    other = ProjectStore(tmp_path)
+    main = store.claim_branch("project", "run", "main")
+    child = other.claim_branch("project", "run", "child")
+    try:
+        with pytest.raises(StorageError, match="writes this branch"):
+            other.claim_branch("project", "run", "main")
+        with pytest.raises(StorageError, match="a branch of this Run is being written"):
+            other.claim_run("project", "run")
+        with pytest.raises(StorageError, match="run_worker_busy"):
+            other.delete_run("project", "run", confirmation="run")
+    finally:
+        store.release_run(main)
+        other.release_run(child)
+    whole = store.claim_run("project", "run")
+    try:
+        with pytest.raises(StorageError, match="another process owns this Run"):
+            other.claim_branch("project", "run", "main")
+    finally:
+        store.release_run(whole)
+
+
+def test_the_run_status_summarizes_its_branches(tmp_path):
+    """The Run is running while any branch is; otherwise it shows the last branch to
+    stop, and each branch lists its own status (#48)."""
+    store = _store_with_run(tmp_path)
+    assert store.branch_status("project", "run", "main") is None
+    store.set_branch_status("project", "run", "main", "running")
+    store.set_branch_status("project", "run", "child", "running")
+    store.set_branch_status("project", "run", "main", "paused")
+    assert store.run("project", "run")["status"] == "running"
+    store.set_branch_status("project", "run", "child", "completed")
+    assert store.run("project", "run")["status"] == "completed"
+    store.set_branch_status("project", "run", "main", "running")
+    store.forget_branch_status("project", "run", "main")
+    store.settle_run_status("project", "run", "paused")
+    assert store.run("project", "run")["status"] == "paused"
+    assert store.branch_status("project", "run", "main") is None
+    assert store.branch_status("project", "run", "child") == "completed"
+
+
+def test_recovery_interrupts_a_branch_left_running_and_spares_a_live_one(tmp_path):
+    """A fork that ended before its child existed leaves only the child's status; it
+    is forgotten, or the Run would stay running (#48)."""
+    store = _store_with_run(tmp_path)
+    for branch in ("main", "child"):
+        reference = BranchReference(
+            run_id="run",
+            branch_id=branch,
+            fork_minute=0,
+            computed_until=0,
+            checkpoint_hash="a" * 64,
+        )
+        store._write(
+            store._path("project", "runs", "run", "branches", branch, "branch.json"),
+            reference.model_dump(mode="json"),
+        )
+    store.set_branch_status("project", "run", "never-created", "running")
+    store.set_branch_status("project", "run", "main", "running")
+    store.set_branch_status("project", "run", "child", "running")
+    live = store.claim_branch("project", "run", "child")
+    try:
+        assert ProjectStore(tmp_path).recover_interrupted() == [("project", "run")]
+        assert store.branch_status("project", "run", "main") == "interrupted"
+        assert store.branch_status("project", "run", "never-created") is None
+        assert store.branch_status("project", "run", "child") == "running"
+        assert store.run("project", "run")["status"] == "running"
+    finally:
+        store.release_run(live)
+    ProjectStore(tmp_path).recover_interrupted()
+    assert store.branch_status("project", "run", "child") == "interrupted"
+    assert store.run("project", "run")["status"] == "interrupted"
+
+
 def test_phone_numbers_are_redacted_but_dois_and_dates_are_not():
     """Run artifacts share this definition; a broader one blanked model references (#190)."""
     from sheltersim.storage.projects import safe_document
