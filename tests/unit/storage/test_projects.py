@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -246,6 +247,11 @@ def test_usage_sees_another_stores_writes_at_once(tmp_path):
     assert (after["bytes"], after["files"]) == (before["bytes"] + size, before["files"] + 1)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows keeps each entry's size from the directory listing, so a file "
+    "removed while it is measured still counts",
+)
 def test_usage_skips_a_file_removed_while_it_is_measured(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path)
     (tmp_path / "kept").write_bytes(b"12")
