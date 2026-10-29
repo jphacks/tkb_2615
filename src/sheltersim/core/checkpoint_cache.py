@@ -44,7 +44,11 @@ class CanonicalEncoder:
     remembered. The document must not change while the encoder is in use.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, chunk_keys: dict[tuple[int, int, int], Any] | None = None) -> None:
+        # Archive chunk hashes by their first and last item bytes and length, shared by
+        # the captures of one history cache: a writer reuses the item bytes of history
+        # it saved before, so the same objects mean the same chunk.
+        self.chunk_keys = {} if chunk_keys is None else chunk_keys
         self._lists: dict[int, tuple[list[Any], list[bytes]]] = {}
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
@@ -60,6 +64,17 @@ class CanonicalEncoder:
         self._encoded[id(value)] = (value, raw)
         for container in containers:
             self._containers[id(container)] = container
+
+    def chunk_key(self, items: list[bytes], start: int, count: int) -> str | None:
+        """The archive key saved before for items[start:start + count], if any."""
+        kept = self.chunk_keys.get((id(items[start]), id(items[start + count - 1]), count))
+        if kept is None or kept[0] is not items[start] or kept[1] is not items[start + count - 1]:
+            return None
+        return kept[2]
+
+    def remember_chunk(self, items: list[bytes], start: int, count: int, key: str) -> None:
+        first, last = items[start], items[start + count - 1]
+        self.chunk_keys[(id(first), id(last), count)] = (first, last, key)
 
     def spliced_lists(self) -> list[list[Any]]:
         """The spliced lists; their item documents are never changed."""
@@ -234,12 +249,13 @@ class CheckpointHistoryCache:
         }
         self._snapshots = _SealedItems(asdict)
         self._resource_snapshots = _SealedItems(dict, still_equal=True)
+        self._chunk_keys: dict[tuple[int, int, int], Any] = {}
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None
     ) -> tuple[dict[str, Any], dict[str, Any], CanonicalEncoder]:
         """world.to_dict() and metrics.to_dict() of a validated world, and their encoder."""
-        encoder = CanonicalEncoder()
+        encoder = CanonicalEncoder(self._chunk_keys)
         histories = [
             path for path in _MODEL_STATE_HISTORIES if _containers(world.model_state, path)
         ]
