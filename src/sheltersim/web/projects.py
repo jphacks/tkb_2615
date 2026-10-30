@@ -775,11 +775,10 @@ class ProjectAPI:
                         # A full disk can also prevent recording the optional report failure.
                         # Keep the already durable completed simulation and its status.
                         pass
-            self.store.set_branch_status(project_id, run_id, branch_id, status)
         except Exception as exc:
             # Provider errors may contain secrets; only a fixed failure code is persisted.
             failure_code = type(exc).__name__
-            self.store.set_branch_status(project_id, run_id, branch_id, "failed")
+            status = "failed"
         finally:
             wall_seconds = time.perf_counter() - wall_started
             cpu_seconds = max(0.0, cpu_clock() - cpu_started)
@@ -839,6 +838,11 @@ class ProjectAPI:
                 except Exception:
                     # Measurement failure never changes the durable simulation outcome.
                     pass
-            self.store.release_run(lease)
+            # The final status, the lease and the job end together under the lock a
+            # submit takes, so a client that sees the status may start the next job.
             with self._lock:
-                self._jobs.pop((project_id, run_id, branch_id), None)
+                try:
+                    self.store.set_branch_status(project_id, run_id, branch_id, status)
+                finally:
+                    self.store.release_run(lease)
+                    self._jobs.pop((project_id, run_id, branch_id), None)
