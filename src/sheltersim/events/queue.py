@@ -5,7 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import operator
-from bisect import bisect_left
+from bisect import bisect_left, insort
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,11 +18,28 @@ class DuplicateEventError(ValueError):
     """Raised when an event ID or sequence number is reused."""
 
 
+def _queue_order(event: ScheduledEvent) -> tuple[int, int, int]:
+    return event.due_minute, event.priority, event.sequence
+
+
 @dataclass
 class EventQueue:
     """Mutable future queue ordered by due minute, priority, and sequence."""
 
     _events: list[ScheduledEvent] = field(default_factory=list)
+    # The same events by ID and by sequence, and in the order pending() returns them. All
+    # are kept by the methods below, the only writers of _events. A tick reads them dozens
+    # of times, with about a hundred events pending.
+    _by_id: dict[str, ScheduledEvent] = field(init=False, repr=False, compare=False)
+    _sequences: set[int] = field(init=False, repr=False, compare=False)
+    _ordered: list[ScheduledEvent] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._by_id = {}
+        for event in self._events:
+            self._by_id.setdefault(event.event_id, event)
+        self._sequences = {event.sequence for event in self._events}
+        self._ordered = sorted(self._events, key=_queue_order)
 
     def __len__(self) -> int:
         return len(self._events)
@@ -32,39 +49,44 @@ class EventQueue:
 
     def pending(self) -> tuple[ScheduledEvent, ...]:
         """Return a stable immutable view of pending events."""
-        return tuple(
-            sorted(
-                self._events,
-                key=lambda event: (event.due_minute, event.priority, event.sequence),
-            )
-        )
+        return tuple(self._ordered)
 
     def find(self, event_id: str) -> ScheduledEvent | None:
         """The pending event with this ID, if any."""
-        for event in self._events:
-            if event.event_id == event_id:
-                return event
-        return None
+        # A handler may ask with an unchecked payload value.
+        return self._by_id.get(event_id) if isinstance(event_id, str) else None
 
     def schedule(self, event: ScheduledEvent) -> None:
         """Add an event, rejecting ambiguous or repeated identities."""
-        if any(item.event_id == event.event_id for item in self._events):
+        if event.event_id in self._by_id:
             raise DuplicateEventError(f"duplicate event ID {event.event_id!r}")
-        if any(item.sequence == event.sequence for item in self._events):
+        if event.sequence in self._sequences:
             raise DuplicateEventError(f"duplicate event sequence {event.sequence}")
         self._events.append(event)
+        self._by_id[event.event_id] = event
+        self._sequences.add(event.sequence)
+        insort(self._ordered, event, key=_queue_order)
 
     def due(self, minute: int) -> tuple[ScheduledEvent, ...]:
         """Snapshot all events due through ``minute`` without removing them."""
         if minute < 0:
             raise ValueError("minute cannot be negative")
-        return tuple(event for event in self.pending() if event.due_minute <= minute)
+        due = []
+        for event in self._ordered:
+            if event.due_minute > minute:
+                break
+            due.append(event)
+        return tuple(due)
 
     def remove(self, event_id: str) -> ScheduledEvent:
         """Remove and return one event after its handler has finished."""
         for index, event in enumerate(self._events):
             if event.event_id == event_id:
-                return self._events.pop(index)
+                del self._events[index]
+                del self._by_id[event_id]
+                self._sequences.discard(event.sequence)
+                del self._ordered[bisect_left(self._ordered, _queue_order(event), key=_queue_order)]
+                return event
         raise KeyError(event_id)
 
     def replace(self, event_id: str, event: ScheduledEvent) -> None:
@@ -81,6 +103,9 @@ class EventQueue:
             ):
                 raise DuplicateEventError("replacement event identity is already in use")
             self._events[index] = event
+            self._by_id[event_id] = event
+            del self._ordered[bisect_left(self._ordered, _queue_order(current), key=_queue_order)]
+            insort(self._ordered, event, key=_queue_order)
             return
         raise KeyError(event_id)
 

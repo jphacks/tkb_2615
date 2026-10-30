@@ -485,12 +485,15 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
     if RESOURCE_LEDGER_KEY not in world.model_state:
         raise ResourceLedgerError("resource ledger is not enabled for this scenario")
     current = world.model_state[RESOURCE_LEDGER_KEY]
+    # The memo compares the reservation IDs by value and checks only those it has not seen.
+    tick_memo = world.__dict__.get("_tick_memo")
     validate_resource_ledger_state(
         current,
         world.resources,
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
+        tick_memo=tick_memo,
     )
     # Only the accounts change in place; the ID and audit lists are only appended to,
     # so copying the lists (not their records) keeps the candidate detached.
@@ -614,13 +617,17 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
+        tick_memo=tick_memo,
     )
     world.model_state[RESOURCE_LEDGER_KEY] = ledger
     world.resources = resources
 
 
-def resource_metric_values(world: Any) -> dict[str, int] | None:
-    """Return optional KPI columns for ledger-enabled scenarios."""
+def resource_metric_values(world: Any, *, tick_memo: Any = None) -> dict[str, int] | None:
+    """Return optional KPI columns for ledger-enabled scenarios.
+
+    ``tick_memo`` is for the tick's own metric capture, on the thread that runs the tick.
+    """
     ledger = world.model_state.get(RESOURCE_LEDGER_KEY)
     if ledger is None:
         return None
@@ -630,6 +637,7 @@ def resource_metric_values(world: Any) -> dict[str, int] | None:
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
+        tick_memo=tick_memo,
     )
     result: dict[str, int] = {}
     for resource_id in RESOURCE_IDS:

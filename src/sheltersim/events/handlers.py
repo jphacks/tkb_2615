@@ -166,7 +166,9 @@ class EventDispatcher:
                 world.event_queue.remove(event.event_id)
             record = world.event_log.find(event.event_id)
             if record is not None:
-                if record.event.to_dict() != event.to_dict() or record.status is not status:
+                if (
+                    record.event is not event and record.event.to_dict() != event.to_dict()
+                ) or record.status is not status:
                     raise ValueError(
                         "transactional event record disagrees with its dispatch result"
                     )

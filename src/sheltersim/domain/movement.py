@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
@@ -23,6 +27,9 @@ from sheltersim.events.models import (
 from sheltersim.policies.space import ZoneRoute
 
 MOVEMENT_STATE_KEY = "movement_v1"
+# Routes found in one simulation's rooms; people start from the same few points.
+_ROOM_ROUTE_MEMO: ContextVar[dict[str, Any] | None] = ContextVar("room_route_memo", default=None)
+MAX_REMEMBERED_ROOM_ROUTES = 4096
 MOVEMENT_POLICY_VERSION = "spatial-route-and-room-waypoint-v2"
 MOVEMENT_SOURCE_ID = "ASM-SPATIAL-MOVEMENT-V2"
 _QUEUE_TRIP_PURPOSES = frozenset(
@@ -1539,6 +1546,50 @@ def route_is_physically_clear(
     return True
 
 
+@contextmanager
+def room_route_scope(memo: dict[str, Any]) -> Iterator[None]:
+    """Keep the routes plan_in_room_route found in ``memo`` for one caller.
+
+    The caller clears ``memo`` when model_configs may have been changed in place.
+    """
+    token = _ROOM_ROUTE_MEMO.set(memo)
+    try:
+        yield
+    finally:
+        _ROOM_ROUTE_MEMO.reset(token)
+
+
+def _remembered_room_routes(world: WorldState) -> dict[Any, Any] | None:
+    """The routes of this scope, emptied when what a plan reads has changed: the geometry
+    and constraint configs and, compared by value, the overlay's moves and partitions."""
+    memo = _ROOM_ROUTE_MEMO.get()
+    if memo is None:
+        return None
+    configs = world.model_configs
+    geometry = configs.get("facility_geometry")
+    constraints = configs.get("spatial_constraints")
+    overlay = world.model_state.get("geometry_overlay_v1")
+    moves = overlay.get("facility_points") if isinstance(overlay, dict) else None
+    partitions = overlay.get("partitions") if isinstance(overlay, dict) else None
+    if (
+        memo.get("geometry") is not geometry
+        or memo.get("constraints") is not constraints
+        or memo.get("has_overlay") is not (overlay is not None)
+        or memo.get("moves") != moves
+        or memo.get("partitions") != partitions
+        or len(memo["routes"]) >= MAX_REMEMBERED_ROOM_ROUTES
+    ):
+        memo.update(
+            geometry=geometry,
+            constraints=constraints,
+            has_overlay=overlay is not None,
+            moves=deepcopy(moves),
+            partitions=deepcopy(partitions),
+        )
+        memo["routes"].clear()
+    return memo["routes"]
+
+
 def plan_in_room_route(
     world: WorldState,
     *,
@@ -1548,6 +1599,36 @@ def plan_in_room_route(
     mobility: str = "independent",
 ) -> tuple[Point2D, ...] | None:
     """Find a shortest visible waypoint path inside one measured room."""
+    routes = _remembered_room_routes(world)
+    # A plan returns the points it is given, and 0.0 and -0.0 are the same key.
+    if (
+        routes is None
+        or (start is not None and (start.x == 0.0 or start.y == 0.0))
+        or destination.x == 0.0
+        or destination.y == 0.0
+    ):
+        return _plan_in_room_route(world, zone_id, start, destination, mobility)
+    key = (
+        zone_id,
+        mobility,
+        None if start is None else (start.x, start.y),
+        destination.x,
+        destination.y,
+    )
+    if key in routes:
+        return routes[key]
+    route = _plan_in_room_route(world, zone_id, start, destination, mobility)
+    routes[key] = route
+    return route
+
+
+def _plan_in_room_route(
+    world: WorldState,
+    zone_id: str,
+    start: Point2D | None,
+    destination: Point2D,
+    mobility: str,
+) -> tuple[Point2D, ...] | None:
     geometry = _geometry(world)
     if geometry is None:
         return None

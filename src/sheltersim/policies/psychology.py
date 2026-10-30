@@ -1463,28 +1463,42 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
         if delta.minute_index != world.minute_index:
             raise StateInvariantError("psychology update was computed for a different minute")
         # Revalidate in case an object was constructed through unsafe deserialization.
-        try:
-            NeedState(
-                toilet_urgency=delta.toilet_urgency,
-                hunger=delta.hunger,
-                fatigue=delta.fatigue,
-                hydration_need=delta.hydration_need,
-            ).validate()
-            validate_unit_interval("stress", delta.stress)
-            validate_unit_interval("trust", delta.trust)
-        except ValueError as exc:
-            raise StateInvariantError(f"invalid psychology update: {exc}") from exc
-        supplied_body = any(
-            getattr(delta, name) is not None
-            for name in (
-                "sleep_debt_minutes",
-                "uncertainty",
-                "reassurance",
-                "discontent",
-                "positive_affect",
-                "negative_affect",
-                "hygiene_need",
-            )
+        # Floats within bounds pass, and NaN fails the comparison; the checks decide the rest.
+        toilet_urgency, hunger, fatigue = delta.toilet_urgency, delta.hunger, delta.fatigue
+        hydration_need, stress, trust = delta.hydration_need, delta.stress, delta.trust
+        if not (
+            type(toilet_urgency) is float
+            and type(hunger) is float
+            and type(fatigue) is float
+            and type(hydration_need) is float
+            and type(stress) is float
+            and type(trust) is float
+            and 0.0 <= toilet_urgency <= 1.0
+            and 0.0 <= hunger <= 1.0
+            and 0.0 <= fatigue <= 1.0
+            and 0.0 <= hydration_need <= 1.0
+            and 0.0 <= stress <= 1.0
+            and 0.0 <= trust <= 1.0
+        ):
+            try:
+                NeedState(
+                    toilet_urgency=toilet_urgency,
+                    hunger=hunger,
+                    fatigue=fatigue,
+                    hydration_need=hydration_need,
+                ).validate()
+                validate_unit_interval("stress", stress)
+                validate_unit_interval("trust", trust)
+            except ValueError as exc:
+                raise StateInvariantError(f"invalid psychology update: {exc}") from exc
+        supplied_body = (
+            delta.sleep_debt_minutes is not None
+            or delta.uncertainty is not None
+            or delta.reassurance is not None
+            or delta.discontent is not None
+            or delta.positive_affect is not None
+            or delta.negative_affect is not None
+            or delta.hygiene_need is not None
         )
         if supplied_body and (
             not isinstance(body_state, dict) or delta.agent_id not in body_state.get("agents", {})

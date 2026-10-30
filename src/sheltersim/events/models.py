@@ -10,6 +10,8 @@ from json import dumps
 from types import MappingProxyType
 from typing import Any
 
+from sheltersim import native
+
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
@@ -105,6 +107,24 @@ class ScheduledEvent:
         return event
 
     def _check(self, *, json_checked: bool) -> None:
+        if not json_checked:
+            # The Rust kernel accepts only what these checks accept; they decide the rest.
+            checked = native.scheduled_event_checked(
+                self.event_id,
+                self.event_type,
+                self.source_id,
+                self.causation_id,
+                self.due_minute,
+                self.sequence,
+                self.priority,
+                self.payload,
+                self.provenance,
+            )
+            if checked is not None:
+                object.__setattr__(self, "kind", EventKind(self.kind))
+                object.__setattr__(self, "payload", checked[0])
+                object.__setattr__(self, "provenance", checked[1])
+                return
         _validate_id("event_id", self.event_id)
         _validate_id("event_type", self.event_type)
         _validate_id("source_id", self.source_id, optional=True)

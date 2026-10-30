@@ -6,6 +6,7 @@ It does not create a support request or claim a completed outcome by itself.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -355,6 +356,12 @@ def append_applied_care_transition(
     return receipt
 
 
+@lru_cache(maxsize=1)
+def _operation_record_adapter() -> TypeAdapter:
+    # Building a TypeAdapter takes about a millisecond.
+    return TypeAdapter(OperationHistoryRecord)
+
+
 def ingest_applied_shared_operation_records(world: WorldState, outcomes: tuple[Any, ...]) -> None:
     """Project typed shared receipts only after EventLog APPLIED insertion."""
     if SHARED_OPERATIONS_KEY not in world.model_state:
@@ -377,11 +384,12 @@ def ingest_applied_shared_operation_records(world: WorldState, outcomes: tuple[A
         state = world.model_state.get(SHARED_OPERATIONS_KEY, {})
         if isinstance(state, dict) and any(
             row.get("event_id") == event.event_id
-            for row in state.get("history", ())
+            # The record of an event being applied, if any, was added just now.
+            for row in reversed(state.get("history", ()))
             if isinstance(row, dict)
         ):
             continue
-        receipt = TypeAdapter(OperationHistoryRecord).validate_python(event.payload)
+        receipt = _operation_record_adapter().validate_python(event.payload)
         record_shared_operation(world, receipt)
 
 

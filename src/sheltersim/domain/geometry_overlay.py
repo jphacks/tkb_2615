@@ -42,12 +42,18 @@ _EMPTY_SPATIAL_CONSTRAINTS: dict[str, Any] = {}
 
 
 @contextmanager
-def geometry_config_scope() -> Iterator[None]:
-    """Reuse parsed facility geometry configs while model_configs cannot change."""
+def geometry_config_scope(
+    parsed: dict[tuple[str, int], tuple[Any, Any]] | None = None,
+) -> Iterator[None]:
+    """Reuse parsed facility geometry configs while model_configs cannot change.
+
+    ``parsed`` carries the parses from an earlier scope; the caller clears it when the
+    configs may have changed.
+    """
     if _CONFIG_SCOPE.get() is not None:
         yield
         return
-    token = _CONFIG_SCOPE.set({})
+    token = _CONFIG_SCOPE.set({} if parsed is None else parsed)
     try:
         yield
     finally:

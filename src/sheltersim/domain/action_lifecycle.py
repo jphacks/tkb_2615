@@ -149,7 +149,7 @@ def record_applied_action_completion(
     if (
         applied_record is None
         or applied_record.status is not EventStatus.APPLIED
-        or applied_record.event.to_dict() != event.to_dict()
+        or (applied_record.event is not event and applied_record.event.to_dict() != event.to_dict())
     ):
         return
     agent_id = event.payload.get("agent_id")
