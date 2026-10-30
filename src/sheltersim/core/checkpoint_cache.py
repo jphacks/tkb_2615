@@ -93,6 +93,7 @@ class CanonicalEncoder:
         self,
         chunk_keys: dict[tuple[int, int, int], Any] | None = None,
         pack_locations: dict[str, tuple[str, int, int]] | None = None,
+        run_inputs: dict[Any, Any] | None = None,
     ) -> None:
         # Archive chunk hashes by their first and last item bytes and length, shared by
         # the captures of one history cache: a writer reuses the item bytes of history
@@ -101,10 +102,13 @@ class CanonicalEncoder:
         # Where the archive saves of the same writer put each chunk in a pack, so a
         # chunk that comes back in a later save is not written again.
         self.pack_locations = {} if pack_locations is None else pack_locations
+        # What the store read of a Run's immutable inputs, for the same writer's next save.
+        self.run_inputs = {} if run_inputs is None else run_inputs
         self._lists: dict[int, tuple[list[Any], list[bytes]]] = {}
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
         self._tree_nodes: dict[int, tuple[Any, str]] = {}
+        self._sizes: dict[int, tuple[Any, int]] = {}
 
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
@@ -196,15 +200,21 @@ class CanonicalEncoder:
 
     def size(self, value: Any) -> int:
         """len(canonical_bytes(value)) without joining spliced lists."""
+        kept = self._sizes.get(id(value))
+        if kept is not None and kept[0] is value:
+            return kept[1]
         items = self.list_items(value)
         if items is not None:
-            return 2 + sum(map(len, items)) + max(len(items) - 1, 0)
-        if self._is_container(value):
+            size = 2 + sum(map(len, items)) + max(len(items) - 1, 0)
+        elif self._is_container(value):
             fields = sum(
                 len(canonical_bytes(key)) + 1 + self.size(item) for key, item in value.items()
             )
-            return 2 + max(len(value) - 1, 0) + fields
-        return len(self._leaf(value))
+            size = 2 + max(len(value) - 1, 0) + fields
+        else:
+            return len(self._leaf(value))
+        self._sizes[id(value)] = (value, size)
+        return size
 
     def digest(self, value: Any) -> str:
         """The SHA-256 of canonical_bytes(value): the hash rule of a Checkpoint v1."""
@@ -386,6 +396,7 @@ class CheckpointHistoryCache:
         self._resource_snapshots = _SealedItems(dict, still_equal=True)
         self._chunk_keys: dict[tuple[int, int, int], Any] = {}
         self._pack_locations: dict[str, tuple[str, int, int]] = {}
+        self._run_inputs: dict[Any, Any] = {}
         # The EventLog of the last restore check (see restored_log()).
         self._log: EventLog | None = None
         # For a Rust EventLog, which keeps each record's bytes, records are followed
@@ -399,10 +410,12 @@ class CheckpointHistoryCache:
         self, world: WorldState, metrics: MetricsRecorder | None
     ) -> tuple[dict[str, Any], dict[str, Any], CanonicalEncoder]:
         """world.to_dict() and metrics.to_dict() of a validated world, and their encoder."""
-        encoder = CanonicalEncoder(self._chunk_keys, self._pack_locations)
+        encoder = CanonicalEncoder(self._chunk_keys, self._pack_locations, self._run_inputs)
         histories = [
             path for path in _MODEL_STATE_HISTORIES if _containers(world.model_state, path)
         ]
+        for cache in self._model_histories.values():
+            cache.known_equal = 0
         data = world._canonical_data(include_event_log=False)
         data["model_state"] = _with_empty(world.model_state, histories)
         world_document = _world_json(data)

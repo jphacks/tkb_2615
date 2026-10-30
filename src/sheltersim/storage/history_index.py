@@ -20,7 +20,13 @@ from typing import Any, Iterator
 from sheltersim.core.saved_items import SavedItems
 from sheltersim.domain.social_dialogue import virtual_dialogue_example
 from sheltersim.events.queue import saved_realized_minute
-from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest, safe_document
+from sheltersim.storage.projects import (
+    ProjectStore,
+    StorageError,
+    canonical,
+    digest,
+    safe_row,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS generations(branch TEXT NOT NULL, kind TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(branch,kind));
@@ -290,11 +296,10 @@ class _RecordBatch:
 
     def put(self, kind: str, row: dict[str, Any], *, key: str | None = None) -> None:
         branch = self.branch
-        row = safe_document(row)
+        row, encoded = safe_row(row)
         minute = row.get("minute", row.get("minute_index"))
         if type(minute) is not int or minute < 0:
             raise StorageError("invalid_index_record_minute")
-        encoded = canonical(row)
         payload_hash = hashlib.sha256(encoded.encode()).hexdigest()  # digest(row)
         key = key or payload_hash
         existing = self.pending.get((kind, key))

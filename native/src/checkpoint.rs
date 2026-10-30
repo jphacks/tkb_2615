@@ -127,6 +127,11 @@ pub fn sensitive_candidates(
     py: Python<'_>,
     raws: Vec<Bound<'_, PyBytes>>,
 ) -> PyResult<(Vec<String>, Vec<String>)> {
+    if let [raw] = raws.as_slice() {
+        let (keys, strings) =
+            candidates(raw.as_bytes()).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        return Ok((keys.into_iter().collect(), strings.into_iter().collect()));
+    }
     let slices: Vec<&[u8]> = raws.iter().map(|raw| raw.as_bytes()).collect();
     let (keys, strings) = py
         .allow_threads(|| {

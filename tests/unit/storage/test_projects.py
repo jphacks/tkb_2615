@@ -33,6 +33,7 @@ from sheltersim.storage.projects import (
     canonical,
     digest,
     safe_document,
+    safe_row,
 )
 
 try:
@@ -716,3 +717,16 @@ def test_a_changed_item_of_a_history_chunk_is_checked_at_the_next_save(tmp_path)
     items[10] = {"value": "person@example.org"}
     with pytest.raises(StorageError, match="sensitive"):
         archive._encode_validated_document({"items": items}, checkpoint_hash=checkpoint_hash)
+
+
+@pytest.mark.parametrize("row", [*_PRIVATE_DOCUMENTS, *_CLEAN_DOCUMENTS, {"pair": (1, "a")}])
+def test_safe_row_gives_what_safe_document_gives(row) -> None:
+    if not isinstance(row, dict):
+        row = {"items": row}
+    try:
+        expected = safe_document(row)
+    except StorageError:
+        with pytest.raises(StorageError):
+            safe_row(row)
+        return
+    assert safe_row(row) == (expected, canonical(expected))

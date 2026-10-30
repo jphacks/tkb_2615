@@ -23,6 +23,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from sheltersim.core.saved_items import SavedItems
+from sheltersim.events.queue import saved_realized_minute
 from sheltersim.storage.projects import StorageError
 
 # The model_state histories ingest indexes, with the field holding each entry's minute.
@@ -63,12 +65,19 @@ class _Tail(Sequence[Any]):
         return iter(self.items)
 
 
+def _realized_minute(record: Any) -> int:
+    return saved_realized_minute(record) if isinstance(record, bytes) else record["realized_minute"]
+
+
 def _send_document(
     checkpoint: Any, events_from: int, kpis_from: int, previous_minute: int
 ) -> dict[str, Any]:
     world, metrics = checkpoint.world_state, checkpoint.metrics_state
     events = world["event_log"]
-    new_events = events[events_from:]
+    # Saved records go as their bytes, and the indexing process parses them.
+    new_events = (
+        events.raws[events_from:] if isinstance(events, SavedItems) else events[events_from:]
+    )
     model_state: dict[str, Any] = {name: {} for name in world["model_state"]}
     for name, field in _HISTORIES:
         state = world["model_state"].get(name)
@@ -78,7 +87,7 @@ def _send_document(
         since = max(0, previous_minute - 1)
         if name == "body_state_v1" and new_events:
             # Dialogue rows of the new events read their body-state effects.
-            since = min(since, min(record["realized_minute"] for record in new_events))
+            since = min(since, min(map(_realized_minute, new_events)))
         first = bisect_left(history, since, key=lambda row: row[field])
         model_state[name] = {"history": history[first:]}
     snapshots = metrics["snapshots"]
@@ -102,12 +111,14 @@ def _view(document: dict[str, Any]) -> SimpleNamespace:
     """A checkpoint as ingest reads it, from a sent document."""
     # A history sent from its minute on is read from its start (see _send_document).
     resources = _Tail(*document["resources"])
+    total, start, new_events = document["events"]
+    new_events = [json.loads(item) if isinstance(item, bytes) else item for item in new_events]
     return SimpleNamespace(
         simulation_minute=document["simulation_minute"],
         checkpoint_hash=document["checkpoint_hash"],
         state_hash=document["state_hash"],
         world_state={
-            "event_log": _Tail(*document["events"]),
+            "event_log": _Tail(total, start, new_events),
             "model_state": document["model_state"],
             "model_configs": document["model_configs"],
         },

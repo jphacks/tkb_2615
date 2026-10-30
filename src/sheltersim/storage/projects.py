@@ -141,6 +141,22 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+def safe_row(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """safe_document(row) and its canonical() text.
+
+    Rust reads the row's canonical JSON for the keys and strings to check, so a row with
+    nothing sensitive, nearly all of them, is not walked in Python: its JSON read back is
+    the same plain value.
+    """
+    raw = native.canonical_json(row)
+    if raw is not None:
+        keys, strings = native.sensitive_candidates([raw])
+        if not strings and not any(_private_field(key) for key in keys):
+            return json.loads(raw), raw.decode()
+    safe = safe_document(row)
+    return safe, canonical(safe)
+
+
 # Kept restored worlds are dropped once no read has used them for this long, so the
 # local server does not hold their memory after the reads (#46).
 _RESTORED_IDLE_SECONDS = 60.0
@@ -721,8 +737,13 @@ class ProjectStore:
         encoder: CanonicalEncoder | None = None,
     ) -> None:
         with self.transaction(), self._usage_measured_once():
-            run = self.run(project_id, reference.run_id)
-            scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
+            # A Run's Scenario is immutable, so one writer reads it once.
+            inputs = {} if encoder is None else encoder.run_inputs
+            scenario = inputs.get((project_id, reference.run_id))
+            if scenario is None:
+                run = self.run(project_id, reference.run_id)
+                scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
+                inputs[(project_id, reference.run_id)] = scenario
             document = document_source()
             world = document["world_state"]
             if (
