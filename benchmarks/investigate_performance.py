@@ -172,6 +172,7 @@ def main() -> None:
             if hasattr(ProjectStore, "save_captured_branch")
             else ()
         ),
+        *(((ProjectStore, "publish_save"),) if hasattr(ProjectStore, "publish_save") else ()),
         (ProjectStore, "usage"),
         (
             CheckpointArchive,

@@ -42,8 +42,13 @@ class FrameCache:
             raise StorageError("invalid checkpoint hash for frame cache")
         return self.directory / f"{checkpoint_hash}.json.gz"
 
-    def put(self, checkpoint_hash: str, frame: dict[str, Any]) -> bool:
-        """Best effort; returns False when the cache would exceed storage capacity."""
+    def put(
+        self, checkpoint_hash: str, frame: dict[str, Any], *, used_bytes: int | None = None
+    ) -> bool:
+        """Best effort; returns False when the cache would exceed storage capacity.
+
+        used_bytes is the storage usage, for a caller that has just had it measured.
+        """
         path = self._file(checkpoint_hash)
         if path.exists():
             return True
@@ -59,7 +64,9 @@ class FrameCache:
         encoder = CanonicalEncoder()
         encoder.remember(frame, encoded_frame, document)
         data = gzip.compress(encoder.encode(document) + b"\n", compresslevel=3, mtime=0)
-        if self.store.usage()["bytes"] + len(data) > self.store.max_bytes:
+        if used_bytes is None:
+            used_bytes = self.store.usage()["bytes"]
+        if used_bytes + len(data) > self.store.max_bytes:
             return False
         if self.directory.is_symlink():
             raise StorageError("frame cache directory cannot follow symlinks")

@@ -710,20 +710,27 @@ class ProjectStore:
         checkpoint: Checkpoint,
         *,
         expected_checkpoint_hash: str | None = None,
-    ) -> None:
+        deferred: bool = False,
+    ) -> Callable[[], int] | None:
         """Save a checkpoint the caller just created with Checkpoint.capture.
 
         capture() already validated the hashes, WorldState/model compatibility
         and metrics. Only pass an object that has not been shared or mutated
         since; anything else must use save_branch, which validates again.
+
+        With deferred, this checks the save and prepares its chunks, and writes nothing.
+        The function it returns does the writing and may run on another thread, which
+        spends nearly all of its time waiting for the disk, without the GIL. It returns
+        the storage usage after the save.
         """
-        self._save_branch(
+        return self._save_branch(
             project_id,
             reference,
             checkpoint,
             checkpoint._document_view,
             expected_checkpoint_hash=expected_checkpoint_hash,
             encoder=checkpoint._encoder,
+            deferred=deferred,
         )
 
     def _save_branch(
@@ -735,7 +742,8 @@ class ProjectStore:
         *,
         expected_checkpoint_hash: str | None,
         encoder: CanonicalEncoder | None = None,
-    ) -> None:
+        deferred: bool = False,
+    ) -> Callable[[], int] | None:
         with self.transaction(), self._usage_measured_once():
             # A Run's Scenario is immutable, so one writer reads it once.
             inputs = {} if encoder is None else encoder.run_inputs
@@ -793,7 +801,6 @@ class ProjectStore:
                 "checkpoints",
                 f"{checkpoint.checkpoint_hash}.json",
             )
-            checkpoint_bytes_before = self.checkpoint_write_bytes(project_id, reference.run_id)
             # The archive applies the privacy check to every chunk that is not
             # already stored (stored chunks passed it when first written) and
             # stages new chunks, so a rejected checkpoint writes nothing.
@@ -830,47 +837,90 @@ class ProjectStore:
                 document,
                 checkpoint_hash=checkpoint.checkpoint_hash,
             )
-            pending_ledger_path = self._path(
-                project_id, "runs", reference.run_id, "checkpoint-write-pending.json"
-            )
-            self._write(
-                pending_ledger_path,
-                {
-                    "schema_version": 1,
-                    "run_id": reference.run_id,
-                    "status": "checkpoint_archive_write_in_progress",
-                },
-            )
-            archive._write_prepared()
-            self._wrote(archive.new_bytes, archive.new_files)
-            new_manifest = not checkpoint_path.exists()
-            self._write(checkpoint_path, encoded_archive, immutable=True)
-            manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0
-            key = (project_id, reference.run_id)
-            written_bytes = checkpoint_bytes_before + archive.new_bytes + manifest_bytes
-            self._write(
-                self._path(project_id, "runs", reference.run_id, "checkpoint-write-ledger.json"),
-                {
-                    "schema_version": 1,
-                    "run_id": reference.run_id,
-                    "unique_checkpoint_bytes_written": written_bytes,
-                    "accounting": (
-                        "unique content-addressed chunk bytes plus immutable checkpoint manifest "
-                        "bytes"
-                    ),
-                },
-            )
-            self._checkpoint_write_bytes[key] = written_bytes
-            pending_size = pending_ledger_path.stat().st_size
-            pending_ledger_path.unlink(missing_ok=True)
-            self._wrote(-pending_size, -1)
-            self._write(
+            write = functools.partial(
+                self.publish_save,
+                project_id,
+                reference,
+                checkpoint,
+                archive,
+                encoded_archive,
                 path,
-                {
-                    **reference.model_dump(mode="json"),
-                    "checkpoint_hash": checkpoint.checkpoint_hash,
-                },
+                checkpoint_path,
             )
+            if not deferred:
+                write()
+                return None
+            # Measuring the disk stats every file. On another thread each stat waits for
+            # the GIL, so the writing continues from this save's measurement.
+            measured = dict(self._measured.usage)
+
+        def write_later() -> int:
+            with self.transaction():
+                self._measured.usage = measured
+                try:
+                    # The branch may have changed since the save was prepared.
+                    current = self._read(path)["checkpoint_hash"] if path.exists() else None
+                    if current != expected_checkpoint_hash:
+                        raise StorageError("branch changed; reload before saving")
+                    write()
+                    return self._measured.usage["bytes"]
+                finally:
+                    self._measured.usage = None
+
+        return write_later
+
+    def publish_save(
+        self,
+        project_id: str,
+        reference: BranchReference,
+        checkpoint: Checkpoint,
+        archive: CheckpointArchive,
+        encoded_archive: dict[str, Any],
+        path: Path,
+        checkpoint_path: Path,
+    ) -> None:
+        """Write a prepared save: its pack, its manifest, then the branch pointer."""
+        checkpoint_bytes_before = self.checkpoint_write_bytes(project_id, reference.run_id)
+        pending_ledger_path = self._path(
+            project_id, "runs", reference.run_id, "checkpoint-write-pending.json"
+        )
+        self._write(
+            pending_ledger_path,
+            {
+                "schema_version": 1,
+                "run_id": reference.run_id,
+                "status": "checkpoint_archive_write_in_progress",
+            },
+        )
+        archive._write_prepared()
+        self._wrote(archive.new_bytes, archive.new_files)
+        new_manifest = not checkpoint_path.exists()
+        self._write(checkpoint_path, encoded_archive, immutable=True)
+        manifest_bytes = checkpoint_path.stat().st_size if new_manifest else 0
+        key = (project_id, reference.run_id)
+        written_bytes = checkpoint_bytes_before + archive.new_bytes + manifest_bytes
+        self._write(
+            self._path(project_id, "runs", reference.run_id, "checkpoint-write-ledger.json"),
+            {
+                "schema_version": 1,
+                "run_id": reference.run_id,
+                "unique_checkpoint_bytes_written": written_bytes,
+                "accounting": (
+                    "unique content-addressed chunk bytes plus immutable checkpoint manifest bytes"
+                ),
+            },
+        )
+        self._checkpoint_write_bytes[key] = written_bytes
+        pending_size = pending_ledger_path.stat().st_size
+        pending_ledger_path.unlink(missing_ok=True)
+        self._wrote(-pending_size, -1)
+        self._write(
+            path,
+            {
+                **reference.model_dump(mode="json"),
+                "checkpoint_hash": checkpoint.checkpoint_hash,
+            },
+        )
 
     def checkpoint_write_bytes(self, project_id: str, run_id: str) -> int:
         """Return durable unique checkpoint archive bytes, reconstructing legacy ledgers once."""
