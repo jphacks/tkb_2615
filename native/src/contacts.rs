@@ -550,6 +550,10 @@ pub fn social_channel_update<'py>(
             .collect();
         let weight_total =
             py_fsum(&weights).ok_or_else(|| Unsupported::new_err("weights are not finite"))?;
+        // The Python code raises for contacts without any weight (its strict zip).
+        if !eligible.is_empty() && !(weight_total > 0.0) {
+            return Err(Unsupported::new_err("eligible contacts have no weight"));
+        }
         let mut shift = 0.0;
         let mut pair_shifts: Vec<f64> = Vec::new();
         let mut raw_pair_shifts: Vec<f64> = Vec::new();

@@ -7,6 +7,7 @@ branch builds and installs it.
 
 from __future__ import annotations
 
+import json
 import struct
 
 import pytest
@@ -242,6 +243,8 @@ def test_the_body_relationship_check_judges_every_record_as_python_does(
 def _same_bits_deep(x: object, y: object) -> bool:
     if isinstance(x, dict) and isinstance(y, dict):
         return list(x) == list(y) and all(_same_bits_deep(x[key], y[key]) for key in x)
+    if isinstance(x, list) and isinstance(y, list):
+        return len(x) == len(y) and all(_same_bits_deep(a, b) for a, b in zip(x, y, strict=True))
     return _same_float_bits(x, y)
 
 
@@ -275,17 +278,7 @@ def test_the_social_kernel_gives_the_python_result(
             runtime_state=runtime_state,
         )
         assert rust is not None
-        assert _same_bits_deep(rust.runtime_state, python.runtime_state)
-        assert len(rust.deltas) == len(python.deltas)
-        for a, b in zip(rust.deltas, python.deltas, strict=True):
-            for name in a.__dataclass_fields__:
-                assert _same_float_bits(getattr(a, name), getattr(b, name)), (a.agent_id, name)
-        assert len(rust.contacts) == len(python.contacts)
-        for a, b in zip(rust.contacts, python.contacts, strict=True):
-            for name in a.__dataclass_fields__:
-                assert _same_float_bits(getattr(a, name), getattr(b, name)), (a, name)
-        assert rust.contributing_contact_count == python.contributing_contact_count
-        assert _same_float_bits(rust.total_stress_added, python.total_stress_added)
+        _same_social_result(rust, python)
         assert rust.policy_version == python.policy_version
         compared.append(view.minute_index)
         contacts.append(len(rust.contacts))
@@ -460,3 +453,150 @@ def test_the_information_kernel_leaves_any_message_to_python(generated_scenario)
     assert result({**state, "schema_version": 1}) is None
     assert result({**state, "contacts": []}) is None
     assert result({**state, "query_pressure": {}}) is None
+
+
+def _same_social_result(rust, python) -> None:
+    assert _same_bits_deep(rust.runtime_state, python.runtime_state)
+    assert len(rust.deltas) == len(python.deltas)
+    for a, b in zip(rust.deltas, python.deltas, strict=True):
+        for name in a.__dataclass_fields__:
+            assert _same_float_bits(getattr(a, name), getattr(b, name)), (a.agent_id, name)
+    assert len(rust.contacts) == len(python.contacts)
+    for a, b in zip(rust.contacts, python.contacts, strict=True):
+        for name in a.__dataclass_fields__:
+            assert _same_float_bits(getattr(a, name), getattr(b, name)), (a, name)
+    assert rust.contributing_contact_count == python.contributing_contact_count
+    assert _same_float_bits(rust.total_stress_added, python.total_stress_added)
+
+
+def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -> None:
+    """IDs that JSON escapes, a zone next to itself, empty channels, zero sensitivity,
+    exact caps and every cooldown and contact history a Run may not reach by itself."""
+    import random
+    from dataclasses import replace
+
+    from sheltersim.core.rng import CounterRNG
+    from sheltersim.core.world import WorldState
+    from sheltersim.domain.information import create_information_runtime_state
+    from sheltersim.domain.models import InformationSpreadConfig
+    from sheltersim.policies.behavior import WorldView
+    from sheltersim.policies.information import InformationSpreadPolicy
+    from sheltersim.policies.psychology import AgentStateDelta
+    from sheltersim.policies.social import (
+        ExpressivenessChannelOpennessPolicy,
+        SocialPropagationParameters,
+    )
+
+    draw = random.Random(2615)
+    template = next(
+        iter(
+            WorldView.from_world(
+                WorldState.from_scenario(generated_scenario), include_state_hash=False
+            ).agents.values()
+        )
+    )
+    names = ["A1", "A2", 'A"3', "A\\4", "é5", "ß6", "A\n7", "B8", "B9", "C10", "C11", "日12"]
+    zones = ["z1", "z2", "zé", 'z"4']
+    stresses = [0.0, 1.0, 0.5, 0.25, 1e-300, 1.0 - 2**-53]
+
+    def unit() -> float:
+        return draw.choice(stresses) if draw.random() < 0.3 else draw.random()
+
+    raised = matched = 0
+    for trial in range(400):
+        minute = draw.randrange(0, 50)
+        ids = draw.sample(names, draw.randrange(1, len(names) + 1))
+        agents = {
+            agent_id: replace(
+                template,
+                id=agent_id,
+                zone_id=draw.choice(zones),
+                group_id=draw.choice((None, "g1", "g2", 'g"3')),
+                stress=unit(),
+                stress_sensitivity=draw.choice((0.0, 1.0, draw.random())),
+                trust=unit(),
+            )
+            for agent_id in ids
+        }
+        view = WorldView(minute_index=minute, agents=agents, facilities={}, state_hash=None)
+        neighbors = {
+            zone: tuple(draw.sample(zones, draw.randrange(0, len(zones) + 1)))
+            for zone in zones
+            if draw.random() < 0.8
+        }
+        pairs = [(a, b) for a in names for b in names if a != b and draw.random() < 0.3]
+        contacts = {
+            json.dumps([a, b], ensure_ascii=False, separators=(",", ":")): {
+                "last_seen_minute": draw.choice((minute - 1 if minute else 0, minute, 0)),
+                "consecutive_minutes": draw.randrange(1, 12),
+            }
+            for a, b in pairs
+        }
+        deltas = tuple(
+            AgentStateDelta(
+                agent_id=agent_id,
+                minute_index=minute,
+                toilet_urgency=0.0,
+                hunger=0.0,
+                fatigue=0.0,
+                stress=unit(),
+                trust=0.5,
+            )
+            for agent_id in ids
+        )
+        rng = CounterRNG(draw.randrange(0, 2**70))
+        parameters = SocialPropagationParameters(
+            enabled=True,
+            max_contacts_per_agent=draw.randrange(0, 5),
+            minimum_contact_minutes=draw.randrange(1, 6),
+            stress_spread_per_minute=draw.choice((0.0, 0.25, draw.random() / 4)),
+            max_pair_stress_increase=draw.choice((0.0, 0.05, 1e-6, draw.random() / 4)),
+            max_agent_stress_increase_per_minute=draw.choice((0.0, 0.05, draw.random() / 4)),
+            cooldown_minutes=draw.randrange(1, 40),
+            source_expressiveness_by_agent={
+                name: draw.choice((0.0, 1.0, draw.random()))
+                for name in names
+                if draw.random() < 0.5
+            },
+            family_channel_strength=draw.choice((0.0, 1.0, draw.random())),
+            same_zone_channel_strength=draw.choice((0.0, 1.0, draw.random())),
+            nearby_zone_channel_strength=draw.choice((0.0, 1.0, draw.random())),
+            source_id="ASM-BOSSE-AFFECT-CONTAGION-V1",
+        )
+        runtime_state = {
+            "schema_version": 1,
+            "contacts": contacts,
+            "agent_cooldown_until": {
+                name: draw.randrange(0, 60) for name in names if draw.random() < 0.4
+            },
+        }
+        social = ExpressivenessChannelOpennessPolicy(parameters)
+        arguments = {"zone_neighbors": neighbors, "runtime_state": runtime_state}
+        rust = social.native_update(view, deltas, rng, **arguments)
+        try:
+            python = social.update(view, deltas, rng, **arguments)
+        except ValueError:
+            # Contacts of no weight stop the Python model; the kernel leaves them to it.
+            assert rust is None, trial
+            raised += 1
+        else:
+            assert rust is not None, trial
+            _same_social_result(rust, python)
+            matched += 1
+
+        information = InformationSpreadPolicy(
+            InformationSpreadConfig(
+                enabled=True,
+                max_contacts_per_agent=draw.randrange(0, 5),
+                query_pressure_decay_per_minute=draw.choice((0.0, 0.25, draw.random() / 4)),
+            )
+        )
+        state = create_information_runtime_state(set(ids))
+        state["contacts"] = contacts
+        state["query_pressure"] = {agent_id: unit() for agent_id in ids}
+        state["counters"]["contact_attempts"] = draw.randrange(0, 100)
+        rust_state = information.native_update(agents, minute, state, rng, zone_neighbors=neighbors)
+        assert rust_state is not None, trial
+        python_state = information.update(view, state, rng, zone_neighbors=neighbors)
+        assert _same_bits_deep(rust_state.runtime_state, python_state.runtime_state), trial
+    assert matched > 100 and raised > 0
