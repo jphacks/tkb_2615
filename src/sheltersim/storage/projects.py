@@ -31,7 +31,7 @@ from sheltersim.core.collection import fewer_collections
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
-from sheltersim.storage.checkpoints import CheckpointArchive
+from sheltersim.storage.checkpoints import ARCHIVE_STORAGE_TYPES, CheckpointArchive
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _PRIVATE = re.compile(
@@ -737,11 +737,21 @@ class ProjectStore:
             # The archive applies the privacy check to every chunk that is not
             # already stored (stored chunks passed it when first written) and
             # stages new chunks, so a rejected checkpoint writes nothing.
+            # Chunks of the branch's previous save (or of this Checkpoint, saved by
+            # another branch) are referred to where they are, not written again.
+            known = checkpoint_path if checkpoint_path.exists() else None
+            if known is None and path.exists():
+                known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
             archive = CheckpointArchive(
                 checkpoint_path.parent,
                 max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
                 content_check=_reject_sensitive_checkpoint_content,
                 encoder=encoder,
+                known_locations=(
+                    CheckpointArchive.pack_locations(self._read(known))
+                    if known is not None and known.exists()
+                    else None
+                ),
             )
             encoded_archive = archive._prepare_validated_document(
                 document,
@@ -843,7 +853,10 @@ class ProjectStore:
         chunks = directory / "chunks"
         if chunks.is_symlink():
             raise StorageError("unsafe_checkpoint_archive_directory")
-        paths = [*directory.glob("*.json"), *chunks.glob("*.json.gz")]
+        packs = directory / "packs"
+        if packs.is_symlink():
+            raise StorageError("unsafe_checkpoint_archive_directory")
+        paths = [*directory.glob("*.json"), *chunks.glob("*.json.gz"), *packs.glob("*.pack")]
         if any(
             path.is_symlink() or not path.resolve().is_relative_to(directory.resolve())
             for path in paths
@@ -914,10 +927,7 @@ class ProjectStore:
             if kept is not None:
                 self._restored[key] = kept
                 self._use_restored()
-        archived = document.get("storage_type") in {
-            "checkpoint_archive_v1",
-            "checkpoint_archive_v2",
-        }
+        archived = document.get("storage_type") in ARCHIVE_STORAGE_TYPES
         if kept is not None and archived:
             # Seeks, comparisons and replays read the same Checkpoint again. Its document
             # is still decoded and its hashes checked, but the world is a copy of the one
@@ -984,7 +994,7 @@ class ProjectStore:
     ) -> dict[str, Any]:
         path = self._path(project_id, "runs", run_id, "checkpoints", f"{checkpoint_hash}.json")
         record = self._read(path)
-        if record.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
+        if record.get("storage_type") in ARCHIVE_STORAGE_TYPES:
             try:
                 document = CheckpointArchive(path.parent).document(record)
             except (CheckpointError, ValueError, TypeError, KeyError) as exc:
@@ -1034,7 +1044,7 @@ class ProjectStore:
         record = self._read(path)
         if record.get("checkpoint_hash") != checkpoint_hash:
             raise StorageError("checkpoint_pointer_corrupt")
-        if record.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
+        if record.get("storage_type") in ARCHIVE_STORAGE_TYPES:
             archive = CheckpointArchive(path.parent)
             return {field: archive.project(record, (field,)) for field in fields}
         checkpoint = Checkpoint.from_dict(record)

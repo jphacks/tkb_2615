@@ -13,6 +13,7 @@ from support.paths import SCENARIO_100_AGENTS
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.storage.checkpoints import CheckpointArchive
 
 
@@ -50,10 +51,12 @@ def test_compressed_checkpoint_retains_hash_and_reuses_chunks(tmp_path):
     )
     archive = CheckpointArchive(tmp_path)
     manifest = archive.encode(checkpoint)
-    first = sorted(tmp_path.rglob("*.json.gz"))
+    first = sorted(tmp_path.rglob("*.pack"))
+    assert len(first) == 1
     assert archive.decode(manifest).to_json() == checkpoint.to_json()
     assert archive.encode(checkpoint) == manifest
-    assert sorted(tmp_path.rglob("*.json.gz")) == first
+    assert CheckpointArchive(tmp_path).encode(checkpoint) == manifest
+    assert sorted(tmp_path.rglob("*.pack")) == first
 
 
 @pytest.mark.parametrize("chunk_records", [20, 128])
@@ -98,11 +101,11 @@ def test_archive_of_a_cached_capture_is_byte_identical(
     assert manifest["document"]["fields"]["world_state"]["fields"]["event_log"]["kind"] == (
         "list_v2"
     )
-    chunks = sorted(path.name for path in (tmp_path / "plain" / "chunks").iterdir())
-    assert sorted(path.name for path in (tmp_path / "cached" / "chunks").iterdir()) == chunks
-    for name in chunks:
-        assert (tmp_path / "cached" / "chunks" / name).read_bytes() == (
-            tmp_path / "plain" / "chunks" / name
+    packs = sorted(path.name for path in (tmp_path / "plain" / "packs").iterdir())
+    assert sorted(path.name for path in (tmp_path / "cached" / "packs").iterdir()) == packs
+    for name in packs:
+        assert (tmp_path / "cached" / "packs" / name).read_bytes() == (
+            tmp_path / "plain" / "packs" / name
         ).read_bytes()
 
 
@@ -173,8 +176,8 @@ def test_a_checkpoint_read_again_still_detects_a_corrupt_chunk(tmp_path, saved_t
     timeline.advance("main", 30)
     reference = store.branch_reference("p", "r", "main")
     store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
-    for chunk in (tmp_path / "p" / "runs" / "r" / "checkpoints" / "chunks").glob("*.json.gz"):
-        chunk.write_bytes(gzip.compress(b'["tampered"]'))
+    for pack in (tmp_path / "p" / "runs" / "r" / "checkpoints" / "packs").glob("*.pack"):
+        pack.write_bytes(gzip.compress(b'["tampered"]').ljust(pack.stat().st_size, b"\0"))
     with pytest.raises(StorageError, match="checkpoint_incompatible_or_corrupt"):
         store.load_restored_checkpoint("p", "r", reference.checkpoint_hash)
 
@@ -243,3 +246,113 @@ def test_the_timer_drops_the_kept_worlds(tmp_path, saved_timeline):
     # A later read keeps the world again, from a new restore.
     store.load_restored_checkpoint("p", "r", head)
     assert list(store._restored) == [("p", "r", head)]
+
+
+def _as_v2_archive(directory: Path) -> None:
+    """Rewrite the v3 manifests in directory as v2 ones with one file per chunk, the
+    layout saved before packs."""
+    import hashlib
+    import json
+
+    from sheltersim.storage.checkpoints import _encoded
+
+    (directory / "chunks").mkdir(exist_ok=True)
+    for path in directory.glob("*.json"):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        for key, (pack, offset, length) in manifest["locations"].items():
+            data = (directory / "packs" / f"{pack}.pack").read_bytes()
+            (directory / "chunks" / f"{key}.json.gz").write_bytes(data[offset : offset + length])
+        body = {"checkpoint_hash": manifest["checkpoint_hash"], "document": manifest["document"]}
+        v2 = {
+            "schema_version": 1,
+            "storage_type": "checkpoint_archive_v2",
+            **body,
+            "manifest_hash": hashlib.sha256(_encoded(body)).hexdigest(),
+        }
+        path.write_text(json.dumps(v2), encoding="utf-8")
+    for pack in (directory / "packs").glob("*.pack"):
+        pack.unlink()
+    # The byte ledger counted the packs; a run without one counts its files once.
+    (directory.parent / "checkpoint-write-ledger.json").unlink()
+
+
+def _manifest(store, checkpoint_hash):
+    import json
+
+    path = store._path("p", "runs", "r", "checkpoints", f"{checkpoint_hash}.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_a_save_writes_one_pack_of_only_the_chunks_it_adds(tmp_path, saved_timeline):
+    store, timeline = saved_timeline(tmp_path)
+    packs = store._path("p", "runs", "r", "checkpoints") / "packs"
+    timeline.advance("main", 30)
+    before = {path.name for path in packs.glob("*.pack")}
+    first = _manifest(store, store.branch_reference("p", "r", "main").checkpoint_hash)
+    timeline.advance("main", 60)
+    new = {path.name for path in packs.glob("*.pack")} - before
+    assert len(new) == 1
+    second = _manifest(store, store.branch_reference("p", "r", "main").checkpoint_hash)
+    # Chunks the first save stored stay in its packs; the new pack has only new ones.
+    kept = set(first["locations"]) & set(second["locations"])
+    assert kept
+    assert all(second["locations"][key] == first["locations"][key] for key in kept)
+    added = {key for key, location in second["locations"].items() if f"{location[0]}.pack" in new}
+    assert added and not added & set(first["locations"])
+    reference = store.branch_reference("p", "r", "main")
+    fresh = type(store)(store.root)
+    assert fresh.load_checkpoint("p", "r", reference.checkpoint_hash).simulation_minute == 60
+
+
+def test_a_run_saved_with_one_file_per_chunk_is_read_and_continued(tmp_path, saved_timeline):
+    """Runs saved before packs keep loading; a later save refers to their chunk files
+    and packs only the chunks it adds."""
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    directory = store._path("p", "runs", "r", "checkpoints")
+    reference = store.branch_reference("p", "r", "main")
+    expected = store.load_checkpoint("p", "r", reference.checkpoint_hash).to_json()
+    _as_v2_archive(directory)
+    fresh = type(store)(store.root)
+    assert fresh.load_checkpoint("p", "r", reference.checkpoint_hash).to_json() == expected
+    chunk_files = {path.name.removesuffix(".json.gz") for path in (directory / "chunks").iterdir()}
+    TimelineStore(fresh, "p", "r").advance("main", 60)
+    head = fresh.branch_reference("p", "r", "main").checkpoint_hash
+    assert fresh.load_checkpoint("p", "r", head).simulation_minute == 60
+    assert len(list((directory / "packs").glob("*.pack"))) == 1
+    # The new manifest refers to the chunk files it shares and packs none of them.
+    manifest = _manifest(fresh, head)
+    assert not set(manifest["locations"]) & chunk_files
+    archive = CheckpointArchive(directory)
+    archive._validate_manifest(manifest)
+    referenced = set()
+    archive._get = lambda key, get=archive._get: referenced.add(key) or get(key)
+    archive._unpack(manifest["document"])
+    assert referenced & chunk_files
+    assert fresh.checkpoint_write_bytes("p", "r") == fresh._checkpoint_archive_bytes("p", "r")
+
+
+def test_a_v3_manifest_with_changed_locations_fails_closed(tmp_path):
+    import hashlib
+
+    from sheltersim.core.checkpoint import CheckpointError
+    from sheltersim.storage.checkpoints import _encoded
+
+    checkpoint = Checkpoint.capture(
+        WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+    )
+    manifest = CheckpointArchive(tmp_path).encode(checkpoint)
+    key = next(iter(manifest["locations"]))
+    moved = {**manifest, "locations": {**manifest["locations"], key: ["0" * 64, 0, 10]}}
+    with pytest.raises(CheckpointError, match="manifest integrity"):
+        CheckpointArchive(tmp_path).decode(moved)
+    # Even with a matching manifest hash, a chunk is checked against its key.
+    body = {name: moved[name] for name in ("checkpoint_hash", "document", "locations")}
+    moved["manifest_hash"] = hashlib.sha256(_encoded(body)).hexdigest()
+    with pytest.raises(CheckpointError, match="missing or corrupt|integrity"):
+        CheckpointArchive(tmp_path).decode(moved)
+    malformed = {**manifest, "locations": {key: ["pack", -1, 0]}}
+    body = {name: malformed[name] for name in ("checkpoint_hash", "document", "locations")}
+    malformed["manifest_hash"] = hashlib.sha256(_encoded(body)).hexdigest()
+    with pytest.raises(CheckpointError, match="invalid checkpoint archive locations"):
+        CheckpointArchive(tmp_path).decode(malformed)
