@@ -66,3 +66,31 @@ def test_corrupt_head_still_fails_closed_in_the_worker(tmp_path, monkeypatch, sa
         api.close()
     assert store.run("p", "r")["status"] == "failed"
     assert store.branch_reference("p", "r", "main").checkpoint_hash == head
+
+
+def test_a_client_that_sees_a_job_end_may_start_the_next_one(tmp_path, monkeypatch, saved_timeline):
+    """The final status, the lease and the job end together, so a submit right after
+    the status leaves "running" is not refused as busy."""
+    import time as clock
+
+    monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
+    store, _ = saved_timeline(tmp_path)
+    release = store.release_run
+
+    def slow_release(lease):
+        clock.sleep(0.3)
+        release(lease)
+
+    monkeypatch.setattr(store, "release_run", slow_release)
+    api = ProjectAPI(store)
+    try:
+        api.submit("p", "r", "main", 5)
+        deadline = clock.monotonic() + 60
+        while store.run("p", "r")["status"] == "running":
+            assert clock.monotonic() < deadline
+            clock.sleep(0.01)
+        assert api.submit("p", "r", "main", 10)["status"] == "running"
+        api.wait_idle(timeout=60)
+    finally:
+        api.close()
+    assert store.branch_reference("p", "r", "main").computed_until == 10
