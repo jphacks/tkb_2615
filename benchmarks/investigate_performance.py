@@ -26,9 +26,12 @@ from sheltersim.experiments.benchmark import build_benchmark_scenario, environme
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore, _IndexedMetricSink
+from sheltersim.inspection import frames as inspection_frames
 from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.storage.checkpoints import CheckpointArchive
+from sheltersim.storage.frames import FrameCache
 from sheltersim.storage.history_index import HistoryIndex
+from sheltersim.storage.index_writer import BackgroundIndexer
 from sheltersim.storage.projects import ProjectStore, digest
 from sheltersim.web.projects import ProjectAPI
 from sheltersim.web.workspace import ProjectWorkspace
@@ -137,7 +140,7 @@ def main() -> None:
                 row["calls"] += 1
                 row["wall_seconds"] += time.perf_counter() - wall
                 row["thread_seconds"] += time.thread_time() - cpu
-                if owner is TimelineStore:
+                if owner is TimelineStore and name == "record":
                     directory = values[0].store.root
                     progress.append(
                         {
@@ -183,8 +186,15 @@ def main() -> None:
         ),
         (HistoryIndex, "ingest"),
         (ProjectWorkspace, "finish_review"),
+        # The parts of a save outside capture and the store's write.
+        (TimelineStore, "_cache_frame"),
+        (FrameCache, "put"),
+        (BackgroundIndexer, "submit"),
+        (BackgroundIndexer, "_receive"),
+        (ProjectStore, "branch_reference"),
     ):
         wrap(owner, name, "CheckpointArchive.encode" if owner is CheckpointArchive else None)
+    wrap(inspection_frames, "world_frame", "world_frame")
     # Preserve the classmethod descriptor while timing capture.
     capture = Checkpoint.capture.__func__
     Checkpoint.capture = capture

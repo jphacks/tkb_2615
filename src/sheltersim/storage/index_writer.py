@@ -3,7 +3,9 @@
 A long computation saves every 30 minutes and indexed each save before computing
 on. BackgroundIndexer sends each save's new records to one process that indexes
 them in order with HistoryIndex.ingest, so the computation waits for the index
-only at its end (and when the index falls more than a few saves behind).
+only at its end (and when the index falls more than a few saves behind). That
+process reads the pipe on its own thread: a send larger than the pipe's buffer
+would otherwise wait for the ingest in progress to end.
 
 Only what ingest reads is sent: the EventLog records, KPI samples and resource
 samples added since the last save, the model_state history entries from the
@@ -17,6 +19,8 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import queue
+import threading
 from bisect import bisect_left
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -129,14 +133,35 @@ def _view(document: dict[str, Any]) -> SimpleNamespace:
     )
 
 
+# What _read_sent queues when the computation's end of the pipe is gone.
+_SENDER_GONE = object()
+
+
+def _read_sent(connection: Any, sent: queue.SimpleQueue[Any]) -> None:
+    """Queue each message as it arrives, up to the final None."""
+    while True:
+        try:
+            message = connection.recv()
+        except (EOFError, OSError):
+            sent.put(_SENDER_GONE)
+            return
+        sent.put(message)
+        if message is None:
+            return
+
+
 def _index_saves(connection: Any, root: str, max_bytes: int, project_id: str, run_id: str) -> None:
     """The indexing process: ingest each sent save in order and answer each one."""
     from sheltersim.storage.history_index import HistoryIndex
     from sheltersim.storage.projects import ProjectStore
 
     index = HistoryIndex(ProjectStore(Path(root), max_bytes=max_bytes), project_id, run_id)
+    sent: queue.SimpleQueue[Any] = queue.SimpleQueue()
+    threading.Thread(target=_read_sent, args=(connection, sent), daemon=True).start()
     while True:
-        message = connection.recv()
+        message = sent.get()
+        if message is _SENDER_GONE:
+            return
         if message is None:
             connection.send(None)
             return
