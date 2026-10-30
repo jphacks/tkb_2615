@@ -160,6 +160,12 @@ def index_row(row: dict[str, Any]) -> tuple[str, str, list, list, list, list] | 
     return None if _native is None else _native.index_row(row)
 
 
+def record_json(record: Any, *types: type) -> bytes | None:
+    """The canonical JSON of record.to_dict() for a record of the types EventLogRecord and
+    ScheduledEvent with only frozen plain values, or None for any other or without the kernel."""
+    return None if _native is None else _native.record_json(record, *types)
+
+
 def same_saved_records(records: list[Any], raws: list[bytes], *types: type) -> bool | None:
     """Whether each of records (of the types EventLogRecord and ScheduledEvent) is exactly the
     record restoring raws gives, read from the bytes; a false says nothing about ==, and

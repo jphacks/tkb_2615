@@ -120,6 +120,9 @@ class EventQueue:
 
 def record_bytes(record: EventLogRecord) -> bytes:
     """The canonical JSON of record.to_dict(), as a Checkpoint saves the record."""
+    encoded = native.record_json(record, EventLogRecord, ScheduledEvent)
+    if encoded is not None:
+        return encoded
     document = record.to_dict()
     encoded = native.canonical_json(document)
     if encoded is not None:

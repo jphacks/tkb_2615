@@ -1345,6 +1345,45 @@ def test_same_saved_records_accepts_a_record_and_its_saved_bytes(fields: dict) -
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        _SAMPLE_PAYLOAD,
+        {"z": 1, "a": {"y": [], "b": {}}, "\u6587": "\u00e9\U0001f600", "\ud7ff": -1.5e-7},
+    ],
+)
+def test_record_json_is_the_canonical_json_of_to_dict(payload: dict) -> None:
+    from sheltersim.events.models import EventLogRecord, ScheduledEvent
+
+    for fields in ({}, {"detail": "\u6587", "source_id": "source-1"}):
+        record = _record(payload, **fields)
+        expected = native.canonical_json(record.to_dict())
+        assert native.record_json(record, EventLogRecord, ScheduledEvent) == expected
+
+
+def test_record_json_leaves_other_values_to_python() -> None:
+    import dataclasses
+    from types import MappingProxyType
+
+    from sheltersim.events.models import EventLogRecord, ScheduledEvent
+
+    class Text(str):
+        pass
+
+    types = (EventLogRecord, ScheduledEvent)
+    assert native.record_json(object(), *types) is None
+    record = _record({"text": "a"})
+    plain = dataclasses.replace(record, event=_record({"text": "a"}).event)
+    object.__setattr__(plain.event, "payload", {"text": "a"})
+    assert native.record_json(plain, *types) is None
+    subclass = dataclasses.replace(record, event=_record({"text": Text("a")}).event)
+    assert native.record_json(subclass, *types) is None
+    nonfinite = dataclasses.replace(record, event=_record({}).event)
+    object.__setattr__(nonfinite.event, "payload", MappingProxyType({"x": float("nan")}))
+    assert native.record_json(nonfinite, *types) is None
+
+
+@pytest.mark.parametrize(
     "changed",
     [
         {"int": 2},

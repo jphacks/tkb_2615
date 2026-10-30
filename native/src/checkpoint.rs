@@ -16,6 +16,8 @@
 
 use std::collections::HashSet;
 
+use crate::Encoder;
+
 use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
@@ -314,6 +316,134 @@ pub fn index_row<'py>(
     )))
 }
 
+/// Write value, a frozen record value, as canonical JSON; false for anything but exact
+/// JSON scalars, tuples and mapping proxies with str keys.
+fn write_frozen(encoder: &mut Encoder, value: &Bound<'_, PyAny>, depth: usize) -> PyResult<bool> {
+    if depth == 0 {
+        return Ok(false);
+    }
+    if let Ok(tuple) = value.downcast_exact::<PyTuple>() {
+        encoder.out.push(b'[');
+        for (index, item) in tuple.iter().enumerate() {
+            if index > 0 {
+                encoder.out.push(b',');
+            }
+            if !write_frozen(encoder, &item, depth - 1)? {
+                return Ok(false);
+            }
+        }
+        encoder.out.push(b']');
+        return Ok(true);
+    }
+    if is_proxy(value) {
+        let items = value.call_method0("items")?;
+        let mut entries: Vec<(Bound<'_, PyString>, Bound<'_, PyAny>)> = Vec::with_capacity(value.len()?);
+        for entry in items.try_iter()? {
+            let (key, item): (Bound<'_, PyAny>, Bound<'_, PyAny>) = entry?.extract()?;
+            let Ok(key) = key.downcast_into_exact::<PyString>() else {
+                return Ok(false);
+            };
+            entries.push((key, item));
+        }
+        let mut named = Vec::with_capacity(entries.len());
+        for (key, item) in &entries {
+            named.push((key.to_str()?, item));
+        }
+        named.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        encoder.out.push(b'{');
+        for (index, (key, item)) in named.into_iter().enumerate() {
+            if index > 0 {
+                encoder.out.push(b',');
+            }
+            crate::write_json_string(&mut encoder.out, key);
+            encoder.out.push(b':');
+            if !write_frozen(encoder, item, depth - 1)? {
+                return Ok(false);
+            }
+        }
+        encoder.out.push(b'}');
+        return Ok(true);
+    }
+    if !plain_scalar(value) {
+        return Ok(false);
+    }
+    match encoder.value(value, 0) {
+        Ok(()) => Ok(true),
+        Err(error) if error.is_instance_of::<crate::Unsupported>(value.py()) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_proxy(value: &Bound<'_, PyAny>) -> bool {
+    let proxy = std::ptr::addr_of_mut!(ffi::PyDictProxy_Type);
+    value.get_type().as_ptr() == proxy.cast()
+}
+
+/// The canonical JSON of record.to_dict(), read from the frozen fields of a record and
+/// its event of exactly these types, or None for a record with any other value.
+#[pyfunction]
+pub fn record_json<'py>(
+    py: Python<'py>,
+    record: &Bound<'py, PyAny>,
+    record_type: &Bound<'py, PyAny>,
+    event_type: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    if !record.get_type().is(record_type) {
+        return Ok(None);
+    }
+    let event = record.getattr("event")?;
+    if !event.get_type().is(event_type) {
+        return Ok(None);
+    }
+    let mut encoder = Encoder { out: Vec::with_capacity(1024) };
+    // Both objects' keys in sorted order.
+    let field = |encoder: &mut Encoder, name: &str, value: &Bound<'py, PyAny>, first: bool| -> PyResult<bool> {
+        if !first {
+            encoder.out.push(b',');
+        }
+        crate::write_json_string(&mut encoder.out, name);
+        encoder.out.push(b':');
+        write_frozen(encoder, value, MAX_SAME_DEPTH)
+    };
+    encoder.out.push(b'{');
+    if !field(&mut encoder, "detail", &record.getattr("detail")?, true)? {
+        return Ok(None);
+    }
+    encoder.out.extend_from_slice(b",\"event\":{");
+    for (index, name) in EVENT_ORDER.iter().enumerate() {
+        let value = if *name == "kind" {
+            event.getattr("kind")?.getattr("value")?
+        } else {
+            event.getattr(*name)?
+        };
+        if !field(&mut encoder, name, &value, index == 0)? {
+            return Ok(None);
+        }
+    }
+    encoder.out.push(b'}');
+    if !field(&mut encoder, "realized_minute", &record.getattr("realized_minute")?, false)?
+        || !field(&mut encoder, "status", &record.getattr("status")?.getattr("value")?, false)?
+    {
+        return Ok(None);
+    }
+    encoder.out.push(b'}');
+    Ok(Some(PyBytes::new(py, &encoder.out)))
+}
+
+// The fields of a saved event in sorted order.
+const EVENT_ORDER: [&str; 10] = [
+    "causation_id",
+    "due_minute",
+    "event_id",
+    "event_type",
+    "kind",
+    "payload",
+    "priority",
+    "provenance",
+    "sequence",
+    "source_id",
+];
+
 // Deeper values are left to the caller, which compares the restored records.
 const MAX_SAME_DEPTH: usize = 64;
 
@@ -356,9 +486,7 @@ fn same_frozen(value: &Bound<'_, PyAny>, document: &serde_json::Value, depth: us
             _ => false,
         },
         Value::Object(object) => {
-            // SAFETY: only the address of the type object is read.
-            let proxy = unsafe { std::ptr::addr_of_mut!(ffi::PyDictProxy_Type) };
-            if value.get_type().as_ptr() != proxy.cast() || value.len()? != object.len() {
+            if !is_proxy(value) || value.len()? != object.len() {
                 return Ok(false);
             }
             for (key, document) in object {
