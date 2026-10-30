@@ -4,11 +4,11 @@
 
 ハッカソン期間中は短期開発のため、レビューを必須としません。
 
-1. 最新の`develop`から、目的を絞ったfeatureブランチを作ります。
-2. `develop`を宛先にPull Requestを作成します。GitHubの既定ブランチは`main`のままなので、宛先を明示してください（例: `gh pr create --base develop`）。
+1. 最新の`main`から、目的を絞ったfeatureブランチを作ります。
+2. `main`を宛先にPull Requestを作成します。
 3. 下記のローカル確認を終えたら、作成者自身がPull Requestをマージします。
 
-`main`は審査中の提出版として凍結しています。`main`へのcommit・merge・Pull Requestは行わないでください。`develop`へも実装commitを直接pushしないでください。このリポジトリではGitHub branch protectionとPull Request時の自動CIは設定されていません。Actions workflowは手動実行です。トリガーやリポジトリ設定を変える場合は、プロジェクトオーナーと相談してください。
+`main`へ実装commitを直接pushしないでください。審査提出版はタグ`submission`で参照できます。Rustへの移植は`feature/rust-port`で進め、完成するまで`main`へ統合しません。このリポジトリではGitHub branch protectionは設定されていません。`オフラインCI`は`main`へのPull Requestごとに自動で実行され、手動でも実行できます。トリガーやリポジトリ設定を変える場合は、プロジェクトオーナーと相談してください。
 
 ## ローカル確認
 
