@@ -1073,12 +1073,12 @@ def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
 ) -> None:
     from sheltersim import policies
 
-    behavior = __import__("sheltersim.policies.behavior", fromlist=["_view_state_hash"])
+    world_view = __import__("sheltersim.policies.world_view", fromlist=["_view_state_hash"])
     assert policies is not None
     document = generated_scenario.model_dump(mode="json")
     document["duration_minutes"] = 240
     kernel = native.view_state_hash
-    original = behavior._view_state_hash
+    original = world_view._view_state_hash
     compared = []
 
     def checked(*arguments):
@@ -1093,7 +1093,7 @@ def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
         compared.append(rust)
         return rust
 
-    monkeypatch.setattr(behavior, "_view_state_hash", checked)
+    monkeypatch.setattr(world_view, "_view_state_hash", checked)
     run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.OFF)
     assert len(compared) == 240
 

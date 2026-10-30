@@ -153,7 +153,7 @@ python benchmarks/gate_all_paths.py --output 出力先 --coverage
 - `--expect`：`fixtures/gate-all-paths.json`のハッシュと比べます。モデルや規則を意図して変えてハッシュが変わったときは、理由をPull Requestに書いて、`--write-expected`で更新します。理由が説明できない変化は不具合として調べます。この値はLinuxのものです（OSをまたいだ一致は段階B5で確かめます）。
 - `--determinism`：別のプロセス、別の`PYTHONHASHSEED`、保存を読むScenarioでは別の`RAYON_NUM_THREADS`、Rustのkernelなし（`SHELTERSIM_NATIVE=0`）で動かして、1回目と比べます。WindowsとmacOSでは`--no-python-kernels`を付けます（RustとPythonの数学関数が同じなのはLinuxだけです）。
 - 分岐・再開・Checkpointの往復は、1つのScenarioの中でまっすぐのRunと比べます（`must_match`）。tickの順序に効くものを省いて同じになることは、この比較で確かめます。
-- `--coverage`：tick側のコード（`core`、`domain`、`events`、`policies`、`experiments/runner.py`）のどの行に届いたかを、ファイルごとに`coverage-native.md`（Rustのkernelあり）と`coverage-both.md`（なしの回も合わせたもの）に書きます。
+- `--coverage`：tick側のコード（`core`、`domain`、`events`、`policies`、`experiments/runner.py`、`experiments/phases/`）のどの行に届いたかを、ファイルごとに`coverage-native.md`（Rustのkernelあり）と`coverage-both.md`（なしの回も合わせたもの）に書きます。
 - `policies`のモデルや、EffectProgramの操作を足したら、ここにもScenarioを足します。`tests/integration/test_all_paths_gate.py`は、モデルの一覧がここに入っていないと失敗します。
 - 介入が拒否された結果と、有効な入力でRunが止まる結果（`known_stops`のScenario）も、期待値に入れます。直したら期待値が変わるので気づけます。止まるものは、見つけたときにIssueにします。
 - 全件を動かすテストには`long_simulation`の印を付けます。通常のpytestは、1つの小さなScenarioだけを動かします。
