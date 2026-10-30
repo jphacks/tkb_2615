@@ -21,6 +21,7 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TickEngine, TraceLevel
+from sheltersim.core.world import WorldState
 from sheltersim.experiments.benchmark import build_benchmark_scenario, environment_manifest
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -161,6 +162,7 @@ def main() -> None:
 
     for owner, name in (
         (TickEngine, "step"),
+        (WorldState, "validate_after_tick"),
         (OfflineSimulationController, "__call__"),
         (_IndexedMetricSink, "record_decision"),
         (_IndexedMetricSink, "record_social_decision"),

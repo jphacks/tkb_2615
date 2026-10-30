@@ -43,14 +43,24 @@ Checkpoint document) and times them.
   The runner uses it through `IntegratedDistressLifeStatePolicy.native_deltas` when
   no trace needs the per-agent parts, instead of `deltas_without_traces`.
 
-- `social_relationships_problem(relationships, good_keys, key_problem)` and
-  `body_relationships_problem(relationships, agents, parsed_keys, parse_key)`: the
-  per-tick checks of every `social_network_v1` and `body_state_v1` relationship
-  record, read where Python keeps them. They return the first rule broken, in the
-  Python order, and `validate_social_network_state` / `validate_body_state` raise
-  the same error; key parses stay the Python functions, remembered per key.
-  Day-7 world: per-tick validation 10.1 ms → 6.4 ms (social 3.23 → 0.98 ms, body
-  2.40 → 0.86 ms).
+- `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
+  `psychological_agents_valid`, `agent_dynamics_valid`, `movement_positions_valid`,
+  `information_contacts_valid`, `unit_values_valid`, `world_agents_valid`: fast
+  acceptance of the large loops of validation, read where Python keeps the state. Each
+  returns true only if every entry passes the Python rules; on false the caller runs
+  those rules, which accept the value or raise their own error, so results and error
+  messages come from one place. Key checks stay Python functions, remembered per key
+  (`core/tick_validation.py`, `PairKeys`).
+
+- `RecordWatch` (`native/src/watch.rs`): which records of a dict of dicts were written
+  since the last check, from CPython's dict watchers, which report every write
+  whichever code makes it. The functions are outside the stable ABI, so
+  `sheltersim.native` looks them up with ctypes and passes their addresses; if that
+  fails, the checks read every record. A list a rule reads is read at every check.
+
+- `ValuesSnapshot`: the values of a dict at the last check, held so that the next
+  check can tell by identity that the dict still starts with them. It lets the
+  end-of-tick check (`WorldState.validate_after_tick`) skip settled support requests.
 
 - `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
   Each record is its Python object, its canonical JSON bytes, or both; the indexes

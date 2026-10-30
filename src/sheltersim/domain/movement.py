@@ -7,6 +7,7 @@ import math
 from dataclasses import replace
 from typing import Any
 
+from sheltersim import native
 from sheltersim.contracts.api import AgentPosition
 from sheltersim.contracts.extensions import FacilityGeometry, Point2D, point_in_polygon
 from sheltersim.contracts.spatial import SpatialConstraints
@@ -182,7 +183,10 @@ def validate_movement_runtime_state(world: WorldState) -> None:
             or not 0.0 <= position["progress"] <= 1.0
         ):
             raise ValueError(f"movement_v1 staff position for {staff_id!r} is invalid")
-    for agent_id, position in state["positions"].items():
+    positions_valid = native.movement_positions_valid(
+        state["positions"], world.zones, world.zone_edges
+    )
+    for agent_id, position in () if positions_valid else state["positions"].items():
         if (
             not isinstance(position, dict)
             or set(position) != {"zone_id", "point", "edge_id", "progress", "position_kind"}

@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 mod eventlog;
 mod psychology;
 mod validation;
+mod watch;
 
 create_exception!(sheltersim_native, Unsupported, PyException);
 
@@ -255,8 +256,18 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;
     module.add_function(wrap_pyfunction!(float_repr, module)?)?;
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
-    module.add_function(wrap_pyfunction!(validation::social_relationships_problem, module)?)?;
-    module.add_function(wrap_pyfunction!(validation::body_relationships_problem, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::psychological_agents_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::agent_dynamics_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::movement_positions_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::information_contacts_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::unit_values_valid, module)?)?;
+    module.add_function(wrap_pyfunction!(validation::world_agents_valid, module)?)?;
+    module.add_class::<validation::ValuesSnapshot>()?;
+    module.add_function(wrap_pyfunction!(watch::install_dict_watcher, module)?)?;
+    module.add_class::<watch::RecordWatch>()?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
     module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;

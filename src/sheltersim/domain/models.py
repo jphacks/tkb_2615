@@ -6,7 +6,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class Activity(StrEnum):
@@ -601,9 +601,25 @@ class SupportRequestState:
     cooldown_until: int = 0
     last_assignment_attempt_minute: int | None = None
     last_assignment_wait_reason_code: str | None = None
+    # Where to report writes; see report_writes_to. Not state, so not a field.
+    _write_listener: ClassVar[list[Any] | None] = None
 
     def __post_init__(self) -> None:
         self.status = SupportRequestStatus(self.status)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        listener = self._write_listener
+        if listener is not None:
+            listener.append(self)
+
+    def report_writes_to(self, listener: list[Any] | None) -> None:
+        """Append this request to listener whenever a field is assigned from now on.
+
+        The end-of-tick check does not read settled requests again until one reports
+        a write (core/tick_validation.py).
+        """
+        object.__setattr__(self, "_write_listener", listener)
 
 
 @dataclass

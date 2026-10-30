@@ -293,18 +293,24 @@ def initialize_simulator_extensions(world: WorldState) -> None:
 
 
 def validate_simulator_extensions(
-    world: WorldState, *, validate_event_history: bool = True
+    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
 ) -> None:
     """Validate each extension independently for checkpoint and restore hooks.
 
     Per-tick validation passes ``validate_event_history=False``: append-only histories
-    are then checked only for records from the tick that just ended.
+    are then checked only for records from the tick that just ended. With a tick_memo
+    it also skips what is proven unchanged (core/tick_validation.py).
     """
-    required = {
-        key.removeprefix("simulator:")
-        for key in simulator_signatures(world.model_configs)
-        if key.startswith("simulator:")
-    }
+    if tick_memo is not None and tick_memo.configs_unchanged:
+        required = tick_memo.required_states
+    else:
+        required = {
+            key.removeprefix("simulator:")
+            for key in simulator_signatures(world.model_configs)
+            if key.startswith("simulator:")
+        }
+        if tick_memo is not None:
+            tick_memo.required_states = required
     if (
         TEMPORARY_SPACES_STATE_KEY in world.model_state
         and TEMPORARY_SPACES_STATE_KEY not in required
@@ -322,22 +328,26 @@ def validate_simulator_extensions(
     if missing:
         raise ValueError(f"required simulator state is missing: {sorted(missing)}")
     validate_agent_dynamics_state(world)
-    validate_body_state(world, validate_event_history=validate_event_history)
+    validate_body_state(world, validate_event_history=validate_event_history, tick_memo=tick_memo)
     validate_population_dynamics_state(world)
-    validate_population_lifecycle_state(world)
-    validate_social_network_state(world)
+    if tick_memo is None or not tick_memo.lifecycle_unchanged:
+        validate_population_lifecycle_state(world)
+    validate_social_network_state(world, tick_memo=tick_memo)
     validate_staff_dynamics_state(world)
     validate_staff_operations_state(world)
     validate_temporary_spaces_state(world)
     validate_movement_runtime_state(world)
-    validate_geometry_overlay_state(world)
+    if tick_memo is None or not tick_memo.overlay_unchanged:
+        validate_geometry_overlay_state(world)
     validate_facility_queue_state(world)
     if (
         SHARED_OPERATIONS_KEY in world.model_state
         and "shared_operations" not in world.model_configs
     ):
         raise ValueError("shared_operations_v1 requires its signed Scenario contract")
-    validate_shared_operations_state(world, validate_event_history=validate_event_history)
+    validate_shared_operations_state(
+        world, validate_event_history=validate_event_history, tick_memo=tick_memo
+    )
 
 
 def restore_simulator_extensions(world: WorldState, model_state: dict[str, Any]) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sheltersim import native
 from sheltersim.core.world import WorldState
 from sheltersim.domain.facility_awareness import FacilityAwarenessConfig
 from sheltersim.policies.behavior import ActionProposal
@@ -104,7 +105,8 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
         or set(state["agents"]) != set(world.agents)
     ):
         raise ValueError("agent_dynamics_v1 has an invalid exact schema")
-    for agent_id, record in state["agents"].items():
+    valid = native.agent_dynamics_valid(state["agents"], world.facilities)
+    for agent_id, record in () if valid else state["agents"].items():
         if (
             not isinstance(record, dict)
             or set(record)

@@ -10,6 +10,7 @@ from typing import Any
 
 from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.tick_validation import PairKeys, saved_json
 from sheltersim.core.world import WorldState
 from sheltersim.policies.affect import create_affect_policy
 
@@ -225,15 +226,8 @@ def _parse_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
     return _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
 
 
-# The parse of each str key, for the Rust kernel to look up first; the parse depends
-# on the key alone.
-_PARSED_KEYS: dict[str, Any] = {}
-_RELATIONSHIP_PROBLEMS = {
-    1: "body_state_v1 relationship key is invalid",
-    2: "body_state_v1 relationship record is invalid",
-    3: "body_state_v1 trust must be within 0..1",
-    4: "body_state_v1 contact minute is invalid",
-}
+# Keys naming two different current people, for the Rust kernel to look up first.
+_GOOD_KEYS = PairKeys()
 
 
 _RELATIONSHIP_FIELDS = frozenset(
@@ -248,34 +242,23 @@ _RELATIONSHIP_FIELDS = frozenset(
 )
 
 
-def validate_body_state(world: WorldState, *, validate_event_history: bool = True) -> None:
-    """Reject partial state, unknown people, out-of-range values and malformed evidence."""
-    state = world.model_state.get(BODY_STATE_KEY)
-    if state is None:
-        return
-    if (
-        not isinstance(state, dict)
-        or set(state)
-        != {
-            "schema_version",
-            "policy_version",
-            "source_id",
-            "config",
-            "agents",
-            "relationships",
-            "history",
-        }
-        or state.get("schema_version") != 1
-        or state.get("policy_version") != BODY_POLICY_VERSION
-        or state.get("source_id") != BODY_SOURCE_ID
-        or not isinstance(state.get("agents"), dict)
-        or set(state["agents"]) != set(world.agents)
-        or not isinstance(state.get("relationships"), dict)
-        or len(state["relationships"]) > MAX_SOCIAL_RELATIONSHIPS
-        or not isinstance(state.get("history"), list)
-        or len(state["history"]) > MAX_SOCIAL_HISTORY
-    ):
-        raise ValueError("body_state_v1 has an invalid exact schema")
+def _pair_key_is_good(key: Any, agents: Any) -> bool:
+    parsed = _parse_key(key)
+    if parsed is None:
+        return False
+    pair, compact = parsed
+    return (
+        compact
+        and pair is not None
+        and pair[0] != pair[1]
+        and pair[0] in agents
+        and pair[1] in agents
+    )
+
+
+def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
+    """Check the saved config; return whether the check read only it, the configs and
+    the current Agent IDs."""
     config = canonical_body_config(state["config"])
     per_agent_fields = (
         "sleep_debt_stress_rate_by_agent",
@@ -294,7 +277,8 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         "dependent_assistance_reassurance_gain_by_agent",
     )
     configured_agent_ids = set().union(*(set(config.get(field, {})) for field in per_agent_fields))
-    if configured_agent_ids - set(world.agents):
+    only_current_residents = not configured_agent_ids - set(world.agents)
+    if not only_current_residents:
         population = world.model_state.get("population_dynamics_v1", {})
         historical_ids = set(world.agents)
         if isinstance(population, dict):
@@ -335,6 +319,49 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         or any(saved[key] is not config[key] and saved[key] != config[key] for key in saved)
     ):
         raise ValueError("body_state_v1 config is not canonical")
+    return only_current_residents
+
+
+def validate_body_state(
+    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
+) -> None:
+    """Reject partial state, unknown people, out-of-range values and malformed evidence."""
+    state = world.model_state.get(BODY_STATE_KEY)
+    if state is None:
+        return
+    if (
+        not isinstance(state, dict)
+        or set(state)
+        != {
+            "schema_version",
+            "policy_version",
+            "source_id",
+            "config",
+            "agents",
+            "relationships",
+            "history",
+        }
+        or state.get("schema_version") != 1
+        or state.get("policy_version") != BODY_POLICY_VERSION
+        or state.get("source_id") != BODY_SOURCE_ID
+        or not isinstance(state.get("agents"), dict)
+        or set(state["agents"]) != set(world.agents)
+        or not isinstance(state.get("relationships"), dict)
+        or len(state["relationships"]) > MAX_SOCIAL_RELATIONSHIPS
+        or not isinstance(state.get("history"), list)
+        or len(state["history"]) > MAX_SOCIAL_HISTORY
+    ):
+        raise ValueError("body_state_v1 has an invalid exact schema")
+    config_json = None
+    if tick_memo is not None and tick_memo.configs_unchanged and tick_memo.agents_unchanged:
+        config_json = saved_json(state["config"])
+    if config_json is None or config_json != tick_memo.body_config_json:
+        depends_on_config_only = _validate_body_config(world, state)
+        if tick_memo is not None:
+            # Past residents named in the config are compared with the population state.
+            tick_memo.body_config_json = (
+                saved_json(state["config"]) if depends_on_config_only else None
+            )
     fields = {
         "sleep_debt_minutes",
         "uncertainty",
@@ -344,7 +371,8 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         "negative_affect",
         "hygiene_need",
     }
-    for agent_id, record in state["agents"].items():
+    checked_agents = () if native.body_agents_valid(state["agents"]) else state["agents"].items()
+    for agent_id, record in checked_agents:
         if not isinstance(record, dict) or set(record) != fields:
             raise ValueError(f"body_state_v1 record for {agent_id!r} is invalid")
         for name, value in record.items():
@@ -357,16 +385,20 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
             ):
                 raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
     agents = world.agents
-    problem = native.body_relationships_problem(
-        state["relationships"], agents, _PARSED_KEYS, _parse_key
+    # Without the kernel, or for a value it leaves to Python, this loop decides. Every
+    # tick checks every relationship, so each record is checked inline, accepting
+    # exactly what the field-by-field rules accept.
+    checked_relationships = state["relationships"]
+    if tick_memo is not None:
+        checked_relationships = tick_memo.relationships_to_check(
+            tick_memo.body_watch, checked_relationships
+        )
+    relationships_valid = native.body_relationships_valid(
+        checked_relationships,
+        _GOOD_KEYS.good_keys(agents.keys()),
+        functools.partial(_pair_key_is_good, agents=agents),
     )
-    if problem:
-        # The Rust kernel checked every relationship by the rules below, in order.
-        raise ValueError(_RELATIONSHIP_PROBLEMS[problem])
-    # Without the kernel (problem is None) this loop checks them. Every tick checks
-    # every relationship, so each record is checked inline, accepting exactly what
-    # the field-by-field rules accept.
-    for key, record in state["relationships"].items() if problem is None else ():
+    for key, record in () if relationships_valid else state["relationships"].items():
         parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
         if parsed is None:
             raise ValueError("body_state_v1 relationship key is invalid")
