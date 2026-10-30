@@ -81,3 +81,29 @@ def test_an_old_bad_record_is_left_to_the_full_check(
     world.validate(validate_event_history=False)
     with pytest.raises(StateInvariantError):
         world.validate()
+
+
+@pytest.mark.parametrize("recent", [True, False])
+def test_appending_an_operation_parses_only_the_records_since_the_previous_tick(
+    finished_world, recent
+) -> None:
+    """Before an append, the shared operations state is checked as the per-tick check
+    does: a bad recent record stops it, an old one is left to the full check."""
+    from sheltersim.contracts.operations import SharedOperationsState
+    from sheltersim.domain.common_operations import record_shared_operation
+
+    world = WorldState.from_dict(copy.deepcopy(finished_world))
+    state = world.model_state["shared_operations_v1"]
+    receipt = SharedOperationsState.model_validate(state).history[0]
+    history = state["history"]
+    if recent:
+        newest = copy.deepcopy(history[-1])
+        newest["minute"] = world.minute_index - 1
+        _break_operation_record(newest)
+        newest["event_type"] = "not-an-operation"
+        history.append(newest)
+    else:
+        history[0]["event_type"] = "not-an-operation"
+    expected = "invalid before operation append" if recent else "current simulation boundary minute"
+    with pytest.raises(ValueError, match=expected):
+        record_shared_operation(world, receipt)
