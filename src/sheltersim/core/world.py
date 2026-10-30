@@ -1317,30 +1317,21 @@ class WorldState:
         try:
             self.event_queue.validate()
             if validate_event_history:
-                self.event_log.validate()
+                # The audit shows the log's ID and sequence indexes hold its records,
+                # so the checks below may read them.
+                self.event_log.validate(
+                    minute_index=self.minute_index, duration_minutes=self.duration_minutes
+                )
         except ValueError as exc:
             raise StateInvariantError(str(exc)) from exc
         queued_events = self.event_queue.pending()
         queue_ids = {event.event_id for event in queued_events}
         queue_sequences = {event.sequence for event in queued_events}
-        if validate_event_history:
-            realized_events = tuple(record.event for record in self.event_log.records)
-            if queue_ids.intersection(event.event_id for event in realized_events):
-                raise StateInvariantError("an event cannot be both pending and realized")
-            if queue_sequences.intersection(event.sequence for event in realized_events):
-                raise StateInvariantError("event sequences must be unique across queue and log")
-            for record in self.event_log.records:
-                if record.realized_minute > self.minute_index:
-                    raise StateInvariantError("event log cannot contain future realization times")
-                if record.realized_minute >= self.duration_minutes:
-                    raise StateInvariantError("event log is outside the scenario duration")
-            max_realized_sequence = max((event.sequence for event in realized_events), default=-1)
-        else:
-            if any(self.event_log.contains_id(event_id) for event_id in queue_ids):
-                raise StateInvariantError("an event cannot be both pending and realized")
-            if any(self.event_log.contains_sequence(sequence) for sequence in queue_sequences):
-                raise StateInvariantError("event sequences must be unique across queue and log")
-            max_realized_sequence = self.event_log.max_sequence
+        if any(self.event_log.contains_id(event_id) for event_id in queue_ids):
+            raise StateInvariantError("an event cannot be both pending and realized")
+        if any(self.event_log.contains_sequence(sequence) for sequence in queue_sequences):
+            raise StateInvariantError("event sequences must be unique across queue and log")
+        max_realized_sequence = self.event_log.max_sequence
         for event in queued_events:
             if event.due_minute >= self.duration_minutes:
                 raise StateInvariantError(f"event {event.event_id!r} is outside the scenario")

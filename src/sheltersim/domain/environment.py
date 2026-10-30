@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from sheltersim.events.queue import EventsById
+
 if TYPE_CHECKING:
     from sheltersim.core.world import WorldState
 
@@ -389,8 +391,8 @@ def validate_zone_environment_runtime_state(
         ):
             raise ValueError("zone environment events require the zone_environment policy")
         if validate_event_history and any(
-            record.event.event_type.startswith("effect_program_environment")
-            for record in world.event_log.records
+            event_type.startswith("effect_program_environment")
+            for event_type in world.event_log.event_types()
         ):
             raise ValueError("zone environment events require the zone_environment policy")
         return
@@ -425,11 +427,7 @@ def validate_zone_environment_runtime_state(
     if not validate_event_history:
         return
 
-    all_events = [
-        *world.event_queue.pending(),
-        *(record.event for record in world.event_log.records),
-    ]
-    by_id = {event.event_id: event for event in all_events}
+    by_id = EventsById(world.event_log, world.event_queue.pending())
     counts: dict[str, int] = defaultdict(int)
     for modifier_id, record in state["modifiers"].items():
         fields = {

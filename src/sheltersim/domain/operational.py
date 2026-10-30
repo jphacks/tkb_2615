@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from sheltersim.events.models import EventKind, EventStatus, ScheduledEvent
+from sheltersim.events.queue import EventsById
 
 if TYPE_CHECKING:
     from sheltersim.core.world import WorldState
@@ -22,6 +23,20 @@ H03_EVENT_TYPES = frozenset(
     }
 )
 _STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+# The only event types the full check reads; others pass it unread.
+_CHECKED_EVENT_TYPES = frozenset(
+    {
+        "facility_outage",
+        "facility_recovery",
+        "resource_delivery",
+        "resource_loss",
+        "resource_reserve",
+        "resource_release",
+        "resource_consume",
+        "staff_restored",
+        *H03_EVENT_TYPES,
+    }
+)
 
 
 def _is_stable_id(value: Any) -> bool:
@@ -164,16 +179,15 @@ def validate_operational_events_state(
             raise ValueError("operational events require operational_events_v1 state")
         return
     all_events = list(pending_events)
-    all_events.extend(record.event for record in world.event_log.records)
-    by_id = {event.event_id: event for event in all_events}
-    outcomes = {record.event.event_id: record for record in world.event_log.records}
+    all_events.extend(record.event for record in world.event_log.of_types(_CHECKED_EVENT_TYPES))
+    by_id = EventsById(world.event_log, pending_events)
 
     def event_status(event_id: str | None) -> EventStatus | None:
         if event_id is None:
             return None
         if in_flight_event is not None and in_flight_event.event_id == event_id:
             return EventStatus.APPLIED
-        outcome = outcomes.get(event_id)
+        outcome = world.event_log.find(event_id)
         return outcome.status if outcome is not None else None
 
     shipments: dict[str, tuple[str, str, int]] = {}
@@ -407,11 +421,8 @@ def validate_operational_events_state(
     if set(state["staff_status"]) != set(world.staff):
         raise ValueError("operational staff status must cover the known staff IDs exactly")
     latest_applied_absence: dict[str, ScheduledEvent] = {}
-    for outcome in world.event_log.records:
-        if outcome.status is EventStatus.APPLIED and outcome.event.event_type in {
-            "staff_unavailable",
-            "staff_shift_change",
-        }:
+    for outcome in world.event_log.of_types({"staff_unavailable", "staff_shift_change"}):
+        if outcome.status is EventStatus.APPLIED:
             latest_applied_absence[outcome.event.payload["staff_id"]] = outcome.event
     if in_flight_event is not None and in_flight_event.event_type in {
         "staff_unavailable",

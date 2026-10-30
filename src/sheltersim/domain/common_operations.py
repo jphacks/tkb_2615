@@ -393,7 +393,7 @@ def record_shared_operation(world: WorldState, record: OperationHistoryRecord) -
 def _event_payload_matches(event_record: Any, record: OperationHistoryRecord) -> bool:
     """Require the complete immutable event payload and causal/source headers to agree."""
     event = event_record.event
-    payload = event.to_dict().get("payload")
+    payload = event.payload_dict()
     expected = record.model_dump(mode="json")
     if (
         isinstance(record, StaffSupportContinuityReceipt)

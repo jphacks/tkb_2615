@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from sheltersim.events.models import EventStatus, ScheduledEvent
+from sheltersim.events.queue import EventsById
 
 if TYPE_CHECKING:
     from sheltersim.core.world import WorldState
@@ -316,13 +317,7 @@ def validate_infrastructure_runtime_state(
     if configured is None:
         if state is not None or (
             any(event.event_type in INFRASTRUCTURE_EVENT_TYPES for event in pending_events)
-            or (
-                validate_event_history
-                and any(
-                    record.event.event_type in INFRASTRUCTURE_EVENT_TYPES
-                    for record in world.event_log.records
-                )
-            )
+            or (validate_event_history and world.event_log.of_types(INFRASTRUCTURE_EVENT_TYPES))
         ):
             raise ValueError("infrastructure events require the infrastructure model")
         return
@@ -363,17 +358,18 @@ def validate_infrastructure_runtime_state(
     if not validate_event_history:
         return
 
-    all_events = pending_events + [record.event for record in world.event_log.records]
-
-    by_id = {event.event_id: event for event in all_events}
-    outcomes = {record.event.event_id: record for record in world.event_log.records}
+    # Only infrastructure events are read from the history below.
+    all_events = pending_events + [
+        record.event for record in world.event_log.of_types(INFRASTRUCTURE_EVENT_TYPES)
+    ]
+    by_id = EventsById(world.event_log, pending_events)
 
     def event_status(event_id: str | None) -> EventStatus | None:
         if event_id is None:
             return None
         if in_flight_event is not None and in_flight_event.event_id == event_id:
             return EventStatus.APPLIED
-        outcome = outcomes.get(event_id)
+        outcome = world.event_log.find(event_id)
         return outcome.status if outcome is not None else None
 
     start_events = {
