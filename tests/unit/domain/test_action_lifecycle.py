@@ -283,3 +283,76 @@ def test_a_restored_event_log_gives_the_active_actions_without_reading_every_rec
     copied.append(_lifecycle_record(len(steps), "a", "completed"))
     assert list(active_action_index(SimpleNamespace(event_log=copied))) == ["c", "b"]
     assert list(active_action_index(SimpleNamespace(event_log=restored))) == ["a", "c", "b"]
+
+
+_PLAIN_RECEIPT = {
+    "schema_version": 1,
+    "action_id": "action-1",
+    "agent_id": "A001",
+    "action": "rest",
+    "target_id": None,
+    "transition": "started",
+    "start_minute": 2,
+    "transition_minute": 5,
+    "duration_minutes": 3,
+    "reason_code": "scheduled_decision",
+    "activity": "resting",
+    "start_activity": None,
+    "start_needs": {"hunger": 0.5},
+    "current_needs": {},
+    "model_id": "model-1",
+    "model_source_id": "ASM-1",
+}
+
+
+def test_a_plain_receipt_dumps_to_the_same_values() -> None:
+    from sheltersim.contracts.operations import ActionLifecycleReceipt
+    from sheltersim.domain.action_lifecycle import _is_plain_receipt
+
+    assert _is_plain_receipt(_PLAIN_RECEIPT)
+    dumped = ActionLifecycleReceipt.model_validate(_PLAIN_RECEIPT).model_dump(mode="json")
+    assert dumped == _PLAIN_RECEIPT and list(dumped) == list(_PLAIN_RECEIPT)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"start_minute": -1, "duration_minutes": 6},
+        {"start_minute": True},
+        {"transition_minute": 1, "duration_minutes": -1},
+        {"duration_minutes": 4},
+        {"transition": "paused"},
+        {"reason_code": ""},
+        {"reason_code": "x" * 121},
+        {"activity": "x" * 81},
+        {"start_activity": 1},
+        {"target_id": "bad id"},
+        {"action_id": "-bad"},
+        {"agent_id": None},
+        {"model_id": "x" * 65},
+        {"model_source_id": "ok\n"},
+        {"start_needs": {"hunger": float("nan")}},
+        {"current_needs": {"hunger": float("inf")}},
+    ],
+)
+def test_anything_else_is_left_to_the_receipt_model(changes) -> None:
+    """Each leaves the plain path, where the model refuses it or converts its values."""
+    from pydantic import ValidationError
+
+    from sheltersim.contracts.operations import ActionLifecycleReceipt
+    from sheltersim.domain.action_lifecycle import _is_plain_receipt
+
+    payload = {**_PLAIN_RECEIPT, **changes}
+    assert not _is_plain_receipt(payload)
+    with pytest.raises(ValidationError):
+        ActionLifecycleReceipt.model_validate(payload)
+
+
+def test_needs_the_model_would_convert_are_left_to_it() -> None:
+    from sheltersim.contracts.operations import ActionLifecycleReceipt
+    from sheltersim.domain.action_lifecycle import _is_plain_receipt
+
+    payload = {**_PLAIN_RECEIPT, "current_needs": {"hunger": 1}}
+    assert not _is_plain_receipt(payload)
+    dumped = ActionLifecycleReceipt.model_validate(payload).model_dump(mode="json")
+    assert type(dumped["current_needs"]["hunger"]) is float

@@ -4,7 +4,7 @@
 
 ## 目的
 
-100人・7日分の Run を、画面から約5分（約318秒）以内で計算できるようにします。Python で入れられる改善は入れ終わり、develop（タグ `python-perf-2026-10-30`）で7日分は 650.5秒です。このブランチでは、B1、tick の計算、tick の終わりの検証、保存の変更を合わせて 261.0秒です（2026-10-31）。
+100人・7日分の Run を、画面から約5分（約318秒）以内で計算できるようにします。Python で入れられる改善は入れ終わり、develop（タグ `python-perf-2026-10-30`）で7日分は 650.5秒です。このブランチでは、B1、tick の計算、tick の終わりの検証、保存の変更を合わせて 261.0秒です（2026-10-31、B4 の前）。
 
 ## 前提になる事実
 
@@ -219,9 +219,35 @@ Python に任せる場合（型の違う値、不正な状態、trace が要る�
 
 ### B4：tick の残りの段階を Rust に移す
 
-行動の提案・調停・内生イベント・予定イベントの処理（domain の規則、約2万行）を、時間のかかる順に移します。段階ごとにハッシュの一致を確かめます。
+行動の提案・調停・内生イベント・予定イベントの処理（domain の規則、約2万行）を、時間のかかる順に移す計画でした。段階ごとにハッシュの一致を確かめます。
 
-**見込み：** 7日分 約100〜150秒（10〜15倍）。
+**計測で分かったこと：** 段階の時間は、規則の計算ではなく、同じものを何度も読み直す処理に広く薄く散らばっていました。そこで、まず作り直しをやめ、受け渡しの少ない2か所だけを Rust にしました。モデルの式は Rust に移していません（モデル担当の方に見ていただく式の移動はありません）。
+
+**入れたもの：**
+
+| 処理 | 変えたこと | 根拠・読む入力 |
+|---|---|---|
+| `WorldView`（提案の段階） | 更新の段階の view から作る（`WorldView.after_state_update`）。人の needs・stress・trust・体調・長期の苦痛だけを世界から読み直す | 2つの段階の間に世界へ書くのは、これらと、view が読まない状態（社会の伝播、関係の記録、指標）だけ。毎 tick の比較テスト（`tests/integration/test_tick_views.py`、メッセージと信念のある Scenario を含む） |
+| 設備の形状の解析、`selected_models` | 段階ごとの作り直しをやめ、コントローラーが持ち続ける | `model_configs` を毎分（その分の最初の段階で）写しと値で比べ、違えば捨てる。分の途中で `model_configs` をその場で書く処理はなく、写して差し替える処理は別のオブジェクトになるので解析し直す |
+| 部屋の中の経路（`plan_in_room_route`） | 同じ入力の結果を覚える（1分あたり約6回の計画の92%） | 形状と制約の設定（オブジェクトの同一性）、`geometry_overlay_v1` の有無、`facility_points`・`partitions`（呼ぶたびに値で比べる）。座標が 0.0 の点は `-0.0` と区別できないので覚えない |
+| 区域の環境（`zone_environment_view`） | 結果を覚える | `model_configs`（同一性）と `modifiers`（呼ぶたびに値で比べる）。読むのはこの2つだけで、時刻は読まない |
+| `EventQueue` | ID・順序番号・並べた列の索引を持つ | `_events` を書くのはこのクラスのメソッドだけ |
+| `ScheduledEvent` の確認 | 確認と凍結を Rust で行う（`scheduled_event_checked`） | Python の確認が受け入れると分かるときだけ受け入れ、それ以外は Python が判定する |
+| `WorldView` の監査ハッシュ | 文書を作らず Rust で書く（`view_state_hash`） | 出力は `canonical_sha256` と同じ。扱えない値は Python で計算する |
+| 資源台帳の確認（行動の適用と指標） | 毎 tick の検証の記憶（`TickValidationMemo.reservation_ids`）を使う | 予約 ID の列を値で比べ、新しい ID だけを確かめる。失敗した操作の ID は次の比較で外れる |
+| 記録の比較 | 同じオブジェクトなら `to_dict()` で比べない | `dispatch_due`、`record_applied_action_completion` |
+| 共有の運営の記録の重複確認 | その分に実現したイベントは、新しい記録だけを見る | 記録はイベントの実現時刻を持つ（`record_shared_operation` の確認） |
+| 支援の依頼の走査 | 指標の3回の走査を1回にする。苦情の確認は並べ替える前に絞る。同じ種類の依頼はスタッフの読み取りを共有する | 苦情の判断は依頼を pending にしない。スタッフの技能は `assign_pending` の中で変わらない |
+| 値の確認 | 型が float で範囲内なら関数を呼ばない（`apply_state_deltas`、`record_distress_monitor_tick`、`validate_social_state_context`）。`ActionCandidate`、`ActionProposal.with_outcome`、行動の記録の receipt は、確認に通るときだけ生成された `__init__`・pydantic を通さない | それ以外の値は今までの確認が判定し、同じエラーになる |
+| ベッドの空きの確認 | 他の人の位置を `Point2D` にせず座標で読む | 素の有限の float 以外は解析する |
+
+**計測（7日分、画面からの経路。移植前の commit と同時に実行して同じ負荷で比較、2026-10-31）：** world・events・KPI のハッシュは一致しました。
+
+@@B4TABLE@@
+
+**移さなかったもの：** 提案の計算（`UtilityBehaviorPolicy.propose`）を Rust に移すと、入力の読み取りと、結果の `ActionCandidate` の組み立てが残るので、1 tick あたり 0.2 ms ほどしか減らない見込みです（計測ではなく見積もり）。式の移動の確認の手間に見合わないので入れていません。`AgentState` の持ち主を移すことも、この段階では要りません。
+
+**残り：** 毎 tick の検証を除くと、残りは 1 tick あたり約 5 ms で、最大のものでも `WorldView.from_world` の約 0.5 ms です。これより先は、状態の持ち主を Rust に移さないと大きくは下がりません。支援の依頼（7日目で約3,300件）を毎分3回走査する分（約 0.2 ms）は、終わった依頼を飛ばせば減りますが、依頼の書き込みの通知を毎 tick の検証と共有する必要があるので、検証を担当する作業と合わせて考えます。
 
 ### B5：OS をまたいだ決定性と、モデル版の確定
 
@@ -234,6 +260,7 @@ Python に任せる場合（型の違う値、不正な状態、trace が要る�
 | 計算の結果 | 7日分の world・events・KPI のハッシュ（`--expect`）。1日分・短い Run は各 PR で、7日分は段階ごとに測る |
 | 移したまとまりの値 | 毎 tick、Python の実装と Rust の値をビット単位で比べる（`tests/integration/test_native_kernels.py`） |
 | 毎 tick の検証 | 壊した状態を tick で止めること、止めるエラーが省かない検証と同じこと（`tests/integration/test_tick_validation.py`） |
+| tick の中で作り直さないもの | 毎 tick、世界から読み直した値とビット単位で比べる（`tests/integration/test_tick_views.py`） |
 | 保存の形 | Rust が作る正規化した JSON・chunk・目録が、Python のものと1バイト違わないこと（B3 までは目録・ハッシュも同じ） |
 | 速さ | 計測器の「Run の終わりだけを測る」機能（`--from-project`・`--fork-minute`）で、7日目の保存と tick を数分で測る |
 | 3つの OS | このブランチの CI（Rust の部品を作って入れたテストと、Linux では部品なしのテスト） |

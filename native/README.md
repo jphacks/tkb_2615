@@ -112,6 +112,15 @@ Checkpoint document) and times them.
   start)` reads a type's records from a position, for a reader that keeps its result as
   the log grows.
 
+- `scheduled_event_checked(...)` and `view_state_hash(...)` (`native/src/records.rs`, stage
+  B4): `ScheduledEvent._check` with its frozen payload and provenance, and the audit hash
+  of a `WorldView` without building its document. Each accepts only what the Python code
+  accepts (exact types, stable IDs, finite floats, keys it can write without escaping);
+  anything else raises `Unsupported`, and the Python code decides or raises. No model
+  formula moved in this stage. `float_json` is the float form of the canonical encoder, which
+  writes ryu's digits directly in the range where they equal `float.__repr__`.
+  Seven days: docs/rust-port.md.
+
 ## Results so far (WSL2, 16 cores, generated Scenario, 100 people)
 
 | Check | Python | Rust |

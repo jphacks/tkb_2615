@@ -6,6 +6,8 @@ utterance and are separate from selected-policy proposals and completion events.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 from sheltersim.contracts.operations import ActionLifecycleReceipt
@@ -17,6 +19,11 @@ from sheltersim.events.queue import keeps_saved_bytes
 ACTION_LIFECYCLE_SOURCE_ID = "ASM-ACTION-LIFECYCLE-V1"
 ACTION_LIFECYCLE_POLICY_VERSION = "applied-action-lifecycle-v2"
 
+_TRANSITIONS = frozenset(
+    {"started", "continued", "completed", "interrupted", "abandoned", "censored"}
+)
+# The pattern of contracts.extensions.Identifier.
+_STABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _COMPLETION_ACTIONS = {
     "toilet_service_complete": {"request_toilet"},
     "resource_service_complete": {"fetch_water", "collect_meal"},
@@ -321,6 +328,43 @@ def _need_snapshot(agent: AgentState, world: WorldState) -> dict[str, float]:
     }
 
 
+def _is_plain_receipt(payload: dict[str, Any]) -> bool:
+    """Whether ActionLifecycleReceipt accepts this payload and dumps the same values.
+
+    Only for values of exactly the declared types; the model decides anything else and
+    raises any error. A receipt is made for most actions, about 18 per tick.
+    """
+    start, minute = payload["start_minute"], payload["transition_minute"]
+    reason_code, activity = payload["reason_code"], payload["activity"]
+    start_activity, target_id = payload["start_activity"], payload["target_id"]
+    plain = (
+        type(start) is int
+        and type(minute) is int
+        and 0 <= start <= minute
+        and payload["duration_minutes"] == minute - start
+        and payload["transition"] in _TRANSITIONS
+        and type(reason_code) is str
+        and 1 <= len(reason_code) <= 120
+        and (activity is None or (type(activity) is str and len(activity) <= 80))
+        and (start_activity is None or (type(start_activity) is str and len(start_activity) <= 80))
+        and (target_id is None or _is_identifier(target_id))
+    )
+    if not plain:
+        return False
+    for name in ("action_id", "agent_id", "action", "model_id", "model_source_id"):
+        if not _is_identifier(payload[name]):
+            return False
+    for needs in (payload["start_needs"], payload["current_needs"]):
+        for key, value in needs.items():
+            if type(key) is not str or type(value) is not float or not math.isfinite(value):
+                return False
+    return True
+
+
+def _is_identifier(value: Any) -> bool:
+    return type(value) is str and _STABLE_ID.fullmatch(value) is not None
+
+
 def _append_transition(
     world: WorldState,
     action: dict[str, Any],
@@ -353,7 +397,8 @@ def _append_transition(
         "model_id": action["model_id"],
         "model_source_id": action["model_source_id"],
     }
-    payload = ActionLifecycleReceipt.model_validate(payload).model_dump(mode="json")
+    if not _is_plain_receipt(payload):
+        payload = ActionLifecycleReceipt.model_validate(payload).model_dump(mode="json")
     event = ScheduledEvent(
         event_id=f"action-lifecycle-{sequence}",
         kind=EventKind.ENDOGENOUS,

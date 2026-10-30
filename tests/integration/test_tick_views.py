@@ -183,3 +183,35 @@ def test_a_tick_with_kept_inputs_gives_the_state_of_one_with_none(generated_scen
         return world.to_dict()
 
     assert run(False) == run(True)
+
+
+def test_the_proposal_view_equals_a_read_view_with_full_traces(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    """A trace takes the other update paths, which write nothing more to the world."""
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 20
+    views = _compared_ticks(monkeypatch)
+    run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.FULL)
+    assert len(views) == 20
+
+
+def test_requests_of_one_kind_get_the_reasons_they_get_alone(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    from sheltersim.domain.staff import support_wait_reason_codes
+    from sheltersim.experiments import metrics
+
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 360
+    compared = []
+
+    def checked(world, request_id, *, minute=None, staff_memo=None):
+        shared = support_wait_reason_codes(world, request_id, minute=minute, staff_memo=staff_memo)
+        assert shared == support_wait_reason_codes(world, request_id, minute=minute)
+        compared.append(shared)
+        return shared
+
+    monkeypatch.setattr(metrics, "support_wait_reason_codes", checked)
+    run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.OFF)
+    assert compared
