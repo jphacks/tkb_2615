@@ -14,7 +14,7 @@ from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore
-from sheltersim.storage.checkpoints import CheckpointArchive
+from sheltersim.storage.checkpoints import CheckpointArchive, _compress_all, _compressed
 
 
 def test_checkpoint_section_reads_only_selected_chunks(
@@ -407,3 +407,12 @@ def test_a_childs_first_save_refers_to_the_chunks_of_the_checkpoint_it_was_forke
     assert len(new) == 1
     written = [key for key, location in child.items() if f"{location[0]}.pack" in new]
     assert 0 < len(written) < len(shared)
+
+
+def test_chunks_compress_to_the_same_bytes_in_order_with_threads() -> None:
+    # Over the size that uses threads, with runs split unevenly among them.
+    raws = [bytes([index % 251]) * (1 + (index * 7919) % 200_000) for index in range(40)]
+    assert sum(map(len, raws)) > 2_000_000
+    assert _compressed(raws) == _compress_all(raws)
+    assert _compressed([]) == []
+    assert _compressed(raws[:1]) == _compress_all(raws[:1])

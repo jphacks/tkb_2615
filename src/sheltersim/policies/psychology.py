@@ -1202,8 +1202,14 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
             for agent in agents
         ):
             return None
-        return tuple(
-            AgentStateDelta.within_bounds(
+        new, set_fields = object.__new__, object.__setattr__
+        deltas = []
+        for agent, row in zip(agents, rows, strict=True):
+            # AgentStateDelta.within_bounds, without the call for each person.
+            delta = new(AgentStateDelta)
+            set_fields(
+                delta,
+                "__dict__",
                 {
                     "agent_id": agent.id,
                     "minute_index": minute,
@@ -1220,10 +1226,10 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
                     "positive_affect": row[9],
                     "negative_affect": row[10],
                     "hygiene_need": row[11],
-                }
+                },
             )
-            for agent, row in zip(agents, rows, strict=True)
-        )
+            deltas.append(delta)
+        return tuple(deltas)
 
     def deltas_without_traces(self, view: WorldView, minute: int) -> tuple[AgentStateDelta, ...]:
         """explain_update(view, minute).deltas without building the per-agent traces.

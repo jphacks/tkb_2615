@@ -61,6 +61,14 @@ jobs:
           if-no-files-found: ignore
           # .test-results is a dot directory, which upload-artifact skips by default.
           include-hidden-files: true
+      - name: 全経路のハッシュを確認
+        if: matrix.os == 'ubuntu-latest'
+        run: python benchmarks/gate_all_paths.py --output "$RUNNER_TEMP/gate" --expect fixtures/gate-all-paths.json
+      - name: Rustの禁止メソッドを確認
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup component add clippy
+          cargo clippy --manifest-path native/Cargo.toml -- -A clippy::all -D clippy::disallowed_methods
       - name: lintを確認
         if: matrix.os == 'ubuntu-latest'
         run: ruff check .

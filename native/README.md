@@ -25,6 +25,49 @@ cd .. && PYTHONPATH=src:native/pylib SHELTERSIM_LLM_MODE=offline .venv/bin/pytho
 (random and edge-case floats, strings, structures, and optionally a saved
 Checkpoint document) and times them.
 
+## Layout for lanes
+
+- `src/core/`: what every lane shares. `value.rs` (`V`, a JSON value that writes canonical
+  bytes through `Encoder` and comes back to Python the same), `mathx.rs`, `rng.rs`,
+  `interner.rs` (IDs and enum members as small numbers in rows, one Python object for each).
+- `src/state/*.rs` and `src/rules/*.rs`: `build.rs` makes each file a module and a Python
+  submodule, so a lane adds a file and edits neither `lib.rs` nor `sheltersim/native.py`. A file
+  exports `pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()>`, and Python reaches it with
+  `native.rules("movement")` or `native.state("movement")`, which are `None` without the
+  extension. Catch `native.Unsupported` around a call; the Python code then decides.
+  `rules/parity.rs` is the example and exposes `core` to the tests.
+- Crates lanes need are already in `Cargo.toml` (`indexmap`, `smallvec`, `rustc-hash`, `itoa`),
+  so `Cargo.lock` stays quiet. `HashMap` and `FxHashMap` are for lookups only: anything iterated
+  into an output goes through `IndexMap`, or is sorted.
+
+### Float rules
+
+Every float operation of a rule goes through `core::mathx`, and keeps the order of the Python
+expression. `tests/integration/test_native_parity.py` compares `mathx` with CPython.
+`cargo clippy --manifest-path native/Cargo.toml -- -A clippy::all -D clippy::disallowed_methods`
+enforces the bans in `native/clippy.toml`.
+
+| Python | Rust | Note |
+|---|---|---|
+| `math.exp(x)`, `math.expm1(x)` | `mathx::exp`, `mathx::expm1` | libm, as CPython. `None` where Python raises |
+| `x ** y`, `x ** 2`, `x ** 0.5` | `mathx::pow` | libm. Never `x * x` or `sqrt`: see below. `None` where Python raises or returns a complex, and for a subnormal result |
+| `math.hypot(*xs)` | `mathx::hypot` | CPython's algorithm |
+| `sum(xs)` | `mathx::py_sum`, `sum_nums` | compensated in 3.12. `sum([])` and a sum of ints are ints: `sum_nums` |
+| `math.fsum(xs)` | `mathx::py_fsum` | `None` for what is not finite |
+| `max(a, b)`, `min(a, b)` of floats | `mathx::py_max`, `py_min` | first argument on a tie; a NaN compares false |
+| `max(0, x)`, any int with a float | `mathx::max_num`, `min_num` | returns the int: JSON writes `0`, not `0.0` |
+| `round(x, 8)` | `mathx::py_round` | half to even on the exact binary value |
+| `round(x)` | `mathx::py_round_int` | an int, half to even |
+
+`None` means the rule raises `Unsupported`, and Python raises its error or computes the value.
+
+`f64::powf` and an `extern "C"` `pow` with a constant exponent are rewritten by LLVM: `powf(x, 2.0)`
+to `x * x`, `powf(x, 0.5)` to `sqrt`, and `pow(x, 2.0)` likewise (checked in the disassembly), and
+those give other bits than `x ** 2` (790 in a million values) and `x ** 0.5` (865 in a million).
+`mathx` passes its arguments through `black_box`, so libm is really called and constants are not
+folded at compile time with the build machine's libm. Until step 4 this keeps Python's result on
+each OS, because both call the same libm.
+
 ## Kernels
 
 - `canonical_json(value)` / `canonical_sha256(value)`: the bytes (and their SHA-256)
@@ -79,7 +122,9 @@ Checkpoint document) and times them.
 
 - `ValuesSnapshot`: the values of a dict at the last check, held so that the next
   check can tell by identity that the dict still starts with them. It lets the
-  end-of-tick check (`WorldState.validate_after_tick`) skip settled support requests.
+  end-of-tick check (`WorldState.validate_after_tick`) skip settled support requests, and
+  the scans of unsettled requests during a tick (`WorldState.unsettled_support_requests`)
+  read only the rest.
 
 - `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
   Each record is its Python object, its canonical JSON bytes, or both; the indexes
@@ -89,7 +134,8 @@ Checkpoint document) and times them.
   that passes the `EventLogRecord`/`ScheduledEvent` checks. A record object is made
   only when Python reads it. `split_json_array` cuts a saved chunk into item bytes.
   Day 7: Checkpoint load 17.4 s → 4.2 s, a fork near day 7 24.0 s → 6.2 s
-  (docs/rust-port.md).
+  (docs/rust-port.md). Appending reads a record's index fields through interned names, and
+  skips the `Mapping` check of a provenance value that is a str.
 
 - `sensitive_candidates(raws)` (stage B3): the distinct object keys of the JSON texts
   `raws`, and their distinct string values the privacy patterns could match, read in
@@ -102,6 +148,21 @@ Checkpoint document) and times them.
   `(start, count)` of a list of item bytes, in parallel and without joining them. These
   are the leaves of the Checkpoint v2 hash tree (`core/checkpoint_cache.py`) and the
   archive's chunk keys.
+
+- `same_saved_records(records, raws, record_type, event_type)` (`src/checkpoint.rs`): whether
+  each live EventLog record is exactly what restoring its saved bytes gives, field by field
+  with the types, without building the restored record. It reads every field of the bytes,
+  and a false says nothing about `==`: the restore check of a save then compares restored
+  records as before (`WorldState.same_state`).
+
+- `record_json(record, record_type, event_type)` (`src/checkpoint.rs`): the canonical JSON of
+  `record.to_dict()`, read from the frozen record without thawing it, or None for any value
+  that is not frozen plain JSON. `same_saved_records` reads the result back on its own path.
+
+- `index_row(row)` (`src/checkpoint.rs`): one pass over a history index row of plain values,
+  giving its canonical JSON, the hash, its identities and event references
+  (`_identities`, `_event_references` in `storage/history_index.py`) and the keys and strings
+  for the privacy check. None for any other row, which Python reads as before.
 
 - `same_json_items(current, documents, start, count)` (stage B3, `src/history.rs`): whether
   each of `current[:count]` is exactly `documents[start + i]`, with the types: 1, 1.0 and

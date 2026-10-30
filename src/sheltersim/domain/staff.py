@@ -185,7 +185,7 @@ class StaffService:
         pending = sorted(
             (
                 request
-                for request in world.support_requests.values()
+                for request in world.unsettled_support_requests()
                 if request.status is SupportRequestStatus.PENDING
             ),
             key=lambda request: _support_assignment_order(

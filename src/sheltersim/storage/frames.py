@@ -16,7 +16,7 @@ import re
 import tempfile
 from typing import Any
 
-from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.checkpoint_cache import CanonicalEncoder, canonical_bytes
 from sheltersim.storage.projects import (
     ProjectStore,
     StorageError,
@@ -47,7 +47,7 @@ class FrameCache:
         path = self._file(checkpoint_hash)
         if path.exists():
             return True
-        encoded_frame = canonical(frame).encode()
+        encoded_frame = canonical_bytes(frame)
         document = {
             "schema_version": 1,
             "projection_version": FRAME_PROJECTION_VERSION,

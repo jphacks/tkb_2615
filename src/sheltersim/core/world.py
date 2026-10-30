@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
@@ -71,7 +71,12 @@ from sheltersim.events.models import (
     EventStatus,
     ScheduledEvent,
 )
-from sheltersim.events.queue import DuplicateEventError, EventLog, EventQueue
+from sheltersim.events.queue import (
+    DuplicateEventError,
+    EventLog,
+    EventQueue,
+    keeps_saved_bytes,
+)
 from sheltersim.experiments.scenario import ResourceServiceConfig, ScenarioSpec
 
 
@@ -1194,12 +1199,13 @@ class WorldState:
                 raise StateInvariantError(
                     f"support request {request.id!r} has invalid assignment-wait reason"
                 )
-            try:
-                request.status = SupportRequestStatus(request.status)
-            except (TypeError, ValueError) as exc:
-                raise StateInvariantError(
-                    f"support request {request.id!r} has invalid status"
-                ) from exc
+            if type(request.status) is not SupportRequestStatus:
+                try:
+                    request.status = SupportRequestStatus(request.status)
+                except (TypeError, ValueError) as exc:
+                    raise StateInvariantError(
+                        f"support request {request.id!r} has invalid status"
+                    ) from exc
             requests_by_agent.setdefault(request.agent_id, []).append(request)
             if request.status is SupportRequestStatus.ASSIGNED:
                 staff_member = self.staff.get(request.assigned_staff_id or "")
@@ -1425,6 +1431,15 @@ class WorldState:
             del self.__dict__["_tick_memo"]
             raise
         memo.commit(self)
+
+    def unsettled_support_requests(self) -> Iterable[SupportRequestState]:
+        """Every request that is pending or assigned, in the order of support_requests,
+        and possibly some that are not, so a caller reads each status. Most requests of
+        a long Run are settled; the last end-of-tick check knows which (core/tick_validation.py).
+        """
+        memo = self.__dict__.get("_tick_memo")
+        unsettled = None if memo is None else memo.unsettled_requests(self.support_requests)
+        return self.support_requests.values() if unsettled is None else unsettled
 
     def allocate_event_sequence(self) -> int:
         """Reserve the next stable sequence number for a newly generated event."""
@@ -1763,11 +1778,20 @@ class WorldState:
             elif getattr(self, item.name) != getattr(other, item.name):
                 return False
         mine, theirs = self.event_log, other.event_log
+        if self.event_queue.pending() != other.event_queue.pending() or len(mine) != len(theirs):
+            return False
+        # The kernel shows other's records are exactly the ones my bytes restore, without
+        # building those; anything it can not show exactly is compared here.
+        records = theirs.records_from(known_equal_events)
         return (
-            self.event_queue.pending() == other.event_queue.pending()
-            and len(mine) == len(theirs)
-            and mine.records_from(known_equal_events) == theirs.records_from(known_equal_events)
-        )
+            keeps_saved_bytes(mine)
+            and native.same_saved_records(
+                records,
+                mine.items_bytes(known_equal_events, len(mine)),
+                EventLogRecord,
+                ScheduledEvent,
+            )
+        ) or mine.records_from(known_equal_events) == records
 
     @classmethod
     def from_json(cls, value: str) -> WorldState:

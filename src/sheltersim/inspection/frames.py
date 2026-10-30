@@ -92,7 +92,7 @@ def world_frame(
             for request_id, care_request in care_requests.items():
                 if care_request.get("agent_id") != agent.id:
                     continue
-                projected = deepcopy(care_request)
+                projected = dict(care_request)
                 support_request = world.support_requests.get(request_id)
                 projected["assigned_staff_id"] = (
                     support_request.assigned_staff_id if support_request is not None else None
@@ -122,7 +122,7 @@ def world_frame(
                 "mobility": agent.profile.mobility.value,
                 "support_need": agent.profile.support_need,
                 "traits": traits.get(agent.id),
-                "context": deepcopy(context_people.get(agent.id))
+                "context": context_people.get(agent.id)
                 if isinstance(context_people, dict)
                 else None,
                 "care_requests": active_care_requests,
@@ -252,7 +252,7 @@ def world_frame(
                         "accessibility": service_point.access.accessibility,
                         "required_access_tags": list(service_point.access.required_access_tags),
                         "required_staff_skills": list(service_point.access.required_staff_skills),
-                        "last_stall": deepcopy(queue.get("last_stall")),
+                        "last_stall": queue.get("last_stall"),
                     }
                 )
         facilities.append(
@@ -327,19 +327,16 @@ def world_frame(
     body = world.model_state.get("body_state_v1", {})
     operations = world.model_state.get("staff_operations_v1", {})
     for person in frame["people"]:
-        person["body"] = deepcopy(body.get("agents", {}).get(person["id"]))
+        person["body"] = body.get("agents", {}).get(person["id"])
     for staff in frame["staff"]:
-        staff["operation"] = deepcopy(operations.get("staff", {}).get(staff["id"]))
-    frame["presence"] = deepcopy(
-        {
-            key: value
-            for key, value in world.model_state.get("population_presence_v1", {}).items()
-            if key != "history"
-        }
-    )
+        staff["operation"] = operations.get("staff", {}).get(staff["id"])
     # History is fetched through its index, never duplicated in every frame.
-    frame["presence"].pop("history", None)
-    frame["sanitation"] = deepcopy(operations.get("zones", {}))
+    frame["presence"] = {
+        key: value
+        for key, value in world.model_state.get("population_presence_v1", {}).items()
+        if key != "history"
+    }
+    frame["sanitation"] = operations.get("zones", {})
     frame["recorded_history"] = {
         "decisions": {
             "source": "people[].decision",
@@ -350,12 +347,12 @@ def world_frame(
             "event_window_truncated": social_window_truncated,
             "frame_event_scan_limit": 5000,
             "retention_limit": 20000,
-            "recent_effects": deepcopy(body.get("history", [])[-200:]),
+            "recent_effects": body.get("history", [])[-200:],
         },
         "staff": {
             "retained_records": len(operations.get("history", [])),
             "retention_limit": 20000,
-            "recent_operations": deepcopy(operations.get("history", [])[-200:]),
+            "recent_operations": operations.get("history", [])[-200:],
         },
         "status": "bounded retained evidence; absence does not prove no earlier event",
     }
@@ -464,6 +461,7 @@ def world_frame(
         for entity in entities:
             if (kind, entity["id"]) in projections:
                 entity["extensions"] = projections[(kind, entity["id"])]
+    # The frame above shares values of the world; this dump is the copy that leaves here.
     rendered = TimelineFrame.model_validate(frame).model_dump(mode="json")
     if not incoming_arrivals:
         rendered.pop("incoming_arrivals", None)

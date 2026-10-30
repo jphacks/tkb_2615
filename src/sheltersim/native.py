@@ -24,6 +24,27 @@ def available() -> bool:
     return _native is not None
 
 
+class _NeverRaised(Exception):
+    """Stands for Unsupported when no kernel exists to raise it."""
+
+
+# Catch this around a kernel from rules() or state(): the Python code then decides.
+Unsupported: type[Exception] = _NeverRaised if _native is None else _native.Unsupported
+
+
+def rules(name: str) -> Any:
+    """The module of native/src/rules/<name>.rs, or None without the extension.
+
+    Porting lanes call their kernels through it and need no function in this file.
+    """
+    return None if _native is None else getattr(_native.rules, name)
+
+
+def state(name: str) -> Any:
+    """The module of native/src/state/<name>.rs, or None without the extension."""
+    return None if _native is None else getattr(_native.state, name)
+
+
 def canonical_json(value: Any) -> bytes | None:
     """json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     allow_nan=False).encode(), or None when the kernel leaves value to json."""
@@ -151,6 +172,26 @@ def world_agents_valid(
     return _native is not None and _native.world_agents_valid(
         agents, zones, activity_type, initial_needs_type, needs_type
     )
+
+
+def index_row(row: dict[str, Any]) -> tuple[str, str, list, list, list, list] | None:
+    """(canonical JSON, its SHA-256, identities, event references, keys, strings to check) of a
+    row of plain lists, str-keyed dicts and JSON scalars (storage/history_index.py), or None
+    for any other row or without the kernel. Identities and references may repeat."""
+    return None if _native is None else _native.index_row(row)
+
+
+def record_json(record: Any, *types: type) -> bytes | None:
+    """The canonical JSON of record.to_dict() for a record of the types EventLogRecord and
+    ScheduledEvent with only frozen plain values, or None for any other or without the kernel."""
+    return None if _native is None else _native.record_json(record, *types)
+
+
+def same_saved_records(records: list[Any], raws: list[bytes], *types: type) -> bool | None:
+    """Whether each of records (of the types EventLogRecord and ScheduledEvent) is exactly the
+    record restoring raws gives, read from the bytes; a false says nothing about ==, and
+    the caller compares restored records. None without the kernel."""
+    return None if _native is None else _native.same_saved_records(records, raws, *types)
 
 
 def same_json_items(current: Any, documents: list[Any], start: int, count: int) -> bool | None:
