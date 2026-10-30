@@ -189,5 +189,10 @@ def test_a_tick_without_a_psychology_trace_gets_the_same_deltas(
         return fast
 
     monkeypatch.setattr(IntegratedDistressLifeStatePolicy, "deltas_without_traces", checked)
+    # The Rust kernel, when installed, is compared with this path in
+    # tests/integration/test_native_kernels.py.
+    monkeypatch.setattr(
+        IntegratedDistressLifeStatePolicy, "native_deltas", lambda self, view, minute: None
+    )
     run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
     assert compared == list(range(360))

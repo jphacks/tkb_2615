@@ -522,7 +522,14 @@ class OfflineSimulationController:
             deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
             if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
                 # No psychology trace is recorded, so its per-agent parts are not built.
-                psychology_result = PsychologyUpdateResult(deltas_without_traces(view, minute), ())
+                # The Rust kernel computes the same deltas when it is installed.
+                native_deltas = self.psychology.native_deltas(view, minute)
+                psychology_result = PsychologyUpdateResult(
+                    native_deltas
+                    if native_deltas is not None
+                    else deltas_without_traces(view, minute),
+                    (),
+                )
             else:
                 psychology_result = self.psychology.explain_update(view, minute)
             base_deltas = psychology_result.deltas

@@ -1,0 +1,80 @@
+# sheltersim_native
+
+Rust kernels for ShelterSim, on the `feature/rust-port` branch. The port moves the
+state the tick computes on into Rust in stages; each stage must keep the world,
+events and KPI hashes of a seven-day Run (`benchmarks/investigate_performance.py
+--expect`). The plan and the measurements are in issue #272.
+
+`sheltersim.native` uses the extension when it can be imported and
+`SHELTERSIM_NATIVE` is not `0`; otherwise every caller runs its Python code, which
+stays the reference. `tests/integration/test_native_kernels.py` compares each kernel
+with that Python code at every tick and is skipped without the extension. CI on this
+branch builds and installs the extension on Linux, Windows and macOS, and on Linux
+runs the tests once more without it.
+
+The first prototypes were made on `experiment/rust-native`.
+
+## Build and use without installing
+
+```shell
+cd native
+../.venv/bin/maturin build --release -i ../.venv/bin/python
+mkdir -p pylib && ../.venv/bin/python -m zipfile -e target/wheels/sheltersim_native-*.whl pylib
+cd .. && PYTHONPATH=src:native/pylib SHELTERSIM_LLM_MODE=offline .venv/bin/python -m pytest -q -n auto
+```
+
+`native/tests/parity_check.py` compares the kernels with Python byte for byte
+(random and edge-case floats, strings, structures, and optionally a saved
+Checkpoint document) and times them.
+
+## Kernels
+
+- `canonical_json(value)` / `canonical_sha256(value)`: the bytes (and their SHA-256)
+  of `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+  allow_nan=False).encode()` for plain JSON values. Other values, NaN and infinity
+  raise `Unsupported`, so the caller falls back to `json`.
+  Not used on this branch: replacing `json` alone saved about 1% (see below).
+
+- `psychology_integrated(globals, agents)`: one minute of
+  `IntegratedDistressLifeStatePolicy` with `BodyDynamicsFormula` (simple needs and
+  stress, life-state feedback, exact mean reversion) for every agent. Every float
+  operation keeps the Python order; `max`/`min` return the first argument on a tie
+  and `sum` is CPython 3.12's compensated sum, so the results are the same floats.
+  The runner uses it through `IntegratedDistressLifeStatePolicy.native_deltas` when
+  no trace needs the per-agent parts, instead of `deltas_without_traces`.
+
+## Results so far (WSL2, 16 cores, generated Scenario, 100 people)
+
+| Check | Python | Rust |
+|---|---:|---:|
+| Floats compared with `repr` (random bits, decimals, edges) | — | 799,870, 0 mismatches |
+| Day-7 world_state document (352 MB), JSON | 3,257 ms | 1,209 ms (byte-identical) |
+| Same, JSON + SHA-256 | 3,864 ms | 1,256 ms |
+| One day, project route (develop 4272b40) | 71.7 s | 70.8 s (same world/events/KPI hashes) |
+| Full offline tests | — | 1372 passed, 4 skipped |
+
+### Psychology update (tick prototype)
+
+| Check | Python | Rust |
+|---|---:|---:|
+| Deltas compared each tick for one day (100 people, 13 fields) | — | 0 mismatches (now `tests/integration/test_native_kernels.py`, 360 minutes) |
+| One day, library route: total | 42.6 s | 35.9 s (same world/events/KPI hashes) |
+| Same, `update_agent_state` phase | 15.5 s | 9.2 s |
+| Psychology policy alone, one day | 6.66 s | 0.61 s |
+| └ of which the Rust kernel | — | 0.07 s (about 95x the Python computation) |
+| Full offline tests with both kernels | — | 1372 passed, 4 skipped |
+
+Python without the per-agent traces (`deltas_without_traces`, PR #286 on develop) takes the same policy from 6.54 s to
+1.25 s a day and one day from 42.0 s to 36.7 s, close to the Rust kernel's 35.9 s.
+Against that Python, this kernel alone saves under a second a day.
+
+Most of the native path's time is building the inputs from `WorldView` and the
+`AgentStateDelta` objects in Python. The computation itself is about 95x faster;
+keeping the per-agent state in Rust would remove most of the boundary cost.
+
+### Canonical JSON
+
+Python's json encoder is already C, and saves reuse most history bytes, so
+replacing JSON alone saves about 1%. The time is in Python-level loops (row
+building, validation, model updates); those loops, not leaf functions, have to
+move for Rust to pay off.
