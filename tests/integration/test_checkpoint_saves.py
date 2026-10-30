@@ -105,6 +105,61 @@ def test_failed_pointer_publish_keeps_previous_durable_head(tmp_path, monkeypatc
     )
 
 
+def test_a_save_that_fails_on_its_thread_stops_the_computation_at_the_next_save(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """Saves run beside the computation, but their failures are not lost."""
+    store, timeline = saved_timeline(tmp_path)
+    original = store._write
+    pointers = []
+
+    def fail_second_pointer(path, value, **kwargs):
+        if path.name == "branch.json":
+            pointers.append(value["computed_until"])
+            if len(pointers) == 2:
+                raise OSError("injected failure of the second save")
+        return original(path, value, **kwargs)
+
+    monkeypatch.setattr(store, "_write", fail_second_pointer)
+    with pytest.raises(OSError, match="injected failure"):
+        timeline.advance("main", 120)
+    # The third save found the failure before it wrote anything.
+    assert pointers == [30, 60]
+    restarted = ProjectStore(store.root)
+    assert restarted.load_branch("p", "r", "main")[0].computed_until == 30
+
+
+def test_a_computation_that_fails_waits_for_the_save_it_started(
+    tmp_path, monkeypatch, saved_timeline
+):
+    """An error in a tick leaves the last save whole, and it is the error reported."""
+    import threading
+
+    from sheltersim.core.engine import TickEngine
+
+    store, timeline = saved_timeline(tmp_path)
+    original = store._write
+    release = threading.Event()
+    step = TickEngine.step
+
+    def slow_write(path, value, **kwargs):
+        if path.name == "branch.json":
+            assert release.wait(timeout=60)
+        return original(path, value, **kwargs)
+
+    def failing_step(engine):
+        if engine.world.minute_index == 30:
+            release.set()
+            raise RuntimeError("injected tick failure")
+        return step(engine)
+
+    monkeypatch.setattr(store, "_write", slow_write)
+    monkeypatch.setattr(TickEngine, "step", failing_step)
+    with pytest.raises(RuntimeError, match="injected tick failure"):
+        timeline.advance("main", 60)
+    assert store.branch_reference("p", "r", "main").computed_until == 30
+
+
 def test_interrupted_archive_recovers_orphan_chunk_accounting(
     tmp_path, monkeypatch, saved_timeline
 ):

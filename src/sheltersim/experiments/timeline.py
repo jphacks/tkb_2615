@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
@@ -304,6 +305,45 @@ def compatible_router_settings(router: LLMRouter, recorded: dict[str, Any]) -> b
 BACKGROUND_INDEX_MIN_SAVES = 8
 
 
+class _SaveThread:
+    """Writes one computation's saves on one thread, in order, while the computation goes on.
+
+    A save's document is detached once captured, and nothing here shortens or reorders
+    what a save does: its files are written, synced and published as without the thread.
+    The computation only stops waiting for the disk, which needs no GIL. Each save starts
+    after the one before it has finished, and a save that failed stops the computation
+    at its next save or at its end. Until then the head on disk is the last save finished.
+    """
+
+    def __init__(self) -> None:
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint-save")
+        self._last: Future[None] | None = None
+
+    def wait(self) -> None:
+        """Wait for the last save, and raise its error if it failed."""
+        last, self._last = self._last, None
+        if last is not None:
+            last.result()
+
+    def submit(self, write: Any) -> None:
+        self.wait()
+        self._last = self._pool.submit(write)
+
+    def close(self) -> None:
+        """Wait for the last save and end the thread; raise the save's error if it failed."""
+        try:
+            self.wait()
+        finally:
+            self._pool.shutdown()
+
+    def abandon(self) -> None:
+        """close() for a computation that is failing already: its error is the one to report."""
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 - reported by the computation's own error
+            pass
+
+
 class TimelineStore:
     """One persisted Run's checkpoint index and exact branch reconstruction API."""
 
@@ -330,7 +370,15 @@ class TimelineStore:
         history_cache: CheckpointHistoryCache | None = None,
         inherit_index_from: str | None = None,
         indexer: Any = None,
+        saver: _SaveThread | None = None,
     ) -> Checkpoint:
+        """Capture the runtime and save it; with a saver, on the saver's thread.
+
+        The returned Checkpoint is durable only without a saver.
+        """
+        if saver is not None:
+            # The head read below, and what a capture reuses, are the last save's.
+            saver.wait()
         if router is not None:
             runtime.runtime_state["llm"] = router.snapshot_state()
             if "replay_source" in runtime.runtime_state and len(router.records) > len(
@@ -355,48 +403,65 @@ class TimelineStore:
             fork_minute=prior.fork_minute if prior else fork_minute,
             computed_until=checkpoint.simulation_minute,
         )
-        # runtime.checkpoint() captured and validated this object just now and it
-        # has not left this method, so the store need not validate it again.
-        self.store.save_captured_branch(
-            self.project_id,
-            reference,
-            checkpoint,
-            expected_checkpoint_hash=prior.checkpoint_hash if prior else None,
-        )
-        if indexer is not None:
-            # A long computation's saves are indexed in another process, in order.
-            indexer.submit(checkpoint, observations or [])
-        else:
-            from sheltersim.storage.history_index import HistoryIndex
+        # The world goes on after this method, so its frame is rendered here.
+        frame = self._frame(runtime, checkpoint)
+        # The caller may clear its list as soon as this method returns.
+        observed = None if observations is None else list(observations)
 
-            HistoryIndex(self.store, self.project_id, self.run_id).ingest(
-                runtime.branch_id,
+        def write() -> None:
+            # runtime.checkpoint() captured and validated this object just now and it
+            # is not shared, so the store need not validate it again.
+            self.store.save_captured_branch(
+                self.project_id,
+                reference,
                 checkpoint,
-                observations=observations,
-                inherit_from=inherit_index_from,
+                expected_checkpoint_hash=prior.checkpoint_hash if prior else None,
             )
-        self._cache_frame(runtime, checkpoint)
+            if indexer is not None:
+                # A long computation's saves are indexed in another process, in order.
+                indexer.submit(checkpoint, observed or [])
+            else:
+                from sheltersim.storage.history_index import HistoryIndex
+
+                HistoryIndex(self.store, self.project_id, self.run_id).ingest(
+                    runtime.branch_id,
+                    checkpoint,
+                    observations=observed,
+                    inherit_from=inherit_index_from,
+                )
+            self._cache_frame(frame, checkpoint)
+
+        if saver is None:
+            write()
+        else:
+            saver.submit(write)
         return checkpoint
 
-    def _cache_frame(self, runtime: BranchRuntime, checkpoint: Checkpoint) -> None:
-        """Render the saved boundary from the writer's in-memory world for later reads.
-
-        The checkpoint is already durable; a cache failure only means readers
-        reconstruct the frame as before.
-        """
+    def _frame(self, runtime: BranchRuntime, checkpoint: Checkpoint) -> dict[str, Any] | None:
+        """The saved boundary rendered from the writer's in-memory world for later reads."""
         from sheltersim.inspection.frames import world_frame
-        from sheltersim.storage.frames import FrameCache
 
         try:
-            frame = world_frame(
+            return world_frame(
                 runtime.world,
                 run_id=self.run_id,
                 branch_id=runtime.branch_id,
                 computed_until=checkpoint.simulation_minute,
                 state_hash=checkpoint.state_hash,
             )
-            cache = FrameCache(self.store, self.project_id, self.run_id)
-            cache.put(checkpoint.checkpoint_hash, frame)
+        except (OSError, StorageError):
+            return None
+
+    def _cache_frame(self, frame: dict[str, Any] | None, checkpoint: Checkpoint) -> None:
+        """Keep a frame of a durable Checkpoint; a failure only means readers reconstruct it."""
+        from sheltersim.storage.frames import FrameCache
+
+        if frame is None:
+            return
+        try:
+            FrameCache(self.store, self.project_id, self.run_id).put(
+                checkpoint.checkpoint_hash, frame
+            )
         except (OSError, StorageError):
             pass
 
@@ -645,6 +710,7 @@ class TimelineStore:
             from sheltersim.storage.index_writer import BackgroundIndexer
 
             indexer = BackgroundIndexer(self.store, self.project_id, self.run_id, branch_id)
+        saver = _SaveThread()
         try:
             while runtime.world.minute_index < target_minute:
                 if cancelled is not None and cancelled():
@@ -658,16 +724,18 @@ class TimelineStore:
                         observations=sink.observations,
                         history_cache=history_cache,
                         indexer=indexer,
+                        saver=saver,
                     )
                     sink.observations.clear()
                     last_recorded_minute = runtime.world.minute_index
             if runtime.world.minute_index == head.simulation_minute:
+                saver.close()
                 if indexer is not None:
                     indexer.close()
                 return BranchRuntime.from_checkpoint(
                     head, branch_id=branch_id, parent_branch_id=reference.parent_branch_id
                 )
-            # A boundary that ended on the interval is already durable; record only an
+            # A boundary that ended on the interval is already saved; record only an
             # unsaved remainder (odd target or cancellation between boundaries).
             if runtime.world.minute_index != last_recorded_minute:
                 self.record(
@@ -677,8 +745,12 @@ class TimelineStore:
                     observations=sink.observations,
                     history_cache=history_cache,
                     indexer=indexer,
+                    saver=saver,
                 )
+            # The computation ends only once its saves are durable.
+            saver.close()
         except BaseException:
+            saver.abandon()
             if indexer is not None:
                 try:
                     indexer.close()
