@@ -195,6 +195,20 @@ def main() -> None:
     ):
         wrap(owner, name, "CheckpointArchive.encode" if owner is CheckpointArchive else None)
     wrap(inspection_frames, "world_frame", "world_frame")
+    close_indexer = BackgroundIndexer.close
+
+    def close_and_record(indexer):
+        close_indexer(indexer)
+        times = indexer.ingest_seconds
+        late = sorted(wall for wall, _ in times[-len(times) // 10 :])
+        totals["index process ingest"] = {
+            "calls": len(times),
+            "wall_seconds": sum(wall for wall, _ in times),
+            "thread_seconds": sum(cpu for _, cpu in times),
+            "late_median_seconds": late[len(late) // 2] if late else 0.0,
+        }
+
+    BackgroundIndexer.close = close_and_record
     # Preserve the classmethod descriptor while timing capture.
     capture = Checkpoint.capture.__func__
     Checkpoint.capture = capture

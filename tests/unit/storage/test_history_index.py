@@ -178,3 +178,70 @@ def test_a_version_one_index_is_read_and_upgraded_and_a_newer_one_refused(index)
         with pytest.raises(StorageError, match="history_index_version_unsupported"):
             with index.connect(write=write):
                 pass
+
+
+def _turn_keys(index: HistoryIndex) -> list[str]:
+    # The rows HistoryIndex.conversation_tail reads for one conversation.
+    with index.connect() as db:
+        rows = db.execute(
+            "SELECT e.key FROM entities e JOIN records r ON r.branch=e.branch AND r.kind=e.kind "
+            "AND r.key=e.key WHERE e.branch=? AND e.kind='conversations' AND e.entity=? "
+            "ORDER BY e.key DESC LIMIT ?",
+            ("main", "talk-1", 5),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+def test_only_a_conversation_has_turn_order_rows_and_its_query_reads_them(index):
+    turn = {"turn_id": "turn-1", "conversation_id": "talk-1", "minute": 1}
+    _put(index, ("conversations", turn, "turn-1"), ("events", _record(1), None))
+    with index.connect() as db:
+        row_count = db.execute(
+            "SELECT COUNT(*) FROM entities INDEXED BY entity_turn_order WHERE kind='conversations'"
+        ).fetchone()[0]
+        total = db.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        plan = db.execute(
+            "EXPLAIN QUERY PLAN SELECT e.key FROM entities e WHERE e.branch=? "
+            "AND e.kind='conversations' AND e.entity=? ORDER BY e.key DESC LIMIT ?",
+            ("main", "talk-1", 5),
+        ).fetchall()
+    assert 0 < row_count < total
+    assert "entity_turn_order" in " ".join(row["detail"] for row in plan)
+    assert _turn_keys(index) == ["turn-1"]
+
+
+def test_a_version_two_index_with_a_full_turn_order_index_gives_the_same_turns(index):
+    with sqlite3.connect(index.path) as db:
+        db.execute("DROP INDEX entity_turn_order")
+        db.execute("CREATE INDEX entity_turn_order ON entities(branch,kind,entity,key)")
+    turn = {"turn_id": "turn-1", "conversation_id": "talk-1", "minute": 1}
+    _put(index, ("conversations", turn, "turn-1"))
+    assert _turn_keys(index) == ["turn-1"]
+
+
+def test_opening_a_current_index_to_write_changes_nothing_in_the_file(index):
+    before = index.path.read_bytes()
+    with index.connect(write=True):
+        pass
+    assert index.path.read_bytes() == before
+
+
+def test_a_kept_writer_sees_other_writers_and_survives_a_failed_write(index):
+    kept = HistoryIndex(index.store, "p", "r", keep_writer=True)
+    try:
+        for number, writer in enumerate((kept, index, kept, kept, index)):
+            _put(writer, ("events", _record(number), None))
+        assert _counts(index)["records"] == 5
+        with pytest.raises(RuntimeError), kept.connect(write=True) as db:
+            db.execute("DELETE FROM records")
+            raise RuntimeError("the caller's own failure")
+        assert _counts(index)["records"] == 5
+        _put(kept, ("events", _record(5), None))
+        assert _counts(index)["records"] == 6
+    finally:
+        kept.close()
+    # A second close, and a new connection after it, are fine.
+    kept.close()
+    _put(kept, ("events", _record(6), None))
+    kept.close()
+    assert _counts(index)["records"] == 7

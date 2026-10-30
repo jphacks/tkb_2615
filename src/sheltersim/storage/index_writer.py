@@ -21,6 +21,7 @@ import json
 import multiprocessing
 import queue
 import threading
+import time
 from bisect import bisect_left
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -155,23 +156,28 @@ def _index_saves(connection: Any, root: str, max_bytes: int, project_id: str, ru
     from sheltersim.storage.history_index import HistoryIndex
     from sheltersim.storage.projects import ProjectStore
 
-    index = HistoryIndex(ProjectStore(Path(root), max_bytes=max_bytes), project_id, run_id)
+    store = ProjectStore(Path(root), max_bytes=max_bytes)
+    index = HistoryIndex(store, project_id, run_id, keep_writer=True)
     sent: queue.SimpleQueue[Any] = queue.SimpleQueue()
     threading.Thread(target=_read_sent, args=(connection, sent), daemon=True).start()
-    while True:
-        message = sent.get()
-        if message is _SENDER_GONE:
-            return
-        if message is None:
-            connection.send(None)
-            return
-        branch, document, observations = message
-        try:
-            index.ingest(branch, _view(document), observations=observations)
-        except Exception as exc:  # The computation reports it and stops.
-            connection.send(f"{type(exc).__name__}: {exc}")
-            return
-        connection.send(None)
+    try:
+        while True:
+            message = sent.get()
+            if message is _SENDER_GONE:
+                return
+            if message is None:
+                connection.send(None)
+                return
+            branch, document, observations = message
+            started, cpu_started = time.perf_counter(), time.thread_time()
+            try:
+                index.ingest(branch, _view(document), observations=observations)
+            except Exception as exc:  # The computation reports it and stops.
+                connection.send(f"{type(exc).__name__}: {exc}")
+                return
+            connection.send((time.perf_counter() - started, time.thread_time() - cpu_started))
+    finally:
+        index.close()
 
 
 class BackgroundIndexer:
@@ -216,6 +222,8 @@ class BackgroundIndexer:
         child.close()
         self._pending = 0
         self._error: str | None = None
+        # The wall and thread seconds of each ingest answered so far.
+        self.ingest_seconds: list[tuple[float, float]] = []
 
     def submit(self, checkpoint: Any, observations: list[dict[str, Any]]) -> None:
         """Send one saved Checkpoint and the observations recorded since the last save."""
@@ -252,7 +260,9 @@ class BackgroundIndexer:
         except EOFError:
             answer = "the indexing process ended without answering"
         self._pending -= 1
-        if answer is not None and self._error is None:
+        if isinstance(answer, tuple):
+            self.ingest_seconds.append(answer)
+        elif answer is not None and self._error is None:
             self._error = answer
             self._pending = 0
 
