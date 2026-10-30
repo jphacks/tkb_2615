@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod checkpoint;
 mod contacts;
+mod core;
 mod eventlog;
 mod history;
 mod psychology;
@@ -22,10 +23,13 @@ mod records;
 mod validation;
 mod watch;
 
+// The `state` and `rules` modules, found by build.rs.
+include!(concat!(env!("OUT_DIR"), "/lanes.rs"));
+
 create_exception!(sheltersim_native, Unsupported, PyException);
 
 // Deeper values are left to the json module, which raises RecursionError itself.
-const MAX_DEPTH: usize = 512;
+pub(crate) const MAX_DEPTH: usize = 512;
 
 pub(crate) struct Encoder {
     pub(crate) out: Vec<u8>,
@@ -107,7 +111,7 @@ impl Encoder {
         write_json_string(&mut self.out, text);
     }
 
-    fn float(&mut self, value: f64) -> PyResult<()> {
+    pub(crate) fn float(&mut self, value: f64) -> PyResult<()> {
         if !value.is_finite() {
             return Err(Unsupported::new_err("NaN and infinity are left to json"));
         }
@@ -268,7 +272,8 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
             if agent.len() != psychology::AGENT_FIELDS {
                 return Err(Unsupported::new_err("agent inputs have the wrong length"));
             }
-            let row = psychology::step(&globals, agent);
+            let row = psychology::step(&globals, agent)
+                .ok_or_else(|| Unsupported::new_err("math.exp would raise"))?;
             // Values outside AgentStateDelta's bounds are left to its Python checks.
             let in_bounds = |value: f64| (0.0..=1.0).contains(&value);
             if !row[..5].iter().copied().all(in_bounds)
@@ -285,6 +290,7 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
 #[pymodule]
 fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("Unsupported", module.py().get_type::<Unsupported>())?;
+    register_lanes(module)?;
     module.add_function(wrap_pyfunction!(canonical_json, module)?)?;
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;
     module.add_function(wrap_pyfunction!(float_repr, module)?)?;

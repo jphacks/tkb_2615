@@ -24,6 +24,27 @@ def available() -> bool:
     return _native is not None
 
 
+class _NeverRaised(Exception):
+    """Stands for Unsupported when no kernel exists to raise it."""
+
+
+# Catch this around a kernel from rules() or state(): the Python code then decides.
+Unsupported: type[Exception] = _NeverRaised if _native is None else _native.Unsupported
+
+
+def rules(name: str) -> Any:
+    """The module of native/src/rules/<name>.rs, or None without the extension.
+
+    Porting lanes call their kernels through it and need no function in this file.
+    """
+    return None if _native is None else getattr(_native.rules, name)
+
+
+def state(name: str) -> Any:
+    """The module of native/src/state/<name>.rs, or None without the extension."""
+    return None if _native is None else getattr(_native.state, name)
+
+
 def canonical_json(value: Any) -> bytes | None:
     """json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     allow_nan=False).encode(), or None when the kernel leaves value to json."""

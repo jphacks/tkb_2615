@@ -10,96 +10,10 @@ use std::collections::{BTreeMap, HashMap};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyString};
-use sha2::{Digest, Sha256};
 
-use crate::psychology::{py_max, py_min};
+use crate::core::mathx::{py_fsum, py_max, py_min};
+use crate::core::rng::{Key, KeyedDraws};
 use crate::{write_json_string, Unsupported};
-
-/// `CounterRNG.random`: SHA-256 of the seed and the JSON key, the first eight bytes
-/// as a fraction of 2**64.
-pub(crate) struct KeyedDraws {
-    seeded: Sha256,
-}
-
-impl KeyedDraws {
-    pub(crate) fn new(seed: &str) -> Self {
-        let mut seeded = Sha256::new();
-        seeded.update(b"sheltersim:sha256-keyed-v1\0");
-        seeded.update(seed.as_bytes());
-        seeded.update(b"\0");
-        Self { seeded }
-    }
-
-    pub(crate) fn draw(&self, key: &[u8]) -> f64 {
-        let digest = self.seeded.clone().chain_update(key).finalize();
-        let mut first = [0u8; 8];
-        first.copy_from_slice(&digest[..8]);
-        // u64 to f64 and int / int both round to nearest, ties to even, and the
-        // division by a power of two is exact.
-        u64::from_be_bytes(first) as f64 / 18_446_744_073_709_551_616.0
-    }
-}
-
-/// math.fsum as CPython 3.12 computes it (Shewchuk's partials with its half-even
-/// correction of the last bit), for finite values whose partial sums stay finite.
-pub(crate) fn py_fsum(values: &[f64]) -> Option<f64> {
-    let mut partials: Vec<f64> = Vec::with_capacity(8);
-    for &value in values {
-        if !value.is_finite() {
-            return None;
-        }
-        let mut x = value;
-        let mut kept = 0;
-        for index in 0..partials.len() {
-            let mut y = partials[index];
-            if x.abs() < y.abs() {
-                std::mem::swap(&mut x, &mut y);
-            }
-            let hi = x + y;
-            let yr = hi - x;
-            let lo = y - yr;
-            if lo != 0.0 {
-                partials[kept] = lo;
-                kept += 1;
-            }
-            x = hi;
-        }
-        partials.truncate(kept);
-        if x != 0.0 {
-            if !x.is_finite() {
-                return None;
-            }
-            partials.push(x);
-        }
-    }
-    let mut n = partials.len();
-    let mut hi = 0.0;
-    if n > 0 {
-        n -= 1;
-        hi = partials[n];
-        let mut lo = 0.0;
-        while n > 0 {
-            let x = hi;
-            n -= 1;
-            let y = partials[n];
-            hi = x + y;
-            let yr = hi - x;
-            lo = y - yr;
-            if lo != 0.0 {
-                break;
-            }
-        }
-        if n > 0 && ((lo < 0.0 && partials[n - 1] < 0.0) || (lo > 0.0 && partials[n - 1] > 0.0)) {
-            let y = lo * 2.0;
-            let x = hi + y;
-            let yr = x - hi;
-            if y == yr {
-                hi = x;
-            }
-        }
-    }
-    Some(hi)
-}
 
 /// math.fsum of finite values, for tests.
 #[pyfunction]
@@ -227,7 +141,7 @@ fn nearby_buckets<'a>(
 /// stops at a slot that used all its attempts; the information model goes on.
 fn select_contacts(
     draws: &KeyedDraws,
-    key_head: &[u8],
+    key: &mut Key,
     me: usize,
     buckets: &[Bucket<'_>],
     maximum: i64,
@@ -242,14 +156,12 @@ fn select_contacts(
     if total <= 0 {
         return;
     }
-    let mut key = Vec::with_capacity(key_head.len() + 24);
+    let head = key.mark();
     for slot in 0..maximum {
         let mut exhausted = true;
         for attempt in 0..maximum * 4 {
-            key.clear();
-            key.extend_from_slice(key_head);
-            key.extend_from_slice(format!(",{slot},{attempt}]").as_bytes());
-            let draw = draws.draw(&key);
+            key.rewind(head);
+            let draw = key.int(slot).int(attempt).draw(draws);
             let mut offset = (total - 1).min((draw * total as f64) as i64);
             let mut chosen = None;
             for bucket in buckets {
@@ -303,14 +215,9 @@ fn pair_key(first: &[u8], second: &[u8]) -> PyResult<String> {
     Ok(key)
 }
 
-fn key_head(label: &str, minute: i64, quoted: &[u8]) -> Vec<u8> {
-    let mut head = Vec::with_capacity(label.len() + quoted.len() + 32);
-    head.extend_from_slice(b"[\"");
-    head.extend_from_slice(label.as_bytes());
-    head.extend_from_slice(b"\",");
-    head.extend_from_slice(minute.to_string().as_bytes());
-    head.push(b',');
-    head.extend_from_slice(quoted);
+fn key_head(label: &str, minute: i64, quoted: &[u8]) -> Key {
+    let mut head = Key::labelled(label);
+    head.int(minute).quoted(quoted);
     head
 }
 
@@ -368,8 +275,8 @@ pub fn information_contacts_without_messages<'py>(
                 includes_self: false,
             });
         }
-        let head = key_head("information-contact-partner-v1", minute, &quoted[me]);
-        select_contacts(&draws, &head, me, &buckets, maximum, false, &mut selected);
+        let mut head = key_head("information-contact-partner-v1", minute, &quoted[me]);
+        select_contacts(&draws, &mut head, me, &buckets, maximum, false, &mut selected);
         for &(source, _) in &selected {
             let key = pair_key(&quoted[me], &quoted[source])?;
             let minutes = match previous.get(&key) {
@@ -515,8 +422,8 @@ pub fn social_channel_update<'py>(
                 includes_self: false,
             });
         }
-        let head = key_head("social-contact-bucket-v1", minute, &quoted[me]);
-        select_contacts(&draws, &head, me, &buckets, maximum, true, &mut selected);
+        let mut head = key_head("social-contact-bucket-v1", minute, &quoted[me]);
+        select_contacts(&draws, &mut head, me, &buckets, maximum, true, &mut selected);
 
         // Contacts of at least the minimum duration, by source ID (people are indexed
         // in ID order, and a person is a source once).
