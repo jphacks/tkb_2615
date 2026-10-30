@@ -43,6 +43,15 @@ Checkpoint document) and times them.
   The runner uses it through `IntegratedDistressLifeStatePolicy.native_deltas` when
   no trace needs the per-agent parts, instead of `deltas_without_traces`.
 
+- `social_relationships_problem(relationships, good_keys, key_problem)` and
+  `body_relationships_problem(relationships, agents, parsed_keys, parse_key)`: the
+  per-tick checks of every `social_network_v1` and `body_state_v1` relationship
+  record, read where Python keeps them. They return the first rule broken, in the
+  Python order, and `validate_social_network_state` / `validate_body_state` raise
+  the same error; key parses stay the Python functions, remembered per key.
+  Day-7 world: per-tick validation 10.1 ms → 6.4 ms (social 3.23 → 0.98 ms, body
+  2.40 → 0.86 ms).
+
 ## Results so far (WSL2, 16 cores, generated Scenario, 100 people)
 
 | Check | Python | Rust |

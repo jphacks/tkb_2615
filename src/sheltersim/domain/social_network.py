@@ -7,6 +7,7 @@ import json
 import math
 from typing import Any, Mapping
 
+from sheltersim import native
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import ScheduledEvent
 
@@ -97,6 +98,22 @@ def _pair_key_problem(pair_key: Any) -> str | None:
 _cached_pair_key_problem = functools.lru_cache(maxsize=65_536)(_pair_key_problem)
 
 
+def _key_problem(pair_key: Any) -> str | None:
+    return (
+        _cached_pair_key_problem(pair_key) if type(pair_key) is str else _pair_key_problem(pair_key)
+    )
+
+
+# str keys whose check found no problem, for the Rust kernel to look up first.
+_GOOD_PAIR_KEYS: set[str] = set()
+_PROBLEMS = {
+    1: "social_network_v1 relationship key is invalid",
+    2: "social_network_v1 relationship record is invalid",
+    3: "social_network_v1 trust value is invalid",
+    4: "social_network_v1 contact time is invalid",
+}
+
+
 _RELATIONSHIP_FIELDS = frozenset(
     {
         "contact_count",
@@ -135,6 +152,14 @@ def validate_social_network_state(world: WorldState) -> None:
         or len(state["relationships"]) > MAX_RELATIONSHIPS
     ):
         raise ValueError("social_network_v1 has an invalid exact schema")
+    problem = native.social_relationships_problem(
+        state["relationships"], _GOOD_PAIR_KEYS, _key_problem
+    )
+    if problem is not None:
+        # The Rust kernel checked every relationship by the rules below, in order.
+        if problem:
+            raise ValueError(_PROBLEMS[problem])
+        return
     # Every tick checks every relationship, so each record is checked inline,
     # accepting exactly what the field-by-field rules accept.
     for pair_key, record in state["relationships"].items():

@@ -8,6 +8,7 @@ import math
 import re
 from typing import Any
 
+from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import WorldState
 from sheltersim.policies.affect import create_affect_policy
@@ -220,6 +221,21 @@ def _relationship_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
 _cached_relationship_key = functools.lru_cache(maxsize=65_536)(_relationship_key)
 
 
+def _parse_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
+    return _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
+
+
+# The parse of each str key, for the Rust kernel to look up first; the parse depends
+# on the key alone.
+_PARSED_KEYS: dict[str, Any] = {}
+_RELATIONSHIP_PROBLEMS = {
+    1: "body_state_v1 relationship key is invalid",
+    2: "body_state_v1 relationship record is invalid",
+    3: "body_state_v1 trust must be within 0..1",
+    4: "body_state_v1 contact minute is invalid",
+}
+
+
 _RELATIONSHIP_FIELDS = frozenset(
     {
         "contact_count",
@@ -341,9 +357,16 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
             ):
                 raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
     agents = world.agents
-    # Every tick checks every relationship, so each record is checked inline,
-    # accepting exactly what the field-by-field rules accept.
-    for key, record in state["relationships"].items():
+    problem = native.body_relationships_problem(
+        state["relationships"], agents, _PARSED_KEYS, _parse_key
+    )
+    if problem:
+        # The Rust kernel checked every relationship by the rules below, in order.
+        raise ValueError(_RELATIONSHIP_PROBLEMS[problem])
+    # Without the kernel (problem is None) this loop checks them. Every tick checks
+    # every relationship, so each record is checked inline, accepting exactly what
+    # the field-by-field rules accept.
+    for key, record in state["relationships"].items() if problem is None else ():
         parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
         if parsed is None:
             raise ValueError("body_state_v1 relationship key is invalid")

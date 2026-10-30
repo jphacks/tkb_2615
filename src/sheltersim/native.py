@@ -53,3 +53,23 @@ def psychology_integrated(globals_: list[float], agents: list[list[float]]) -> l
         return _native.psychology_integrated(globals_, agents)
     except _native.Unsupported:
         return None
+
+
+def social_relationships_problem(
+    relationships: Any, good_keys: set[Any], key_problem: Any
+) -> int | None:
+    """The first rule a social_network_v1 relationship breaks (1 key, 2 record, 3 trust,
+    4 contact minute; 0 when all are valid), or None without the kernel."""
+    if _native is None:
+        return None
+    return _native.social_relationships_problem(relationships, good_keys, key_problem) or 0
+
+
+def body_relationships_problem(
+    relationships: Any, agents: Any, parsed_keys: dict[Any, Any], parse_key: Any
+) -> int | None:
+    """The first rule a body_state_v1 relationship breaks (1 key, 2 key or record,
+    3 trust, 4 contact minute; 0 when all are valid), or None without the kernel."""
+    if _native is None:
+        return None
+    return _native.body_relationships_problem(relationships, agents, parsed_keys, parse_key) or 0
