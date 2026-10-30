@@ -99,7 +99,7 @@ Checkpoint document) and times them.
 | One late save, `TimelineStore.record` (near day 7) | 1,076 ms | 420 ms |
 | Both hashes | 376 ms | 20 ms |
 | Privacy check of the new chunks | 119 ms | 10 ms |
-| Seven days, `TimelineStore.record` (336 saves) | 288.8 s | 146.9 s (same world/events/KPI hashes) |
+| Seven days, `TimelineStore.record` (336 saves) | 288.8 s | 125.2 s (same world/events/KPI hashes) |
 
 ### Psychology update (tick prototype)
 
