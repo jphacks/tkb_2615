@@ -247,3 +247,47 @@ def test_a_restored_world_that_differs_is_validated_and_compared_in_full_next_ti
             assert "checkpoint payload is invalid" in str(exc)
         else:
             raise AssertionError("an invalid restored world was accepted")
+
+
+def test_a_restore_check_extends_the_last_checks_eventlog(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    """The world a restore check builds is discarded, so the next check appends the new
+    records to its EventLog; the log's indexes equal those of a log built anew."""
+    from sheltersim.events.queue import EventLog
+
+    world = live_checkpoint_world
+    cache = CheckpointHistoryCache()
+    received = []
+    original = WorldState.from_dict.__func__
+
+    def from_dict(cls, document, **kwargs):
+        received.append(kwargs.get("_restored_log"))
+        return original(cls, document, **kwargs)
+
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
+    logs = []
+    for name in ("first", "cache-event-1", "cache-event-2"):
+        if name != "first":
+            _realize(world, name)
+        Checkpoint.capture(world, history_cache=cache)
+        logs.append(cache.restored_log())
+    assert received[0] is None
+    assert received[1] is logs[0] and received[2] is logs[0] and logs[2] is logs[0]
+    fresh = EventLog(list(world.event_log.records))
+    log = logs[2]
+    assert len(log) == len(world.event_log)
+    for record in world.event_log.records:
+        assert log.find(record.event.event_id) == record
+    assert log.max_sequence == fresh.max_sequence
+    assert log.event_types() == fresh.event_types()
+    monkeypatch.setattr(WorldState, "from_dict", classmethod(original))
+    assert Checkpoint.capture(world, history_cache=cache).to_json() == (
+        Checkpoint.capture(world).to_json()
+    )
+
+    # A cache seeded with a live world's records never extends that world's log.
+    seeded = CheckpointHistoryCache()
+    saved = Checkpoint.capture(world)
+    assert seeded.seed_events(world.event_log.records, saved.world_state["event_log"])
+    assert seeded.restored_log() is None

@@ -26,6 +26,7 @@ from typing import Any
 
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
+from sheltersim.events.queue import EventLog
 from sheltersim.experiments.metrics import MetricsRecorder
 
 
@@ -275,6 +276,8 @@ class CheckpointHistoryCache:
         self._resource_snapshots = _SealedItems(dict, still_equal=True)
         self._chunk_keys: dict[tuple[int, int, int], Any] = {}
         self._pack_locations: dict[str, tuple[str, int, int]] = {}
+        # The EventLog of the last restore check (see restored_log()).
+        self._log: EventLog | None = None
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None
@@ -332,6 +335,8 @@ class CheckpointHistoryCache:
         events.restored = list(records)
         # The items are the restored records themselves.
         events.restored_equal = len(records)
+        # They belong to a live world's EventLog, which a restore check never extends.
+        self._log = None
         return True
 
     def restored_events(self) -> list[EventLogRecord]:
@@ -342,8 +347,23 @@ class CheckpointHistoryCache:
         """How many leading restored_events() are known to equal the captured records."""
         return self._events.restored_equal
 
-    def remember_restored(self, records: Sequence[EventLogRecord], *, equal: bool) -> None:
-        """Keep the records a restore check made from the last documents().
+    def restored_log(self) -> EventLog | None:
+        """The EventLog of the last restore check, if it holds exactly restored_events().
+
+        That restored world was discarded, so the next restore check may append the
+        new records to its EventLog instead of indexing every record again.
+        """
+        log, restored = self._log, self._events.restored
+        if log is None or len(log) != len(restored):
+            return None
+        if restored and log._records[-1] is not restored[-1]:
+            return None
+        return log
+
+    def remember_restored(
+        self, records: Sequence[EventLogRecord], *, equal: bool, log: EventLog | None = None
+    ) -> None:
+        """Keep the records a restore check made from the last documents(), and its log.
 
         equal says whether the check showed them equal to the captured records.
         """
@@ -351,3 +371,4 @@ class CheckpointHistoryCache:
             raise ValueError("restored EventLog does not match the captured documents")
         self._events.restored = list(records)
         self._events.restored_equal = len(records) if equal else 0
+        self._log = log
