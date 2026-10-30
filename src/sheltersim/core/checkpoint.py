@@ -132,6 +132,7 @@ class Checkpoint:
         restored, _ = checkpoint._validate(
             hashes_verified=True,
             restored_events=history_cache.restored_events(),
+            restored_log=history_cache.restored_log(),
             shared=encoder.spliced_lists(),
             validate_world=False,
         )
@@ -141,7 +142,9 @@ class Checkpoint:
                 restored.validate()
             except StateInvariantError as exc:
                 raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
-        history_cache.remember_restored(restored.event_log.records, equal=equal)
+        history_cache.remember_restored(
+            restored.event_log.records, equal=equal, log=restored.event_log
+        )
         object.__setattr__(checkpoint, "_encoder", encoder)
         # The restored world shares the history lists of the captured documents.
         return checkpoint, None
@@ -189,17 +192,22 @@ class Checkpoint:
         return compatible
 
     def _world_document_for_restore(
-        self, shared: Sequence[Any] = (), *, raw: bytes | None = None
+        self, shared: Sequence[Any] = (), *, raw: bytes | None = None, borrow: bool = False
     ) -> dict[str, Any]:
         # raw is the canonical JSON of world_state. Saved and captured documents are
         # read from canonical JSON, so reading it again copies them, key order
-        # included, faster than deepcopy.
+        # included, faster than deepcopy. With borrow the caller only reads the world
+        # it restores and discards it, so the document itself is returned when it
+        # needs no migration.
+        migration = self._legacy_queue_migration_required()
+        if borrow and not migration:
+            return self.world_state
         world_document = (
             json.loads(raw)
             if raw is not None
             else deepcopy(self.world_state, {id(item): item for item in shared})
         )
-        if self._legacy_queue_migration_required():
+        if migration:
             from sheltersim.domain.facility_queues import (
                 FACILITY_QUEUES_LEGACY_MODE,
                 FACILITY_QUEUES_LEGACY_MODE_KEY,
@@ -321,6 +329,7 @@ class Checkpoint:
         restored_events: list[EventLogRecord] | None = None,
         shared: Sequence[Any] = (),
         validate_world: bool = True,
+        restored_log: Any = None,
     ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version != self.CURRENT_SCHEMA_VERSION:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
@@ -354,14 +363,16 @@ class Checkpoint:
                 )
                 metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
             else:
-                # A capture's restore check discards the restored world, and the
-                # history lists it reused are never changed, so they are not copied.
+                # A capture's restore check only reads the restored world and then
+                # discards it, so it is built on the captured documents, not copies.
                 world = WorldState.from_dict(
-                    self._world_document_for_restore(shared),
+                    self._world_document_for_restore(shared, borrow=True),
                     _restored_events=restored_events,
                     _shared=shared,
                     _validate=validate_world,
                     _saved_json=True,
+                    _borrow=True,
+                    _restored_log=restored_log,
                 )
                 metrics = MetricsRecorder.from_dict(
                     deepcopy(self.metrics_state, {id(item): item for item in shared})

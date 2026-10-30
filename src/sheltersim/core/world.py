@@ -1443,6 +1443,8 @@ class WorldState:
         _shared: Sequence[Any] = (),
         _validate: bool = True,
         _saved_json: bool = False,
+        _borrow: bool = False,
+        _restored_log: EventLog | None = None,
     ) -> WorldState:
         """Restore the exact current schema; older or unknown schemas fail closed.
 
@@ -1453,6 +1455,10 @@ class WorldState:
         validates the world, or shows it equals one validated already. With
         _saved_json the document was read from hash-checked canonical JSON, so event
         payloads are not encoded again to check they are JSON (ScheduledEvent.from_saved).
+        With _borrow the new world keeps the document's objects instead of copies; only
+        a caller that reads the world and discards it may pass it. _restored_log is
+        such a discarded world's EventLog of the leading event_log documents; the new
+        records are appended to it, keeping its indexes, instead of building a new one.
         """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
@@ -1583,24 +1589,30 @@ class WorldState:
                 item["id"]: SupportRequestState(**item) for item in document["support_requests"]
             }
             active_tasks = {item["id"]: ActiveTask(**item) for item in document["active_tasks"]}
+
+            def copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
+                return value if _borrow else deepcopy(value, memo)
+
             event_from = ScheduledEvent.from_saved if _saved_json else _event_from_document
             queue = EventQueue([event_from(item) for item in document["event_queue"]])
-            if len(_restored_events) > len(document["event_log"]):
+            leading = _restored_log if _restored_log is not None else _restored_events
+            if len(leading) > len(document["event_log"]):
                 raise StateInvariantError("restored EventLog records exceed the document")
-            log = EventLog(
-                [
-                    *_restored_events,
-                    *(
-                        EventLogRecord(
-                            event=event_from(item["event"]),
-                            realized_minute=item["realized_minute"],
-                            status=EventStatus(item["status"]),
-                            detail=item["detail"],
-                        )
-                        for item in document["event_log"][len(_restored_events) :]
-                    ),
-                ]
+            new_records = (
+                EventLogRecord(
+                    event=event_from(item["event"]),
+                    realized_minute=item["realized_minute"],
+                    status=EventStatus(item["status"]),
+                    detail=item["detail"],
+                )
+                for item in document["event_log"][len(leading) :]
             )
+            if _restored_log is not None:
+                log = _restored_log
+                for record in new_records:
+                    log.append(record)
+            else:
+                log = EventLog([*_restored_events, *new_records])
             world = cls(
                 scenario_id=document["scenario_id"],
                 seed=document["seed"],
@@ -1612,15 +1624,15 @@ class WorldState:
                 facilities=facilities,
                 staff=staff,
                 support_requests=support_requests,
-                resources=deepcopy(document["resources"]),
+                resources=copy(document["resources"]),
                 active_tasks=active_tasks,
                 event_queue=queue,
                 event_log=log,
-                rng_state=deepcopy(document["rng_state"]),
-                id_counters=deepcopy(document["id_counters"]),
-                metric_state=deepcopy(document["metric_state"]),
-                model_configs=deepcopy(document["model_configs"]),
-                model_state=deepcopy(document["model_state"], {id(item): item for item in _shared}),
+                rng_state=copy(document["rng_state"]),
+                id_counters=copy(document["id_counters"]),
+                metric_state=copy(document["metric_state"]),
+                model_configs=copy(document["model_configs"]),
+                model_state=copy(document["model_state"], {id(item): item for item in _shared}),
                 schema_version=document["schema_version"],
             )
             if _validate:
