@@ -76,6 +76,10 @@ class StateInvariantError(ValueError):
     """Raised when a world state violates a simulation invariant."""
 
 
+def _event_from_document(document: dict[str, Any]) -> ScheduledEvent:
+    return ScheduledEvent(**document)
+
+
 @dataclass
 class WorldState:
     """Mutable state owned by the engine/controller for one scenario run."""
@@ -1438,6 +1442,7 @@ class WorldState:
         _restored_events: Sequence[EventLogRecord] = (),
         _shared: Sequence[Any] = (),
         _validate: bool = True,
+        _saved_json: bool = False,
     ) -> WorldState:
         """Restore the exact current schema; older or unknown schemas fail closed.
 
@@ -1445,7 +1450,9 @@ class WorldState:
         _restored_events are records restored before from the same leading
         event_log documents, which are not parsed again, and the new world may keep
         the _shared model_state lists instead of copies. Without _validate the caller
-        validates the world, or shows it equals one validated already.
+        validates the world, or shows it equals one validated already. With
+        _saved_json the document was read from hash-checked canonical JSON, so event
+        payloads are not encoded again to check they are JSON (ScheduledEvent.from_saved).
         """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
@@ -1576,7 +1583,8 @@ class WorldState:
                 item["id"]: SupportRequestState(**item) for item in document["support_requests"]
             }
             active_tasks = {item["id"]: ActiveTask(**item) for item in document["active_tasks"]}
-            queue = EventQueue([ScheduledEvent(**item) for item in document["event_queue"]])
+            event_from = ScheduledEvent.from_saved if _saved_json else _event_from_document
+            queue = EventQueue([event_from(item) for item in document["event_queue"]])
             if len(_restored_events) > len(document["event_log"]):
                 raise StateInvariantError("restored EventLog records exceed the document")
             log = EventLog(
@@ -1584,7 +1592,7 @@ class WorldState:
                     *_restored_events,
                     *(
                         EventLogRecord(
-                            event=ScheduledEvent(**item["event"]),
+                            event=event_from(item["event"]),
                             realized_minute=item["realized_minute"],
                             status=EventStatus(item["status"]),
                             detail=item["detail"],

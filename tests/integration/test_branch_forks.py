@@ -94,3 +94,12 @@ def test_a_fork_at_a_saved_minute_takes_the_saved_checkpoint(
     )
     timeline.fork("main", 45, "between-saves")
     assert captures == [1]
+
+
+def test_a_fork_keeps_no_copy_of_the_world_it_read(tmp_path, saved_timeline) -> None:
+    """A fork reads its source once and hands the world to the child, so the store
+    keeps no copy of it for later reads (#257)."""
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 60)
+    timeline.fork("main", 30, "child")
+    assert store._restored == {}

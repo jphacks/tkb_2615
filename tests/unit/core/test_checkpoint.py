@@ -94,9 +94,9 @@ def test_paired_restore_constructs_one_validated_detached_world(monkeypatch) -> 
     original = WorldState.from_dict.__func__
     calls = []
 
-    def restore(cls, document):
+    def restore(cls, document, **kwargs):
         calls.append(document["minute_index"])
-        return original(cls, document)
+        return original(cls, document, **kwargs)
 
     monkeypatch.setattr(WorldState, "from_dict", classmethod(restore))
     restored_world, restored_metrics = checkpoint.restore_state()
