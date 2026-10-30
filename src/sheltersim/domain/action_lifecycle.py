@@ -32,10 +32,8 @@ _INTERRUPTED_ACTIONS = {
 def active_action_index(world: WorldState) -> dict[str, dict[str, Any]]:
     """Rebuild transient lookup state from persisted event evidence after restore."""
     active: dict[str, dict[str, Any]] = {}
-    for row in world.event_log.records:
+    for row in world.event_log.of_types({"agent_action_lifecycle"}):
         event = row.event
-        if event.event_type != "agent_action_lifecycle":
-            continue
         payload = event.payload
         agent_id = payload.get("agent_id")
         if not isinstance(agent_id, str):

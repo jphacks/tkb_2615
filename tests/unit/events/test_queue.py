@@ -265,3 +265,35 @@ def test_both_event_logs_answer_alike(make_event, implementation) -> None:
     assert copied == log and copied is not log and copied.find("e1") is records[1]
     copied.append(record(7, "c"))
     assert len(copied) == 8 and len(log) == 7
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_an_event_log_read_back_from_saved_bytes_makes_records_when_read(implementation) -> None:
+    """from_saved builds the indexes from the saved canonical JSON; the native store
+    makes a record object only when one is read, equal to the record saved."""
+    from sheltersim import native
+    from sheltersim.events.queue import (
+        _NativeEventLog,
+        _PythonEventLog,
+        record_bytes,
+        record_from_bytes,
+    )
+
+    if implementation == "native" and not native.available():
+        pytest.skip("the sheltersim_native extension is not installed")
+    log_type = _NativeEventLog if implementation == "native" else _PythonEventLog
+    records = _records(6, kinds=("a", "b"))
+    saved = [record_bytes(record) for record in records]
+    assert [record_from_bytes(raw) for raw in saved] == records
+    log = log_type.from_saved(saved)
+    if implementation == "native":
+        assert log._store.unread() == 6
+        assert log.find("e3") == records[3]
+        assert log._store.unread() == 5
+        assert log.of_types({"b"}) == [records[1], records[3], records[5]]
+        assert log._store.unread() == 3
+    assert log.records == tuple(records)
+    assert log.items_bytes(0, 6) == saved
+    assert log.with_provenance_object("marker") == records[1::2]
+    with pytest.raises(DuplicateEventError):
+        log_type.from_saved([saved[0], saved[0]])

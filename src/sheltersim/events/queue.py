@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import heapq
+import json
 import operator
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from sheltersim import native
-from sheltersim.events.models import EventLogRecord, ScheduledEvent
+from sheltersim.events.models import EventLogRecord, EventStatus, ScheduledEvent
 
 
 class DuplicateEventError(ValueError):
@@ -82,6 +83,28 @@ class EventQueue:
             raise ValueError("event queue contains duplicate event IDs")
         if len(sequences) != len(set(sequences)):
             raise ValueError("event queue contains duplicate event sequences")
+
+
+def record_bytes(record: EventLogRecord) -> bytes:
+    """The canonical JSON of record.to_dict(), as a Checkpoint saves the record."""
+    document = record.to_dict()
+    encoded = native.canonical_json(document)
+    if encoded is not None:
+        return encoded
+    return json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode()
+
+
+def record_from_bytes(raw: bytes) -> EventLogRecord:
+    """The record of saved canonical JSON, as WorldState.from_dict builds it."""
+    document = json.loads(raw)
+    return EventLogRecord(
+        event=ScheduledEvent.from_saved(document["event"]),
+        realized_minute=document["realized_minute"],
+        status=EventStatus(document["status"]),
+        detail=document["detail"],
+    )
 
 
 @dataclass
@@ -189,6 +212,15 @@ class _PythonEventLog:
 
     def last(self) -> EventLogRecord | None:
         return self._records[-1] if self._records else None
+
+    @classmethod
+    def from_saved(cls, items: Iterable[bytes]) -> _PythonEventLog:
+        """The EventLog of saved records, each the canonical JSON of its to_dict()."""
+        return cls([record_from_bytes(raw) for raw in items])
+
+    def items_bytes(self, start: int, end: int) -> list[bytes]:
+        """The canonical JSON of the records from start to end."""
+        return [record_bytes(record) for record in self._records[start:end]]
 
     def event_ids(self) -> list[str]:
         """The realized event IDs in append order."""
@@ -329,8 +361,25 @@ class _NativeEventLog:
 
     def __init__(self, _records: Iterable[EventLogRecord] = ()) -> None:
         self._store = native.event_store()
+        self._store.set_codecs(record_bytes, record_from_bytes)
         for record in _records:
             self.append(record)
+
+    @classmethod
+    def from_saved(cls, items: Iterable[bytes]) -> _NativeEventLog:
+        """The EventLog of saved records, each the canonical JSON of its to_dict().
+
+        Their indexes are read from the bytes; a record object is made when read.
+        """
+        log = cls()
+        refused = log._store.extend_saved(items)
+        if refused:
+            raise DuplicateEventError("saved EventLog repeats an event ID or sequence")
+        return log
+
+    def items_bytes(self, start: int, end: int) -> list[bytes]:
+        """The canonical JSON of the records from start to end."""
+        return self._store.items_bytes(start, end)
 
     def append(self, record: EventLogRecord) -> None:
         refused = self._store.append(record)

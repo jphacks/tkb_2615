@@ -416,16 +416,10 @@ def care_history_by_agent(world: WorldState, *, limit: int = 20) -> dict[str, li
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise ValueError("care history limit must be between 1 and 100")
     rows: dict[str, list[dict[str, Any]]] = {}
-    for record in world.event_log.records:
+    # The care event types' records, in append order, without reading the others.
+    for record in world.event_log.of_types({"care_support_transition", "staff_support_continuity"}):
         event = record.event
-        if (
-            event.event_type
-            not in {
-                "care_support_transition",
-                "staff_support_continuity",
-            }
-            or record.status is not EventStatus.APPLIED
-        ):
+        if record.status is not EventStatus.APPLIED:
             continue
         if event.event_type == "staff_support_continuity":
             receipt = StaffSupportContinuityReceipt.model_validate(event.payload)

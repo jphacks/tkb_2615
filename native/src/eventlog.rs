@@ -1,9 +1,12 @@
 //! The realized EventLog held in Rust (docs/rust-port.md, stage B1).
 //!
-//! The records stay the Python EventLogRecord objects the dispatcher appended; the
-//! indexes the EventLog keeps (ID, sequence, minute, event type, provenance object
-//! keys, care requests, completed support kinds, applied facility events) live
-//! here, so lookups and audits run without Python containers.
+//! Each record is a Python EventLogRecord object, its canonical JSON bytes, or both.
+//! A record appended by the simulation starts as the object; its bytes are made
+//! by the store's encoder when asked for. A record read back from a saved
+//! Checkpoint starts as the bytes; its object is made by the store's factory when
+//! Python reads it. The indexes the EventLog keeps (ID, sequence, minute, event
+//! type, provenance object keys, care requests, completed support kinds, applied
+//! facility events) live here, so lookups and audits need no record objects.
 //!
 //! Appending checks duplicate IDs and sequences and returns a code; the Python
 //! EventLog raises the same DuplicateEventError as before.
@@ -11,13 +14,29 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 
 struct Entry {
-    record: Py<PyAny>,
+    record: Option<Py<PyAny>>,
+    bytes: Option<Py<PyBytes>>,
     event_type: u32,
     applied: bool,
     minute: i64,
+}
+
+/// What the indexes read from one record.
+struct Fields {
+    event_id: String,
+    sequence: i64,
+    event_type: String,
+    minute: i64,
+    applied: bool,
+    request_id: Option<String>,
+    agent_id: Option<String>,
+    support_kind: Option<String>,
+    payload_status_completed: bool,
+    facility_id: Option<String>,
+    provenance_objects: Vec<String>,
 }
 
 #[pyclass(module = "sheltersim_native")]
@@ -37,6 +56,9 @@ pub struct EventStore {
     // Records an audit checked and the bounds it checked them against.
     audited: usize,
     audit_bounds: (Option<i64>, Option<i64>),
+    // record -> canonical bytes, and canonical bytes -> record (set from Python).
+    encoder: Option<Py<PyAny>>,
+    factory: Option<Py<PyAny>>,
 }
 
 fn mapping_get<'py>(
@@ -71,7 +93,101 @@ impl EventStore {
             applied_facility_events: HashMap::new(),
             audited: 0,
             audit_bounds: (None, None),
+            encoder: None,
+            factory: None,
         }
+    }
+
+    fn record_at(&mut self, py: Python<'_>, index: usize) -> PyResult<Py<PyAny>> {
+        if let Some(record) = &self.entries[index].record {
+            return Ok(record.clone_ref(py));
+        }
+        let bytes = self.entries[index].bytes.as_ref().unwrap().clone_ref(py);
+        let factory = self
+            .factory
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no record factory"))?;
+        let record = factory.call1(py, (bytes,))?;
+        self.entries[index].record = Some(record.clone_ref(py));
+        Ok(record)
+    }
+
+    fn bytes_at(&mut self, py: Python<'_>, index: usize) -> PyResult<Py<PyBytes>> {
+        if let Some(bytes) = &self.entries[index].bytes {
+            return Ok(bytes.clone_ref(py));
+        }
+        let record = self.entries[index].record.as_ref().unwrap().clone_ref(py);
+        let encoder = self
+            .encoder
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no record encoder"))?;
+        let bytes: Py<PyBytes> = encoder.call1(py, (record,))?.extract(py)?;
+        self.entries[index].bytes = Some(bytes.clone_ref(py));
+        Ok(bytes)
+    }
+
+    /// 0, or 1 for a realized ID, 2 for a realized sequence.
+    fn add(
+        &mut self,
+        fields: Fields,
+        record: Option<Py<PyAny>>,
+        bytes: Option<Py<PyBytes>>,
+    ) -> u8 {
+        if self.by_id.contains_key(&fields.event_id) {
+            return 1;
+        }
+        if self.sequences.contains(&fields.sequence) {
+            return 2;
+        }
+        let index = self.entries.len();
+        if fields.event_type == "care_support_transition" {
+            if let Some(request_id) = &fields.request_id {
+                self.first_care_request
+                    .entry(request_id.clone())
+                    .or_insert_with(|| fields.event_id.clone());
+            }
+            if let (true, true, Some(agent), Some(kind)) = (
+                fields.applied,
+                fields.payload_status_completed,
+                &fields.agent_id,
+                &fields.support_kind,
+            ) {
+                let kinds = self.completed_support_kinds.entry(agent.clone()).or_default();
+                if !kinds.contains(kind) {
+                    kinds.push(kind.clone());
+                }
+            }
+        }
+        if fields.applied
+            && (fields.event_type == "facility_outage" || fields.event_type == "facility_recovery")
+        {
+            if let Some(facility_id) = &fields.facility_id {
+                let events = self
+                    .applied_facility_events
+                    .entry(facility_id.clone())
+                    .or_default();
+                if !events.contains(&fields.event_id) {
+                    events.push(fields.event_id.clone());
+                }
+            }
+        }
+        for key in fields.provenance_objects {
+            self.by_provenance.entry(key).or_default().push(index);
+        }
+        let type_id = self.type_id(&fields.event_type);
+        self.entries.push(Entry {
+            record,
+            bytes,
+            event_type: type_id,
+            applied: fields.applied,
+            minute: fields.minute,
+        });
+        self.by_id.insert(fields.event_id, index);
+        self.sequences.insert(fields.sequence);
+        self.max_sequence = self.max_sequence.max(fields.sequence);
+        self.by_minute.entry(fields.minute).or_default().push(index);
+        self.by_type.entry(type_id).or_default().push(index);
+        0
     }
 
     fn type_id(&mut self, name: &str) -> u32 {
@@ -84,8 +200,12 @@ impl EventStore {
         id
     }
 
-    fn records_of(&self, py: Python<'_>, indices: impl Iterator<Item = usize>) -> Vec<Py<PyAny>> {
-        indices.map(|index| self.entries[index].record.clone_ref(py)).collect()
+    fn records_of(
+        &mut self,
+        py: Python<'_>,
+        indices: impl Iterator<Item = usize>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        indices.map(|index| self.record_at(py, index)).collect()
     }
 }
 
@@ -96,77 +216,42 @@ impl EventStore {
         Self::empty()
     }
 
+    /// The encoder (record -> canonical JSON bytes) and factory (bytes -> record).
+    fn set_codecs(&mut self, encoder: Py<PyAny>, factory: Py<PyAny>) {
+        self.encoder = Some(encoder);
+        self.factory = Some(factory);
+    }
+
     /// Append one EventLogRecord: 0, or 1 for a realized ID, 2 for a realized sequence.
     fn append(&mut self, record: &Bound<'_, PyAny>) -> PyResult<u8> {
-        let event = record.getattr("event")?;
-        let event_id: String = event.getattr("event_id")?.extract()?;
-        let sequence: i64 = event.getattr("sequence")?.extract()?;
-        if self.by_id.contains_key(&event_id) {
-            return Ok(1);
-        }
-        if self.sequences.contains(&sequence) {
-            return Ok(2);
-        }
-        let event_type: String = event.getattr("event_type")?.extract()?;
-        let minute: i64 = record.getattr("realized_minute")?.extract()?;
-        let status: String = record.getattr("status")?.getattr("value")?.extract()?;
-        let applied = status == "applied";
-        let payload = event.getattr("payload")?;
-        let index = self.entries.len();
-        if event_type == "care_support_transition" {
-            if let Some(request_id) = as_str(&mapping_get(&payload, "request_id")?) {
-                self.first_care_request
-                    .entry(request_id)
-                    .or_insert_with(|| event_id.clone());
-            }
-            let agent_id = as_str(&mapping_get(&payload, "agent_id")?);
-            let support_kind = as_str(&mapping_get(&payload, "support_kind")?);
-            let completed = mapping_get(&payload, "status")?
-                .map(|value| value.eq("completed"))
-                .transpose()?
-                .unwrap_or(false);
-            if let (true, true, Some(agent), Some(kind)) = (applied, completed, agent_id, support_kind)
-            {
-                let kinds = self.completed_support_kinds.entry(agent).or_default();
-                if !kinds.contains(&kind) {
-                    kinds.push(kind);
-                }
-            }
-        }
-        if applied && (event_type == "facility_outage" || event_type == "facility_recovery") {
-            if let Some(facility_id) = as_str(&mapping_get(&payload, "facility_id")?) {
-                let events = self.applied_facility_events.entry(facility_id).or_default();
-                if !events.contains(&event_id) {
-                    events.push(event_id.clone());
-                }
-            }
-        }
-        let provenance = event.getattr("provenance")?;
-        // isinstance(value, collections.abc.Mapping), as the Python EventLog checks.
-        let mapping_type = record.py().import("collections.abc")?.getattr("Mapping")?;
-        let items = provenance.call_method0("items")?;
+        let fields = fields_of_record(record)?;
+        Ok(self.add(fields, Some(record.clone().unbind()), None))
+    }
+
+    /// Append records saved as canonical JSON bytes (event_log documents of a
+    /// Checkpoint), in order: 0, or the code of the first refused one.
+    fn extend_saved(&mut self, items: &Bound<'_, PyAny>) -> PyResult<u8> {
         for item in items.try_iter()? {
             let item = item?;
-            let pair = item.downcast::<PyTuple>()?;
-            let value = pair.get_item(1)?;
-            if value.is_instance(&mapping_type)? {
-                let key: String = pair.get_item(0)?.extract()?;
-                self.by_provenance.entry(key).or_default().push(index);
+            let bytes = item.downcast::<PyBytes>()?;
+            let fields = fields_of_bytes(bytes.as_bytes())?;
+            let refused = self.add(fields, None, Some(bytes.clone().unbind()));
+            if refused != 0 {
+                return Ok(refused);
             }
         }
-        let type_id = self.type_id(&event_type);
-        self.entries.push(Entry {
-            record: record.clone().unbind(),
-            event_type: type_id,
-            applied,
-            minute,
-        });
-        self.by_id.insert(event_id, index);
-        self.sequences.insert(sequence);
-        self.max_sequence = self.max_sequence.max(sequence);
-        self.by_minute.entry(minute).or_default().push(index);
-        self.by_type.entry(type_id).or_default().push(index);
         Ok(0)
+    }
+
+    /// The canonical JSON bytes of the records from start to end.
+    fn items_bytes(&mut self, py: Python<'_>, start: usize, end: usize) -> PyResult<Vec<Py<PyBytes>>> {
+        let end = end.min(self.entries.len());
+        (start.min(end)..end).map(|index| self.bytes_at(py, index)).collect()
+    }
+
+    /// How many records have no object yet (read back and not read since).
+    fn unread(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.record.is_none()).count()
     }
 
     fn __len__(&self) -> usize {
@@ -186,11 +271,14 @@ impl EventStore {
         self.max_sequence
     }
 
-    fn find(&self, py: Python<'_>, event_id: &Bound<'_, PyAny>) -> Option<Py<PyAny>> {
-        let event_id = event_id.downcast::<PyString>().ok()?.to_str().ok()?;
-        self.by_id
-            .get(event_id)
-            .map(|index| self.entries[*index].record.clone_ref(py))
+    fn find(&mut self, py: Python<'_>, event_id: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+        let Ok(text) = event_id.downcast::<PyString>() else {
+            return Ok(None);
+        };
+        match self.by_id.get(text.to_str()?).copied() {
+            Some(index) => Ok(Some(self.record_at(py, index)?)),
+            None => Ok(None),
+        }
     }
 
     fn first_care_request_event(&self, request_id: &str) -> Option<String> {
@@ -211,11 +299,9 @@ impl EventStore {
             .unwrap_or_default()
     }
 
-    fn at_minute(&self, py: Python<'_>, minute: i64) -> Vec<Py<PyAny>> {
-        match self.by_minute.get(&minute) {
-            Some(indices) => self.records_of(py, indices.iter().copied()),
-            None => Vec::new(),
-        }
+    fn at_minute(&mut self, py: Python<'_>, minute: i64) -> PyResult<Vec<Py<PyAny>>> {
+        let indices = self.by_minute.get(&minute).cloned().unwrap_or_default();
+        self.records_of(py, indices.into_iter())
     }
 
     fn event_types(&self) -> Vec<String> {
@@ -225,14 +311,12 @@ impl EventStore {
             .collect()
     }
 
-    fn with_provenance_object(&self, py: Python<'_>, key: &str) -> Vec<Py<PyAny>> {
-        match self.by_provenance.get(key) {
-            Some(indices) => self.records_of(py, indices.iter().copied()),
-            None => Vec::new(),
-        }
+    fn with_provenance_object(&mut self, py: Python<'_>, key: &str) -> PyResult<Vec<Py<PyAny>>> {
+        let indices = self.by_provenance.get(key).cloned().unwrap_or_default();
+        self.records_of(py, indices.into_iter())
     }
 
-    fn of_types(&self, py: Python<'_>, event_types: &Bound<'_, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
+    fn of_types(&mut self, py: Python<'_>, event_types: &Bound<'_, PyAny>) -> PyResult<Vec<Py<PyAny>>> {
         let mut indices: Vec<usize> = Vec::new();
         let mut seen: HashSet<u32> = HashSet::new();
         for name in event_types.try_iter()? {
@@ -251,18 +335,22 @@ impl EventStore {
         if seen.len() > 1 {
             indices.sort_unstable();
         }
-        Ok(self.records_of(py, indices.into_iter()))
+        self.records_of(py, indices.into_iter())
     }
 
     /// The records from start on, in append order.
     #[pyo3(signature = (start=0))]
-    fn records_from(&self, py: Python<'_>, start: usize) -> Vec<Py<PyAny>> {
+    fn records_from(&mut self, py: Python<'_>, start: usize) -> PyResult<Vec<Py<PyAny>>> {
         let start = start.min(self.entries.len());
-        self.records_of(py, start..self.entries.len())
+        let end = self.entries.len();
+        self.records_of(py, start..end)
     }
 
-    fn last(&self, py: Python<'_>) -> Option<Py<PyAny>> {
-        self.entries.last().map(|entry| entry.record.clone_ref(py))
+    fn last(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        match self.entries.len() {
+            0 => Ok(None),
+            length => Ok(Some(self.record_at(py, length - 1)?)),
+        }
     }
 
     fn event_ids<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
@@ -271,15 +359,16 @@ impl EventStore {
         PyList::new(py, ids.into_iter().map(|(id, _)| id.as_str()))
     }
 
-    fn recent(&self, py: Python<'_>, limit: usize) -> Vec<Py<PyAny>> {
-        let start = self.entries.len().saturating_sub(limit);
-        self.records_of(py, start..self.entries.len())
+    fn recent(&mut self, py: Python<'_>, limit: usize) -> PyResult<Vec<Py<PyAny>>> {
+        let end = self.entries.len();
+        let start = end.saturating_sub(limit);
+        self.records_of(py, start..end)
     }
 
     /// Up to limit applied records of event_types from the end, scanning at most
     /// scan_limit records, in append order; and whether records were left unscanned.
     fn recent_matching(
-        &self,
+        &mut self,
         py: Python<'_>,
         event_types: &Bound<'_, PyAny>,
         limit: usize,
@@ -310,7 +399,8 @@ impl EventStore {
             }
         }
         found.reverse();
-        Ok((self.records_of(py, found.into_iter()), scanned < self.entries.len()))
+        let more = scanned < self.entries.len();
+        Ok((self.records_of(py, found.into_iter())?, more))
     }
 
     /// Audit realization times: 0, 3 for a future realization, 4 for one outside the
@@ -349,7 +439,8 @@ impl EventStore {
                 .entries
                 .iter()
                 .map(|entry| Entry {
-                    record: entry.record.clone_ref(py),
+                    record: entry.record.as_ref().map(|record| record.clone_ref(py)),
+                    bytes: entry.bytes.as_ref().map(|bytes| bytes.clone_ref(py)),
                     event_type: entry.event_type,
                     applied: entry.applied,
                     minute: entry.minute,
@@ -368,6 +459,8 @@ impl EventStore {
             applied_facility_events: self.applied_facility_events.clone(),
             audited: self.audited,
             audit_bounds: self.audit_bounds,
+            encoder: self.encoder.as_ref().map(|encoder| encoder.clone_ref(py)),
+            factory: self.factory.as_ref().map(|factory| factory.clone_ref(py)),
         }
     }
 
@@ -379,4 +472,80 @@ impl EventStore {
         sizes.set_item("sequences", self.sequences.len())?;
         Ok(sizes)
     }
+}
+
+fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
+    let event = record.getattr("event")?;
+    let payload = event.getattr("payload")?;
+    let status: String = record.getattr("status")?.getattr("value")?.extract()?;
+    let mut provenance_objects = Vec::new();
+    // isinstance(value, collections.abc.Mapping), as the Python EventLog checks.
+    let mapping_type = record.py().import("collections.abc")?.getattr("Mapping")?;
+    for item in event.getattr("provenance")?.call_method0("items")?.try_iter()? {
+        let item = item?;
+        let pair = item.downcast::<PyTuple>()?;
+        if pair.get_item(1)?.is_instance(&mapping_type)? {
+            provenance_objects.push(pair.get_item(0)?.extract()?);
+        }
+    }
+    Ok(Fields {
+        event_id: event.getattr("event_id")?.extract()?,
+        sequence: event.getattr("sequence")?.extract()?,
+        event_type: event.getattr("event_type")?.extract()?,
+        minute: record.getattr("realized_minute")?.extract()?,
+        applied: status == "applied",
+        request_id: as_str(&mapping_get(&payload, "request_id")?),
+        agent_id: as_str(&mapping_get(&payload, "agent_id")?),
+        support_kind: as_str(&mapping_get(&payload, "support_kind")?),
+        payload_status_completed: mapping_get(&payload, "status")?
+            .map(|value| value.eq("completed"))
+            .transpose()?
+            .unwrap_or(false),
+        facility_id: as_str(&mapping_get(&payload, "facility_id")?),
+        provenance_objects,
+    })
+}
+
+fn bad_document(what: &str) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("saved EventLog record: {what}"))
+}
+
+fn fields_of_bytes(bytes: &[u8]) -> PyResult<Fields> {
+    use serde_json::Value;
+    let document: Value =
+        serde_json::from_slice(bytes).map_err(|error| bad_document(&error.to_string()))?;
+    let event = document.get("event").ok_or_else(|| bad_document("no event"))?;
+    let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
+    let payload = event.get("payload");
+    let payload_text = |key: &str| text(payload.and_then(|value| value.get(key)));
+    let mut provenance_objects = Vec::new();
+    if let Some(Value::Object(provenance)) = event.get("provenance") {
+        for (key, value) in provenance {
+            if value.is_object() {
+                provenance_objects.push(key.clone());
+            }
+        }
+    }
+    Ok(Fields {
+        event_id: text(event.get("event_id")).ok_or_else(|| bad_document("event_id"))?,
+        sequence: event
+            .get("sequence")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| bad_document("sequence"))?,
+        event_type: text(event.get("event_type")).ok_or_else(|| bad_document("event_type"))?,
+        minute: document
+            .get("realized_minute")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| bad_document("realized_minute"))?,
+        applied: document.get("status").and_then(Value::as_str) == Some("applied"),
+        request_id: payload_text("request_id"),
+        agent_id: payload_text("agent_id"),
+        support_kind: payload_text("support_kind"),
+        payload_status_completed: payload
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            == Some("completed"),
+        facility_id: payload_text("facility_id"),
+        provenance_objects,
+    })
 }
