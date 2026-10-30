@@ -309,12 +309,15 @@ def test_world_rejects_psychology_values_outside_zero_to_one(field: str, value: 
         world.validate()
 
 
-def test_state_digest_is_the_storage_digest_of_the_world_document(live_checkpoint_world) -> None:
-    """state_digest() hashes canonical_json() directly; re-encoding to_dict() gives the
-    same text, including escaped and non-ASCII strings and floats."""
+def test_state_digest_is_the_state_hash_of_a_checkpoint_of_the_world(
+    live_checkpoint_world,
+) -> None:
+    """state_digest() converts only what a save converts; it gives the hash of to_dict()
+    and of a Checkpoint, including escaped and non-ASCII strings and floats."""
+    from sheltersim.core.checkpoint import Checkpoint
+    from sheltersim.core.checkpoint_cache import CanonicalEncoder
     from sheltersim.events.handlers import EventDispatcher
     from sheltersim.events.models import EventKind, ScheduledEvent
-    from sheltersim.storage.projects import digest
 
     world = live_checkpoint_world
     world.schedule_event(
@@ -329,7 +332,8 @@ def test_state_digest_is_the_storage_digest_of_the_world_document(live_checkpoin
         )
     )
     EventDispatcher().dispatch_due(world, world.minute_index)
-    assert world.state_digest() == digest(world.to_dict())
+    assert world.state_digest() == CanonicalEncoder().world_tree_digest(world.to_dict())
+    assert world.state_digest() == Checkpoint.capture(world).state_hash
 
 
 def test_same_state_compares_every_field_and_skips_only_known_equal_records() -> None:

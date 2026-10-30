@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from sheltersim.core.checkpoint import Checkpoint, _digest
+from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
 
 
@@ -24,10 +24,9 @@ def test_prequeue_checkpoint_keeps_legacy_fifo_mode_and_can_be_saved_again(
     legacy_world = deepcopy(document["world_state"])
     legacy_world["model_state"].pop(FACILITY_QUEUES_STATE_KEY)
     document["world_state"] = legacy_world
-    document["state_hash"] = _digest(legacy_world)
     document["model_versions"].pop("simulator:facility_queues_v1")
-    document.pop("checkpoint_hash")
-    document["checkpoint_hash"] = _digest(document)
+    document["state_hash"] = Checkpoint.document_hashes(document)[0]
+    document["checkpoint_hash"] = Checkpoint.document_hashes(document)[1]
 
     restored = Checkpoint.from_dict(document).restore_world()
     assert restored.model_state[FACILITY_QUEUES_LEGACY_MODE_KEY]["mode"] == (

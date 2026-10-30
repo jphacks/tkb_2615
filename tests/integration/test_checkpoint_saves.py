@@ -139,10 +139,10 @@ def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch, saved_timeli
     checked = []
     original = projects._reject_sensitive_checkpoint_content
 
-    def check(value):
+    def check(value, raw=None):
         if not (isinstance(value, dict) and all(item is None for item in value.values())):
             checked.append(value)
-        original(value)
+        original(value, raw)
 
     monkeypatch.setattr(projects, "_reject_sensitive_checkpoint_content", check)
     reference, head = store.load_branch("p", "r", "main")

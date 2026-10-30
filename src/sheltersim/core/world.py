@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Sequence
 from copy import deepcopy
@@ -1431,9 +1430,12 @@ class WorldState:
         return json.loads(self.canonical_json())
 
     def state_digest(self) -> str:
-        """The SHA-256 of canonical_json(): storage digest(to_dict()), whose canonical
-        JSON is the same text, without parsing it back and encoding it again."""
-        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+        """The state_hash a Checkpoint of this world holds, from a validated world."""
+        from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+
+        self.validate()
+        document, _, encoder = CheckpointHistoryCache().documents(self, None)
+        return encoder.world_tree_digest(document)
 
     @classmethod
     def from_dict(

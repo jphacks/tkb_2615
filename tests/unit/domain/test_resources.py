@@ -88,7 +88,7 @@ def test_resource_ledger_is_opt_in_strict_and_world_checkpoint_roundtrips(
     metrics = MetricsRecorder()
     metrics.capture(world, minute=0)
     checkpoint = Checkpoint.from_json(Checkpoint.capture(world, metrics=metrics).to_json())
-    assert checkpoint.schema_version == 1
+    assert checkpoint.schema_version == 2
     assert checkpoint.world_state_schema_version == 5
     assert checkpoint.restore_world().canonical_json() == world.canonical_json()
     assert checkpoint.restore_metrics().to_dict() == metrics.to_dict()

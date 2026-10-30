@@ -6,6 +6,7 @@ is checked in tests/integration/test_checkpoint_resume.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -170,7 +171,7 @@ def test_checkpoint_has_independent_schema_and_captures_every_runtime_state(
         expected_model_versions=restored_checkpoint.model_versions
     )
 
-    assert checkpoint.schema_version == restored_checkpoint.schema_version == 1
+    assert checkpoint.schema_version == restored_checkpoint.schema_version == 2
     assert checkpoint.world_state_schema_version == world.schema_version == 5
     assert restored.canonical_json() == world.canonical_json()
     assert restored.event_queue.pending() == world.event_queue.pending()
@@ -191,9 +192,9 @@ def test_checkpoint_fails_closed_for_versions_corruption_and_model_mismatch(
     checkpoint = Checkpoint.capture(live_checkpoint_world)
     document = checkpoint.to_dict()
 
-    old_checkpoint = dict(document, schema_version=2)
+    unknown_checkpoint = dict(document, schema_version=3)
     with pytest.raises(CheckpointError, match="checkpoint schema"):
-        Checkpoint.from_dict(old_checkpoint)
+        Checkpoint.from_dict(unknown_checkpoint)
 
     extended_checkpoint = dict(document, unexpected_contract_field=True)
     with pytest.raises(CheckpointError, match="fields do not match"):
@@ -215,19 +216,20 @@ def test_checkpoint_fails_closed_for_versions_corruption_and_model_mismatch(
 def test_capture_hashes_once_and_later_reads_still_detect_mutation(
     monkeypatch, live_checkpoint_world
 ) -> None:
-    import sheltersim.core.checkpoint as module
-
     world_digests, body_digests = [], []
-    original = module._digest
+    original_world = CanonicalEncoder.world_tree_digest
+    original_body = CanonicalEncoder.body_tree_digest
 
-    def digest(value):
-        if isinstance(value, dict) and "event_log" in value:
-            world_digests.append(1)
-        if isinstance(value, dict) and "world_state" in value:
-            body_digests.append(1)
-        return original(value)
+    def world_digest(self, value):
+        world_digests.append(1)
+        return original_world(self, value)
 
-    monkeypatch.setattr(module, "_digest", digest)
+    def body_digest(self, value):
+        body_digests.append(1)
+        return original_body(self, value)
+
+    monkeypatch.setattr(CanonicalEncoder, "world_tree_digest", world_digest)
+    monkeypatch.setattr(CanonicalEncoder, "body_tree_digest", body_digest)
     checkpoint = Checkpoint.capture(live_checkpoint_world)
     assert (len(world_digests), len(body_digests)) == (1, 1)
     monkeypatch.undo()
@@ -288,10 +290,9 @@ def _with_saved_event_log(checkpoint: Checkpoint, encode) -> dict:
     world["event_log"] = SavedItems(raws)
     encoder = CanonicalEncoder()
     encoder.splice(world["event_log"], raws, world)
-    document["state_hash"] = encoder.digest(world)
+    document["state_hash"] = encoder.world_tree_digest(world)
     body = {key: value for key, value in document.items() if key != "checkpoint_hash"}
-    encoder.contain(body)
-    document["checkpoint_hash"] = encoder.digest(body)
+    document["checkpoint_hash"] = encoder.body_tree_digest(body)
     return document
 
 
@@ -334,3 +335,201 @@ def test_a_saved_event_record_that_is_not_canonical_json_fails_closed(
     )
     with pytest.raises(CheckpointError, match="unknown event status"):
         Checkpoint._load(unknown)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _tree_object(hashes: dict[str, str]) -> str:
+    return _sha256(b"\0sheltersim-tree-object\0" + _canonical(hashes))
+
+
+def _tree_list(items: list) -> str:
+    chunks = [_sha256(_canonical(items[i : i + 128])) for i in range(0, len(items), 128)]
+    return _sha256(b"\0sheltersim-tree-list\0" + _canonical([len(items), chunks]))
+
+
+def _tree_v2_document() -> dict:
+    return {
+        "schema_version": 2,
+        "world_state_schema_version": 5,
+        "scenario_id": "s",
+        "simulation_minute": 3,
+        "state_hash": "0" * 64,
+        "model_versions": {"m": "1"},
+        "world_state": {
+            "event_log": [{"item": index, "text": "あ"} for index in range(300)],
+            "model_state": {
+                "body_state_v1": {
+                    "agents": {"a": 1},
+                    "history": [{"minute": index} for index in range(129)],
+                },
+                "social_network_v1": {"relationships": [1, 2]},
+            },
+            "resources": {"water": 1.5},
+        },
+        "metrics_state": {"schema_version": 4, "snapshots": [[index] for index in range(128)]},
+        "runtime_state": {"history": [1]},
+        "checkpoint_hash": "0" * 64,
+    }
+
+
+def test_the_v2_hashes_are_the_tree_of_the_documented_rule() -> None:
+    """The rule written out here is the saved format: a change of it needs a new version."""
+    document = _tree_v2_document()
+    world = document["world_state"]
+    model_state = world["model_state"]
+    state_hash = _tree_object(
+        {
+            "event_log": _tree_list(world["event_log"]),
+            "model_state": _tree_object(
+                {
+                    "body_state_v1": _tree_object(
+                        {
+                            "agents": _sha256(_canonical(model_state["body_state_v1"]["agents"])),
+                            "history": _tree_list(model_state["body_state_v1"]["history"]),
+                        }
+                    ),
+                    "social_network_v1": _sha256(_canonical(model_state["social_network_v1"])),
+                }
+            ),
+            "resources": _sha256(_canonical(world["resources"])),
+        }
+    )
+    document["state_hash"] = state_hash
+    body_hashes = {
+        key: _sha256(_canonical(value))
+        for key, value in document.items()
+        if key not in {"world_state", "metrics_state", "checkpoint_hash"}
+    }
+    body_hashes["world_state"] = state_hash
+    body_hashes["metrics_state"] = _tree_object(
+        {
+            "schema_version": _sha256(b"4"),
+            "snapshots": _tree_list(document["metrics_state"]["snapshots"]),
+        }
+    )
+    assert Checkpoint.document_hashes(document) == (state_hash, _tree_object(body_hashes))
+
+
+def _changed(change) -> dict:
+    document = _tree_v2_document()
+    change(document)
+    return document
+
+
+def _swap(items: list, first: int, second: int) -> None:
+    items[first], items[second] = items[second], items[first]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["world_state"]["event_log"][0].update(item=-1),
+        lambda d: d["world_state"]["event_log"][127].update(item=-1),
+        lambda d: d["world_state"]["event_log"][128].update(item=-1),
+        lambda d: d["world_state"]["event_log"][-1].update(text="い"),
+        lambda d: d["world_state"]["event_log"].pop(),
+        lambda d: d["world_state"]["event_log"].pop(0),
+        lambda d: d["world_state"]["event_log"].append({"item": 300}),
+        lambda d: _swap(d["world_state"]["event_log"], 127, 128),
+        lambda d: _swap(d["world_state"]["event_log"], 10, 20),
+        lambda d: d["world_state"]["model_state"]["body_state_v1"]["history"][128].update(minute=0),
+        lambda d: d["world_state"]["model_state"]["body_state_v1"]["agents"].update(a=2),
+        lambda d: d["world_state"]["model_state"]["social_network_v1"]["relationships"].append(3),
+        lambda d: d["world_state"]["resources"].update(water=1.0),
+        lambda d: d["world_state"].update(extra=None),
+        lambda d: d["world_state"].update(event_log={}),
+        lambda d: d["metrics_state"]["snapshots"].__setitem__(5, [-1]),
+        lambda d: d["runtime_state"]["history"].append(2),
+        lambda d: d["model_versions"].update(m="2"),
+        lambda d: d.update(simulation_minute=4),
+    ],
+)
+def test_any_change_of_a_document_changes_the_v2_hash(change) -> None:
+    before = Checkpoint.document_hashes(_tree_v2_document())
+    assert Checkpoint.document_hashes(_changed(change))[1] != before[1]
+
+
+def test_the_v2_hash_of_spliced_bytes_is_the_hash_of_the_document(monkeypatch) -> None:
+    """Hashes from cached item bytes, by Rust or Python, equal those of a plain document."""
+    document = _tree_v2_document()
+    expected = Checkpoint.document_hashes(document)
+    for kernel in (native.chunk_hashes, lambda *_: None):
+        monkeypatch.setattr(native, "chunk_hashes", kernel)
+        encoder = CanonicalEncoder()
+        world = dict(document["world_state"])
+        raws = [_canonical(item) for item in world["event_log"]]
+        world["event_log"] = list(world["event_log"])
+        encoder.splice(world["event_log"], raws, world)
+        assert encoder.world_tree_digest(world) == expected[0]
+        # A second digest reuses the chunk hashes: only a new chunk's items are read.
+        repeat = CanonicalEncoder(encoder.chunk_keys)
+        repeat.splice(world["event_log"], raws, world)
+        monkeypatch.setattr(native, "chunk_hashes", lambda *_: pytest.fail("hashed again"))
+        assert repeat.world_tree_digest(world) == expected[0]
+
+
+def _v1_document(checkpoint: Checkpoint) -> dict:
+    """The document as Checkpoint v1 saved it: both hashes over all of its canonical JSON."""
+    document = json.loads(checkpoint.to_json())
+    document["schema_version"] = 1
+    document["state_hash"] = _sha256(_canonical(document["world_state"]))
+    del document["checkpoint_hash"]
+    document["checkpoint_hash"] = _sha256(_canonical(document))
+    return document
+
+
+def test_a_v1_checkpoint_loads_and_verifies_under_its_own_rule(live_checkpoint_world) -> None:
+    """Old saves stay readable; what is saved from them is the current version."""
+    current = Checkpoint.capture(live_checkpoint_world)
+    document = _v1_document(current)
+    assert document["state_hash"] != current.state_hash
+
+    loaded = Checkpoint.from_json(json.dumps(document))
+    assert (loaded.schema_version, loaded.state_hash) == (1, document["state_hash"])
+    assert json.loads(loaded.to_json()) == document
+    assert Checkpoint.document_hashes(document) == (
+        document["state_hash"],
+        document["checkpoint_hash"],
+    )
+    world = loaded.restore_world()
+    assert world.canonical_json() == live_checkpoint_world.canonical_json()
+
+    again = Checkpoint.capture(world)
+    assert again.schema_version == 2
+    assert again.state_hash == current.state_hash
+
+
+def test_a_tampered_v1_or_relabelled_checkpoint_fails_closed(live_checkpoint_world) -> None:
+    current = Checkpoint.capture(live_checkpoint_world)
+    document = _v1_document(current)
+    tampered = json.loads(json.dumps(document))
+    tampered["world_state"]["resources"]["water"] = 500
+    with pytest.raises(CheckpointError, match="WorldState integrity hash mismatch"):
+        Checkpoint.from_dict(tampered)
+    tampered = json.loads(json.dumps(document))
+    tampered["runtime_state"]["added"] = 1
+    with pytest.raises(CheckpointError, match="^checkpoint integrity hash mismatch"):
+        Checkpoint.from_dict(tampered)
+    # The hash rule follows the version, so changing the version breaks the hashes.
+    with pytest.raises(CheckpointError, match="hash mismatch"):
+        Checkpoint.from_dict(dict(document, schema_version=2))
+    with pytest.raises(CheckpointError, match="hash mismatch"):
+        Checkpoint.from_dict(dict(current.to_dict(), schema_version=1))
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the Rust EventLog")
+def test_a_changed_saved_event_record_fails_closed_under_the_tree_hash(
+    live_checkpoint_world,
+) -> None:
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    document = _with_saved_event_log(checkpoint, _canonical)
+    events = document["world_state"]["event_log"]
+    assert len(events)
+    item = json.loads(events.raws[0])
+    item["detail"] = "changed"
+    events.raws[0] = _canonical(item)
+    with pytest.raises(CheckpointError, match="WorldState integrity hash mismatch"):
+        Checkpoint._load(document)

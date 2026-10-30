@@ -1,13 +1,20 @@
 """Reuse one writer's conversions of append-only history between Checkpoint saves.
 
-A Checkpoint v1 holds the whole WorldState and KPI history, and its hashes and
-archive chunks cover the canonical JSON of all of it. Most of that is history that
-only grows: realized EventLog records, KPI and resource samples, and model_state
-histories such as the body-state window. A writer that saves every 30 minutes
-keeps, for each item it saved before, the JSON document, its canonical bytes and
-(for EventLog records) the record that the save's restore check made from that
-document. The next save converts, encodes and restores only the new items, and
-still produces the bytes, hashes and chunks of a full capture.
+A Checkpoint holds the whole WorldState and KPI history, and its hashes and archive
+chunks cover the canonical JSON of all of it. Most of that is history that only
+grows: realized EventLog records, KPI and resource samples, and model_state histories
+such as the body-state window. A writer that saves every 30 minutes keeps, for each
+item it saved before, the JSON document, its canonical bytes and (for EventLog
+records) the record that the save's restore check made from that document. The next
+save converts, encodes and restores only the new items, and still produces the bytes,
+hashes and chunks of a full capture.
+
+The hashes of a Checkpoint v2 are hash trees (docs/rust-port.md, B3). A list on a
+history path is hashed as its count and the SHA-256 of each run of TREE_CHUNK_ITEMS
+items, which are the archive's chunk keys, so a save hashes only new chunks. Any other
+value is a leaf, the SHA-256 of its canonical JSON. An object on the path to a history
+is hashed as the hashes of its fields. The rule reads nothing but the document, so a
+reader without any of these caches gets the same hashes.
 
 Items are matched by identity, and the cache holds a reference to each one so an
 id is never reused while it is cached. EventLog records and KPI snapshots are
@@ -25,6 +32,7 @@ from copy import deepcopy
 from dataclasses import asdict, fields
 from typing import Any
 
+from sheltersim import native
 from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
@@ -46,6 +54,28 @@ def canonical_bytes(value: Any) -> bytes:
 
 # Items of a spliced list joined at a time when only a hash of the bytes is needed.
 _HASH_BATCH = 512
+
+# How many items each hash of a history list covers (a Checkpoint v2 hash rule), and
+# the archive's default for its chunks, so that the same bytes are hashed once.
+TREE_CHUNK_ITEMS = 128
+
+# The lists a Checkpoint v2 hash splits into chunks (None), by their path. Part of the
+# hash rule: changing it needs a new Checkpoint version.
+_WORLD_TREE: dict[str, Any] = {
+    "event_log": None,
+    "model_state": {
+        "body_state_v1": {"history": None},
+        "shared_operations_v1": {"history": None},
+        "resource_ledger_v1": {"audit": None},
+        "resource_service_v1": {"request_history": None, "queue_stall_history": None},
+    },
+}
+_METRICS_TREE: dict[str, Any] = {"snapshots": None, "resource_snapshots": None}
+_BODY_TREE: dict[str, Any] = {"world_state": _WORLD_TREE, "metrics_state": _METRICS_TREE}
+
+# Inner nodes start with NUL, which canonical JSON (the bytes of a leaf) never does.
+_TREE_LIST = b"\0sheltersim-tree-list\0"
+_TREE_OBJECT = b"\0sheltersim-tree-object\0"
 
 
 class CanonicalEncoder:
@@ -71,6 +101,7 @@ class CanonicalEncoder:
         self._lists: dict[int, tuple[list[Any], list[bytes]]] = {}
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
+        self._tree_nodes: dict[int, tuple[Any, str]] = {}
 
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
@@ -173,10 +204,74 @@ class CanonicalEncoder:
         return len(self._leaf(value))
 
     def digest(self, value: Any) -> str:
+        """The SHA-256 of canonical_bytes(value): the hash rule of a Checkpoint v1."""
         hasher = hashlib.sha256()
         for part in self.parts(value, joined=False):
             hasher.update(part)
         return hasher.hexdigest()
+
+    def world_tree_digest(self, world_document: dict[str, Any]) -> str:
+        """The state_hash of a Checkpoint v2 holding world_document."""
+        return self._tree_node(world_document, _WORLD_TREE)
+
+    def body_tree_digest(self, body: dict[str, Any]) -> str:
+        """The checkpoint_hash of a Checkpoint v2 with this body."""
+        return self._tree_node(body, _BODY_TREE)
+
+    def _tree_node(self, value: Any, shape: dict[str, Any] | None) -> str:
+        kept = self._tree_nodes.get(id(value))
+        if kept is not None and kept[0] is value:
+            return kept[1]
+        if shape is None and isinstance(value, (list, SavedItems)):
+            node = self._tree_list(value)
+        elif (
+            shape is not None
+            and isinstance(value, dict)
+            and all(isinstance(key, str) for key in value)
+        ):
+            hashes = {
+                key: self._tree_node(item, shape[key]) if key in shape else self._tree_leaf(item)
+                for key, item in value.items()
+            }
+            node = hashlib.sha256(_TREE_OBJECT + canonical_bytes(hashes)).hexdigest()
+        else:
+            node = self._tree_leaf(value)
+        self._tree_nodes[id(value)] = (value, node)
+        return node
+
+    def _tree_leaf(self, value: Any) -> str:
+        return hashlib.sha256(self._leaf(value)).hexdigest()
+
+    def _tree_list(self, value: Sequence[Any]) -> str:
+        items = value.raws if isinstance(value, SavedItems) else self.list_items(value)
+        count = len(value)
+        chunks = [
+            (start, min(TREE_CHUNK_ITEMS, count - start))
+            for start in range(0, count, TREE_CHUNK_ITEMS)
+        ]
+        if items is None:
+            keys = [
+                hashlib.sha256(_list_bytes(value[start : start + size])).hexdigest()
+                for start, size in chunks
+            ]
+        else:
+            keys = [self.chunk_key(items, start, size) for start, size in chunks]
+            missing = [index for index, key in enumerate(keys) if key is None]
+            if missing:
+                wanted = [chunks[index] for index in missing]
+                hashes = native.chunk_hashes(items, wanted) or [
+                    hashlib.sha256(b"[" + b",".join(items[start : start + size]) + b"]").hexdigest()
+                    for start, size in wanted
+                ]
+                for index, (start, size), key in zip(missing, wanted, hashes, strict=True):
+                    keys[index] = key
+                    self.remember_chunk(items, start, size, key)
+        return hashlib.sha256(_TREE_LIST + canonical_bytes([count, keys])).hexdigest()
+
+
+def _list_bytes(items: list[Any]) -> bytes:
+    encoded = native.canonical_json(items)
+    return canonical_bytes(items) if encoded is None else encoded
 
 
 class _SealedItems:

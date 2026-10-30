@@ -1064,11 +1064,9 @@ class ProjectStore:
             not isinstance(document, dict)
             or set(document) != fields
             or type(document["schema_version"]) is not int
-            or document["schema_version"] != 1
+            or document["schema_version"] not in Checkpoint.SUPPORTED_SCHEMA_VERSIONS
             or document["checkpoint_hash"] != checkpoint_hash
-            or digest({k: v for k, v in document.items() if k != "checkpoint_hash"})
-            != checkpoint_hash
-            or digest(document["world_state"]) != document["state_hash"]
+            or Checkpoint.document_hashes(document) != (document["state_hash"], checkpoint_hash)
             or safe_document(document) != document
         ):
             raise StorageError("checkpoint_recorded_document_integrity_mismatch")

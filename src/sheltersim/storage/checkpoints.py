@@ -48,7 +48,7 @@ def _encoded(value: Any) -> bytes:
 
 
 class CheckpointArchive:
-    """Storage representation only; restores the unchanged Checkpoint v1 hash."""
+    """Storage representation only; restores the unchanged Checkpoint and its hashes."""
 
     def __init__(
         self,
@@ -417,8 +417,11 @@ class CheckpointArchive:
             or document.get("checkpoint_hash") != record["checkpoint_hash"]
         ):
             raise CheckpointError("checkpoint archive pointer hash mismatch")
-        body = {key: value for key, value in document.items() if key != "checkpoint_hash"}
-        if hashlib.sha256(_encoded(body)).hexdigest() != record["checkpoint_hash"]:
+        try:
+            _, checkpoint_hash = Checkpoint.document_hashes(document)
+        except KeyError as exc:
+            raise CheckpointError("checkpoint logical integrity mismatch") from exc
+        if checkpoint_hash != record["checkpoint_hash"]:
             raise CheckpointError("checkpoint logical integrity mismatch")
         return document
 

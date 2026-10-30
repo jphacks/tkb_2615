@@ -726,8 +726,16 @@ class TimelineStore:
             )
         else:
             child, checkpoint = source.fork_with_checkpoint(child_id)
-        if expected_state_hash is not None and checkpoint.state_hash != expected_state_hash:
-            raise TimelineError("source state changed; preview the intervention again")
+        if expected_state_hash is not None:
+            # A preview hashes the world under the current rule; a Checkpoint of an older
+            # version holds its hash under its own rule.
+            current = (
+                checkpoint.state_hash
+                if checkpoint.schema_version == Checkpoint.CURRENT_SCHEMA_VERSION
+                else child.world.state_digest()
+            )
+            if current != expected_state_hash:
+                raise TimelineError("source state changed; preview the intervention again")
         child.runtime_state["fork_origin"] = {
             "branch_id": branch_id,
             "minute": minute,

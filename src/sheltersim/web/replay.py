@@ -55,7 +55,7 @@ def _branch_frames(
                     run_id=run_id,
                     branch_id=ref.branch_id,
                     computed_until=ref.computed_until,
-                    state_hash=encoder.digest(document),
+                    state_hash=encoder.world_tree_digest(document),
                 )
             )
         )

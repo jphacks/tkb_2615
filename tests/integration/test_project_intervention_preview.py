@@ -174,7 +174,7 @@ def _saved_state(api: ProjectAPI) -> tuple[str, str]:
     timeline = TimelineStore(api.store, "project", "run")
     return (
         api.store.load_branch("project", "run", "main")[1].to_json(),
-        digest(timeline.seek("main", PREVIEW_MINUTE).world.to_dict()),
+        timeline.seek("main", PREVIEW_MINUTE).world.state_digest(),
     )
 
 

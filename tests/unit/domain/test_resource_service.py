@@ -6,7 +6,6 @@ tests/integration/test_resource_service.py.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -158,15 +157,7 @@ def test_v6_world_and_checkpoint_reject_noncanonical_service_config(
     del checkpoint_document["world_state"]["model_configs"]["resource_service"][
         "water_utility_base"
     ]
-    checkpoint_document["state_hash"] = hashlib.sha256(
-        json.dumps(
-            checkpoint_document["world_state"],
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    checkpoint_document["state_hash"] = Checkpoint.document_hashes(checkpoint_document)[0]
     with pytest.raises(ValueError, match="checkpoint payload is invalid.*complete canonical"):
         Checkpoint.from_dict(checkpoint_document)
 

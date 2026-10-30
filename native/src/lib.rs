@@ -259,6 +259,7 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validation::social_relationships_problem, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_problem, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
     module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;

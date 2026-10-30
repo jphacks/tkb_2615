@@ -42,4 +42,4 @@ Program ID、effect ID、modifier IDは安定しています。eventにはeffect
 
 GuardExpressionは上限付きASTです。最大20 node、深さ4、固定fieldと比較・boolean operatorのみを許可します。dispatcherはASTを直接解釈し、Python eval、コード実行、動的import、event trigger chainを使いません。guardがfalseなら抑止eventだけ記録し、対象subsystemは変えません。`target.*`と`zone.occupancy`は、その効果の対象（施設・区画）で評価します。図面の変更の操作は対象をpayloadの`target_id`に持つので、それも対象として読みます（#194）。`eq`・`ne`は、数値（整数・小数）どうしなら数として比べ（`0`と`0.0`は等しい）、真偽値と数値は等しいとみなしません（#196）。開始がguardで抑止された効果の期限切れも、抑止として記録します（環境の変更を含む。#195）。
 
-任意のeffect_program_v1とzone_environment_v1 stateはWorldState、したがってCheckpoint v1に保存されます。EffectProgramを含むCheckpointはmodel_versionsにeffect_program_interpreter=1を記録します。任意stateがないWorldState v5/v6とCheckpoint v1も互換性を保ちます。
+任意のeffect_program_v1とzone_environment_v1 stateはWorldState、したがってCheckpointに保存されます。EffectProgramを含むCheckpointはmodel_versionsにeffect_program_interpreter=1を記録します。任意stateがないWorldState v5/v6とCheckpoint v1・v2も互換性を保ちます。

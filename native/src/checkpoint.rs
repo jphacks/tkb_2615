@@ -17,6 +17,9 @@
 use std::collections::HashSet;
 
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyList};
+use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 
 const SK_RUN: usize = 12;
 
@@ -124,4 +127,43 @@ pub fn sensitive_candidates(py: Python<'_>, raw: &[u8]) -> PyResult<(Vec<String>
         .allow_threads(|| candidates(raw))
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok((keys.into_iter().collect(), strings.into_iter().collect()))
+}
+
+/// The SHA-256 hex digest of `[item,item,...]` for each (start, count) of items, a list
+/// of bytes, computed in parallel without the GIL and without joining the items.
+#[pyfunction]
+pub fn chunk_hashes(
+    py: Python<'_>,
+    items: &Bound<'_, PyList>,
+    chunks: Vec<(usize, usize)>,
+) -> PyResult<Vec<String>> {
+    let mut held: Vec<Vec<Bound<'_, PyBytes>>> = Vec::with_capacity(chunks.len());
+    for (start, count) in &chunks {
+        let mut chunk = Vec::with_capacity(*count);
+        for index in *start..*start + *count {
+            chunk.push(items.get_item(index)?.downcast_into::<PyBytes>()?);
+        }
+        held.push(chunk);
+    }
+    let slices: Vec<Vec<&[u8]>> = held
+        .iter()
+        .map(|chunk| chunk.iter().map(|item| item.as_bytes()).collect())
+        .collect();
+    Ok(py.allow_threads(|| {
+        slices
+            .par_iter()
+            .map(|chunk| {
+                let mut hasher = Sha256::new();
+                hasher.update(b"[");
+                for (index, item) in chunk.iter().enumerate() {
+                    if index > 0 {
+                        hasher.update(b",");
+                    }
+                    hasher.update(item);
+                }
+                hasher.update(b"]");
+                hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+            })
+            .collect()
+    }))
 }
