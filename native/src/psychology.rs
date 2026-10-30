@@ -4,7 +4,7 @@
 //! and `py_max`/`py_min` return the first argument on a tie as Python's do.
 
 #[inline]
-fn py_max(first: f64, second: f64) -> f64 {
+pub(crate) fn py_max(first: f64, second: f64) -> f64 {
     if second > first {
         second
     } else {
@@ -13,7 +13,7 @@ fn py_max(first: f64, second: f64) -> f64 {
 }
 
 #[inline]
-fn py_min(first: f64, second: f64) -> f64 {
+pub(crate) fn py_min(first: f64, second: f64) -> f64 {
     if second < first {
         second
     } else {

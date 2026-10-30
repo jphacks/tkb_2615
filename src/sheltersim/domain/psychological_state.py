@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from copy import deepcopy
 from typing import Any
 
+from sheltersim import native
 from sheltersim.domain.models import validate_unit_interval
 
 PSYCHOLOGICAL_STATE_KEY = "psychological_distress_v1"
@@ -70,8 +70,9 @@ def update_psychological_state(
         ("high_distress_threshold", high_distress_threshold),
     ):
         validate_unit_interval(name, value)
-    result = deepcopy(state)
-    agents = result["agents"]
+    # Validated above: each record holds numbers only, so this is a deep copy.
+    agents = {agent_id: dict(record) for agent_id, record in state["agents"].items()}
+    result = {**state, "agents": agents}
     for agent_id, acute in sorted(acute_by_agent.items()):
         validate_unit_interval(f"acute distress for {agent_id}", acute)
         record = agents.get(agent_id)
@@ -140,7 +141,7 @@ def validate_psychological_state(state: Any) -> None:
         "daily_observed_minutes",
         "completed_days",
     }
-    for agent_id, record in agents.items():
+    for agent_id, record in () if native.psychological_agents_valid(agents) else agents.items():
         if (
             not isinstance(agent_id, str)
             or not agent_id

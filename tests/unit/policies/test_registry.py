@@ -329,3 +329,19 @@ def test_a_checkpoint_from_before_implicit_suite_selectors_ran_is_refused():
 
     with pytest.raises(CheckpointError, match="explicit migration required"):
         Checkpoint.from_dict(document).restore_world()
+
+
+def test_selected_models_scope_shares_the_selection_of_one_configs_object() -> None:
+    from sheltersim.contracts.policies import selected_models, selected_models_scope
+
+    configs = {"behavior": {"policy": "utility-softmax-v1"}}
+    other = {"behavior": {"policy": "priority-rule-v1"}}
+    assert selected_models(configs) is not selected_models(configs)
+    with selected_models_scope():
+        first = selected_models(configs)
+        assert selected_models(configs) is first
+        with selected_models_scope():
+            assert selected_models(configs) is first
+        assert selected_models(other)["behavior"] == "priority-rule-v1"
+        assert selected_models(configs) is first
+    assert selected_models(configs) is not first

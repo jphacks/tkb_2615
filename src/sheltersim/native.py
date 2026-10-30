@@ -55,24 +55,109 @@ def psychology_integrated(globals_: list[float], agents: list[list[float]]) -> l
         return None
 
 
-def social_relationships_problem(
-    relationships: Any, good_keys: set[Any], key_problem: Any
-) -> int | None:
-    """The first rule a social_network_v1 relationship breaks (1 key, 2 record, 3 trust,
-    4 contact minute; 0 when all are valid), or None without the kernel."""
+def information_contacts_without_messages(*arguments: Any) -> tuple | None:
+    """One tick of InformationSpreadPolicy.update while nobody holds a belief, or None."""
     if _native is None:
         return None
-    return _native.social_relationships_problem(relationships, good_keys, key_problem) or 0
+    try:
+        return _native.information_contacts_without_messages(*arguments)
+    except (_native.Unsupported, TypeError):
+        return None
 
 
-def body_relationships_problem(
-    relationships: Any, agents: Any, parsed_keys: dict[Any, Any], parse_key: Any
-) -> int | None:
-    """The first rule a body_state_v1 relationship breaks (1 key, 2 key or record,
-    3 trust, 4 contact minute; 0 when all are valid), or None without the kernel."""
+def social_channel_update(*arguments: Any) -> tuple | None:
+    """One tick of ExpressivenessChannelOpennessPolicy.update, or None."""
     if _native is None:
         return None
-    return _native.body_relationships_problem(relationships, agents, parsed_keys, parse_key) or 0
+    try:
+        return _native.social_channel_update(*arguments)
+    except (_native.Unsupported, TypeError):
+        return None
+
+
+def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
+    """True only if every social_network_v1 relationship passes the Python rules."""
+    return _native is not None and _native.social_relationships_valid(
+        relationships, good_keys, key_ok
+    )
+
+
+def body_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
+    """True only if every body_state_v1 relationship passes the Python rules."""
+    return _native is not None and _native.body_relationships_valid(
+        relationships, good_keys, key_ok
+    )
+
+
+def body_agents_valid(agents: Any) -> bool:
+    """True only if every body_state_v1 Agent record passes the Python rules."""
+    return _native is not None and _native.body_agents_valid(agents)
+
+
+def psychological_agents_valid(agents: Any) -> bool:
+    """True only if every psychological_distress_v1 Agent record passes the Python rules."""
+    return _native is not None and _native.psychological_agents_valid(agents)
+
+
+def agent_dynamics_valid(agents: Any, facilities: Any) -> bool:
+    """True only if every agent_dynamics_v1 record passes the Python rules."""
+    return _native is not None and _native.agent_dynamics_valid(agents, facilities)
+
+
+def movement_positions_valid(positions: Any, zones: Any, edges: Any) -> bool:
+    """True only if every movement_v1 position passes the Python rules."""
+    return _native is not None and _native.movement_positions_valid(positions, zones, edges)
+
+
+def information_contacts_valid(
+    contacts: Any, good_keys: set[str], key_ok: Any, duration_minutes: int
+) -> bool:
+    """True only if every information-spread contact passes the Python rules."""
+    return _native is not None and _native.information_contacts_valid(
+        contacts, good_keys, key_ok, duration_minutes
+    )
+
+
+def unit_values_valid(values: Any) -> bool:
+    """True only if every value of the dict is a finite number within 0..1."""
+    return _native is not None and _native.unit_values_valid(values)
+
+
+def world_agents_valid(
+    agents: Any, zones: Any, activity_type: Any, initial_needs_type: Any, needs_type: Any
+) -> bool:
+    """True only if every AgentState passes the per-Agent rules of a v6 WorldState."""
+    return _native is not None and _native.world_agents_valid(
+        agents, zones, activity_type, initial_needs_type, needs_type
+    )
+
+
+def _dict_watchers_installed() -> bool:
+    """Hand the dict watcher functions, which are outside the stable ABI, to the kernel."""
+    try:
+        import ctypes
+
+        api = ctypes.pythonapi
+        addresses = [
+            ctypes.cast(getattr(api, name), ctypes.c_void_p).value or 0
+            for name in ("PyDict_AddWatcher", "PyDict_Watch", "PyDict_Unwatch")
+        ]
+    except (ImportError, AttributeError, OSError):
+        return False
+    return _native.install_dict_watcher(*addresses)
+
+
+def record_watch(list_field: str | None = None) -> Any:
+    """A new watch of a dict's records (sheltersim_native.RecordWatch), or None if this
+    Python or build cannot watch dicts; the caller then reads every record."""
+    if _native is None or not _dict_watchers_installed():
+        return None
+    return _native.RecordWatch(list_field)
+
+
+def values_snapshot() -> Any:
+    """A new held list of a dict's values (sheltersim_native.ValuesSnapshot), or None."""
+    return None if _native is None else _native.ValuesSnapshot()
 
 
 def event_store() -> Any:

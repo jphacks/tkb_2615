@@ -104,14 +104,12 @@ def _key_problem(pair_key: Any) -> str | None:
     )
 
 
+def _key_is_good(pair_key: Any) -> bool:
+    return _key_problem(pair_key) is None
+
+
 # str keys whose check found no problem, for the Rust kernel to look up first.
 _GOOD_PAIR_KEYS: set[str] = set()
-_PROBLEMS = {
-    1: "social_network_v1 relationship key is invalid",
-    2: "social_network_v1 relationship record is invalid",
-    3: "social_network_v1 trust value is invalid",
-    4: "social_network_v1 contact time is invalid",
-}
 
 
 _RELATIONSHIP_FIELDS = frozenset(
@@ -131,7 +129,7 @@ def _is_count(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def validate_social_network_state(world: WorldState) -> None:
+def validate_social_network_state(world: WorldState, *, tick_memo: Any = None) -> None:
     """Validate sparse directed edges without requiring every possible Agent pair."""
     state = world.model_state.get(SOCIAL_NETWORK_STATE_KEY)
     if state is None:
@@ -152,16 +150,14 @@ def validate_social_network_state(world: WorldState) -> None:
         or len(state["relationships"]) > MAX_RELATIONSHIPS
     ):
         raise ValueError("social_network_v1 has an invalid exact schema")
-    problem = native.social_relationships_problem(
-        state["relationships"], _GOOD_PAIR_KEYS, _key_problem
-    )
-    if problem is not None:
-        # The Rust kernel checked every relationship by the rules below, in order.
-        if problem:
-            raise ValueError(_PROBLEMS[problem])
+    relationships = state["relationships"]
+    if tick_memo is not None:
+        relationships = tick_memo.relationships_to_check(tick_memo.social_watch, relationships)
+    if native.social_relationships_valid(relationships, _GOOD_PAIR_KEYS, _key_is_good):
         return
-    # Every tick checks every relationship, so each record is checked inline,
-    # accepting exactly what the field-by-field rules accept.
+    # Without the kernel, or for a value it leaves to Python, these rules decide. Every
+    # tick checks every relationship, so each record is checked inline, accepting
+    # exactly what the field-by-field rules accept.
     for pair_key, record in state["relationships"].items():
         problem = (
             _cached_pair_key_problem(pair_key)

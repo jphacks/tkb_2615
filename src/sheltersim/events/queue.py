@@ -39,6 +39,13 @@ class EventQueue:
             )
         )
 
+    def find(self, event_id: str) -> ScheduledEvent | None:
+        """The pending event with this ID, if any."""
+        for event in self._events:
+            if event.event_id == event_id:
+                return event
+        return None
+
     def schedule(self, event: ScheduledEvent) -> None:
         """Add an event, rejecting ambiguous or repeated identities."""
         if any(item.event_id == event.event_id for item in self._events):
