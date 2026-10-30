@@ -103,6 +103,21 @@ Checkpoint document) and times them.
   are the leaves of the Checkpoint v2 hash tree (`core/checkpoint_cache.py`) and the
   archive's chunk keys.
 
+- `same_saved_records(records, raws, record_type, event_type)` (`src/checkpoint.rs`): whether
+  each live EventLog record is exactly what restoring its saved bytes gives, field by field
+  with the types, without building the restored record. It reads every field of the bytes,
+  and a false says nothing about `==`: the restore check of a save then compares restored
+  records as before (`WorldState.same_state`).
+
+- `record_json(record, record_type, event_type)` (`src/checkpoint.rs`): the canonical JSON of
+  `record.to_dict()`, read from the frozen record without thawing it, or None for any value
+  that is not frozen plain JSON. `same_saved_records` reads the result back on its own path.
+
+- `index_row(row)` (`src/checkpoint.rs`): one pass over a history index row of plain values,
+  giving its canonical JSON, the hash, its identities and event references
+  (`_identities`, `_event_references` in `storage/history_index.py`) and the keys and strings
+  for the privacy check. None for any other row, which Python reads as before.
+
 - `same_json_items(current, documents, start, count)` (stage B3, `src/history.rs`): whether
   each of `current[:count]` is exactly `documents[start + i]`, with the types: 1, 1.0 and
   True differ, a tuple and a list differ, and floats compare by their bits. A save compares
