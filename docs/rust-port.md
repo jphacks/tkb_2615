@@ -243,7 +243,20 @@ Python に任せる場合（型の違う値、不正な状態、trace が要る�
 
 **計測（7日分、画面からの経路。移植前の commit と同時に実行して同じ負荷で比較、2026-10-31）：** world・events・KPI のハッシュは一致しました。
 
-@@B4TABLE@@
+| 処理 | 前（秒） | 後（秒） |
+|---:|---:|---:|
+| `propose_actions` | 34.5 | 16.7 |
+| `update_agent_state` | 21.3 | 15.5 |
+| `arbitrate_actions` | 21.1 | 9.4 |
+| `dispatch_due_events` | 20.9 | 10.0 |
+| `collect_metrics` | 9.1 | 4.0 |
+| `sample_endogenous_events` | 1.6 | 1.6 |
+| 段階の合計 | 108.7 | 57.3 |
+| tick（`TickEngine.step`） | 122.2 | 69.0 |
+| └ 毎 tick の検証（`validate_after_tick`） | 13.1 | 11.3 |
+| 全体 | 291.2 | 237.0 |
+
+保存の違いは、同じ回で 674 個の Checkpoint のファイルを比べ、すべて1バイトも違わないことを確かめました。
 
 **移さなかったもの：** 提案の計算（`UtilityBehaviorPolicy.propose`）を Rust に移すと、入力の読み取りと、結果の `ActionCandidate` の組み立てが残るので、1 tick あたり 0.2 ms ほどしか減らない見込みです（計測ではなく見積もり）。式の移動の確認の手間に見合わないので入れていません。`AgentState` の持ち主を移すことも、この段階では要りません。
 
