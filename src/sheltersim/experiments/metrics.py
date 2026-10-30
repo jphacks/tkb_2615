@@ -60,11 +60,13 @@ class MetricSnapshot:
         )
         stresses = [agent.stress for agent in world.agents.values()]
         high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
-        active_support_agent_ids = sorted(
-            request.agent_id
+        # Most requests of a long Run are settled, so they are read once here.
+        active_support = [
+            request
             for request in world.support_requests.values()
             if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
-        )
+        ]
+        active_support_agent_ids = sorted(request.agent_id for request in active_support)
         staff_task_ids = sorted(
             task_id for staff in world.staff.values() for task_id in staff.work_queue
         )
@@ -79,21 +81,17 @@ class MetricSnapshot:
             )
         )
         pending_support = [
-            request
-            for request in world.support_requests.values()
-            if request.status is SupportRequestStatus.PENDING
+            request for request in active_support if request.status is SupportRequestStatus.PENDING
         ]
-        active_support = [
-            request
-            for request in world.support_requests.values()
-            if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
-        ]
+        staff_memo: dict[str, Any] = {}
         support_wait_details = {
             request.agent_id: {
                 "request_id": request.id,
                 "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
                 "reason_codes": list(
-                    support_wait_reason_codes(world, request.id, minute=sample_minute)
+                    support_wait_reason_codes(
+                        world, request.id, minute=sample_minute, staff_memo=staff_memo
+                    )
                 ),
             }
             for request in sorted(active_support, key=lambda item: item.agent_id)
@@ -179,7 +177,7 @@ class MetricsRecorder:
         snapshot = MetricSnapshot.from_world(world, minute=minute)
         if self.snapshots and snapshot.minute_index <= self.snapshots[-1].minute_index:
             raise ValueError("metric snapshots must have strictly increasing minutes")
-        resource_values = resource_metric_values(world)
+        resource_values = resource_metric_values(world, tick_memo=world.__dict__.get("_tick_memo"))
         if resource_values is None:
             if self.resource_snapshots is not None:
                 raise ValueError("resource ledger cannot be removed during metric capture")

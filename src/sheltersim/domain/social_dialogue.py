@@ -17,6 +17,9 @@ _AFFECT = (
     "uncertainty",
     "hygiene_need",
 )
+_NEED_FIELDS = frozenset(_NEEDS)
+_AFFECT_FIELDS = frozenset(_AFFECT)
+_STATE_FIELDS = frozenset({"stress", "trust", "needs", "affect"})
 _INTERACTION_LINES = {
     "reassurance_exchange": "今わかっていることを、一緒に確かめませんか。",
     "family_care": "必要なことを一緒に確認しよう。",
@@ -80,21 +83,24 @@ def validate_social_state_context(
     ):
         raise ValueError("social dialogue state context does not match its event")
     for state in context["participants"].values():
-        if not isinstance(state, Mapping) or set(state) != {"stress", "trust", "needs", "affect"}:
+        if not isinstance(state, Mapping) or state.keys() != _STATE_FIELDS:
             raise ValueError("social dialogue participant state has unsupported fields")
         _validate_unit(state["stress"])
         _validate_unit(state["trust"])
         needs = state["needs"]
-        if not isinstance(needs, Mapping) or set(needs) != set(_NEEDS):
+        if not isinstance(needs, Mapping) or needs.keys() != _NEED_FIELDS:
             raise ValueError("social dialogue needs context is invalid")
         for value in needs.values():
-            _validate_unit(value)
+            # A float within bounds passes, and NaN fails the comparison.
+            if type(value) is not float or not 0.0 <= value <= 1.0:
+                _validate_unit(value)
         affect = state["affect"]
         if affect is not None:
-            if not isinstance(affect, Mapping) or set(affect) != set(_AFFECT):
+            if not isinstance(affect, Mapping) or affect.keys() != _AFFECT_FIELDS:
                 raise ValueError("social dialogue affect context is invalid")
             for value in affect.values():
-                _validate_unit(value)
+                if type(value) is not float or not 0.0 <= value <= 1.0:
+                    _validate_unit(value)
 
 
 def _validate_unit(value: Any) -> None:

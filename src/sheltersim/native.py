@@ -45,6 +45,27 @@ def canonical_sha256(value: Any) -> str | None:
         return None
 
 
+def scheduled_event_checked(*arguments: Any) -> tuple[Any, Any] | None:
+    """The frozen payload and provenance of an event that passes ScheduledEvent's checks,
+    or None for the Python checks to decide, which raise any error."""
+    if _native is None:
+        return None
+    try:
+        return _native.scheduled_event_checked(*arguments)
+    except _native.Unsupported:
+        return None
+
+
+def view_state_hash(*arguments: Any) -> str | None:
+    """The audit hash of a WorldView, or None when the kernel leaves it to Python."""
+    if _native is None:
+        return None
+    try:
+        return _native.view_state_hash(*arguments)
+    except (_native.Unsupported, TypeError):
+        return None
+
+
 def psychology_integrated(globals_: list[float], agents: list[list[float]]) -> list | None:
     """The new state floats of IntegratedDistressLifeStatePolicy for each agent, or None."""
     if _native is None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY
@@ -17,6 +18,7 @@ from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
 from sheltersim.domain.body_state import canonical_body_config, create_body_state
 from sheltersim.domain.care_receipts import (
+    SHARED_OPERATIONS_KEY,
     append_applied_care_transition,
     care_history_by_agent,
     care_history_for_agent,
@@ -28,6 +30,7 @@ from sheltersim.domain.models import StaffState
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.domain.staff import StaffService
 from sheltersim.events.handlers import EventDispatcher, StaffSupportCompletionHandler
+from sheltersim.events.models import EventStatus
 from sheltersim.events.queue import EventLog
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import person_projection, world_frame
@@ -638,3 +641,19 @@ def test_care_history_rows_are_kept_with_the_event_log_and_a_caller_can_not_chan
     assert care_history_by_agent(world, limit=5) == {}
     world.event_log = EventLog()
     assert care_history_by_agent(world) == {}
+
+
+def test_a_recorded_event_is_not_recorded_again_however_old_it_is() -> None:
+    """Only an event realized now looks among the newest records (their minutes order them)."""
+    event = SimpleNamespace(event_id="event-1", event_type="care_support_transition", payload={})
+    old_record = {"event_id": "event-1", "minute": 3}
+    state = {"history": [old_record, *({"event_id": f"e-{i}", "minute": 90} for i in range(5))]}
+    world = SimpleNamespace(model_state={SHARED_OPERATIONS_KEY: state}, minute_index=100)
+    realized_before = SimpleNamespace(event=event, status=EventStatus.APPLIED, realized_minute=3)
+    ingest_applied_shared_operation_records(world, (realized_before,))
+    assert len(state["history"]) == 6
+    state["history"].append({"event_id": "event-2", "minute": 100})
+    newest = SimpleNamespace(event_id="event-2", event_type="staff_handoff", payload={})
+    realized_now = SimpleNamespace(event=newest, status=EventStatus.APPLIED, realized_minute=100)
+    ingest_applied_shared_operation_records(world, (realized_now,))
+    assert len(state["history"]) == 7

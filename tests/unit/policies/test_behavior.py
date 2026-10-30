@@ -299,3 +299,79 @@ def test_behavior_refuses_a_view_without_its_required_audit_hash() -> None:
 
     with pytest.raises(ValueError, match="require a WorldView with a state hash"):
         UtilityBehaviorPolicy().propose(view, next(iter(world.agents)), CounterRNG(world.seed))
+
+
+def test_a_directly_made_candidate_equals_the_dataclass_and_keeps_its_errors() -> None:
+    from sheltersim.policies.behavior import _candidate
+
+    made = _candidate(ActionKind.REST, True, "trigger", 0.25, 1, 0.5)
+    assert made == ActionCandidate(ActionKind.REST, True, "trigger", 0.25, 1, 0.5)
+    assert made.__dict__ == ActionCandidate(ActionKind.REST, True, "trigger", 0.25, 1, 0.5).__dict__
+    for arguments in (
+        (ActionKind.REST, True, "", 0.25, 1, 0.5),
+        (ActionKind.REST, True, "t", float("nan"), 1, 0.5),
+        (ActionKind.REST, True, "t", float("inf"), 1, 0.5),
+        (ActionKind.REST, True, "t", 0.25, -1, 0.5),
+        (ActionKind.REST, True, "t", 0.25, 1, float("nan")),
+        (ActionKind.REST, True, "t", 0.25, 1, 1.5),
+        (ActionKind.REST, False, "t", 0.25, 1, 0.5),
+    ):
+        with pytest.raises(ValueError):
+            _candidate(*arguments)
+    assert _candidate("rest", True, "t", 0.25, 1, 0.5).action is ActionKind.REST
+
+
+def test_a_recorded_outcome_equals_replace_and_keeps_the_timing_check() -> None:
+    from dataclasses import replace
+
+    candidate = ActionCandidate(ActionKind.REST, True, "t", 0.25, 0, 1.0)
+    proposal = ActionProposal(
+        agent_id="A001",
+        minute_index=5,
+        observed_state_hash="0" * 64,
+        action=ActionKind.REST,
+        candidates=(candidate,),
+        trigger="scheduled_decision",
+        choice_value=0.5,
+        rng_key=("behavior",),
+        selection_probability=1.0,
+        policy_version="v",
+        next_decision_at=6,
+    )
+    assert proposal.with_outcome("X", 9) == replace(proposal, target_id="X", next_decision_at=9)
+    with pytest.raises(ValueError):
+        proposal.with_outcome("X", 5)
+
+
+def test_a_kept_zone_environment_follows_the_configs_and_modifiers(generated_scenario) -> None:
+    from sheltersim.domain.environment import ZONE_ENVIRONMENT_STATE_KEY, zone_environment_view
+    from sheltersim.policies.behavior import _zone_environment
+
+    world = WorldState.from_scenario(generated_scenario)
+    world.model_state.setdefault(ZONE_ENVIRONMENT_STATE_KEY, {"schema_version": 1, "modifiers": {}})
+    zone_id = next(iter(world.zones))
+    cache: dict = {}
+    first = _zone_environment(world, zone_id, cache)
+    assert first == zone_environment_view(world, zone_id)
+    assert _zone_environment(world, zone_id, cache) is first
+    world.model_state[ZONE_ENVIRONMENT_STATE_KEY]["modifiers"]["m-1"] = {
+        "zone_id": zone_id,
+        "op": "set_lighting",
+        "parameters": {"level": 0.125},
+        "start_minute": 0,
+        "start_event_id": "event-1",
+        "source_id": "ASM-TEST",
+        "assumption_ids": ["ASM-TEST"],
+    }
+    changed = _zone_environment(world, zone_id, cache)
+    assert changed == zone_environment_view(world, zone_id)
+    if "zone_environment" in world.model_configs:
+        assert changed.lighting_level == 0.125
+    del world.model_state[ZONE_ENVIRONMENT_STATE_KEY]["modifiers"]["m-1"]
+    assert _zone_environment(world, zone_id, cache) == first
+    world.model_configs = dict(world.model_configs)
+    assert _zone_environment(world, zone_id, cache) == first
+    assert cache["configs"] is world.model_configs
+    del world.model_state[ZONE_ENVIRONMENT_STATE_KEY]
+    assert _zone_environment(world, zone_id, cache) == zone_environment_view(world, zone_id)
+    assert cache["has_state"] is False

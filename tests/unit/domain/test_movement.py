@@ -14,7 +14,11 @@ import math
 from sheltersim.contracts.extensions import Point2D
 from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.world import WorldState
-from sheltersim.domain.geometry_overlay import GEOMETRY_OVERLAY_KEY, geometry_config_scope
+from sheltersim.domain.geometry_overlay import (
+    GEOMETRY_OVERLAY_KEY,
+    effective_geometry,
+    geometry_config_scope,
+)
 from sheltersim.domain.movement import (
     MOVEMENT_STATE_KEY,
     _geometry,
@@ -26,6 +30,7 @@ from sheltersim.domain.movement import (
     plan_in_room_route,
     progress_physical_queue_head_to_service,
     progress_physical_queue_positions,
+    room_route_scope,
     route_is_physically_clear,
 )
 from sheltersim.domain.resource_service import ResourceServiceManager
@@ -256,3 +261,89 @@ def test_movement_reads_the_effective_constraints_from_one_parse_per_phase(
             for edge_id in edges:
                 route_is_physically_clear(world, edge_id)
     assert len(spatial_calls) == 1
+
+
+def _route_inputs(world: WorldState) -> tuple[str, Point2D, Point2D]:
+    geometry = effective_geometry(world)
+    zone = next(item for item in geometry.zones if item.zone_id == "sleeping")
+    xs = [point.x for point in zone.polygon]
+    ys = [point.y for point in zone.polygon]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    return (
+        zone.zone_id,
+        Point2D(x=min(xs) + width * 0.13, y=min(ys) + height * 0.17),
+        Point2D(x=min(xs) + width * 0.83, y=min(ys) + height * 0.71),
+    )
+
+
+def test_a_remembered_room_route_is_the_planned_route(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    zone_id, start, destination = _route_inputs(world)
+    planned = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
+    memo = {"routes": {}}
+    with room_route_scope(memo):
+        first = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
+        again = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
+    assert first == planned
+    assert again is first
+    assert len(memo["routes"]) == 1
+
+
+def test_a_remembered_room_route_is_dropped_when_what_it_read_changes(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    zone_id, start, destination = _route_inputs(world)
+    world.model_state.setdefault(
+        "geometry_overlay_v1",
+        {"facility_points": {}, "partitions": {}, "route_modifiers": {}, "temporary_rooms": {}},
+    )
+    memo = {"routes": {}}
+
+    def planned() -> tuple:
+        with room_route_scope(memo):
+            remembered = plan_in_room_route(
+                world, zone_id=zone_id, start=start, destination=destination
+            )
+        assert remembered == plan_in_room_route(
+            world, zone_id=zone_id, start=start, destination=destination
+        )
+        return remembered
+
+    open_route = planned()
+    overlay = world.model_state["geometry_overlay_v1"]
+    # A wall between the two points: the route must go round it or fail.
+    middle_x = (start.x + destination.x) / 2
+    middle_y = (start.y + destination.y) / 2
+    overlay["partitions"]["p-1"] = {
+        "zone_id": zone_id,
+        "polygon_m": [
+            {"x": middle_x - 0.5, "y": middle_y - 0.5},
+            {"x": middle_x + 0.5, "y": middle_y - 0.5},
+            {"x": middle_x + 0.5, "y": middle_y + 0.5},
+            {"x": middle_x - 0.5, "y": middle_y + 0.5},
+        ],
+        "source_ids": ["ASM-TEST"],
+    }
+    blocked_route = planned()
+    assert blocked_route != open_route
+    del overlay["partitions"]["p-1"]
+    assert planned() == open_route
+    # Another raw config object is another geometry.
+    world.model_configs["spatial_constraints"] = dict(world.model_configs["spatial_constraints"])
+    assert planned() == open_route
+    assert memo["constraints"] is world.model_configs["spatial_constraints"]
+    # No overlay is another kind of plan.
+    del world.model_state["geometry_overlay_v1"]
+    planned()
+    assert memo["has_overlay"] is False
+
+
+def test_zero_coordinates_are_not_remembered(generated_scenario) -> None:
+    """0.0 and -0.0 are one dict key, but the plan returns the points it was given."""
+    world = WorldState.from_scenario(generated_scenario)
+    zone_id, start, destination = _route_inputs(world)
+    memo = {"routes": {}}
+    with room_route_scope(memo):
+        plan_in_room_route(
+            world, zone_id=zone_id, start=Point2D(x=0.0, y=start.y), destination=destination
+        )
+    assert memo["routes"] == {}

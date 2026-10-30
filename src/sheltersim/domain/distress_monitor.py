@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 from sheltersim.domain.models import validate_unit_interval
 
 _PREFIX = "acute_distress_monitor"
+
+
+@lru_cache(maxsize=1024)
+def _metric_keys(agent_id: str) -> tuple[str, str, str, str, str]:
+    key = f"{_PREFIX}:{agent_id}"
+    return (
+        f"{key}:current_run",
+        f"{key}:longest_run",
+        f"{key}:episodes",
+        f"{key}:recovered_run_total",
+        f"{key}:recovered_run_count",
+    )
 
 
 def record_distress_monitor_tick(
@@ -24,24 +37,25 @@ def record_distress_monitor_tick(
     it does not retain a tick-by-tick history or affect model state.
     """
     validate_unit_interval("distress monitor threshold", threshold)
-    if set(previous_by_agent) != set(current_by_agent):
+    if previous_by_agent.keys() != current_by_agent.keys():
         raise ValueError("distress monitor Agent sets must match")
     for agent_id in sorted(current_by_agent):
         previous = previous_by_agent[agent_id]
         current = current_by_agent[agent_id]
-        validate_unit_interval(f"previous distress for {agent_id}", previous)
-        validate_unit_interval(f"current distress for {agent_id}", current)
-        key = f"{_PREFIX}:{agent_id}"
-        run = metrics.get(f"{key}:current_run", 0.0)
-        longest = metrics.get(f"{key}:longest_run", 0.0)
-        episodes = metrics.get(f"{key}:episodes", 0.0)
-        recovered_total = metrics.get(f"{key}:recovered_run_total", 0.0)
-        recovered_count = metrics.get(f"{key}:recovered_run_count", 0.0)
-        if any(
-            not math.isfinite(value) or value < 0.0
-            for value in (run, longest, episodes, recovered_total, recovered_count)
-        ):
-            raise ValueError("distress monitor state must be finite and non-negative")
+        # Floats within bounds pass, and NaN fails the comparison; the check decides the rest.
+        if not (type(previous) is float and 0.0 <= previous <= 1.0):
+            validate_unit_interval(f"previous distress for {agent_id}", previous)
+        if not (type(current) is float and 0.0 <= current <= 1.0):
+            validate_unit_interval(f"current distress for {agent_id}", current)
+        run_key, longest_key, episodes_key, total_key, count_key = _metric_keys(agent_id)
+        run = metrics.get(run_key, 0.0)
+        longest = metrics.get(longest_key, 0.0)
+        episodes = metrics.get(episodes_key, 0.0)
+        recovered_total = metrics.get(total_key, 0.0)
+        recovered_count = metrics.get(count_key, 0.0)
+        for value in (run, longest, episodes, recovered_total, recovered_count):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError("distress monitor state must be finite and non-negative")
 
         was_high = previous >= threshold
         is_high = current >= threshold
@@ -59,11 +73,11 @@ def record_distress_monitor_tick(
                 run += 1.0
             longest = max(longest, run)
 
-        metrics[f"{key}:current_run"] = run
-        metrics[f"{key}:longest_run"] = longest
-        metrics[f"{key}:episodes"] = episodes
-        metrics[f"{key}:recovered_run_total"] = recovered_total
-        metrics[f"{key}:recovered_run_count"] = recovered_count
+        metrics[run_key] = run
+        metrics[longest_key] = longest
+        metrics[episodes_key] = episodes
+        metrics[total_key] = recovered_total
+        metrics[count_key] = recovered_count
 
 
 def distress_monitor_summary(metrics: Mapping[str, float]) -> dict[str, Any]:

@@ -18,6 +18,7 @@ mod contacts;
 mod eventlog;
 mod history;
 mod psychology;
+mod records;
 mod validation;
 mod watch;
 
@@ -26,12 +27,12 @@ create_exception!(sheltersim_native, Unsupported, PyException);
 // Deeper values are left to the json module, which raises RecursionError itself.
 const MAX_DEPTH: usize = 512;
 
-struct Encoder {
-    out: Vec<u8>,
+pub(crate) struct Encoder {
+    pub(crate) out: Vec<u8>,
 }
 
 impl Encoder {
-    fn value(&mut self, value: &Bound<'_, PyAny>, depth: usize) -> PyResult<()> {
+    pub(crate) fn value(&mut self, value: &Bound<'_, PyAny>, depth: usize) -> PyResult<()> {
         if depth > MAX_DEPTH {
             return Err(Unsupported::new_err("value nests too deeply"));
         }
@@ -54,12 +55,17 @@ impl Encoder {
         } else if let Ok(number) = value.downcast::<PyFloat>() {
             self.float(number.value())?;
         } else if let Ok(object) = value.downcast::<PyDict>() {
-            let mut items: Vec<(String, Bound<'_, PyAny>)> = Vec::with_capacity(object.len());
+            let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
+                Vec::with_capacity(object.len());
             for (key, item) in object.iter() {
+                entries.push((key, item));
+            }
+            let mut items: Vec<(&str, &Bound<'_, PyAny>)> = Vec::with_capacity(entries.len());
+            for (key, item) in &entries {
                 let key = key
                     .downcast::<PyString>()
                     .map_err(|_| Unsupported::new_err("object key is not a str"))?;
-                items.push((key.to_str()?.to_owned(), item));
+                items.push((key.to_str()?, item));
             }
             // Python orders str by code point, the same as UTF-8 bytes.
             items.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
@@ -105,7 +111,14 @@ impl Encoder {
         if !value.is_finite() {
             return Err(Unsupported::new_err("NaN and infinity are left to json"));
         }
-        self.out.extend_from_slice(python_float_repr(value).as_bytes());
+        // In this range ryu and float.__repr__ both write the shortest digits in fixed
+        // notation with at least one digit after the point.
+        if (1e-4..1e16).contains(&value.abs()) {
+            let mut buffer = ryu::Buffer::new();
+            self.out.extend_from_slice(buffer.format_finite(value).as_bytes());
+        } else {
+            self.out.extend_from_slice(python_float_repr(value).as_bytes());
+        }
         Ok(())
     }
 }
@@ -235,6 +248,14 @@ fn float_repr(value: f64) -> String {
     python_float_repr(value)
 }
 
+/// The JSON of a float as the Encoder writes it, for tests.
+#[pyfunction]
+fn float_json(value: f64) -> PyResult<String> {
+    let mut encoder = Encoder { out: Vec::with_capacity(32) };
+    encoder.float(value)?;
+    Ok(String::from_utf8(encoder.out).expect("a float is ASCII"))
+}
+
 /// One minute of the mean-reverting life-state psychology for every agent.
 /// `globals` has 23 floats and each agent 32; see psychology.rs.
 #[pyfunction]
@@ -267,7 +288,10 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(canonical_json, module)?)?;
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;
     module.add_function(wrap_pyfunction!(float_repr, module)?)?;
+    module.add_function(wrap_pyfunction!(float_json, module)?)?;
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
+    module.add_function(wrap_pyfunction!(records::scheduled_event_checked, module)?)?;
+    module.add_function(wrap_pyfunction!(records::view_state_hash, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
     module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;

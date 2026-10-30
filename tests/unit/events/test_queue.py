@@ -6,13 +6,15 @@ tests/unit/events/test_handlers.py.
 
 from __future__ import annotations
 
+import random
+
 import pytest
 from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.core.world import WorldState
 from sheltersim.events.handlers import EventDispatcher
-from sheltersim.events.models import EventLogRecord, EventStatus
-from sheltersim.events.queue import DuplicateEventError, EventLog
+from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
+from sheltersim.events.queue import DuplicateEventError, EventLog, EventQueue
 from sheltersim.experiments.scenario import ScenarioSpec
 
 
@@ -346,3 +348,54 @@ def test_of_types_from_gives_the_records_of_of_types_from_a_position(make_event)
         expected = [record for record, at in zip(records, positions, strict=True) if at >= start]
         assert log.of_types_from(wanted, start) == expected
     assert [record.event.sequence for record in log.of_types_from({"a"}, 1)] == [3]
+
+
+def _event(event_id: str, sequence: int, due_minute: int = 1, priority: int = 0) -> ScheduledEvent:
+    return ScheduledEvent(event_id, EventKind.ENDOGENOUS, due_minute, priority, sequence, "tick")
+
+
+def test_the_indexes_answer_as_a_scan_of_the_events_does() -> None:
+    """find, due and pending read indexes; the list stays what they are compared with."""
+    rng = random.Random(20261031)
+    queue = EventQueue()
+    live: list[ScheduledEvent] = []
+    for sequence in range(1500):
+        action = rng.random()
+        if action < 0.55 or not live:
+            event = _event(f"e-{sequence}", sequence, rng.randrange(40), rng.randrange(3))
+            queue.schedule(event)
+            live.append(event)
+        elif action < 0.85:
+            event = live.pop(rng.randrange(len(live)))
+            assert queue.remove(event.event_id) is event
+        else:
+            index = rng.randrange(len(live))
+            current = live[index]
+            event = _event(current.event_id, current.sequence, rng.randrange(40), current.priority)
+            queue.replace(current.event_id, event)
+            live[index] = event
+        expected = sorted(live, key=lambda item: (item.due_minute, item.priority, item.sequence))
+        assert list(queue.pending()) == expected
+        minute = rng.randrange(40)
+        assert list(queue.due(minute)) == [item for item in expected if item.due_minute <= minute]
+        probe = rng.choice(live) if live else None
+        if probe is not None:
+            assert queue.find(probe.event_id) is probe
+        assert queue.find(f"e-{sequence + 1}") is None
+        assert len(queue) == len(live)
+
+
+def test_the_indexes_still_refuse_repeated_identities_and_unknown_events() -> None:
+    event = _event("e-1", 1)
+    queue = EventQueue([event])
+    assert queue.find("e-1") is event
+    assert queue.find(["not", "hashable"]) is None
+    with pytest.raises(DuplicateEventError):
+        queue.schedule(_event("e-1", 2))
+    with pytest.raises(DuplicateEventError):
+        queue.schedule(_event("e-2", 1))
+    queue.remove("e-1")
+    with pytest.raises(KeyError):
+        queue.remove("e-1")
+    queue.schedule(_event("e-1", 1, due_minute=5))
+    assert queue.pending()[0].due_minute == 5

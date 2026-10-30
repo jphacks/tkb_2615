@@ -162,12 +162,18 @@ _SELECTION_SCOPE: ContextVar[list[tuple[Any, dict[str, str]]] | None] = ContextV
 
 
 @contextmanager
-def selected_models_scope() -> Iterator[None]:
-    """Reuse the selection of each model_configs object while it cannot change."""
+def selected_models_scope(
+    selections: list[tuple[Any, dict[str, str]]] | None = None,
+) -> Iterator[None]:
+    """Reuse the selection of each model_configs object while it cannot change.
+
+    ``selections`` carries the results of an earlier scope; the caller clears it when the
+    configs may have changed.
+    """
     if _SELECTION_SCOPE.get() is not None:
         yield
         return
-    token = _SELECTION_SCOPE.set([])
+    token = _SELECTION_SCOPE.set([] if selections is None else selections)
     try:
         yield
     finally:

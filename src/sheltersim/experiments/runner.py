@@ -61,6 +61,7 @@ from sheltersim.domain.movement import (
     advance_movement,
     facility_approach_route,
     finish_movement,
+    room_route_scope,
     route_is_physically_clear,
     route_with_movement_time,
     start_movement,
@@ -186,6 +187,16 @@ class OfflineSimulationController:
         self._person_contexts: dict[str, Any] = {}
         self._closed_edges: dict[str, tuple[Any, set[str]]] = {}
         self.active_actions = active_action_index(world)
+        # The update phase's view, from which the next phase's view is made.
+        self._view_before_proposals: WorldView | None = None
+        # What the phases parsed from model_configs, while its values stay the same.
+        self._config_scopes_minute: int | None = None
+        self._config_scopes_object: dict[str, Any] | None = None
+        self._config_scopes_configs: dict[str, Any] | None = None
+        self._parsed_configs: dict[tuple[str, int], tuple[Any, Any]] = {}
+        self._model_selections: list[tuple[Any, dict[str, str]]] = []
+        self._room_routes: dict[str, Any] = {"routes": {}}
+        self._zone_environments: dict[str, Any] = {}
         initialize_simulator_extensions(world)
         validate_simulator_extensions(world)
         proximity_model_id = selected_models(world.model_configs).get("social_proximity")
@@ -415,8 +426,26 @@ class OfflineSimulationController:
         self.staff_space = SpaceRouter(staff_graph, self.space.policy)
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
-        # No phase edits model_configs, so the facility geometry is parsed once per phase.
-        with geometry_config_scope(), selected_models_scope():
+        # No phase edits model_configs in place, and a phase that swaps the object brings
+        # new raw objects, so what was parsed is kept while the object and its values stay
+        # the same. Comparing the object too keeps swaps from piling up old configs.
+        if minute != self._config_scopes_minute:
+            self._config_scopes_minute = minute
+            if (
+                world.model_configs is not self._config_scopes_object
+                or world.model_configs != self._config_scopes_configs
+            ):
+                self._config_scopes_object = world.model_configs
+                self._config_scopes_configs = deepcopy(world.model_configs)
+                self._parsed_configs.clear()
+                self._model_selections.clear()
+                self._room_routes = {"routes": {}}
+                self._zone_environments = {}
+        with (
+            geometry_config_scope(self._parsed_configs),
+            selected_models_scope(self._model_selections),
+            room_route_scope(self._room_routes),
+        ):
             self._run_phase(phase, world, minute, rng)
 
     def _run_phase(
@@ -523,7 +552,10 @@ class OfflineSimulationController:
         elif phase is TickPhase.UPDATE_AGENT_STATE:
             self._update_movement(minute)
             view = WorldView.from_world(
-                world, include_state_hash=False, person_cache=self._person_contexts
+                world,
+                include_state_hash=False,
+                person_cache=self._person_contexts,
+                environment_cache=self._zone_environments,
             )
             deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
             if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
@@ -630,8 +662,18 @@ class OfflineSimulationController:
                     runtime_state, minute, final_deltas
                 )
             apply_state_deltas(world, final_deltas)
+            self._view_before_proposals = view
         elif phase is TickPhase.PROPOSE_ACTIONS:
-            view = WorldView.from_world(world, person_cache=self._person_contexts)
+            prior, self._view_before_proposals = self._view_before_proposals, None
+            view = (
+                WorldView.after_state_update(prior, world)
+                if prior is not None and prior.minute_index == minute
+                else WorldView.from_world(
+                    world,
+                    person_cache=self._person_contexts,
+                    environment_cache=self._zone_environments,
+                )
+            )
             for proposal in self.decisions.propose_due(view, rng):
                 self._apply_proposal(
                     proposal,
@@ -706,7 +748,10 @@ class OfflineSimulationController:
             result = self.information_policy.update(
                 # Information policies read the people and the minute, never the audit hash.
                 WorldView.from_world(
-                    self.world, include_state_hash=False, person_cache=self._person_contexts
+                    self.world,
+                    include_state_hash=False,
+                    person_cache=self._person_contexts,
+                    environment_cache=self._zone_environments,
                 ),
                 self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
                 rng,
@@ -801,7 +846,15 @@ class OfflineSimulationController:
         if self.social_policy is None:
             return
         threshold = self.social_policy.limits.complaint_wait_minutes
-        for request_id, request in sorted(self.world.support_requests.items()):
+        # A complaint decision does not make a request pending, so only requests pending
+        # now can qualify below. Most requests of a long Run are settled.
+        due = [
+            (request_id, request)
+            for request_id, request in self.world.support_requests.items()
+            if request.status is SupportRequestStatus.PENDING
+            and request.requested_minute + threshold == minute
+        ]
+        for request_id, request in sorted(due):
             if (
                 request.status is SupportRequestStatus.PENDING
                 and request.requested_minute + threshold == minute
@@ -1235,11 +1288,7 @@ class OfflineSimulationController:
                                 + 1.0
                             )
 
-        recorded_proposal = replace(
-            proposal,
-            target_id=target_id,
-            next_decision_at=agent.next_decision_at,
-        )
+        recorded_proposal = proposal.with_outcome(target_id, agent.next_decision_at)
         self.artifacts.record_decision(
             recorded_proposal,
             observed_state=observed_state,

@@ -16,7 +16,12 @@ from sheltersim.contracts.policies import selected_models
 from sheltersim.contracts.population import PersonContext, population_context_people
 from sheltersim.core.rng import KeyedRandom, RNGKeyPart
 from sheltersim.core.world import WorldState
-from sheltersim.domain.environment import ZoneDemandView, zone_environment_view
+from sheltersim.domain.environment import (
+    ZONE_ENVIRONMENT_STATE_KEY,
+    ZoneDemandView,
+    ZoneEnvironmentView,
+    zone_environment_view,
+)
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.infrastructure import (
     active_environmental_stress,
@@ -153,6 +158,159 @@ class FacilityView:
     facility_event_context_ids: tuple[str, ...] = ()
 
 
+def _zone_environment(
+    world: WorldState, zone_id: str, cache: dict[str, Any] | None
+) -> ZoneEnvironmentView:
+    """zone_environment_view(world, zone_id), which reads only model_configs and the
+    modifiers: a kept view is used while they are the same object and the same values."""
+    if cache is None:
+        return zone_environment_view(world, zone_id)
+    state = world.model_state.get(ZONE_ENVIRONMENT_STATE_KEY)
+    modifiers = state.get("modifiers") if isinstance(state, dict) else None
+    if (
+        cache.get("configs") is not world.model_configs
+        or cache.get("has_state") is not isinstance(state, dict)
+        or cache.get("modifiers") != modifiers
+    ):
+        cache.clear()
+        cache.update(
+            configs=world.model_configs,
+            has_state=isinstance(state, dict),
+            modifiers=deepcopy(modifiers),
+            views={},
+        )
+    views = cache["views"]
+    view = views.get(zone_id)
+    if view is None:
+        view = views[zone_id] = zone_environment_view(world, zone_id)
+    return view
+
+
+def _view_state_hash(
+    world: WorldState,
+    agents: Mapping[str, AgentView],
+    facilities: Mapping[str, FacilityView],
+    information_state: Any,
+    has_population_context: bool,
+) -> str:
+    """The audit hash of a view: what a decision observed, in canonical JSON."""
+    body_state = world.model_state.get("body_state_v1", {})
+    resource_service = world.schema_version == 6
+    resource_config = world.model_configs["resource_service"] if resource_service else None
+    information_config = (
+        world.model_configs["information_spread"] if information_state is not None else None
+    )
+    # Without building the document; every value is checked as canonical_sha256 does.
+    # The kernel takes None for a config to leave out, so a None config stays with Python.
+    if (resource_config is not None or not resource_service) and (
+        information_config is not None or information_state is None
+    ):
+        state_hash = native.view_state_hash(
+            world.minute_index,
+            [agent.__dict__ for agent in agents.values()],
+            [facility.__dict__ for facility in facilities.values()],
+            resource_config,
+            information_config,
+            bool(has_population_context or body_state),
+        )
+        if state_hash is not None:
+            return state_hash
+    state_data = {
+        "minute_index": world.minute_index,
+        "agents": [
+            {
+                "id": agent.id,
+                "group_id": agent.group_id,
+                "zone_id": agent.zone_id,
+                "mobility": agent.mobility.value,
+                "support_need": agent.support_need,
+                "stress_sensitivity": agent.stress_sensitivity,
+                "rng_key": agent.rng_key,
+                "activity": agent.activity.value,
+                "target_id": agent.target_id,
+                "needs": {
+                    "toilet_urgency": agent.needs.toilet_urgency,
+                    "hunger": agent.needs.hunger,
+                    "fatigue": agent.needs.fatigue,
+                },
+                "stress": agent.stress,
+                "trust": agent.trust,
+                "next_decision_at": agent.next_decision_at,
+                "queue_task_id": agent.queue_task_id,
+                "queue_kind": agent.queue_kind,
+                "queue_target_id": agent.queue_target_id,
+                "queue_wait_minutes": agent.queue_wait_minutes,
+                "support_request_id": agent.support_request_id,
+                "support_request_status": agent.support_request_status,
+                "support_assigned_staff_id": agent.support_assigned_staff_id,
+                "support_wait_minutes": agent.support_wait_minutes,
+                "support_cooldown_remaining_minutes": (agent.support_cooldown_remaining_minutes),
+            }
+            for agent in agents.values()
+        ],
+        "facilities": [
+            {
+                "id": facility.id,
+                "kind": facility.kind,
+                "zone_id": facility.zone_id,
+                "capacity": facility.capacity,
+                "working_units": facility.working_units,
+                "active_agent_ids": facility.active_agent_ids,
+                "queue_agent_ids": facility.queue_agent_ids,
+            }
+            for facility in facilities.values()
+        ],
+    }
+    if world.schema_version == 6:
+        state_data["resource_service_config"] = world.model_configs["resource_service"]
+        for agent_state, agent_view in zip(state_data["agents"], agents.values(), strict=True):
+            agent_state["needs"]["hydration_need"] = agent_view.needs.hydration_need
+        for facility_state, facility_view in zip(
+            state_data["facilities"], facilities.values(), strict=True
+        ):
+            facility_state["resource_active_agent_ids"] = facility_view.resource_active_agent_ids
+            facility_state["resource_queue_agent_ids"] = facility_view.resource_queue_agent_ids
+    if information_state is not None:
+        state_data["information_spread_config"] = world.model_configs["information_spread"]
+        for agent_state in state_data["agents"]:
+            agent_state["information_query_pressure"] = information_state["query_pressure"][
+                agent_state["id"]
+            ]
+    if has_population_context or body_state:
+        state_data["agent_life_context"] = [
+            {
+                "agent_id": agent.id,
+                "caregiver_ids": agent.caregiver_ids,
+                "care_for_ids": agent.care_for_ids,
+                "parent_ids": agent.parent_ids,
+                "roles": agent.roles,
+                "usual_wake_minute": agent.usual_wake_minute,
+                "usual_sleep_minute": agent.usual_sleep_minute,
+                "required_sleep_minutes": agent.required_sleep_minutes,
+                "personal_context_present": agent.personal_context_present,
+                "sleep_debt_minutes": agent.sleep_debt_minutes,
+                "uncertainty": agent.uncertainty,
+                "reassurance": agent.reassurance,
+                "discontent": agent.discontent,
+                "positive_affect": agent.positive_affect,
+                "negative_affect": agent.negative_affect,
+                "hygiene_need": agent.hygiene_need,
+            }
+            for agent in agents.values()
+        ]
+    state_hash = native.canonical_sha256(state_data)
+    if state_hash is None:
+        encoded = json.dumps(
+            state_data,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        state_hash = hashlib.sha256(encoded).hexdigest()
+    return state_hash
+
+
 @dataclass(frozen=True)
 class WorldView:
     """Read-only, detached snapshot passed across policy boundaries."""
@@ -188,6 +346,23 @@ class WorldView:
             MappingProxyType({key: tuple(value) for key, value in sorted(groups.items())}),
         )
 
+    def immediate_needs(self) -> dict[str, float]:
+        """The largest of each person's stress and needs; proposals read it many times."""
+        values = self.__dict__.get("_immediate_needs")
+        if values is None:
+            values = {}
+            for agent_id, agent in self.agents.items():
+                needs = agent.needs
+                values[agent_id] = max(
+                    agent.stress,
+                    needs.toilet_urgency,
+                    needs.hunger,
+                    needs.fatigue,
+                    needs.hydration_need,
+                )
+            object.__setattr__(self, "_immediate_needs", values)
+        return values
+
     @classmethod
     def from_world(
         cls,
@@ -195,11 +370,14 @@ class WorldView:
         *,
         include_state_hash: bool = True,
         person_cache: dict[str, tuple[Any, PersonContext]] | None = None,
+        environment_cache: dict[str, Any] | None = None,
     ) -> WorldView:
         """Create a detached snapshot, optionally omitting its audit hash.
 
         ``person_cache`` keeps parsed person contexts between calls for one caller; a
         record is parsed again as soon as it differs from the copy kept with it.
+        ``environment_cache`` does the same for zone environments; the caller empties it
+        when model_configs may have been changed in place.
         """
         queue_tasks: dict[str, list[Any]] = {}
         information_state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
@@ -273,7 +451,8 @@ class WorldView:
             else {}
         )
         environment_by_zone = {
-            zone_id: zone_environment_view(world, zone_id) for zone_id in sorted(world.zones)
+            zone_id: _zone_environment(world, zone_id, environment_cache)
+            for zone_id in sorted(world.zones)
         }
         # What every person in a zone shares; each person's fields are added to a copy.
         zone_fields: dict[str, dict[str, Any]] = {}
@@ -442,108 +621,10 @@ class WorldView:
         }
         state_hash = None
         if include_state_hash:
-            state_data = {
-                "minute_index": world.minute_index,
-                "agents": [
-                    {
-                        "id": agent.id,
-                        "group_id": agent.group_id,
-                        "zone_id": agent.zone_id,
-                        "mobility": agent.mobility.value,
-                        "support_need": agent.support_need,
-                        "stress_sensitivity": agent.stress_sensitivity,
-                        "rng_key": agent.rng_key,
-                        "activity": agent.activity.value,
-                        "target_id": agent.target_id,
-                        "needs": {
-                            "toilet_urgency": agent.needs.toilet_urgency,
-                            "hunger": agent.needs.hunger,
-                            "fatigue": agent.needs.fatigue,
-                        },
-                        "stress": agent.stress,
-                        "trust": agent.trust,
-                        "next_decision_at": agent.next_decision_at,
-                        "queue_task_id": agent.queue_task_id,
-                        "queue_kind": agent.queue_kind,
-                        "queue_target_id": agent.queue_target_id,
-                        "queue_wait_minutes": agent.queue_wait_minutes,
-                        "support_request_id": agent.support_request_id,
-                        "support_request_status": agent.support_request_status,
-                        "support_assigned_staff_id": agent.support_assigned_staff_id,
-                        "support_wait_minutes": agent.support_wait_minutes,
-                        "support_cooldown_remaining_minutes": (
-                            agent.support_cooldown_remaining_minutes
-                        ),
-                    }
-                    for agent in agents.values()
-                ],
-                "facilities": [
-                    {
-                        "id": facility.id,
-                        "kind": facility.kind,
-                        "zone_id": facility.zone_id,
-                        "capacity": facility.capacity,
-                        "working_units": facility.working_units,
-                        "active_agent_ids": facility.active_agent_ids,
-                        "queue_agent_ids": facility.queue_agent_ids,
-                    }
-                    for facility in facilities.values()
-                ],
-            }
-            if world.schema_version == 6:
-                state_data["resource_service_config"] = world.model_configs["resource_service"]
-                for agent_state, agent_view in zip(
-                    state_data["agents"], agents.values(), strict=True
-                ):
-                    agent_state["needs"]["hydration_need"] = agent_view.needs.hydration_need
-                for facility_state, facility_view in zip(
-                    state_data["facilities"], facilities.values(), strict=True
-                ):
-                    facility_state["resource_active_agent_ids"] = (
-                        facility_view.resource_active_agent_ids
-                    )
-                    facility_state["resource_queue_agent_ids"] = (
-                        facility_view.resource_queue_agent_ids
-                    )
-            if information_state is not None:
-                state_data["information_spread_config"] = world.model_configs["information_spread"]
-                for agent_state in state_data["agents"]:
-                    agent_state["information_query_pressure"] = information_state["query_pressure"][
-                        agent_state["id"]
-                    ]
-            if has_population_context or body_state:
-                state_data["agent_life_context"] = [
-                    {
-                        "agent_id": agent.id,
-                        "caregiver_ids": agent.caregiver_ids,
-                        "care_for_ids": agent.care_for_ids,
-                        "parent_ids": agent.parent_ids,
-                        "roles": agent.roles,
-                        "usual_wake_minute": agent.usual_wake_minute,
-                        "usual_sleep_minute": agent.usual_sleep_minute,
-                        "required_sleep_minutes": agent.required_sleep_minutes,
-                        "personal_context_present": agent.personal_context_present,
-                        "sleep_debt_minutes": agent.sleep_debt_minutes,
-                        "uncertainty": agent.uncertainty,
-                        "reassurance": agent.reassurance,
-                        "discontent": agent.discontent,
-                        "positive_affect": agent.positive_affect,
-                        "negative_affect": agent.negative_affect,
-                        "hygiene_need": agent.hygiene_need,
-                    }
-                    for agent in agents.values()
-                ]
-            state_hash = native.canonical_sha256(state_data)
-            if state_hash is None:
-                encoded = json.dumps(
-                    state_data,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                    allow_nan=False,
-                ).encode("utf-8")
-                state_hash = hashlib.sha256(encoded).hexdigest()
-        return cls(
+            state_hash = _view_state_hash(
+                world, agents, facilities, information_state, has_population_context
+            )
+        view = cls(
             minute_index=world.minute_index,
             agents=agents,
             facilities=facilities,
@@ -551,6 +632,61 @@ class WorldView:
             resource_service_enabled=world.schema_version == 6,
             autonomy_enabled=autonomy_enabled,
         )
+        object.__setattr__(view, "_has_population_context", has_population_context)
+        return view
+
+    @classmethod
+    def after_state_update(cls, prior: WorldView, world: WorldState) -> WorldView:
+        """from_world(world) when the only writes since ``prior`` are the update phase's.
+
+        Those are the needs, stress and trust of each person, their body state and their
+        long-term distress, which are read again here, and state no view reads (the social
+        propagation and relationship records, the metric state). Every other field is
+        ``prior``'s, including what is derived from it.
+        """
+        body_state = world.model_state.get("body_state_v1", {})
+        body_agents = body_state.get("agents", {}) if isinstance(body_state, dict) else {}
+        psychology_state = world.model_state.get(PSYCHOLOGICAL_STATE_KEY, {})
+        psychology_agents = (
+            psychology_state.get("agents", {}) if isinstance(psychology_state, dict) else {}
+        )
+        agents = {}
+        for agent_id, before in prior.agents.items():
+            agent = world.agents[agent_id]
+            needs = agent.needs
+            body = body_agents.get(agent_id, _NO_RECORD)
+            fields = before.__dict__.copy()
+            fields["needs"] = NeedView(
+                needs.toilet_urgency, needs.hunger, needs.fatigue, needs.hydration_need
+            )
+            fields["stress"] = agent.stress
+            fields["chronic_distress"] = psychology_agents.get(agent_id, _NO_RECORD).get(
+                "long_term_distress", 0.0
+            )
+            fields["trust"] = agent.trust
+            fields["sleep_debt_minutes"] = body.get("sleep_debt_minutes", 0.0)
+            fields["uncertainty"] = body.get("uncertainty", 0.0)
+            fields["reassurance"] = body.get("reassurance", 0.0)
+            fields["discontent"] = body.get("discontent", 0.0)
+            fields["positive_affect"] = body.get("positive_affect", 0.5)
+            fields["negative_affect"] = body.get("negative_affect", 0.0)
+            fields["hygiene_need"] = body.get("hygiene_need", 0.0)
+            view = object.__new__(AgentView)
+            object.__setattr__(view, "__dict__", fields)
+            agents[agent_id] = view
+        refreshed = object.__new__(cls)
+        fields = prior.__dict__.copy()
+        fields.pop("_immediate_needs", None)
+        fields["agents"] = MappingProxyType(agents)
+        fields["state_hash"] = _view_state_hash(
+            world,
+            agents,
+            prior.facilities,
+            world.model_state.get(INFORMATION_SPREAD_STATE_KEY),
+            prior._has_population_context,
+        )
+        object.__setattr__(refreshed, "__dict__", fields)
+        return refreshed
 
 
 class ActionKind(StrEnum):
@@ -638,6 +774,19 @@ class ActionProposal:
             selected[0].probability, self.selection_probability
         ):
             raise ValueError("proposal action must match one eligible candidate")
+
+    def with_outcome(self, target_id: str | None, next_decision_at: int) -> ActionProposal:
+        """replace(self, target_id=..., next_decision_at=...): the other checks read fields
+        that do not change, so only the timing is checked again."""
+        if type(next_decision_at) is not int or next_decision_at <= self.minute_index:
+            return replace(self, target_id=target_id, next_decision_at=next_decision_at)
+        proposal = object.__new__(ActionProposal)
+        object.__setattr__(
+            proposal,
+            "__dict__",
+            {**self.__dict__, "target_id": target_id, "next_decision_at": next_decision_at},
+        )
+        return proposal
 
 
 class BehaviorPolicy(Protocol):
@@ -966,44 +1115,19 @@ class UtilityBehaviorPolicy:
             )
         elif agent.personal_context_present:
             family_peers = ()
+        pressure = view.immediate_needs()
         family_target = max(
             family_peers,
-            key=lambda peer_id: (
-                max(
-                    view.agents[peer_id].stress,
-                    view.agents[peer_id].needs.toilet_urgency,
-                    view.agents[peer_id].needs.hunger,
-                    view.agents[peer_id].needs.fatigue,
-                    view.agents[peer_id].needs.hydration_need,
-                ),
-                peer_id,
-            ),
+            key=lambda peer_id: (pressure[peer_id], peer_id),
             default=None,
         )
+        help_threshold = distress + 0.15
         help_targets = tuple(
-            peer_id
-            for peer_id in zone_peers
-            if max(
-                view.agents[peer_id].stress,
-                view.agents[peer_id].needs.toilet_urgency,
-                view.agents[peer_id].needs.hunger,
-                view.agents[peer_id].needs.fatigue,
-                view.agents[peer_id].needs.hydration_need,
-            )
-            > distress + 0.15
+            peer_id for peer_id in zone_peers if pressure[peer_id] > help_threshold
         )
         help_target = max(
             help_targets,
-            key=lambda peer_id: (
-                max(
-                    view.agents[peer_id].stress,
-                    view.agents[peer_id].needs.toilet_urgency,
-                    view.agents[peer_id].needs.hunger,
-                    view.agents[peer_id].needs.fatigue,
-                    view.agents[peer_id].needs.hydration_need,
-                ),
-                peer_id,
-            ),
+            key=lambda peer_id: (pressure[peer_id], peer_id),
             default=None,
         )
         minute_of_day = view.minute_index % 1440
@@ -1096,48 +1220,17 @@ class UtilityBehaviorPolicy:
                     ),
                     (
                         ActionKind.CARE_FAMILY,
-                        family_target is not None
-                        and max(
-                            view.agents[family_target].stress,
-                            view.agents[family_target].needs.toilet_urgency,
-                            view.agents[family_target].needs.hunger,
-                            view.agents[family_target].needs.fatigue,
-                            view.agents[family_target].needs.hydration_need,
-                        )
-                        >= 0.25,
+                        family_target is not None and pressure[family_target] >= 0.25,
                         "co-located family or care-linked person has an unmet need",
                         0.12
-                        + (
-                            0.45
-                            * max(
-                                view.agents[family_target].stress,
-                                view.agents[family_target].needs.toilet_urgency,
-                                view.agents[family_target].needs.hunger,
-                                view.agents[family_target].needs.fatigue,
-                                view.agents[family_target].needs.hydration_need,
-                            )
-                            if family_target is not None
-                            else 0.0
-                        ),
+                        + (0.45 * pressure[family_target] if family_target is not None else 0.0),
                         int(family_target is not None and view.agents[family_target].stress >= 0.8),
                     ),
                     (
                         ActionKind.HELP_OTHERS,
                         help_target is not None,
                         "co-located person has substantially higher immediate need or stress",
-                        0.15
-                        + (
-                            0.4
-                            * max(
-                                view.agents[help_target].stress,
-                                view.agents[help_target].needs.toilet_urgency,
-                                view.agents[help_target].needs.hunger,
-                                view.agents[help_target].needs.fatigue,
-                                view.agents[help_target].needs.hydration_need,
-                            )
-                            if help_target is not None
-                            else 0.0
-                        ),
+                        0.15 + (0.4 * pressure[help_target] if help_target is not None else 0.0),
                         int(help_target is not None and view.agents[help_target].stress >= 0.8),
                     ),
                 ]
@@ -1190,13 +1283,13 @@ class UtilityBehaviorPolicy:
             1.0 - math.fsum(probabilities[index] for index in eligible_indices[:-1]),
         )
         evidence = tuple(
-            ActionCandidate(
-                action=action,
-                eligible=eligible,
-                trigger=_demand_trigger(candidate_trigger, demand_modifiers.get(action.value)),
-                utility=utility + priority * 0.5,
-                urgency_priority=priority,
-                probability=probability,
+            _candidate(
+                action,
+                eligible,
+                _demand_trigger(candidate_trigger, demand_modifiers.get(action.value)),
+                utility + priority * 0.5,
+                priority,
+                probability,
             )
             for (action, eligible, candidate_trigger, utility, priority), probability in zip(
                 candidates, probabilities, strict=True
@@ -1315,6 +1408,42 @@ class PriorityRuleBehaviorPolicy:
         )
 
 
+def _candidate(
+    action: ActionKind,
+    eligible: bool,
+    trigger: str,
+    utility: float,
+    urgency_priority: int,
+    probability: float,
+) -> ActionCandidate:
+    """ActionCandidate(...) of a candidate the scorer made, without the generated __init__
+    when its checks pass; the class raises any error."""
+    if (
+        type(action) is not ActionKind
+        or not trigger
+        or not math.isfinite(utility)
+        or urgency_priority < 0
+        or not math.isfinite(probability)
+        or not 0.0 <= probability <= 1.0
+        or (not eligible and probability != 0.0)
+    ):
+        return ActionCandidate(action, eligible, trigger, utility, urgency_priority, probability)
+    candidate = object.__new__(ActionCandidate)
+    object.__setattr__(
+        candidate,
+        "__dict__",
+        {
+            "action": action,
+            "eligible": eligible,
+            "trigger": trigger,
+            "utility": utility,
+            "urgency_priority": urgency_priority,
+            "probability": probability,
+        },
+    )
+    return candidate
+
+
 def _demand_trigger(trigger: str, modifier: ZoneDemandView | None) -> str:
     if modifier is None:
         return trigger
@@ -1372,6 +1501,7 @@ def _target_for_action(view: WorldView, agent: AgentView, action: ActionKind) ->
         agent.needs.fatigue,
         agent.needs.hydration_need,
     )
+    pressure = view.immediate_needs()
     if action is ActionKind.CARE_FAMILY:
         peers = tuple(
             peer
@@ -1395,32 +1525,12 @@ def _target_for_action(view: WorldView, agent: AgentView, action: ActionKind) ->
         peers = tuple(
             peer
             for peer in view.zone_members.get(agent.zone_id, ())
-            if peer != agent.id
-            and max(
-                view.agents[peer].stress,
-                view.agents[peer].needs.toilet_urgency,
-                view.agents[peer].needs.hunger,
-                view.agents[peer].needs.fatigue,
-                view.agents[peer].needs.hydration_need,
-            )
-            > own_pressure + 0.15
+            if peer != agent.id and pressure[peer] > own_pressure + 0.15
         )
     eligible = tuple(peers)
     if not eligible:
         return None
-    return max(
-        eligible,
-        key=lambda peer: (
-            max(
-                view.agents[peer].stress,
-                view.agents[peer].needs.toilet_urgency,
-                view.agents[peer].needs.hunger,
-                view.agents[peer].needs.fatigue,
-                view.agents[peer].needs.hydration_need,
-            ),
-            peer,
-        ),
-    )
+    return max(eligible, key=lambda peer: (pressure[peer], peer))
 
 
 class BehaviorDecisionRunner:

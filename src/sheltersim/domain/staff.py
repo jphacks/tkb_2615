@@ -195,8 +195,20 @@ class StaffService:
                 fairness_after_minutes=self.fairness_after_minutes,
             ),
         )
+        # Skills do not change here; requests of one kind need the same staff.
+        qualified_by_kind: dict[str, list[Any]] = {}
+
+        def qualified_for(support_kind: str) -> list[Any]:
+            qualified = qualified_by_kind.get(support_kind)
+            if qualified is None:
+                required = _CARE_SKILL_ALTERNATIVES.get(support_kind, {"support"})
+                qualified = qualified_by_kind[support_kind] = [
+                    staff for staff in world.staff.values() if required.intersection(staff.skills)
+                ]
+            return qualified
+
         no_qualified_worker_count = sum(
-            not _qualified_staff_exists(world, request.id) for request in pending
+            not qualified_for(_support_kind(world, request.id)) for request in pending
         )
         record_wait_metrics = (
             world.metric_state.get("support_assignment_metrics_minute", -1.0) != minute
@@ -238,11 +250,7 @@ class StaffService:
                     available_staff.append(person)
             if person is None:
                 if record_wait_metrics:
-                    qualified = [
-                        staff
-                        for staff in world.staff.values()
-                        if required_skills.intersection(staff.skills)
-                    ]
+                    qualified = qualified_for(support_kind)
                     if any(staff.active_task_id is not None for staff in qualified):
                         blocker_exposure["support_wait_staff_busy_request_minutes"] += 1
                     # "Off shift" covers every qualified worker who is not working
@@ -428,21 +436,32 @@ def _support_priority(world: WorldState, request_id: str) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def support_required_skills(world: WorldState, request_id: str) -> set[str]:
-    """Return the declared qualification alternatives for one support request."""
+def _support_kind(world: WorldState, request_id: str) -> str:
     care_receipt = care_receipt_for_request(world, request_id)
-    support_kind = (
+    return (
         care_receipt.get("support_kind", "emotional_support")
         if care_receipt is not None
         else "emotional_support"
     )
-    return _CARE_SKILL_ALTERNATIVES.get(support_kind, {"support"})
+
+
+def support_required_skills(world: WorldState, request_id: str) -> set[str]:
+    """Return the declared qualification alternatives for one support request."""
+    return _CARE_SKILL_ALTERNATIVES.get(_support_kind(world, request_id), {"support"})
 
 
 def support_wait_reason_codes(
-    world: WorldState, request_id: str, *, minute: int | None = None
+    world: WorldState,
+    request_id: str,
+    *,
+    minute: int | None = None,
+    staff_memo: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    """Describe current observable blockers without asserting a single cause."""
+    """Describe current observable blockers without asserting a single cause.
+
+    ``staff_memo`` keeps what is read about the staff for the next request of the same kind,
+    for a caller that does not change the world between the calls.
+    """
     request = world.support_requests.get(request_id)
     if request is None:
         return ("request_missing",)
@@ -456,37 +475,44 @@ def support_wait_reason_codes(
         )
     if request.status is not SupportRequestStatus.PENDING:
         return ("request_closed",)
-    required = support_required_skills(world, request_id)
-    qualified = [staff for staff in world.staff.values() if required.intersection(staff.skills)]
+    support_kind = _support_kind(world, request_id)
+    known = staff_memo.get(support_kind) if staff_memo is not None else None
+    if known is None:
+        required = _CARE_SKILL_ALTERNATIVES.get(support_kind, {"support"})
+        qualified = [staff for staff in world.staff.values() if required.intersection(staff.skills)]
+        staff_blockers: set[str] = set()
+        operations = world.model_state.get("staff_operations_v1", {})
+        for staff in qualified:
+            if not staff_is_available(world, staff.id):
+                staff_blockers.add("staff_unavailable")
+            if staff.active_task_id is not None:
+                staff_blockers.add("staff_busy")
+            operation = (
+                operations.get("staff", {}).get(staff.id) if isinstance(operations, dict) else None
+            )
+            if isinstance(operation, dict) and operation.get("phase") != "idle":
+                staff_blockers.add("staff_on_other_operation")
+            dynamics = world.model_state.get("staff_dynamics_v1", {})
+            dynamics_staff = (
+                dynamics.get("staff", {}).get(staff.id) if isinstance(dynamics, dict) else None
+            )
+            if (
+                isinstance(dynamics_staff, dict)
+                and dynamics_staff.get("rest_until_minute", 0) > sample_minute
+            ):
+                staff_blockers.add("staff_resting")
+            elif not staff_dynamics_on_shift(world, staff.id, sample_minute):
+                staff_blockers.add("staff_off_shift")
+        known = (qualified, staff_blockers, _route_candidates(world, qualified, sample_minute))
+        if staff_memo is not None:
+            staff_memo[support_kind] = known
+    qualified, staff_blockers, candidates = known
     if not qualified:
         return ("no_qualified_staff",)
-    operations = world.model_state.get("staff_operations_v1", {})
-    blockers: set[str] = set()
-    for staff in qualified:
-        if not staff_is_available(world, staff.id):
-            blockers.add("staff_unavailable")
-        if staff.active_task_id is not None:
-            blockers.add("staff_busy")
-        operation = (
-            operations.get("staff", {}).get(staff.id) if isinstance(operations, dict) else None
-        )
-        if isinstance(operation, dict) and operation.get("phase") != "idle":
-            blockers.add("staff_on_other_operation")
-        dynamics = world.model_state.get("staff_dynamics_v1", {})
-        dynamics_staff = (
-            dynamics.get("staff", {}).get(staff.id) if isinstance(dynamics, dict) else None
-        )
-        if (
-            isinstance(dynamics_staff, dict)
-            and dynamics_staff.get("rest_until_minute", 0) > sample_minute
-        ):
-            blockers.add("staff_resting")
-        elif not staff_dynamics_on_shift(world, staff.id, sample_minute):
-            blockers.add("staff_off_shift")
     route_reasons, route_is_feasible = _support_route_wait_reasons(
-        world, agent_id=request.agent_id, staff=qualified, minute=sample_minute
+        world, agent_id=request.agent_id, candidates=candidates, minute=sample_minute
     )
-    blockers.update(route_reasons)
+    blockers = staff_blockers | route_reasons
     if not blockers:
         if not route_is_feasible:
             return ("no_route_to_qualified_staff",)
@@ -500,18 +526,8 @@ def support_wait_reason_codes(
     return tuple(sorted(blockers))
 
 
-def _support_route_wait_reasons(
-    world: WorldState,
-    *,
-    agent_id: str,
-    staff: list[Any],
-    minute: int,
-) -> tuple[set[str], bool]:
-    """Classify routed-support blockers using the same graph constraints as the runner."""
-    agent = world.agents.get(agent_id)
-    if agent is None:
-        return set(), False
-    candidates = [
+def _route_candidates(world: WorldState, staff: list[Any], minute: int) -> list[Any]:
+    return [
         person
         for person in staff
         if person.active_task_id is None
@@ -519,6 +535,19 @@ def _support_route_wait_reasons(
         and staff_dynamics_is_available(world, person.id, minute)
         and staff_dynamics_on_shift(world, person.id, minute)
     ]
+
+
+def _support_route_wait_reasons(
+    world: WorldState,
+    *,
+    agent_id: str,
+    candidates: list[Any],
+    minute: int,
+) -> tuple[set[str], bool]:
+    """Classify routed-support blockers using the same graph constraints as the runner."""
+    agent = world.agents.get(agent_id)
+    if agent is None:
+        return set(), False
     if not candidates:
         return set(), False
 
@@ -609,11 +638,6 @@ def default_support_fairness_minutes(unresolved_after_minutes: int) -> int:
     if type(unresolved_after_minutes) is not int or unresolved_after_minutes <= 0:
         return 30
     return max(1, min(30, unresolved_after_minutes - 1))
-
-
-def _qualified_staff_exists(world: WorldState, request_id: str) -> bool:
-    required_skills = support_required_skills(world, request_id)
-    return any(required_skills.intersection(staff.skills) for staff in world.staff.values())
 
 
 def _support_assignment_order(
