@@ -15,6 +15,7 @@ import re
 import tempfile
 from bisect import bisect_right
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,6 +28,10 @@ from sheltersim.experiments.metrics import MetricsRecorder
 
 _HASH = re.compile(r"^[a-f0-9]{64}$")
 
+# Compressing a save's new chunks: at most this many threads, each with this much to do.
+_COMPRESS_THREADS = 4
+_COMPRESS_THREAD_BYTES = 256 * 1024
+
 # Every manifest version this archive reads; saves write the last one.
 ARCHIVE_STORAGE_TYPES = frozenset(
     {"checkpoint_archive_v1", "checkpoint_archive_v2", "checkpoint_archive_v3"}
@@ -34,6 +39,32 @@ ARCHIVE_STORAGE_TYPES = frozenset(
 
 # The list a restore reads as item bytes (SavedItems) when the Rust EventLog is there.
 _SAVED_EVENT_LOG = ("world_state", "event_log")
+
+
+def _compress_all(raws: list[bytes]) -> list[bytes]:
+    return [gzip.compress(raw, compresslevel=3, mtime=0) for raw in raws]
+
+
+def _compressed(raws: list[bytes]) -> list[bytes]:
+    """Each chunk compressed, in order; the same bytes however many threads do it.
+
+    zlib releases the GIL. The caller waits here, so a save stays on its own thread.
+    """
+    total = sum(map(len, raws))
+    workers = min(_COMPRESS_THREADS, os.cpu_count() or 1, total // _COMPRESS_THREAD_BYTES)
+    if workers <= 1:
+        return _compress_all(raws)
+    # One long run per thread: a task per chunk would cost as much as a small chunk does.
+    runs: list[list[bytes]] = [[]]
+    size = 0
+    for raw in raws:
+        if size >= total / workers:
+            runs.append([])
+            size = 0
+        runs[-1].append(raw)
+        size += len(raw)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return [item for run in pool.map(_compress_all, runs) for item in run]
 
 
 class CheckpointArchive:
@@ -63,6 +94,7 @@ class CheckpointArchive:
         self.new_bytes = 0
         self.new_files = 0
         self.chunk_directory = directory / "chunks"
+        self._has_chunk_files: bool | None = None
         self.pack_directory = directory / "packs"
         # The new chunks of the save being prepared: their values and bytes, then each
         # chunk compressed, once the content checks have passed.
@@ -98,7 +130,10 @@ class CheckpointArchive:
         if location is not None:
             self._referenced[key] = location
             return True
-        if (self.chunk_directory / f"{key}.json.gz").exists():
+        if self._has_chunk_files is None:
+            # Only v1/v2 saves wrote that directory; nearly every new chunk asks.
+            self._has_chunk_files = self.chunk_directory.exists()
+        if self._has_chunk_files and (self.chunk_directory / f"{key}.json.gz").exists():
             # A v1/v2 chunk file; the manifest records no location for it.
             self._referenced[key] = None
             return True
@@ -122,9 +157,9 @@ class CheckpointArchive:
         """Check all new chunks of a save at once, then compress them."""
         if self.content_check is not None and staged:
             self.content_check(list(staged.values()))
-        compressed = {
-            key: gzip.compress(raw, compresslevel=3, mtime=0) for key, (_, raw) in staged.items()
-        }
+        compressed = dict(
+            zip(staged, _compressed([raw for _, raw in staged.values()]), strict=True)
+        )
         if (
             self.max_new_bytes is not None
             and self.new_bytes + sum(map(len, compressed.values())) > self.max_new_bytes

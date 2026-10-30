@@ -8,6 +8,7 @@ That the cache stays within the storage capacity is checked in
 tests/unit/storage/test_frames.py.
 """
 
+import copy
 import gzip
 import json
 
@@ -107,3 +108,25 @@ def test_cache_write_failure_keeps_the_durable_checkpoint(
     expected = reconstructed(timeline, "main", 30)
     assert_on_the_floor_plan(expected)
     assert timeline.frame("main", 30) == expected
+
+
+def test_a_frame_shares_nothing_with_the_world(tmp_path, saved_timeline, generated_scenario):
+    _, timeline = saved_timeline(tmp_path, generated_scenario)
+    timeline.advance("main", 60)
+    world = timeline.seek("main", 60).world
+    before = copy.deepcopy(world.model_state)
+    frame = world_frame(world, run_id="r", branch_id="main", computed_until=60)
+
+    def overwrite(value):
+        # Every container of the frame is emptied, deepest first.
+        if isinstance(value, dict):
+            for item in value.values():
+                overwrite(item)
+            value.clear()
+        elif isinstance(value, list):
+            for item in value:
+                overwrite(item)
+            value.clear()
+
+    overwrite(frame)
+    assert world.model_state == before
