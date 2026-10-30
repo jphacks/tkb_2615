@@ -387,6 +387,8 @@ def main() -> int:
     report, _ = render(*args.sets, load_set(args.sets[0]), load_set(args.sets[1]))
     if args.output:
         args.output.write_text(report, encoding="utf-8")
+    # The report has Japanese labels; a Windows console encoding cannot write them.
+    sys.stdout.reconfigure(encoding="utf-8")
     print(report, end="")
     return 0
 
