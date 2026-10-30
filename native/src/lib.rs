@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 mod checkpoint;
 mod contacts;
 mod eventlog;
+mod history;
 mod psychology;
 mod validation;
 mod watch;
@@ -269,6 +270,7 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
+    module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;

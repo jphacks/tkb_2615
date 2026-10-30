@@ -29,6 +29,7 @@ from sheltersim.storage.checkpoints import CheckpointArchive
 from sheltersim.storage.projects import (
     ProjectStore,
     StorageError,
+    _redact,
     _reject_sensitive_checkpoint_content,
     canonical,
     digest,
@@ -704,6 +705,59 @@ def test_the_strings_rust_leaves_out_can_not_match_the_privacy_patterns() -> Non
         else:
             assert safe_document(text) == text, text
     assert returned > 1000
+
+
+def test_every_string_redaction_changes_is_returned_by_the_rust_scan() -> None:
+    """Random strings near the patterns, with the characters that make them hard to read:
+    other digits and spaces, case folds to ASCII, escapes in the JSON, surrogate pairs."""
+    if not native.available():
+        pytest.skip("the sheltersim_native extension is not installed")
+    generator = random.Random(20261031)
+    pieces = [
+        *"019-+().@_ax",
+        " ",
+        "\t",
+        "\n",
+        "\u00a0",
+        "\u3000",
+        "\u2003",
+        "\u2009",
+        "\u0660",
+        "\u0967",
+        "\uff11",
+        "\uff0d",
+        "\u2010",
+        "\u2212",
+        "12",
+        "555",
+        "/",
+        "b.co",
+        "sk-",
+        "SK-",
+        "\u017fk-",
+        "s\u212a-",
+        "ant-",
+        "abcdefghijkl",
+        "bearer",
+        "BEARER",
+        "Bearer ",
+        "\u00e9",
+        "\u3042",
+        "task-1",
+        "\U0001f600",
+        '"',
+        "\\",
+        "\x00",
+        "\x1f",
+    ]
+    changed = 0
+    for _ in range(30_000):
+        text = "".join(generator.choices(pieces, k=generator.randint(1, 14)))
+        if _redact(text) != text:
+            changed += 1
+            _, strings = native.sensitive_candidates([canonical([{"k": text}]).encode()])
+            assert text in strings, text
+    assert changed > 3000
 
 
 def test_a_changed_item_of_a_history_chunk_is_checked_at_the_next_save(tmp_path) -> None:

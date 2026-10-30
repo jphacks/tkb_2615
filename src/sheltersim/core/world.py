@@ -12,6 +12,7 @@ from typing import Any
 from sheltersim import native
 from sheltersim.contracts.policies import selected_models
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.save_validation import SaveValidationMemo
 from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.tick_validation import TickValidationMemo
 from sheltersim.domain.environment import (
@@ -258,11 +259,14 @@ class WorldState:
         _in_flight_event: ScheduledEvent | None = None,
         validate_event_history: bool = True,
         _tick_memo: TickValidationMemo | None = None,
+        _history_memo: SaveValidationMemo | None = None,
     ) -> None:
         """Check world invariants, optionally auditing immutable EventLog history.
 
         _tick_memo is for validate_after_tick only: checks of what it shows unchanged
-        since the last end-of-tick check are skipped.
+        since the last end-of-tick check are skipped. _history_memo is for a Checkpoint
+        capture only: entries of append-only histories that are unchanged since they
+        last passed are not read again (core/save_validation.py).
         """
         configs_unchanged = _tick_memo is not None and _tick_memo.configs_unchanged
         if (
@@ -305,7 +309,10 @@ class WorldState:
 
             try:
                 validate_simulator_extensions(
-                    self, validate_event_history=validate_event_history, tick_memo=_tick_memo
+                    self,
+                    validate_event_history=validate_event_history,
+                    tick_memo=_tick_memo,
+                    history_memo=_history_memo,
                 )
             except (ValueError, KeyError, TypeError) as exc:
                 raise StateInvariantError("invalid simulator extension state") from exc
@@ -394,6 +401,18 @@ class WorldState:
             if not validate_event_history:
                 request_history = records_since_previous_tick(request_history, self.minute_index)
                 stall_history = records_since_previous_tick(stall_history, self.minute_index)
+            elif _history_memo is not None:
+                inputs = (
+                    known_agent_ids,
+                    set(self.zones),
+                    {key: facility.kind for key, facility in self.facilities.items()},
+                )
+                request_history = _history_memo.unread(
+                    ("resource_service_v1", "request_history"), request_history, inputs
+                )
+                stall_history = _history_memo.unread(
+                    ("resource_service_v1", "queue_stall_history"), stall_history, inputs
+                )
             for record in request_history:
                 if (
                     not isinstance(record, dict)
@@ -1348,7 +1367,7 @@ class WorldState:
                     set(self.zones),
                 )
                 if validate_event_history:
-                    validate_resource_ledger(*ledger_arguments)
+                    validate_resource_ledger(*ledger_arguments, history_memo=_history_memo)
                 else:
                     validate_resource_ledger_state(
                         *ledger_arguments, minute_index=self.minute_index, tick_memo=_tick_memo

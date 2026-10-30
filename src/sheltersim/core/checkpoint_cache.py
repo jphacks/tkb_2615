@@ -19,7 +19,9 @@ reader without any of these caches gets the same hashes.
 Items are matched by identity, and the cache holds a reference to each one so an
 id is never reused while it is cached. EventLog records and KPI snapshots are
 frozen. The other histories are plain dicts that are appended and never edited;
-such an entry is reused only while it still equals its saved document.
+such an entry is reused only while it still equals its saved document. With the rust
+kernels that comparison also tells 1 from True and a tuple from a list, and its result
+also tells the save's validation which entries it need not read (core/save_validation.py).
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ from dataclasses import asdict, fields
 from typing import Any
 
 from sheltersim import native
+from sheltersim.contracts.policies import model_signatures
+from sheltersim.core.save_validation import SaveValidationMemo
 from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
@@ -108,7 +112,6 @@ class CanonicalEncoder:
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
         self._tree_nodes: dict[int, tuple[Any, str]] = {}
-        self._sizes: dict[int, tuple[Any, int]] = {}
 
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
@@ -198,22 +201,27 @@ class CanonicalEncoder:
     def encode(self, value: Any) -> bytes:
         return b"".join(self.parts(value))
 
-    def size(self, value: Any) -> int:
-        """len(canonical_bytes(value)) without joining spliced lists."""
-        kept = self._sizes.get(id(value))
-        if kept is not None and kept[0] is value:
-            return kept[1]
+    def exceeds(self, value: Any, limit: int) -> bool:
+        """Whether len(canonical_bytes(value)) > limit, without reading all of a spliced list."""
+        return self._size_up_to(value, limit) > limit
+
+    def _size_up_to(self, value: Any, limit: int) -> int:
+        """The size of value, or any size above limit once it is known to exceed it."""
         items = self.list_items(value)
         if items is not None:
-            size = 2 + sum(map(len, items)) + max(len(items) - 1, 0)
-        elif self._is_container(value):
-            fields = sum(
-                len(canonical_bytes(key)) + 1 + self.size(item) for key, item in value.items()
-            )
-            size = 2 + max(len(value) - 1, 0) + fields
-        else:
+            size = 2 + max(len(items) - 1, 0)
+            for item in items:
+                size += len(item)
+                if size > limit:
+                    break
+            return size
+        if not self._is_container(value):
             return len(self._leaf(value))
-        self._sizes[id(value)] = (value, size)
+        size = 2 + max(len(value) - 1, 0)
+        for key, item in value.items():
+            size += len(canonical_bytes(key)) + 1 + self._size_up_to(item, limit - size)
+            if size > limit:
+                break
         return size
 
     def digest(self, value: Any) -> str:
@@ -298,24 +306,37 @@ class _SealedItems:
         self.restored_equal = 0
         # How many leading items the last update() found equal to their documents.
         self.known_equal = 0
+        # The result of compare() for the update() of the same list that follows it.
+        self._compared: tuple[Sequence[Any], int, int] | None = None
 
-    def update(self, current: Sequence[Any]) -> None:
-        """Reuse the cached items still in current and convert the others.
+    def compare(self, current: Sequence[Any]) -> int:
+        """How many leading items of current are unchanged; update(current) reuses this."""
+        self._compared = (current, *self._unchanged(current))
+        return self._compared[2]
+
+    def _unchanged(self, current: Sequence[Any]) -> tuple[int, int]:
+        """The position in the cache of current's first item, and how many are unchanged.
 
         The lists only drop old items from the front and append new ones. Anything
-        else, such as a replaced world or an edited entry, converts them all again.
+        else, such as a replaced world or an edited entry, finds none unchanged.
         """
         start = self._position(current[0]) if current else len(self.items)
         kept = len(self.items) - start
-        if not (
+        if (
             kept <= len(current)
             and all(map(operator.is_, self.items[start:], current[:kept]))
-            and (
-                not self._still_equal
-                or all(map(operator.eq, current[:kept], self.documents[start:]))
-            )
+            and (not self._still_equal or _still_documents(current, self.documents, start, kept))
         ):
-            start, kept = len(self.items), 0
+            return start, kept
+        return len(self.items), 0
+
+    def update(self, current: Sequence[Any]) -> None:
+        """Reuse the cached items still in current and convert the others."""
+        compared, self._compared = self._compared, None
+        if compared is not None and compared[0] is current:
+            start, kept = compared[1:]
+        else:
+            start, kept = self._unchanged(current)
         documents = self.documents[start:]
         raws = self.raws[start:]
         for item in current[kept:]:
@@ -333,6 +354,14 @@ class _SealedItems:
             if cached is item:
                 return index
         return len(self.items)
+
+
+def _still_documents(current: Sequence[Any], documents: list[Any], start: int, count: int) -> bool:
+    """Whether current[:count] still are documents[start:start + count]."""
+    same = native.same_json_items(current, documents, start, count)
+    if same is None:
+        return all(map(operator.eq, current[:count], documents[start : start + count]))
+    return same
 
 
 def _world_json(value: Any) -> Any:
@@ -405,6 +434,42 @@ class CheckpointHistoryCache:
         # to equal the captured ones.
         self._event_raws: list[bytes] | None = None
         self._raws_equal = 0
+        self._validation: SaveValidationMemo | None = None
+        # The model signatures of the last configs, by their canonical JSON.
+        self._signatures: tuple[bytes, dict[str, str]] | None = None
+
+    def model_signatures(self, configs: dict[str, Any]) -> dict[str, str]:
+        """contracts.policies.model_signatures(configs); the same configs compute it once.
+
+        It reads only the configs and the installed catalog, which do not change while a
+        writer runs. Do not change the returned dict.
+        """
+        key = canonical_bytes(configs)
+        if self._signatures is None or self._signatures[0] != key:
+            self._signatures = (key, model_signatures(configs))
+        return self._signatures[1]
+
+    def validation_memo(self, world: WorldState) -> SaveValidationMemo | None:
+        """The memo for validating world before this save, without the rust kernels None.
+
+        Compares the histories with the documents of the last save, once for both the
+        validation and the documents() that follows it.
+        """
+        if not native.available():
+            return None
+        if self._validation is None:
+            self._validation = SaveValidationMemo()
+        unchanged = {}
+        for path, cache in self._model_histories.items():
+            containers = _containers(world.model_state, path)
+            if containers:
+                unchanged[path] = cache.compare(containers[-1][path[-1]])
+        self._validation.begin(world, unchanged)
+        return self._validation
+
+    def forget_validation(self) -> None:
+        """Drop what passed validations proved, after a failed capture."""
+        self._validation = None
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None

@@ -293,13 +293,19 @@ def initialize_simulator_extensions(world: WorldState) -> None:
 
 
 def validate_simulator_extensions(
-    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
+    world: WorldState,
+    *,
+    validate_event_history: bool = True,
+    tick_memo: Any = None,
+    history_memo: Any = None,
 ) -> None:
     """Validate each extension independently for checkpoint and restore hooks.
 
     Per-tick validation passes ``validate_event_history=False``: append-only histories
     are then checked only for records from the tick that just ended. With a tick_memo
-    it also skips what is proven unchanged (core/tick_validation.py).
+    it also skips what is proven unchanged (core/tick_validation.py). A save's complete
+    validation passes a history_memo to skip unchanged old entries
+    (core/save_validation.py).
     """
     if tick_memo is not None and tick_memo.configs_unchanged:
         required = tick_memo.required_states
@@ -328,7 +334,12 @@ def validate_simulator_extensions(
     if missing:
         raise ValueError(f"required simulator state is missing: {sorted(missing)}")
     validate_agent_dynamics_state(world)
-    validate_body_state(world, validate_event_history=validate_event_history, tick_memo=tick_memo)
+    validate_body_state(
+        world,
+        validate_event_history=validate_event_history,
+        tick_memo=tick_memo,
+        history_memo=history_memo,
+    )
     validate_population_dynamics_state(world)
     if tick_memo is None or not tick_memo.lifecycle_unchanged:
         validate_population_lifecycle_state(world)
@@ -346,7 +357,10 @@ def validate_simulator_extensions(
     ):
         raise ValueError("shared_operations_v1 requires its signed Scenario contract")
     validate_shared_operations_state(
-        world, validate_event_history=validate_event_history, tick_memo=tick_memo
+        world,
+        validate_event_history=validate_event_history,
+        tick_memo=tick_memo,
+        history_memo=history_memo,
     )
 
 
