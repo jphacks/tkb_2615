@@ -12,6 +12,7 @@ from sheltersim.contracts.operations import ActionLifecycleReceipt
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import AgentState
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
+from sheltersim.events.queue import keeps_saved_bytes
 
 ACTION_LIFECYCLE_SOURCE_ID = "ASM-ACTION-LIFECYCLE-V1"
 ACTION_LIFECYCLE_POLICY_VERSION = "applied-action-lifecycle-v2"
@@ -32,7 +33,15 @@ _INTERRUPTED_ACTIONS = {
 def active_action_index(world: WorldState) -> dict[str, dict[str, Any]]:
     """Rebuild transient lookup state from persisted event evidence after restore."""
     active: dict[str, dict[str, Any]] = {}
-    for row in world.event_log.of_types({"agent_action_lifecycle"}):
+    # The Rust EventLog knows which records decide the result, so a restored log makes
+    # only those objects. They give the same dict, in the same order, as all of them.
+    log = world.event_log
+    rows = (
+        log.active_lifecycle_records()
+        if keeps_saved_bytes(log)
+        else log.of_types({"agent_action_lifecycle"})
+    )
+    for row in rows:
         event = row.event
         payload = event.payload
         agent_id = payload.get("agent_id")

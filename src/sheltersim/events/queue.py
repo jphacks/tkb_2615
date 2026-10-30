@@ -446,6 +446,10 @@ class _NativeEventLog:
         """The records whose event has one of event_types, in append order."""
         return self._store.of_types(event_types)
 
+    def active_lifecycle_records(self) -> list[EventLogRecord]:
+        """The agent_action_lifecycle records a pass needs for each agent's active action."""
+        return self._store.active_lifecycle_records()
+
     @property
     def records(self) -> tuple[EventLogRecord, ...]:
         """Read-only view of realized outcomes in append order."""
