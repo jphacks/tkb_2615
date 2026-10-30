@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS entities(branch TEXT NOT NULL, kind TEXT NOT NULL, ke
 CREATE INDEX IF NOT EXISTS entity_time ON entities(branch,kind,entity,minute,key);
 CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key);
 CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
-PRAGMA user_version=1;
+CREATE TABLE IF NOT EXISTS lineage(branch TEXT PRIMARY KEY, parent TEXT NOT NULL, fork_minute INTEGER NOT NULL);
+PRAGMA user_version=2;
 """  # noqa: E501
 _WRITE_CACHE_KIB = 16_384
 
@@ -124,6 +125,44 @@ def _event_references(value: Any) -> set[str]:
         for item in value:
             result.update(_event_references(item))
     return result
+
+
+# Version 2 adds lineage: a branch forked from another reads the parent's rows before
+# its fork minute instead of copying them. Version 1 indexes have no lineage rows and
+# read the same; code that knows only version 1 refuses a version 2 index.
+_READABLE_VERSIONS = (1, 2)
+
+
+def _segments(db: sqlite3.Connection, branch: str) -> list[tuple[str, int | None]]:
+    """The branches whose rows a branch reads, each with the minute its rows end before:
+    the branch itself (no end), then its parent before the fork minute, and so on."""
+    segments: list[tuple[str, int | None]] = [(branch, None)]
+    limit: int | None = None
+    current = branch
+    while True:
+        row = db.execute(
+            "SELECT parent,fork_minute FROM lineage WHERE branch=?", (current,)
+        ).fetchone()
+        if row is None:
+            return segments
+        current = row[0]
+        limit = row[1] if limit is None else min(limit, row[1])
+        if any(name == current for name, _ in segments):
+            raise StorageError("history_index_lineage_cycle")
+        segments.append((current, limit))
+
+
+def _scope(segments: list[tuple[str, int | None]], alias: str = "r") -> tuple[str, list[Any]]:
+    """A WHERE term selecting the rows segments name, and its arguments."""
+    terms, args = [], []
+    for name, limit in segments:
+        if limit is None:
+            terms.append(f"{alias}.branch=?")
+            args.append(name)
+        else:
+            terms.append(f"({alias}.branch=? AND {alias}.minute<?)")
+            args.extend((name, limit))
+    return "(" + " OR ".join(terms) + ")", args
 
 
 def _virtual_utterance_example(
@@ -230,14 +269,15 @@ class _RecordBatch:
 
     def __init__(self, db: sqlite3.Connection, branch: str) -> None:
         self.db, self.branch = db, branch
+        # The ancestors whose rows this branch reads (their minute limits); a row they
+        # hold already is not stored again.
+        self.ancestors: list[tuple[str, int]] = []
         self.pending: dict[tuple[str, str], str] = {}
         self.records: list[tuple[Any, ...]] = []
         self.entities: list[tuple[Any, ...]] = []
         self.tokens: list[tuple[Any, ...]] = []
         self.references: list[tuple[Any, ...]] = []
         self.added: dict[str, int] = {}
-        # Rows copied from the parent branch (#223), which put() does not derive again.
-        self.inherited: set[tuple[str, str]] = set()
 
     def __enter__(self) -> _RecordBatch:
         return self
@@ -247,8 +287,6 @@ class _RecordBatch:
             self.flush()
 
     def put(self, kind: str, row: dict[str, Any], *, key: str | None = None) -> None:
-        if key is not None and (kind, key) in self.inherited:
-            return
         branch = self.branch
         row = safe_document(row)
         minute = row.get("minute", row.get("minute_index"))
@@ -264,6 +302,19 @@ class _RecordBatch:
                 (branch, kind, key),
             ).fetchone()
             existing = stored[0] if stored is not None else None
+        if existing is None and kind != "conversations":
+            # An ancestor's rows before the fork minute are read as this branch's.
+            for ancestor, limit in self.ancestors:
+                if minute >= limit:
+                    break
+                stored = self.db.execute(
+                    "SELECT payload FROM records WHERE branch=? AND kind=? AND key=? AND minute<?",
+                    (ancestor, kind, key, limit),
+                ).fetchone()
+                if stored is not None:
+                    if stored[0] != encoded:
+                        raise StorageError("immutable_history_record_conflict")
+                    return
         if existing is not None:
             if existing != encoded:
                 raise StorageError("immutable_history_record_conflict")
@@ -329,53 +380,14 @@ class _RecordBatch:
         self.added.clear()
 
 
-def _inherit_rows(
-    db: sqlite3.Connection, parent: str, branch: str, checkpoint: Any
-) -> set[tuple[str, str]]:
-    """Copy the parent's rows for this checkpoint's events and KPI samples."""
-    pairs = []
-    for record in checkpoint.world_state["event_log"]:
-        event_id = record["event"]["event_id"]
-        pairs.append(("events", digest(record)))
-        pairs.append(("social", "event:" + event_id))
-        for kind in ("actions", "care", "operations"):
-            pairs.append((kind, "applied:" + event_id))
-        pairs.append(("care", "care:" + event_id))
-        pairs.append(("operations", "operations:" + event_id))
-    pairs.extend(
-        ("kpis", str(sample["minute_index"])) for sample in checkpoint.metrics_state["snapshots"]
-    )
-    db.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS inherit(kind TEXT, key TEXT, PRIMARY KEY(kind,key))"
-    )
-    db.execute("DELETE FROM temp.inherit")
-    db.executemany("INSERT OR IGNORE INTO temp.inherit VALUES(?,?)", pairs)
-    db.execute(
-        "INSERT INTO records SELECT ?,r.kind,r.key,r.minute,r.event_id,r.cause,r.source,"
-        "r.event_type,r.status,r.payload,r.payload_hash FROM records r JOIN temp.inherit i "
-        "ON r.kind=i.kind AND r.key=i.key WHERE r.branch=?",
-        (branch, parent),
-    )
-    for table, columns in (("entities", "e.entity,e.minute"), ("tokens", "e.token,e.minute")):
-        selected = (
-            f"?,e.kind,e.key,{columns}" if table == "entities" else f"?,e.kind,{columns},e.key"
-        )
-        db.execute(
-            f"INSERT INTO {table} SELECT {selected} FROM {table} e JOIN temp.inherit i "
-            "ON e.kind=i.kind AND e.key=i.key WHERE e.branch=?",
-            (branch, parent),
-        )
-    db.execute(
-        "INSERT INTO generations SELECT ?,kind,count(*) FROM records WHERE branch=? "
-        "GROUP BY kind ON CONFLICT(branch,kind) DO UPDATE SET value=value+excluded.value",
-        (branch, branch),
-    )
-    inherited = {
-        (row[0], row[1])
-        for row in db.execute("SELECT kind,key FROM records WHERE branch=?", (branch,))
-    }
-    db.execute("DELETE FROM temp.inherit")
-    return inherited
+def _leading(items: list[Any], before: Any) -> int:
+    """How many leading items satisfy before."""
+    count = 0
+    for item in items:
+        if not before(item):
+            break
+        count += 1
+    return count
 
 
 class HistoryIndex:
@@ -404,7 +416,7 @@ class HistoryIndex:
                 # the mode stays until a later write; on other files this does nothing.
                 connection.execute("PRAGMA journal_mode=DELETE")
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1):
+                if version not in (0, *_READABLE_VERSIONS):
                     raise StorageError("history_index_version_unsupported")
                 connection.executescript(_SCHEMA)
                 page_size = connection.execute("PRAGMA page_size").fetchone()[0]
@@ -418,7 +430,8 @@ class HistoryIndex:
                 connection.execute(f"PRAGMA cache_size=-{_WRITE_CACHE_KIB}")
                 connection.execute("BEGIN IMMEDIATE")
             else:
-                if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                if version not in _READABLE_VERSIONS:
                     raise StorageError("history_index_version_unsupported")
                 connection.execute("PRAGMA query_only=ON")
                 connection.execute("BEGIN")
@@ -451,15 +464,21 @@ class HistoryIndex:
     ) -> None:
         """Append only new immutable records; checkpoint lists are already in writer memory.
 
-        A new branch forked from inherit_from copies the parent's rows derived from
-        the events and KPI samples they share, instead of deriving them again (#223).
-        Rows derived from model_state histories, whose windows differ, are derived.
+        A new branch forked from inherit_from reads the parent's rows before the fork
+        minute instead of storing them (#256); it stores only rows from the fork minute
+        on, and none its ancestors hold already.
         """
         with self.connect(write=True) as db, _RecordBatch(db, branch) as records:
             prior = db.execute("SELECT * FROM heads WHERE branch=?", (branch,)).fetchone()
-            if inherit_from is not None and prior is None and not rebuild:
-                records.inherited = _inherit_rows(db, inherit_from, branch, checkpoint)
+            forked = inherit_from is not None and prior is None and not rebuild
+            if forked:
+                db.execute(
+                    "INSERT INTO lineage VALUES(?,?,?)",
+                    (branch, inherit_from, checkpoint.simulation_minute),
+                )
             if rebuild:
+                # A rebuilt branch derives every row itself and reads no ancestor.
+                db.execute("DELETE FROM lineage WHERE branch=?", (branch,))
                 # This index is a replaceable read model of immutable source logs.
                 # Clear only the requested branch so a new projection version can
                 # rebuild it without conflicting with rows derived by older code.
@@ -477,6 +496,22 @@ class HistoryIndex:
             counts = json.loads(prior["counts"]) if prior and not rebuild else {}
             if rebuild:
                 previous_minute = -1
+            records.ancestors = [
+                (name, limit) for name, limit in _segments(db, branch)[1:] if limit is not None
+            ]
+            if forked:
+                # Events and KPI samples before the fork minute are the parent's rows;
+                # histories are read again from the minute before, as after a save.
+                fork_minute = checkpoint.simulation_minute
+                counts["events"] = _leading(
+                    checkpoint.world_state["event_log"],
+                    lambda record: record["realized_minute"] < fork_minute,
+                )
+                counts["kpis"] = _leading(
+                    checkpoint.metrics_state["snapshots"],
+                    lambda sample: sample["minute_index"] < fork_minute,
+                )
+                previous_minute = fork_minute
             if previous_minute > checkpoint.simulation_minute:
                 raise StorageError("history_index_ahead_of_checkpoint")
             known = db.execute(
@@ -865,6 +900,12 @@ class HistoryIndex:
         graph = None
         with self.connect() as db:
             anchor, indexed_minute = self.answering_head(db, branch, anchor, anchor_minute)
+            # Conversation turns belong to their branch; other rows are read through its
+            # lineage.
+            segments = [(branch, None)] if kind == "conversations" else _segments(db, branch)
+            scope, scope_args = _scope(segments)
+            where[0] = scope
+            args[:1] = scope_args
             after = (
                 cursor_decode(query.cursor, scope, anchor)
                 if query.kind != "conversations"
@@ -884,9 +925,9 @@ class HistoryIndex:
                 while frontier and len(visited) < 500:
                     current = frontier.pop(0)
                     links = db.execute(
-                        "SELECT event_id,cause FROM records WHERE branch=? AND kind='events' "
-                        "AND (event_id=? OR cause=?) LIMIT 501",
-                        (branch, current, current),
+                        f"SELECT r.event_id,r.cause FROM records r WHERE {scope} AND "
+                        "r.kind='events' AND (r.event_id=? OR r.cause=?) LIMIT 501",
+                        (*scope_args, current, current),
                     ).fetchall()
                     link_limit_hit = link_limit_hit or len(links) >= 501
                     for row in links:
@@ -910,9 +951,9 @@ class HistoryIndex:
                     or bool(frontier)
                     or len(visited) >= 500,
                     "root_present": db.execute(
-                        "SELECT 1 FROM records WHERE branch=? AND kind='events' AND "
-                        "event_id=? LIMIT 1",
-                        (branch, query.event_id),
+                        f"SELECT 1 FROM records r WHERE {scope} AND r.kind='events' AND "
+                        "r.event_id=? LIMIT 1",
+                        (*scope_args, query.event_id),
                     ).fetchone()
                     is not None,
                 }
@@ -931,17 +972,26 @@ class HistoryIndex:
                         raise StorageError("stale_or_foreign_cursor")
                     where.append("(r.minute,r.kind,r.key)>(?,?,?)")
                     args.extend((after[0], after_kind, after_key))
+            # One ordered select per branch of the lineage keeps each on its index;
+            # the compound select merges them in order.
+            parts, part_args = [], []
+            rest, rest_args = where[1:], args[len(scope_args) :]
+            for segment in segments:
+                segment_scope, segment_args = _scope([segment])
+                parts.append(
+                    "SELECT r.kind,r.minute,r.key,r.payload,r.payload_hash FROM records r "
+                    "WHERE " + " AND ".join([segment_scope, *rest])
+                )
+                part_args.extend((*segment_args, *rest_args))
             rows = db.execute(
-                "SELECT r.kind,r.minute,r.key,r.payload,r.payload_hash FROM records r WHERE "
-                + " AND ".join(where)
-                + " ORDER BY r.minute,r.kind,r.key LIMIT ?",
-                (*args, query.limit + 1),
+                " UNION ALL ".join(parts) + " ORDER BY minute,kind,key LIMIT ?",
+                (*part_args, query.limit + 1),
             ).fetchall()
             coverage_rows = db.execute(
-                "SELECT kind,MIN(minute),MAX(minute),COUNT(*) FROM records "
-                "WHERE branch=? AND kind IN (" + ",".join("?" for _ in kinds) + ") "
-                "AND minute BETWEEN ? AND ? GROUP BY kind",
-                (branch, *kinds, query.start, query.end),
+                f"SELECT r.kind,MIN(r.minute),MAX(r.minute),COUNT(*) FROM records r WHERE {scope} "
+                "AND r.kind IN (" + ",".join("?" for _ in kinds) + ") "
+                "AND r.minute BETWEEN ? AND ? GROUP BY r.kind",
+                (*scope_args, *kinds, query.start, query.end),
             ).fetchall()
             head = db.execute("SELECT counts FROM heads WHERE branch=?", (branch,)).fetchone()
         coverage_by_kind = {

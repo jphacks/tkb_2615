@@ -122,3 +122,59 @@ def test_an_index_left_in_wal_mode_returns_to_the_rollback_journal(index):
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     assert not index.path.with_name(index.path.name + "-wal").exists()
     assert _counts(index)["records"] == 1
+
+
+def test_a_branch_reads_its_ancestors_before_the_smallest_fork_minute(index):
+    """#256: lineage rows name each branch's parent and fork minute."""
+    from sheltersim.storage.history_index import _scope, _segments
+
+    with index.connect(write=True) as db:
+        db.execute("INSERT INTO lineage VALUES('a','main',50)")
+        db.execute("INSERT INTO lineage VALUES('b','a',30)")
+        db.execute("INSERT INTO lineage VALUES('c','main',70)")
+        assert _segments(db, "main") == [("main", None)]
+        assert _segments(db, "a") == [("a", None), ("main", 50)]
+        assert _segments(db, "b") == [("b", None), ("a", 30), ("main", 30)]
+        assert _segments(db, "c") == [("c", None), ("main", 70)]
+        scope, args = _scope(_segments(db, "b"))
+        assert scope == "(r.branch=? OR (r.branch=? AND r.minute<?) OR (r.branch=? AND r.minute<?))"
+        assert args == ["b", "a", 30, "main", 30]
+
+
+def test_a_forked_branch_stores_no_row_its_parent_holds_before_the_fork_minute(index):
+    _put(index, ("events", _record(10), "early"), ("events", _record(60), "late"))
+    with index.connect(write=True) as db:
+        db.execute("INSERT INTO lineage VALUES('child','main',50)")
+    with index.connect(write=True) as db, _RecordBatch(db, "child") as records:
+        records.ancestors = [("main", 50)]
+        records.put("events", _record(10), key="early")
+        records.put("events", _record(60), key="late")
+    with sqlite3.connect(index.path.as_uri() + "?mode=ro", uri=True) as db:
+        stored = db.execute("SELECT key FROM records WHERE branch='child'").fetchall()
+    # The parent's row at minute 60 is after the fork, so the child stores its own.
+    assert stored == [("late",)]
+    with pytest.raises(StorageError, match="immutable_history_record_conflict"):
+        with index.connect(write=True) as db, _RecordBatch(db, "child") as records:
+            records.ancestors = [("main", 50)]
+            records.put("events", {**_record(10), "status": "rejected"}, key="early")
+
+
+def test_a_version_one_index_is_read_and_upgraded_and_a_newer_one_refused(index):
+    """Version 1 indexes have no lineage and read the same; a write makes them version 2.
+    An index of a version this code does not know is refused, read or written."""
+    _put(index, ("events", _record(1), "k"))
+    with sqlite3.connect(index.path) as db:
+        db.execute("DROP TABLE lineage")
+        db.execute("PRAGMA user_version=1")
+    with index.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 1
+    with index.connect(write=True):
+        pass
+    with sqlite3.connect(index.path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("SELECT COUNT(*) FROM lineage").fetchone()[0] == 0
+        db.execute("PRAGMA user_version=3")
+    for write in (False, True):
+        with pytest.raises(StorageError, match="history_index_version_unsupported"):
+            with index.connect(write=write):
+                pass
