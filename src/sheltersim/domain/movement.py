@@ -393,6 +393,7 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
     pending = {event.event_id for event in world.event_queue.pending()}
     replan: list[str] = []
     completed_queue_trips: set[str] = set()
+    zone_centers: dict[str, Point2D | None] = {}
     for agent_id, journey in sorted(tuple(state["journeys"].items())):
         agent = world.agents.get(agent_id)
         if agent is None:
@@ -416,7 +417,7 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
             or journey["task_id"] not in world.active_tasks
         ):
             state["journeys"].pop(agent_id, None)
-            _set_stationary_position(world, agent_id, geometry)
+            _set_stationary_position(world, agent_id, geometry, zone_centers)
             continue
         facility = world.facilities.get(journey["facility_id"]) if journey["facility_id"] else None
         destination = facility.zone_id if facility is not None else journey["destination_zone_id"]
@@ -513,7 +514,7 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
             and agent_id not in completed_queue_trips
             and world.agents[agent_id].activity is not Activity.QUEUED
         ):
-            _set_stationary_position(world, agent_id, geometry)
+            _set_stationary_position(world, agent_id, geometry, zone_centers)
     staff_position_snapshots(world, boundary_minute=minute + 1)
     return tuple(replan)
 
@@ -718,8 +719,13 @@ def _reserved_bed_point(world: WorldState, agent_id: str) -> Point2D | None:
 
 
 def _set_stationary_position(
-    world: WorldState, agent_id: str, geometry: FacilityGeometry | None
+    world: WorldState,
+    agent_id: str,
+    geometry: FacilityGeometry | None,
+    zone_centers: dict[str, Point2D | None] | None = None,
 ) -> None:
+    """Record where a person not on a journey is; ``zone_centers`` keeps the centers of
+    one geometry for a caller that places everyone in one tick."""
     state = world.model_state.get(MOVEMENT_STATE_KEY)
     agent = world.agents.get(agent_id)
     if state is None or agent is None:
@@ -732,7 +738,13 @@ def _set_stationary_position(
             point = geometry.facility_points.get(agent.target_id)
         elif agent.activity is Activity.SLEEPING:
             point = _reserved_bed_point(world, agent_id)
-        point = point or _zone_center(geometry, agent.zone_id)
+        if not point:
+            if zone_centers is None:
+                point = _zone_center(geometry, agent.zone_id)
+            else:
+                if agent.zone_id not in zone_centers:
+                    zone_centers[agent.zone_id] = _zone_center(geometry, agent.zone_id)
+                point = zone_centers[agent.zone_id]
     elif agent.zone_id in world.zones:
         zone = world.zones[agent.zone_id]
         if zone.display_x is not None and zone.display_y is not None:
