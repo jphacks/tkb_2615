@@ -56,8 +56,8 @@ def test_corrupt_head_still_fails_closed_in_the_worker(tmp_path, monkeypatch, sa
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
     store, _ = saved_timeline(tmp_path)
     head = store.branch_reference("p", "r", "main").checkpoint_hash
-    for chunk in (store._path("p", "runs", "r", "checkpoints") / "chunks").iterdir():
-        chunk.write_bytes(b"corrupt")
+    for pack in (store._path("p", "runs", "r", "checkpoints") / "packs").glob("*.pack"):
+        pack.write_bytes(b"corrupt")
     api = ProjectAPI(store)
     try:
         api.submit("p", "r", "main", 5)

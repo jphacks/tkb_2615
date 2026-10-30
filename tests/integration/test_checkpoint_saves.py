@@ -16,6 +16,23 @@ from sheltersim.storage.checkpoints import CheckpointArchive
 from sheltersim.storage.projects import ProjectStore
 
 
+def _same_as_public_archive(directory, checkpoint, public):
+    """The saved manifest packs the document as a fresh archive does, and each of
+    its chunks, wherever an earlier save put it, holds the same bytes."""
+    manifest = json.loads(
+        (directory / f"{checkpoint.checkpoint_hash}.json").read_text(encoding="utf-8")
+    )
+    fresh = CheckpointArchive(public)
+    expected = fresh.encode(checkpoint)
+    assert manifest["document"] == expected["document"]
+    assert manifest["checkpoint_hash"] == expected["checkpoint_hash"]
+    saved = CheckpointArchive(directory)
+    assert saved.decode(manifest).to_json() == checkpoint.to_json()
+    fresh._validate_manifest(expected)
+    for key in CheckpointArchive.pack_locations(expected):
+        assert saved._get(key) == fresh._get(key)
+
+
 @pytest.mark.parametrize(("target", "expected"), [(30, [30]), (31, [30, 31])])
 def test_advance_records_each_changed_boundary_once(
     tmp_path, monkeypatch, target, expected, saved_timeline
@@ -93,15 +110,15 @@ def test_interrupted_archive_recovers_orphan_chunk_accounting(
 ):
     store, timeline = saved_timeline(tmp_path)
     prior = store.load_branch("p", "r", "main")[1].to_json()
-    write_chunk = CheckpointArchive._write_chunk
+    write_pack = CheckpointArchive._write_pack
 
-    def interrupted_write(archive, key, compressed):
-        write_chunk(archive, key, compressed)
+    def interrupted_write(archive, name, data):
+        write_pack(archive, name, data)
         if archive.new_bytes:
-            raise OSError("injected interruption after a durable chunk")
+            raise OSError("injected interruption after a durable pack")
 
     with monkeypatch.context() as patch:
-        patch.setattr(CheckpointArchive, "_write_chunk", interrupted_write)
+        patch.setattr(CheckpointArchive, "_write_pack", interrupted_write)
         with pytest.raises(OSError, match="injected interruption"):
             timeline.advance("main", 5)
     restarted = ProjectStore(store.root)
@@ -135,16 +152,12 @@ def test_stored_chunks_are_not_checked_again(tmp_path, monkeypatch, saved_timeli
     assert checked
 
 
-def test_saved_archive_matches_the_public_encoder_byte_for_byte(tmp_path, saved_timeline):
+def test_saved_archive_matches_the_public_encoder(tmp_path, saved_timeline):
     store, timeline = saved_timeline(tmp_path)
     timeline.advance("main", 31)
     _, head = store.load_branch("p", "r", "main")
     directory = store._path("p", "runs", "r", "checkpoints")
-    manifest = json.loads((directory / f"{head.checkpoint_hash}.json").read_text(encoding="utf-8"))
-    other = tmp_path / "public"
-    assert CheckpointArchive(other).encode(head) == manifest
-    for chunk in (other / "chunks").iterdir():
-        assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()
+    _same_as_public_archive(directory, head, tmp_path / "public")
 
 
 def test_every_save_matches_a_full_capture_and_the_public_encoder(
@@ -174,10 +187,8 @@ def test_every_save_matches_a_full_capture_and_the_public_encoder(
     assert [item.simulation_minute for item in saved] == [10, 20, 30, 40, 50, 60, 70, 40, 50, 60]
     directory = store._path("p", "runs", "r", "checkpoints")
     for checkpoint in saved:
-        manifest = json.loads(
-            (directory / f"{checkpoint.checkpoint_hash}.json").read_text(encoding="utf-8")
+        _same_as_public_archive(
+            directory, checkpoint, tmp_path / "public" / checkpoint.checkpoint_hash
         )
-        other = tmp_path / "public" / checkpoint.checkpoint_hash
-        assert CheckpointArchive(other).encode(checkpoint) == manifest
-        for chunk in (other / "chunks").iterdir():
-            assert (directory / "chunks" / chunk.name).read_bytes() == chunk.read_bytes()
+    # A save writes one pack of the chunks it adds; the others stay where they are.
+    assert len(list((directory / "packs").glob("*.pack"))) <= len(saved) + 1

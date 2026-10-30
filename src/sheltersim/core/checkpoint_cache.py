@@ -48,11 +48,18 @@ class CanonicalEncoder:
     remembered. The document must not change while the encoder is in use.
     """
 
-    def __init__(self, chunk_keys: dict[tuple[int, int, int], Any] | None = None) -> None:
+    def __init__(
+        self,
+        chunk_keys: dict[tuple[int, int, int], Any] | None = None,
+        pack_locations: dict[str, tuple[str, int, int]] | None = None,
+    ) -> None:
         # Archive chunk hashes by their first and last item bytes and length, shared by
         # the captures of one history cache: a writer reuses the item bytes of history
         # it saved before, so the same objects mean the same chunk.
         self.chunk_keys = {} if chunk_keys is None else chunk_keys
+        # Where the archive saves of the same writer put each chunk in a pack, so a
+        # chunk that comes back in a later save is not written again.
+        self.pack_locations = {} if pack_locations is None else pack_locations
         self._lists: dict[int, tuple[list[Any], list[bytes]]] = {}
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
@@ -264,12 +271,13 @@ class CheckpointHistoryCache:
         self._snapshots = _SealedItems(asdict)
         self._resource_snapshots = _SealedItems(dict, still_equal=True)
         self._chunk_keys: dict[tuple[int, int, int], Any] = {}
+        self._pack_locations: dict[str, tuple[str, int, int]] = {}
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None
     ) -> tuple[dict[str, Any], dict[str, Any], CanonicalEncoder]:
         """world.to_dict() and metrics.to_dict() of a validated world, and their encoder."""
-        encoder = CanonicalEncoder(self._chunk_keys)
+        encoder = CanonicalEncoder(self._chunk_keys, self._pack_locations)
         histories = [
             path for path in _MODEL_STATE_HISTORIES if _containers(world.model_state, path)
         ]

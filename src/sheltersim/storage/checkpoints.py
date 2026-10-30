@@ -1,9 +1,14 @@
-"""Compressed content-addressed checkpoint chunks with bounded read amplification."""
+"""Compressed content-addressed checkpoint chunks with bounded read amplification.
+
+A v3 manifest stores the chunks one save adds in one pack file and records where
+each of its chunks is. Chunks of v1/v2 archives are one file each and stay readable.
+"""
 
 from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -18,6 +23,11 @@ from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 
 _HASH = re.compile(r"^[a-f0-9]{64}$")
+
+# Every manifest version this archive reads; saves write the last one.
+ARCHIVE_STORAGE_TYPES = frozenset(
+    {"checkpoint_archive_v1", "checkpoint_archive_v2", "checkpoint_archive_v3"}
+)
 
 
 def _encoded(value: Any) -> bytes:
@@ -37,6 +47,7 @@ class CheckpointArchive:
         max_new_bytes: int | None = None,
         content_check: Callable[[Any], None] | None = None,
         encoder: CanonicalEncoder | None = None,
+        known_locations: dict[str, tuple[str, int, int]] | None = None,
     ) -> None:
         self.directory = directory
         self.chunk_records = chunk_records
@@ -50,21 +61,55 @@ class CheckpointArchive:
         self.new_bytes = 0
         self.new_files = 0
         self.chunk_directory = directory / "chunks"
+        self.pack_directory = directory / "packs"
         self._staged: dict[str, bytes] | None = None
         self._staged_bytes = 0
+        # Where saved chunks in packs are: the locations of a manifest saved before
+        # and, through the encoder, of every save of the same writer. A save refers
+        # to them instead of writing them again (any other chunk is a v1/v2 file).
+        self._known = dict(known_locations or {})
+        # The pack chunks the manifest being prepared refers to, and the new pack.
+        self._referenced: dict[str, tuple[str, int, int] | None] = {}
+        self._new_pack: tuple[str, bytes] | None = None
+        self._prepared: dict[str, tuple[str, int, int]] = {}
+        # The locations of the manifest being read.
+        self._locations: dict[str, tuple[str, int, int]] = {}
+
+    def _check_directories(self) -> None:
+        for directory in (self.chunk_directory, self.pack_directory):
+            if directory.is_symlink() or not directory.resolve().is_relative_to(
+                self.directory.resolve()
+            ):
+                raise CheckpointError("checkpoint chunk directory cannot follow symlinks")
+
+    def _stored(self, key: str) -> bool:
+        """Whether a chunk is saved or staged already; the manifest then refers to it."""
+        if key in self._referenced:
+            return True
+        if self._staged is not None and key in self._staged:
+            self._referenced[key] = None
+            return True
+        location = self._known.get(key)
+        if location is None and self.encoder is not None:
+            location = self.encoder.pack_locations.get(key)
+        if location is not None:
+            self._referenced[key] = location
+            return True
+        if (self.chunk_directory / f"{key}.json.gz").exists():
+            # A v1/v2 chunk file; the manifest records no location for it.
+            self._referenced[key] = None
+            return True
+        return False
 
     def _put(self, value: Any, raw: bytes | None = None) -> str:
-        if self.chunk_directory.is_symlink() or not self.chunk_directory.resolve().is_relative_to(
-            self.directory.resolve()
-        ):
-            raise CheckpointError("checkpoint chunk directory cannot follow symlinks")
+        if self._staged is None:
+            raise CheckpointError("checkpoint chunks are written only by a prepared save")
         if raw is None:
             raw = _encoded(value)
         if len(raw) > 16_777_216:
             raise CheckpointError("checkpoint chunk exceeds the supported size")
         key = hashlib.sha256(raw).hexdigest()
-        path = self.chunk_directory / f"{key}.json.gz"
-        if path.exists() or (self._staged is not None and key in self._staged):
+        if self._stored(key):
             return key
         if self.content_check is not None:
             self.content_check(value)
@@ -74,30 +119,29 @@ class CheckpointArchive:
             and self.new_bytes + self._staged_bytes + len(compressed) > self.max_new_bytes
         ):
             raise CheckpointError("checkpoint storage capacity exceeded")
-        if self._staged is not None:
-            self._staged[key] = compressed
-            self._staged_bytes += len(compressed)
-        else:
-            self._write_chunk(key, compressed)
+        self._staged[key] = compressed
+        self._staged_bytes += len(compressed)
+        self._referenced[key] = None
         return key
 
-    def _write_chunk(self, key: str, compressed: bytes) -> None:
-        path = self.chunk_directory / f"{key}.json.gz"
-        self.chunk_directory.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix=".chunk-", dir=self.chunk_directory)
+    def _write_pack(self, name: str, data: bytes) -> None:
+        """Publish one pack; a pack with the same name holds the same bytes."""
+        path = self.pack_directory / f"{name}.pack"
+        self.pack_directory.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".pack-", dir=self.pack_directory)
         try:
             with os.fdopen(fd, "wb") as stream:
-                stream.write(compressed)
+                stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
             try:
-                os.link(name, path)
-                self.new_bytes += len(compressed)
+                os.link(temporary, path)
+                self.new_bytes += len(data)
                 self.new_files += 1
             except FileExistsError:
                 pass
         finally:
-            Path(name).unlink(missing_ok=True)
+            Path(temporary).unlink(missing_ok=True)
 
     def _pack(self, value: Any) -> dict[str, Any]:
         if isinstance(value, list) and len(value) > self.chunk_records:
@@ -138,7 +182,7 @@ class CheckpointArchive:
         if items is None or self.encoder is None:
             return self._put(value[start : start + count])
         key = self.encoder.chunk_key(items, start, count)
-        if key is not None and (self.chunk_directory / f"{key}.json.gz").exists():
+        if key is not None and self._stored(key):
             # The same item bytes as a chunk saved before by this writer.
             return key
         key = self._put(
@@ -176,39 +220,76 @@ class CheckpointArchive:
         *,
         checkpoint_hash: str,
     ) -> dict[str, Any]:
-        """Pack and run content checks without writing; _write_prepared publishes chunks."""
-        self._staged, self._staged_bytes = {}, 0
+        """Pack and run content checks without writing; _write_prepared publishes the pack."""
+        self._check_directories()
+        self._staged, self._staged_bytes, self._referenced = {}, 0, {}
         try:
-            body = {"checkpoint_hash": checkpoint_hash, "document": self._pack(document)}
+            packed = self._pack(document)
         except BaseException:
             self._staged, self._staged_bytes = None, 0
             raise
+        staged, self._staged, self._staged_bytes = self._staged, None, 0
+        self._new_pack = None
+        if staged:
+            data = b"".join(staged.values())
+            name = hashlib.sha256(data).hexdigest()
+            offset = 0
+            for key, compressed in staged.items():
+                self._referenced[key] = (name, offset, len(compressed))
+                offset += len(compressed)
+            self._new_pack = (name, data)
+        self._prepared = {
+            key: location for key, location in self._referenced.items() if location is not None
+        }
+        body = {
+            "checkpoint_hash": checkpoint_hash,
+            "document": packed,
+            "locations": _location_table(self._prepared),
+        }
         return {
             "schema_version": 1,
-            "storage_type": "checkpoint_archive_v2",
+            "storage_type": "checkpoint_archive_v3",
             **body,
             "manifest_hash": hashlib.sha256(_encoded(body)).hexdigest(),
         }
 
     def _write_prepared(self) -> None:
-        staged, self._staged, self._staged_bytes = self._staged or {}, None, 0
-        for key, compressed in staged.items():
-            self._write_chunk(key, compressed)
+        pack, self._new_pack = self._new_pack, None
+        if pack is not None:
+            self._write_pack(*pack)
+        # Only chunks now on disk are referred to by later saves.
+        prepared, self._prepared = self._prepared, {}
+        self._known.update(prepared)
+        if self.encoder is not None:
+            self.encoder.pack_locations.update(prepared)
 
     def _get(self, key: str) -> Any:
         if not isinstance(key, str) or not _HASH.fullmatch(key):
             raise CheckpointError("invalid checkpoint chunk hash")
-        path = self.chunk_directory / f"{key}.json.gz"
-        if path.is_symlink() or self.chunk_directory.is_symlink():
+        location = self._locations.get(key)
+        directory = self.chunk_directory if location is None else self.pack_directory
+        path = (
+            directory / f"{key}.json.gz" if location is None else directory / f"{location[0]}.pack"
+        )
+        if path.is_symlink() or directory.is_symlink():
             raise CheckpointError("checkpoint chunks cannot follow symlinks")
         try:
-            # A single chunk has a hard decompression bound to reject corrupt archives.
-            with gzip.open(path, "rb") as stream:
-                raw = stream.read(16_777_217)
+            if location is None:
+                # A single chunk has a hard decompression bound to reject corrupt archives.
+                with gzip.open(path, "rb") as stream:
+                    raw = stream.read(16_777_217)
+            else:
+                with path.open("rb") as stream:
+                    stream.seek(location[1])
+                    compressed = stream.read(location[2])
+                if len(compressed) != location[2]:
+                    raise CheckpointError("checkpoint chunk integrity/size mismatch")
+                with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as member:
+                    raw = member.read(16_777_217)
             if len(raw) > 16_777_216 or hashlib.sha256(raw).hexdigest() != key:
                 raise CheckpointError("checkpoint chunk integrity/size mismatch")
             return json.loads(raw)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, EOFError, json.JSONDecodeError) as exc:
             raise CheckpointError("checkpoint chunk is missing or corrupt") from exc
 
     def _unpack(self, node: dict[str, Any], *, depth: int = 0) -> Any:
@@ -290,13 +371,51 @@ class CheckpointArchive:
         if (
             type(record.get("schema_version")) is not int
             or record.get("schema_version") != 1
-            or record.get("storage_type") not in {"checkpoint_archive_v1", "checkpoint_archive_v2"}
+            or record.get("storage_type") not in ARCHIVE_STORAGE_TYPES
         ):
             raise CheckpointError("unsupported checkpoint archive version")
-        if record["storage_type"] == "checkpoint_archive_v2":
-            body = {"checkpoint_hash": record["checkpoint_hash"], "document": record["document"]}
-            if hashlib.sha256(_encoded(body)).hexdigest() != record.get("manifest_hash"):
-                raise CheckpointError("checkpoint archive manifest integrity mismatch")
+        self._locations = {}
+        if record["storage_type"] == "checkpoint_archive_v1":
+            return
+        body = {"checkpoint_hash": record["checkpoint_hash"], "document": record["document"]}
+        if record["storage_type"] == "checkpoint_archive_v3":
+            body["locations"] = record.get("locations")
+        if hashlib.sha256(_encoded(body)).hexdigest() != record.get("manifest_hash"):
+            raise CheckpointError("checkpoint archive manifest integrity mismatch")
+        if record["storage_type"] == "checkpoint_archive_v3":
+            self._locations = self.pack_locations(record)
+
+    @staticmethod
+    def pack_locations(record: dict[str, Any]) -> dict[str, tuple[str, int, int]]:
+        """The chunk locations of a v3 manifest, empty for v1/v2; malformed ones fail."""
+        if record.get("storage_type") != "checkpoint_archive_v3":
+            return {}
+        table = record.get("locations")
+        packs = table.get("packs") if isinstance(table, dict) else None
+        chunks = table.get("chunks") if isinstance(table, dict) else None
+        if (
+            not isinstance(table, dict)
+            or set(table) != {"packs", "chunks"}
+            or not isinstance(packs, list)
+            or not all(isinstance(name, str) and _HASH.fullmatch(name) for name in packs)
+            or len(set(packs)) != len(packs)
+            or not isinstance(chunks, dict)
+            or not all(
+                isinstance(key, str)
+                and _HASH.fullmatch(key)
+                and isinstance(location, list)
+                and len(location) == 3
+                and all(type(number) is int for number in location)
+                and 0 <= location[0] < len(packs)
+                and location[1] >= 0
+                and 0 < location[2] <= 16_777_216 + 65_536
+                for key, location in chunks.items()
+            )
+        ):
+            raise CheckpointError("invalid checkpoint archive locations")
+        return {
+            key: (packs[index], offset, length) for key, (index, offset, length) in chunks.items()
+        }
 
     def _path_node(self, node: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any]:
         for index, field in enumerate(path):
@@ -387,3 +506,16 @@ class CheckpointArchive:
             "projection_integrity": "manifest_and_selected_chunks",
             "full_checkpoint_verified_by_this_read": False,
         }
+
+
+def _location_table(locations: dict[str, tuple[str, int, int]]) -> dict[str, Any]:
+    """The manifest form of chunk locations: each pack name once, chunks by key."""
+    packs = sorted({name for name, _, _ in locations.values()})
+    number = {name: index for index, name in enumerate(packs)}
+    return {
+        "packs": packs,
+        "chunks": {
+            key: [number[name], offset, length]
+            for key, (name, offset, length) in sorted(locations.items())
+        },
+    }

@@ -9,7 +9,7 @@ from typing import Any
 
 from sheltersim.contracts.workspace import ComparisonDifferenceQuery
 from sheltersim.core.checkpoint import CheckpointError
-from sheltersim.storage.checkpoints import CheckpointArchive
+from sheltersim.storage.checkpoints import ARCHIVE_STORAGE_TYPES, CheckpointArchive
 from sheltersim.storage.history_index import cursor_decode, cursor_encode
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest
 
@@ -68,7 +68,7 @@ def _commands(
     if record.get("checkpoint_hash") != checkpoint_hash:
         raise StorageError("checkpoint_pointer_integrity_mismatch")
     try:
-        if record.get("storage_type") in {"checkpoint_archive_v1", "checkpoint_archive_v2"}:
+        if record.get("storage_type") in ARCHIVE_STORAGE_TYPES:
             # Project only Branch audit data; never load WorldState or response tape.
             commands = CheckpointArchive(path.parent).project(
                 record, ("runtime_state", "branch", "command_log")
