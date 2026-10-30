@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 
@@ -79,9 +80,9 @@ pub struct EventStore {
 
 fn mapping_get<'py>(
     mapping: &Bound<'py, PyAny>,
-    key: &str,
+    key: &Bound<'py, PyString>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let value = mapping.call_method1("get", (key,))?;
+    let value = mapping.call_method1(intern!(mapping.py(), "get"), (key,))?;
     Ok(if value.is_none() { None } else { Some(value) })
 }
 
@@ -581,36 +582,45 @@ impl EventStore {
 }
 
 fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
-    let event = record.getattr("event")?;
-    let payload = event.getattr("payload")?;
-    let status: String = record.getattr("status")?.getattr("value")?.extract()?;
+    let py = record.py();
+    let event = record.getattr(intern!(py, "event"))?;
+    let payload = event.getattr(intern!(py, "payload"))?;
+    let status: String = record.getattr(intern!(py, "status"))?.getattr(intern!(py, "_value_"))?.extract()?;
     let mut provenance_objects = Vec::new();
-    // isinstance(value, collections.abc.Mapping), as the Python EventLog checks.
-    let mapping_type = record.py().import("collections.abc")?.getattr("Mapping")?;
-    for item in event.getattr("provenance")?.call_method0("items")?.try_iter()? {
+    // isinstance(value, collections.abc.Mapping), as the Python EventLog checks. Nearly every
+    // value is a str, which the costly check would only reject.
+    let mut mapping_type = None;
+    for item in event.getattr(intern!(py, "provenance"))?.call_method0(intern!(py, "items"))?.try_iter()? {
         let item = item?;
         let pair = item.downcast::<PyTuple>()?;
-        if pair.get_item(1)?.is_instance(&mapping_type)? {
+        let value = pair.get_item(1)?;
+        if value.is_exact_instance_of::<PyString>() {
+            continue;
+        }
+        if mapping_type.is_none() {
+            mapping_type = Some(py.import("collections.abc")?.getattr(intern!(py, "Mapping"))?);
+        }
+        if value.is_instance(mapping_type.as_ref().expect("set above"))? {
             provenance_objects.push(pair.get_item(0)?.extract()?);
         }
     }
-    let event_type: String = event.getattr("event_type")?.extract()?;
+    let event_type: String = event.getattr(intern!(py, "event_type"))?.extract()?;
     Ok(Fields {
-        event_id: event.getattr("event_id")?.extract()?,
-        sequence: event.getattr("sequence")?.extract()?,
-        minute: record.getattr("realized_minute")?.extract()?,
+        event_id: event.getattr(intern!(py, "event_id"))?.extract()?,
+        sequence: event.getattr(intern!(py, "sequence"))?.extract()?,
+        minute: record.getattr(intern!(py, "realized_minute"))?.extract()?,
         applied: status == "applied",
-        request_id: as_str(&mapping_get(&payload, "request_id")?),
-        agent_id: as_str(&mapping_get(&payload, "agent_id")?),
-        support_kind: as_str(&mapping_get(&payload, "support_kind")?),
-        payload_status_completed: mapping_get(&payload, "status")?
+        request_id: as_str(&mapping_get(&payload, intern!(py, "request_id"))?),
+        agent_id: as_str(&mapping_get(&payload, intern!(py, "agent_id"))?),
+        support_kind: as_str(&mapping_get(&payload, intern!(py, "support_kind"))?),
+        payload_status_completed: mapping_get(&payload, intern!(py, "status"))?
             .map(|value| value.eq("completed"))
             .transpose()?
             .unwrap_or(false),
-        facility_id: as_str(&mapping_get(&payload, "facility_id")?),
+        facility_id: as_str(&mapping_get(&payload, intern!(py, "facility_id"))?),
         provenance_objects,
         transition: if event_type == ACTION_LIFECYCLE_EVENT_TYPE {
-            as_str(&mapping_get(&payload, "transition")?)
+            as_str(&mapping_get(&payload, intern!(py, "transition"))?)
         } else {
             None
         },
