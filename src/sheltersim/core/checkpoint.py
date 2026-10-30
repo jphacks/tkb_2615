@@ -127,14 +127,21 @@ class Checkpoint:
         # recomputing them here cannot fail. Structure and restore checks remain.
         if history_cache is None:
             return checkpoint, checkpoint._validate(hashes_verified=True)
-        # EventLog documents an earlier capture restored are not parsed again;
-        # the restored world is still built and validated as a whole.
+        # EventLog documents an earlier capture restored are not parsed again. The
+        # restored world equals the world validated above, or is validated itself.
         restored, _ = checkpoint._validate(
             hashes_verified=True,
             restored_events=history_cache.restored_events(),
             shared=encoder.spliced_lists(),
+            validate_world=False,
         )
-        history_cache.remember_restored(restored.event_log.records)
+        equal = restored.same_state(world, known_equal_events=history_cache.restored_events_equal())
+        if not equal:
+            try:
+                restored.validate()
+            except StateInvariantError as exc:
+                raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
+        history_cache.remember_restored(restored.event_log.records, equal=equal)
         object.__setattr__(checkpoint, "_encoder", encoder)
         # The restored world shares the history lists of the captured documents.
         return checkpoint, None
@@ -313,6 +320,7 @@ class Checkpoint:
         hashes_verified: bool = False,
         restored_events: list[EventLogRecord] | None = None,
         shared: Sequence[Any] = (),
+        validate_world: bool = True,
     ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version != self.CURRENT_SCHEMA_VERSION:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
@@ -350,6 +358,7 @@ class Checkpoint:
                     self._world_document_for_restore(shared),
                     _restored_events=restored_events,
                     _shared=shared,
+                    _validate=validate_world,
                 )
                 metrics = MetricsRecorder.from_dict(
                     deepcopy(self.metrics_state, {id(item): item for item in shared})

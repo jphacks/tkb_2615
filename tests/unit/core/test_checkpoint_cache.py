@@ -166,3 +166,84 @@ def test_a_cache_seeded_with_a_restored_event_log_captures_what_a_full_capture_d
     assert not unseeded.seed_events(restored.event_log.records, documents)
     cached = Checkpoint.capture(restored, history_cache=unseeded)
     assert cached.to_json() == Checkpoint.capture(restored).to_json()
+
+
+def test_a_restored_world_equal_to_the_captured_one_is_not_validated_again(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    """The restore check compares the restored world with the world validated just
+    before, and compares only the EventLog records no earlier check compared."""
+    world = live_checkpoint_world
+    cache = CheckpointHistoryCache()
+    validated = []
+    compared = []
+    validate = WorldState.validate
+    same_state = WorldState.same_state
+
+    def counting_validate(self, **kwargs):
+        validated.append(self is world)
+        return validate(self, **kwargs)
+
+    def counting_same_state(self, other, **kwargs):
+        result = same_state(self, other, **kwargs)
+        compared.append((kwargs["known_equal_events"], len(other.event_log), result))
+        return result
+
+    monkeypatch.setattr(WorldState, "validate", counting_validate)
+    monkeypatch.setattr(WorldState, "same_state", counting_same_state)
+    for name in ("first", "cache-event-1", "cache-event-2"):
+        if name != "first":
+            _realize(world, name)
+        validated.clear()
+        cached = Checkpoint.capture(world, history_cache=cache)
+        assert validated == [True]
+        monkeypatch.setattr(WorldState, "validate", validate)
+        assert cached.to_json() == Checkpoint.capture(world).to_json()
+        monkeypatch.setattr(WorldState, "validate", counting_validate)
+    assert compared == [(0, 1, True), (1, 2, True), (2, 3, True)]
+
+
+def test_a_restored_world_that_differs_is_validated_and_compared_in_full_next_time(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    from sheltersim.core.checkpoint import CheckpointError
+
+    world = live_checkpoint_world
+    cache = CheckpointHistoryCache()
+    Checkpoint.capture(world, history_cache=cache)
+    restore = Checkpoint._world_document_for_restore
+    validated = []
+    validate = WorldState.validate
+
+    def counting_validate(self, **kwargs):
+        validated.append(self is world)
+        return validate(self, **kwargs)
+
+    def changed(self, *args, **kwargs):
+        document = restore(self, *args, **kwargs)
+        document["metric_state"] = {**document["metric_state"], "test_only": 1.0}
+        return document
+
+    monkeypatch.setattr(WorldState, "validate", counting_validate)
+    with monkeypatch.context() as patch:
+        patch.setattr(Checkpoint, "_world_document_for_restore", changed)
+        _realize(world, "cache-event-1")
+        Checkpoint.capture(world, history_cache=cache)
+    # A different (still valid) restored world is validated as a whole.
+    assert validated == [True, False]
+    assert cache.restored_events_equal() == 0
+
+    def broken(self, *args, **kwargs):
+        document = restore(self, *args, **kwargs)
+        document["minute_index"] = -1
+        return document
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Checkpoint, "_world_document_for_restore", broken)
+        _realize(world, "cache-event-2")
+        try:
+            Checkpoint.capture(world, history_cache=cache)
+        except CheckpointError as exc:
+            assert "checkpoint payload is invalid" in str(exc)
+        else:
+            raise AssertionError("an invalid restored world was accepted")

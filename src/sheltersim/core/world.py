@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Any
 
@@ -1446,13 +1446,15 @@ class WorldState:
         *,
         _restored_events: Sequence[EventLogRecord] = (),
         _shared: Sequence[Any] = (),
+        _validate: bool = True,
     ) -> WorldState:
         """Restore the exact current schema; older or unknown schemas fail closed.
 
         The private arguments are for the restore check of Checkpoint.capture only:
         _restored_events are records restored before from the same leading
         event_log documents, which are not parsed again, and the new world may keep
-        the _shared model_state lists instead of copies.
+        the _shared model_state lists instead of copies. Without _validate the caller
+        validates the world, or shows it equals one validated already.
         """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
@@ -1622,12 +1624,31 @@ class WorldState:
                 model_state=deepcopy(document["model_state"], {id(item): item for item in _shared}),
                 schema_version=document["schema_version"],
             )
-            world.validate()
+            if _validate:
+                world.validate()
             return world
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, StateInvariantError):
                 raise
             raise StateInvariantError(f"invalid WorldState document: {exc}") from exc
+
+    def same_state(self, other: WorldState, *, known_equal_events: int = 0) -> bool:
+        """Whether two worlds hold equal state, so they pass the same validation.
+
+        The first known_equal_events EventLog records of both worlds are already known
+        to be equal and are not compared. Pending events compare in queue order.
+        """
+        for item in fields(self):
+            if item.name in {"event_queue", "event_log"}:
+                continue
+            if getattr(self, item.name) != getattr(other, item.name):
+                return False
+        mine, theirs = self.event_log._records, other.event_log._records
+        return (
+            self.event_queue.pending() == other.event_queue.pending()
+            and len(mine) == len(theirs)
+            and mine[known_equal_events:] == theirs[known_equal_events:]
+        )
 
     @classmethod
     def from_json(cls, value: str) -> WorldState:

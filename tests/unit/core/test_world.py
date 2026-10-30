@@ -330,3 +330,42 @@ def test_state_digest_is_the_storage_digest_of_the_world_document(live_checkpoin
     )
     EventDispatcher().dispatch_due(world, world.minute_index)
     assert world.state_digest() == digest(world.to_dict())
+
+
+def test_same_state_compares_every_field_and_skips_only_known_equal_records() -> None:
+    from sheltersim.events.models import EventKind, ScheduledEvent
+
+    def event(name: str, minute: int, sequence: int) -> ScheduledEvent:
+        return ScheduledEvent(
+            event_id=name,
+            kind=EventKind.EXOGENOUS,
+            due_minute=minute,
+            priority=0,
+            sequence=sequence,
+            event_type="unknown_same_state_test_event",
+            payload={},
+        )
+
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+    for index in range(2):
+        world.schedule_event(event(f"done-{index}", 0, world.allocate_event_sequence()))
+    EventDispatcher().dispatch_due(world, 0)
+    first = event("later-a", 5, world.allocate_event_sequence())
+    second = event("later-b", 3, world.allocate_event_sequence())
+    world.schedule_event(first)
+    world.schedule_event(second)
+    copy = WorldState.from_dict(world.to_dict())
+    assert copy.same_state(world)
+    # Pending events compare in queue order, whatever order they were added in.
+    assert copy.event_queue._events != world.event_queue._events
+    copy.agents[next(iter(copy.agents))].stress += 0.25
+    assert not copy.same_state(world)
+    copy = WorldState.from_dict(world.to_dict())
+    copy.model_state["test_only"] = {"value": 1}
+    assert not copy.same_state(world)
+    copy = WorldState.from_dict(world.to_dict())
+    copy.event_log._records[1] = copy.event_log._records[0]
+    assert not copy.same_state(world)
+    assert not copy.same_state(world, known_equal_events=1)
+    # Records known to be equal already are not compared again.
+    assert copy.same_state(world, known_equal_events=2)
