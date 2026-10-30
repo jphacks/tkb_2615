@@ -47,7 +47,7 @@ class CheckpointArchive:
         max_new_bytes: int | None = None,
         content_check: Callable[[Any], None] | None = None,
         encoder: CanonicalEncoder | None = None,
-        known_locations: dict[str, list[Any]] | None = None,
+        known_locations: dict[str, tuple[str, int, int]] | None = None,
     ) -> None:
         self.directory = directory
         self.chunk_records = chunk_records
@@ -64,14 +64,16 @@ class CheckpointArchive:
         self.pack_directory = directory / "packs"
         self._staged: dict[str, bytes] | None = None
         self._staged_bytes = 0
-        # Where saved chunks in packs are: the locations of a manifest saved before,
-        # which a save does not write again (any other chunk is a v1/v2 file).
+        # Where saved chunks in packs are: the locations of a manifest saved before
+        # and, through the encoder, of every save of the same writer. A save refers
+        # to them instead of writing them again (any other chunk is a v1/v2 file).
         self._known = dict(known_locations or {})
         # The pack chunks the manifest being prepared refers to, and the new pack.
-        self._referenced: dict[str, list[Any] | None] = {}
+        self._referenced: dict[str, tuple[str, int, int] | None] = {}
         self._new_pack: tuple[str, bytes] | None = None
+        self._prepared: dict[str, tuple[str, int, int]] = {}
         # The locations of the manifest being read.
-        self._locations: dict[str, list[Any]] = {}
+        self._locations: dict[str, tuple[str, int, int]] = {}
 
     def _check_directories(self) -> None:
         for directory in (self.chunk_directory, self.pack_directory):
@@ -88,6 +90,8 @@ class CheckpointArchive:
             self._referenced[key] = None
             return True
         location = self._known.get(key)
+        if location is None and self.encoder is not None:
+            location = self.encoder.pack_locations.get(key)
         if location is not None:
             self._referenced[key] = location
             return True
@@ -231,17 +235,17 @@ class CheckpointArchive:
             name = hashlib.sha256(data).hexdigest()
             offset = 0
             for key, compressed in staged.items():
-                self._referenced[key] = [name, offset, len(compressed)]
+                self._referenced[key] = (name, offset, len(compressed))
                 offset += len(compressed)
             self._new_pack = (name, data)
-        locations = {
-            key: location
-            for key, location in sorted(self._referenced.items())
-            if location is not None
+        self._prepared = {
+            key: location for key, location in self._referenced.items() if location is not None
         }
-        # Later saves through this archive refer to these chunks instead of rewriting them.
-        self._known.update(locations)
-        body = {"checkpoint_hash": checkpoint_hash, "document": packed, "locations": locations}
+        body = {
+            "checkpoint_hash": checkpoint_hash,
+            "document": packed,
+            "locations": _location_table(self._prepared),
+        }
         return {
             "schema_version": 1,
             "storage_type": "checkpoint_archive_v3",
@@ -253,6 +257,11 @@ class CheckpointArchive:
         pack, self._new_pack = self._new_pack, None
         if pack is not None:
             self._write_pack(*pack)
+        # Only chunks now on disk are referred to by later saves.
+        prepared, self._prepared = self._prepared, {}
+        self._known.update(prepared)
+        if self.encoder is not None:
+            self.encoder.pack_locations.update(prepared)
 
     def _get(self, key: str) -> Any:
         if not isinstance(key, str) or not _HASH.fullmatch(key):
@@ -377,25 +386,36 @@ class CheckpointArchive:
             self._locations = self.pack_locations(record)
 
     @staticmethod
-    def pack_locations(record: dict[str, Any]) -> dict[str, list[Any]]:
+    def pack_locations(record: dict[str, Any]) -> dict[str, tuple[str, int, int]]:
         """The chunk locations of a v3 manifest, empty for v1/v2; malformed ones fail."""
-        locations = record.get("locations")
         if record.get("storage_type") != "checkpoint_archive_v3":
             return {}
-        if not isinstance(locations, dict) or not all(
-            isinstance(key, str)
-            and _HASH.fullmatch(key)
-            and isinstance(location, list)
-            and len(location) == 3
-            and isinstance(location[0], str)
-            and _HASH.fullmatch(location[0])
-            and all(type(number) is int for number in location[1:])
-            and location[1] >= 0
-            and 0 < location[2] <= 16_777_216 + 65_536
-            for key, location in locations.items()
+        table = record.get("locations")
+        packs = table.get("packs") if isinstance(table, dict) else None
+        chunks = table.get("chunks") if isinstance(table, dict) else None
+        if (
+            not isinstance(table, dict)
+            or set(table) != {"packs", "chunks"}
+            or not isinstance(packs, list)
+            or not all(isinstance(name, str) and _HASH.fullmatch(name) for name in packs)
+            or len(set(packs)) != len(packs)
+            or not isinstance(chunks, dict)
+            or not all(
+                isinstance(key, str)
+                and _HASH.fullmatch(key)
+                and isinstance(location, list)
+                and len(location) == 3
+                and all(type(number) is int for number in location)
+                and 0 <= location[0] < len(packs)
+                and location[1] >= 0
+                and 0 < location[2] <= 16_777_216 + 65_536
+                for key, location in chunks.items()
+            )
         ):
             raise CheckpointError("invalid checkpoint archive locations")
-        return locations
+        return {
+            key: (packs[index], offset, length) for key, (index, offset, length) in chunks.items()
+        }
 
     def _path_node(self, node: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any]:
         for index, field in enumerate(path):
@@ -486,3 +506,16 @@ class CheckpointArchive:
             "projection_integrity": "manifest_and_selected_chunks",
             "full_checkpoint_verified_by_this_read": False,
         }
+
+
+def _location_table(locations: dict[str, tuple[str, int, int]]) -> dict[str, Any]:
+    """The manifest form of chunk locations: each pack name once, chunks by key."""
+    packs = sorted({name for name, _, _ in locations.values()})
+    number = {name: index for index, name in enumerate(packs)}
+    return {
+        "packs": packs,
+        "chunks": {
+            key: [number[name], offset, length]
+            for key, (name, offset, length) in sorted(locations.items())
+        },
+    }

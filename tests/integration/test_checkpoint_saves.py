@@ -29,7 +29,7 @@ def _same_as_public_archive(directory, checkpoint, public):
     saved = CheckpointArchive(directory)
     assert saved.decode(manifest).to_json() == checkpoint.to_json()
     fresh._validate_manifest(expected)
-    for key in expected["locations"]:
+    for key in CheckpointArchive.pack_locations(expected):
         assert saved._get(key) == fresh._get(key)
 
 

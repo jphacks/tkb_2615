@@ -259,7 +259,7 @@ def _as_v2_archive(directory: Path) -> None:
     (directory / "chunks").mkdir(exist_ok=True)
     for path in directory.glob("*.json"):
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for key, (pack, offset, length) in manifest["locations"].items():
+        for key, (pack, offset, length) in CheckpointArchive.pack_locations(manifest).items():
             data = (directory / "packs" / f"{pack}.pack").read_bytes()
             (directory / "chunks" / f"{key}.json.gz").write_bytes(data[offset : offset + length])
         body = {"checkpoint_hash": manifest["checkpoint_hash"], "document": manifest["document"]}
@@ -293,12 +293,13 @@ def test_a_save_writes_one_pack_of_only_the_chunks_it_adds(tmp_path, saved_timel
     new = {path.name for path in packs.glob("*.pack")} - before
     assert len(new) == 1
     second = _manifest(store, store.branch_reference("p", "r", "main").checkpoint_hash)
+    first, second = map(CheckpointArchive.pack_locations, (first, second))
     # Chunks the first save stored stay in its packs; the new pack has only new ones.
-    kept = set(first["locations"]) & set(second["locations"])
+    kept = set(first) & set(second)
     assert kept
-    assert all(second["locations"][key] == first["locations"][key] for key in kept)
-    added = {key for key, location in second["locations"].items() if f"{location[0]}.pack" in new}
-    assert added and not added & set(first["locations"])
+    assert all(second[key] == first[key] for key in kept)
+    added = {key for key, location in second.items() if f"{location[0]}.pack" in new}
+    assert added and not added & set(first)
     reference = store.branch_reference("p", "r", "main")
     fresh = type(store)(store.root)
     assert fresh.load_checkpoint("p", "r", reference.checkpoint_hash).simulation_minute == 60
@@ -322,7 +323,7 @@ def test_a_run_saved_with_one_file_per_chunk_is_read_and_continued(tmp_path, sav
     assert len(list((directory / "packs").glob("*.pack"))) == 1
     # The new manifest refers to the chunk files it shares and packs none of them.
     manifest = _manifest(fresh, head)
-    assert not set(manifest["locations"]) & chunk_files
+    assert not set(CheckpointArchive.pack_locations(manifest)) & chunk_files
     archive = CheckpointArchive(directory)
     archive._validate_manifest(manifest)
     referenced = set()
@@ -342,8 +343,12 @@ def test_a_v3_manifest_with_changed_locations_fails_closed(tmp_path):
         WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
     )
     manifest = CheckpointArchive(tmp_path).encode(checkpoint)
-    key = next(iter(manifest["locations"]))
-    moved = {**manifest, "locations": {**manifest["locations"], key: ["0" * 64, 0, 10]}}
+    table = manifest["locations"]
+    key = next(iter(table["chunks"]))
+    moved = {
+        **manifest,
+        "locations": {"packs": table["packs"], "chunks": {**table["chunks"], key: [0, 0, 10]}},
+    }
     with pytest.raises(CheckpointError, match="manifest integrity"):
         CheckpointArchive(tmp_path).decode(moved)
     # Even with a matching manifest hash, a chunk is checked against its key.
@@ -351,8 +356,31 @@ def test_a_v3_manifest_with_changed_locations_fails_closed(tmp_path):
     moved["manifest_hash"] = hashlib.sha256(_encoded(body)).hexdigest()
     with pytest.raises(CheckpointError, match="missing or corrupt|integrity"):
         CheckpointArchive(tmp_path).decode(moved)
-    malformed = {**manifest, "locations": {key: ["pack", -1, 0]}}
+    malformed = {**manifest, "locations": {"packs": ["pack"], "chunks": {key: [0, -1, 0]}}}
     body = {name: malformed[name] for name in ("checkpoint_hash", "document", "locations")}
     malformed["manifest_hash"] = hashlib.sha256(_encoded(body)).hexdigest()
     with pytest.raises(CheckpointError, match="invalid checkpoint archive locations"):
         CheckpointArchive(tmp_path).decode(malformed)
+
+
+def test_a_chunk_that_comes_back_in_a_later_save_is_not_written_again(tmp_path):
+    """A writer remembers where all its saves put each chunk, not only its last save."""
+    from sheltersim.core.checkpoint_cache import CanonicalEncoder
+
+    encoder = CanonicalEncoder()
+    first = [{"row": index, "text": "a" * 64} for index in range(300)]
+    second = [{"row": index, "text": "b" * 64} for index in range(300)]
+    previous = None
+    for number, rows in enumerate((first, second, first)):
+        archive = CheckpointArchive(
+            tmp_path,
+            encoder=encoder,
+            known_locations=CheckpointArchive.pack_locations(previous) if previous else None,
+        )
+        previous = archive._encode_validated_document(
+            {"rows": rows}, checkpoint_hash=f"{number}" * 64
+        )
+        assert CheckpointArchive(tmp_path).unpack_document(previous) == {"rows": rows}
+    # The third save wrote nothing: its chunks are all in the first save's pack.
+    assert archive.new_files == 0
+    assert len(list((tmp_path / "packs").glob("*.pack"))) == 2
