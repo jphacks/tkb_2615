@@ -215,3 +215,26 @@ def test_requests_of_one_kind_get_the_reasons_they_get_alone(
     monkeypatch.setattr(metrics, "support_wait_reason_codes", checked)
     run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.OFF)
     assert compared
+
+
+def test_swapped_configs_do_not_pile_up_in_the_controller(generated_scenario) -> None:
+    """Copy-and-swap handlers replace model_configs; only the current object's parses stay."""
+    from copy import deepcopy
+
+    from sheltersim.core.engine import TickEngine
+    from sheltersim.core.world import WorldState
+    from sheltersim.experiments.metrics import MetricsRecorder
+    from sheltersim.experiments.runner import OfflineSimulationController
+    from sheltersim.experiments.timeline import _MetricSink
+
+    world = WorldState.from_scenario(generated_scenario)
+    controller = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))
+    engine = TickEngine(world, phase_handler=controller)
+    engine.step()
+    parsed = len(controller._parsed_configs)
+    for _ in range(3):
+        world.model_configs = deepcopy(world.model_configs)
+        engine.step()
+    assert len(controller._parsed_configs) == parsed
+    assert [known for known, _ in controller._model_selections] == [world.model_configs]
+    assert controller._model_selections[0][0] is world.model_configs

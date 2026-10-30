@@ -191,6 +191,7 @@ class OfflineSimulationController:
         self._view_before_proposals: WorldView | None = None
         # What the phases parsed from model_configs, while its values stay the same.
         self._config_scopes_minute: int | None = None
+        self._config_scopes_object: dict[str, Any] | None = None
         self._config_scopes_configs: dict[str, Any] | None = None
         self._parsed_configs: dict[tuple[str, int], tuple[Any, Any]] = {}
         self._model_selections: list[tuple[Any, dict[str, str]]] = []
@@ -426,10 +427,15 @@ class OfflineSimulationController:
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
         # No phase edits model_configs in place, and a phase that swaps the object brings
-        # new raw objects, so what was parsed is kept while the values stay the same.
+        # new raw objects, so what was parsed is kept while the object and its values stay
+        # the same. Comparing the object too keeps swaps from piling up old configs.
         if minute != self._config_scopes_minute:
             self._config_scopes_minute = minute
-            if world.model_configs != self._config_scopes_configs:
+            if (
+                world.model_configs is not self._config_scopes_object
+                or world.model_configs != self._config_scopes_configs
+            ):
+                self._config_scopes_object = world.model_configs
                 self._config_scopes_configs = deepcopy(world.model_configs)
                 self._parsed_configs.clear()
                 self._model_selections.clear()
