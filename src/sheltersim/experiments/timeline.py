@@ -670,10 +670,25 @@ class TimelineStore:
             self.project_id, "runs", self.run_id, "branches", child_id, "branch.json"
         ).exists():
             raise TimelineError("child branch already exists")
-        source = self.seek(branch_id, minute)
+        source, saved = self._seek(branch_id, minute)
         # The child is taken from this Checkpoint, which also holds both hashes of
         # the source.
-        child, checkpoint = source.fork_with_checkpoint(child_id)
+        if (
+            minute == saved.simulation_minute
+            and source._checkpoint_runtime_state() == saved.runtime_state
+        ):
+            # The source is a saved Checkpoint restored and not advanced; capturing it
+            # again gives the same Checkpoint, so the child takes it and the source's
+            # world, which nothing else uses.
+            checkpoint = saved
+            child = BranchRuntime.from_checkpoint(
+                saved,
+                branch_id=child_id,
+                parent_branch_id=source.branch_id,
+                _restored=(source.world, source.metrics),
+            )
+        else:
+            child, checkpoint = source.fork_with_checkpoint(child_id)
         if expected_state_hash is not None and checkpoint.state_hash != expected_state_hash:
             raise TimelineError("source state changed; preview the intervention again")
         child.runtime_state["fork_origin"] = {
