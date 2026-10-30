@@ -97,6 +97,23 @@ def _pair_key_problem(pair_key: Any) -> str | None:
 _cached_pair_key_problem = functools.lru_cache(maxsize=65_536)(_pair_key_problem)
 
 
+_RELATIONSHIP_FIELDS = frozenset(
+    {
+        "contact_count",
+        "conversation_count",
+        "cooperation_count",
+        "trust",
+        "shared_message_ids",
+        "last_contact_minute",
+        "last_interaction",
+    }
+)
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def validate_social_network_state(world: WorldState) -> None:
     """Validate sparse directed edges without requiring every possible Agent pair."""
     state = world.model_state.get(SOCIAL_NETWORK_STATE_KEY)
@@ -118,6 +135,8 @@ def validate_social_network_state(world: WorldState) -> None:
         or len(state["relationships"]) > MAX_RELATIONSHIPS
     ):
         raise ValueError("social_network_v1 has an invalid exact schema")
+    # Every tick checks every relationship, so each record is checked inline,
+    # accepting exactly what the field-by-field rules accept.
     for pair_key, record in state["relationships"].items():
         problem = (
             _cached_pair_key_problem(pair_key)
@@ -129,20 +148,10 @@ def validate_social_network_state(world: WorldState) -> None:
         if (
             problem is not None
             or not isinstance(record, dict)
-            or set(record)
-            != {
-                "contact_count",
-                "conversation_count",
-                "cooperation_count",
-                "trust",
-                "shared_message_ids",
-                "last_contact_minute",
-                "last_interaction",
-            }
-            or any(
-                not isinstance(record[key], int) or isinstance(record[key], bool) or record[key] < 0
-                for key in ("contact_count", "conversation_count", "cooperation_count")
-            )
+            or record.keys() != _RELATIONSHIP_FIELDS
+            or not _is_count(record["contact_count"])
+            or not _is_count(record["conversation_count"])
+            or not _is_count(record["cooperation_count"])
             or not isinstance(record["shared_message_ids"], list)
         ):
             raise ValueError("social_network_v1 relationship record is invalid")

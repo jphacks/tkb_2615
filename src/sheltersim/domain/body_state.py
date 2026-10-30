@@ -220,6 +220,18 @@ def _relationship_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
 _cached_relationship_key = functools.lru_cache(maxsize=65_536)(_relationship_key)
 
 
+_RELATIONSHIP_FIELDS = frozenset(
+    {
+        "contact_count",
+        "trust",
+        "contact_minutes",
+        "last_contact_minute",
+        "last_interaction",
+        "topic_ids",
+    }
+)
+
+
 def validate_body_state(world: WorldState, *, validate_event_history: bool = True) -> None:
     """Reject partial state, unknown people, out-of-range values and malformed evidence."""
     state = world.model_state.get(BODY_STATE_KEY)
@@ -328,6 +340,9 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
                 or not 0.0 <= value <= upper
             ):
                 raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
+    agents = world.agents
+    # Every tick checks every relationship, so each record is checked inline,
+    # accepting exactly what the field-by-field rules accept.
     for key, record in state["relationships"].items():
         parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
         if parsed is None:
@@ -335,26 +350,21 @@ def validate_body_state(world: WorldState, *, validate_event_history: bool = Tru
         pair, compact = parsed
         if (
             pair is None
-            or any(item not in world.agents for item in pair)
+            or pair[0] not in agents
+            or pair[1] not in agents
             or pair[0] == pair[1]
             or not compact
             or not isinstance(record, dict)
-            or set(record)
-            != {
-                "contact_count",
-                "trust",
-                "contact_minutes",
-                "last_contact_minute",
-                "last_interaction",
-                "topic_ids",
-            }
-            or any(
-                type(record[name]) is not int or record[name] < 0
-                for name in ("contact_count", "contact_minutes")
+            or record.keys() != _RELATIONSHIP_FIELDS
+            or type(contact_count := record["contact_count"]) is not int
+            or contact_count < 0
+            or type(contact_minutes := record["contact_minutes"]) is not int
+            or contact_minutes < 0
+            or not isinstance(topic_ids := record["topic_ids"], list)
+            or len(topic_ids) > 32
+            or (
+                topic_ids and any(not isinstance(item, str) or len(item) > 64 for item in topic_ids)
             )
-            or not isinstance(record["topic_ids"], list)
-            or len(record["topic_ids"]) > 32
-            or any(not isinstance(item, str) or len(item) > 64 for item in record["topic_ids"])
         ):
             raise ValueError("body_state_v1 relationship record is invalid")
         trust = record["trust"]

@@ -163,3 +163,58 @@ def test_each_relationship_key_is_judged_as_before_every_time(body_world) -> Non
             except ValueError as error:
                 outcome = str(error)
             assert outcome == expected, key
+
+
+def test_each_relationship_record_is_judged_as_before(body_world) -> None:
+    """The record check, written inline, accepts what the field-by-field rules did."""
+    world = body_world
+    first, second = sorted(world.agents)[:2]
+    record = {
+        "contact_count": 1,
+        "trust": 0.5,
+        "contact_minutes": 2,
+        "last_contact_minute": 0,
+        "last_interaction": None,
+        "topic_ids": [],
+    }
+
+    def accepted_before(candidate: object) -> bool:
+        return (
+            isinstance(candidate, dict)
+            and set(candidate) == set(record)
+            and not any(
+                type(candidate[name]) is not int or candidate[name] < 0
+                for name in ("contact_count", "contact_minutes")
+            )
+            and isinstance(candidate["topic_ids"], list)
+            and len(candidate["topic_ids"]) <= 32
+            and not any(
+                not isinstance(item, str) or len(item) > 64 for item in candidate["topic_ids"]
+            )
+        )
+
+    missing = dict(record)
+    del missing["trust"]
+    candidates = [
+        record,
+        missing,
+        {**record, "extra": 1},
+        {**record, "contact_count": -1},
+        {**record, "contact_count": True},
+        {**record, "contact_minutes": 2.0},
+        {**record, "topic_ids": ("a",)},
+        {**record, "topic_ids": ["a"] * 33},
+        {**record, "topic_ids": ["a" * 65]},
+        {**record, "topic_ids": [1]},
+        {**record, "topic_ids": ["a", "b"]},
+        ["not", "a", "dict"],
+    ]
+    state = world.model_state[BODY_STATE_KEY]
+    for candidate in candidates:
+        state["relationships"] = {f'["{first}","{second}"]': candidate}
+        try:
+            validate_body_state(world)
+            accepted = True
+        except ValueError as error:
+            accepted = "relationship record is invalid" not in str(error)
+        assert accepted is accepted_before(candidate), candidate
