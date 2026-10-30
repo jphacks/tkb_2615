@@ -41,9 +41,25 @@ def main() -> None:
     parser.add_argument("--scenario", choices=("baseline", "generated"), default="baseline")
     parser.add_argument("--scenario-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--expect",
+        type=Path,
+        help="an earlier result.json whose world, events and KPI hashes must match",
+    )
+    parser.add_argument(
+        "--from-project",
+        type=Path,
+        help="a projects directory an earlier --route project run saved; fork its main "
+        "branch at --fork-minute and compute --duration more minutes",
+    )
+    parser.add_argument("--fork-minute", type=int)
     args = parser.parse_args()
     if args.duration <= 0:
         parser.error("duration must be positive")
+    if (args.from_project is None) != (args.fork_minute is None):
+        parser.error("--from-project and --fork-minute go together")
+    if args.from_project is not None and (args.route != "project" or args.fork_minute < 0):
+        parser.error("--from-project needs --route project and a non-negative --fork-minute")
     environment = environment_manifest()
     args.output.mkdir(parents=True, exist_ok=False)
     # Fail closed even if a future regression constructs a network provider.
@@ -54,6 +70,7 @@ def main() -> None:
         raise AssertionError("network forbidden by offline benchmark")
 
     socket.socket.connect = denied
+    late_store = ProjectStore(args.from_project) if args.from_project else None
     scenario = build_benchmark_scenario(
         ScenarioSpec.load("fixtures/scenarios/baseline_100_7d.json"),
         agent_count=100,
@@ -87,6 +104,10 @@ def main() -> None:
             event for event in document["scheduled_events"] if event["due_minute"] < args.duration
         ]
         scenario = ScenarioSpec.model_validate(document)
+    if late_store is not None:
+        # The saved Run's own Scenario; the options above only name a new one.
+        saved_run = late_store.run("p", "r")
+        scenario = late_store.scenario("p", saved_run["scenario_id"], saved_run["scenario_version"])
     environment["model_versions"] = model_signatures(scenario.model_configs)
     (args.output / "scenario.json").write_text(scenario.canonical_json() + "\n")
     totals = {}
@@ -189,21 +210,34 @@ def main() -> None:
         metrics = recorded_metrics[0].to_dict()
         api_requests = 0
     else:
-        store = ProjectStore(args.output / "projects")
-        api = ProjectAPI(store, recover=False)
-        store.create_project("p")
-        store.save_scenario(
-            "p", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
-        )
-        api.post(
-            ["p", "runs"],
-            {
-                "run_id": "r",
-                "scenario_id": scenario.id,
-                "scenario_version": 1,
-                "execution_mode": "offline",
-            },
-        )
+        fork_seconds = None
+        if late_store is not None:
+            # A late window: the saves and ticks of a long Run without computing it again.
+            store = late_store
+            api = ProjectAPI(store, recover=False)
+            branch, target = f"late-{args.fork_minute}", args.fork_minute + args.duration
+            fork_started = time.perf_counter()
+            api.fork(
+                "p", "r", "main", {"minute": args.fork_minute, "child_id": branch, "approved": True}
+            )
+            fork_seconds = time.perf_counter() - fork_started
+        else:
+            store = ProjectStore(args.output / "projects")
+            api = ProjectAPI(store, recover=False)
+            branch, target = "main", args.duration
+            store.create_project("p")
+            store.save_scenario(
+                "p", scenario, approved_hash=digest(json.loads(scenario.canonical_json()))
+            )
+            api.post(
+                ["p", "runs"],
+                {
+                    "run_id": "r",
+                    "scenario_id": scenario.id,
+                    "scenario_version": 1,
+                    "execution_mode": "offline",
+                },
+            )
         setup_seconds = time.perf_counter() - started
         setup_timings = dict(totals)
         totals.clear()
@@ -225,13 +259,13 @@ def main() -> None:
         api._advance = advance
         started = last = time.perf_counter()
         # Match /demo-v2, which resumes without the optional telemetry recording.
-        api.submit("p", "r", "main", args.duration)
+        api.submit("p", "r", branch, target)
         api._pool.submit(lambda: None).result()
         wall_seconds = time.perf_counter() - started
         cpu_seconds = worker_cpu[0]
         api.close()
-        assert store.run("p", "r")["status"] == "completed"
-        _, checkpoint = store.load_branch("p", "r", "main")
+        reference, checkpoint = store.load_branch("p", "r", branch)
+        assert reference.computed_until == target, "the computation stopped early"
         world = checkpoint.restore_world()
         metrics = checkpoint.metrics_state
         api_requests = checkpoint.runtime_state["llm"]["api_request_count"]
@@ -248,6 +282,11 @@ def main() -> None:
         "wall_seconds": wall_seconds,
         "thread_seconds": cpu_seconds,
         "setup_seconds": locals().get("setup_seconds"),
+        "late_window": (
+            {"fork_minute": args.fork_minute, "fork_seconds": fork_seconds}
+            if args.from_project
+            else None
+        ),
         "setup_timings": locals().get("setup_timings"),
         "scenario_kind": args.scenario,
         "world_hash": digest(world.to_dict()),
@@ -269,8 +308,17 @@ def main() -> None:
     (args.output / "final-world.json.gz").write_bytes(
         gzip.compress(world.canonical_json().encode())
     )
+    mismatched = []
+    if args.expect:
+        expected = json.loads(args.expect.read_text(encoding="utf-8"))
+        mismatched = [
+            key
+            for key in ("world_hash", "events_hash", "metrics_hash")
+            if expected.get(key) != result[key]
+        ]
+        result["expected_hashes"] = {"source": str(args.expect), "mismatched": mismatched}
     (args.output / "result.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(
         json.dumps(
@@ -287,6 +335,8 @@ def main() -> None:
             }
         )
     )
+    if mismatched:
+        raise SystemExit(f"hashes differ from {args.expect}: {', '.join(mismatched)}")
 
 
 if __name__ == "__main__":
