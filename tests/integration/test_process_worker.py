@@ -245,13 +245,18 @@ def _with_child(tmp_path, saved_timeline):
 
 def test_two_branches_of_a_run_compute_at_once(tmp_path, monkeypatch, saved_timeline):
     """Branches of one Run compute in parallel processes; the Run is running while
-    either is and each branch shows its own status (#48)."""
+    either is and each branch shows its own status (#48).
+
+    Each branch is asked for far more than the time it takes to start the other
+    process, then cancelled, so the check does not depend on how fast either
+    computes (a 30-minute target finished first on Windows CI).
+    """
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
     store = _with_child(tmp_path, saved_timeline)
     api = ProjectAPI(store, recover=False, worker="process", max_jobs=2)
     try:
-        api.submit("p", "r", "main", 30)
-        api.submit("p", "r", "child", 30)
+        api.submit("p", "r", "main", 600)
+        api.submit("p", "r", "child", 600)
         assert len(multiprocessing.active_children()) == 2
         run = api.get(["p", "runs", "r"], {})
         assert run["status"] == "running"
@@ -259,18 +264,16 @@ def test_two_branches_of_a_run_compute_at_once(tmp_path, monkeypatch, saved_time
             "main": "running",
             "child": "running",
         }
+        api.post(["p", "runs", "r", "cancel"], {})
         api.wait_idle(timeout=300)
     finally:
         api.close()
     run = store.run("p", "r")
     assert run["status"] == "paused"
-    assert {
-        branch["branch_id"]: (branch["status"], branch["computed_until"])
-        for branch in run["branches"]
-    } == {
-        "main": ("paused", 30),
-        "child": ("paused", 30),
-    }
+    statuses = {branch["branch_id"]: branch["status"] for branch in run["branches"]}
+    assert statuses == {"main": "paused", "child": "paused"}
+    # Each cancelled branch stopped before its target.
+    assert all(branch["computed_until"] < 600 for branch in run["branches"])
 
 
 def test_a_branch_forks_and_cancels_while_another_branch_computes(
