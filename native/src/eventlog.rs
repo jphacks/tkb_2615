@@ -681,8 +681,8 @@ fn fields_of_bytes(bytes: &[u8]) -> Result<Fields, String> {
     })
 }
 
-const RECORD_FIELDS: [&str; 4] = ["detail", "event", "realized_minute", "status"];
-const EVENT_FIELDS: [&str; 10] = [
+pub(crate) const RECORD_FIELDS: [&str; 4] = ["detail", "event", "realized_minute", "status"];
+pub(crate) const EVENT_FIELDS: [&str; 10] = [
     "causation_id",
     "due_minute",
     "event_id",

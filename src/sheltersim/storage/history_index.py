@@ -17,12 +17,14 @@ from bisect import bisect_left
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from sheltersim import native
 from sheltersim.core.saved_items import SavedItems
 from sheltersim.domain.social_dialogue import virtual_dialogue_example
 from sheltersim.events.queue import saved_realized_minute
 from sheltersim.storage.projects import (
     ProjectStore,
     StorageError,
+    _private_field,
     canonical,
     digest,
     safe_row,
@@ -40,13 +42,26 @@ CREATE INDEX IF NOT EXISTS record_source ON records(branch,kind,source,minute,ke
 CREATE INDEX IF NOT EXISTS record_status ON records(branch,kind,status,minute,key);
 CREATE INDEX IF NOT EXISTS record_type ON records(branch,kind,event_type,minute,key);
 CREATE TABLE IF NOT EXISTS entities(branch TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, entity TEXT NOT NULL, minute INTEGER NOT NULL, PRIMARY KEY(branch,kind,key,entity));
-CREATE INDEX IF NOT EXISTS entity_time ON entities(branch,kind,entity,minute,key);
-CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key);
+CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key) WHERE kind='conversations';
 CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
 CREATE TABLE IF NOT EXISTS lineage(branch TEXT PRIMARY KEY, parent TEXT NOT NULL, fork_minute INTEGER NOT NULL);
 PRAGMA user_version=2;
 """  # noqa: E501
+_SCHEMA_VERSION = 2
+# entity_turn_order orders the turns of a conversation and is read only with that kind.
+# Over the other kinds its keys are hashes, so nearly every row would change another page
+# for each commit to journal and write. A file made before it was partial keeps its index
+# and answers the same, and so does one that still has entity_time, an index on entities
+# that no query reads; all of these are version 2.
 _WRITE_CACHE_KIB = 16_384
+# The indexing process keeps its connection, and its cache, from one save to the next.
+_KEPT_WRITER_CACHE_KIB = 262_144
+
+
+def _storage_code(error: sqlite3.Error) -> str:
+    if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL:
+        return "storage_capacity_exceeded"
+    return "history_index_unavailable"
 
 
 @functools.cache
@@ -94,6 +109,10 @@ def cursor_decode(value: str | None, scope: str, anchor: str) -> tuple[int, str]
 def _terms(text: str) -> list[str]:
     # Literal tokens, not SQL/FTS expressions. Japanese contiguous terms stay intact.
     return sorted(set(re.findall(r"[\w:-]{1,80}", text.casefold())))[:16]
+
+
+# The row fields whose words are indexed as tokens.
+_TOKEN_FIELDS = ("event_type", "action", "kind", "status", "trigger", "topic_id", "task_kind")
 
 
 def _identities(value: Any) -> set[str]:
@@ -296,11 +315,24 @@ class _RecordBatch:
 
     def put(self, kind: str, row: dict[str, Any], *, key: str | None = None) -> None:
         branch = self.branch
-        row, encoded = safe_row(row)
+        # A plain row with nothing the privacy check changes is read in one pass in Rust.
+        read = native.index_row(row)
+        if read is not None and (
+            read[5]
+            or any(map(_private_field, read[4]))
+            # The token text of a container depends on its key order, here not yet sorted.
+            or any(isinstance(row.get(name), (dict, list)) for name in _TOKEN_FIELDS)
+        ):
+            read = None
+        if read is None:
+            row, encoded = safe_row(row)
+            payload_hash = hashlib.sha256(encoded.encode()).hexdigest()  # digest(row)
+            identities, references = _identities(row), _event_references(row)
+        else:
+            encoded, payload_hash, identities, references = read[:4]
         minute = row.get("minute", row.get("minute_index"))
         if type(minute) is not int or minute < 0:
             raise StorageError("invalid_index_record_minute")
-        payload_hash = hashlib.sha256(encoded.encode()).hexdigest()  # digest(row)
         key = key or payload_hash
         existing = self.pending.get((kind, key))
         if existing is None:
@@ -326,7 +358,7 @@ class _RecordBatch:
             if existing != encoded:
                 raise StorageError("immutable_history_record_conflict")
             self.references.extend(
-                (branch, kind, "@event:" + event, minute, key) for event in _event_references(row)
+                (branch, kind, "@event:" + event, minute, key) for event in set(references)
             )
             return
         self.pending[(kind, key)] = encoded
@@ -346,23 +378,10 @@ class _RecordBatch:
             )
         )
         self.added[kind] = self.added.get(kind, 0) + 1
-        self.entities.extend((branch, kind, key, item, minute) for item in _identities(row))
+        self.entities.extend((branch, kind, key, item, minute) for item in set(identities))
         # Index bounded metadata, never long answers, raw prompts or arbitrary prose.
-        words = _terms(
-            " ".join(
-                str(row.get(name, ""))
-                for name in (
-                    "event_type",
-                    "action",
-                    "kind",
-                    "status",
-                    "trigger",
-                    "topic_id",
-                    "task_kind",
-                )
-            )
-        )
-        words = sorted(set(words) | {"@event:" + event for event in _event_references(row)})
+        words = _terms(" ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS))
+        words = sorted(set(words) | {"@event:" + event for event in references})
         self.tokens.extend((branch, kind, token, minute, key) for token in words)
         if len(self.records) >= self._FLUSH_RECORDS:
             self.flush()
@@ -398,9 +417,50 @@ def _leading(items: list[Any], before: Any) -> int:
 
 
 class HistoryIndex:
-    def __init__(self, store: ProjectStore, project_id: str, run_id: str) -> None:
+    def __init__(
+        self, store: ProjectStore, project_id: str, run_id: str, *, keep_writer: bool = False
+    ) -> None:
         self.store, self.project_id, self.run_id = store, project_id, run_id
         self.path = store._path(project_id, "runs", run_id, "history.sqlite")
+        # With keep_writer, write transactions share one connection, whose page cache
+        # stays valid between them while no other connection writes; close() ends it.
+        self._keep_writer = keep_writer
+        self._writer: sqlite3.Connection | None = None
+
+    def close(self) -> None:
+        """Close the kept write connection, if any."""
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            writer.close()
+
+    def _open_writer(self) -> sqlite3.Connection:
+        # Branches of a Run index their saves at once (#48); a writer waits for another
+        # branch's write, up to a fork's copy of its parent's rows.
+        connection = sqlite3.connect(self.path.as_uri() + "?mode=rwc", uri=True, timeout=120)
+        connection.row_factory = sqlite3.Row
+        try:
+            # An index written while #268 used a write-ahead log keeps that mode in
+            # the file; return it to the rollback journal (#269). With readers open
+            # the mode stays until a later write; on other files this does nothing.
+            connection.execute("PRAGMA journal_mode=DELETE")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, *_READABLE_VERSIONS):
+                raise StorageError("history_index_version_unsupported")
+            if version != _SCHEMA_VERSION:
+                # The script ends by setting the version, which is a write and a sync.
+                connection.executescript(_SCHEMA)
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+            # A derived file cannot individually exceed the configured disk cap.
+            connection.execute(f"PRAGMA max_page_count={max(1, self.store.max_bytes // page_size)}")
+            # Hold one ingest's changed pages in memory. With the 2 MiB default the
+            # growing index spills pages mid-transaction, each spill syncing the
+            # journal first (#47). The commit still syncs as before.
+            cache_kib = _KEPT_WRITER_CACHE_KIB if self._keep_writer else _WRITE_CACHE_KIB
+            connection.execute(f"PRAGMA cache_size=-{cache_kib}")
+        except BaseException:
+            connection.close()
+            raise
+        return connection
 
     @contextmanager
     def connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -408,57 +468,52 @@ class HistoryIndex:
             raise StorageError("history_index_required: explicitly rebuild the saved Run index")
         if self.path.is_symlink():
             raise StorageError("unsafe_history_index")
-        # Branches of a Run index their saves at once (#48); a writer waits for another
-        # branch's write, up to a fork's copy of its parent's rows.
-        connection = sqlite3.connect(
-            self.path.as_uri() + ("?mode=rwc" if write else "?mode=ro"),
-            uri=True,
-            timeout=120 if write else 10,
-        )
+        if write:
+            with self._write_transaction() as connection:
+                yield connection
+            return
+        connection = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=10)
         connection.row_factory = sqlite3.Row
         try:
-            if write:
-                # An index written while #268 used a write-ahead log keeps that mode in
-                # the file; return it to the rollback journal (#269). With readers open
-                # the mode stays until a later write; on other files this does nothing.
-                connection.execute("PRAGMA journal_mode=DELETE")
-                version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, *_READABLE_VERSIONS):
-                    raise StorageError("history_index_version_unsupported")
-                connection.executescript(_SCHEMA)
-                page_size = connection.execute("PRAGMA page_size").fetchone()[0]
-                # A derived file cannot individually exceed the configured disk cap.
-                connection.execute(
-                    f"PRAGMA max_page_count={max(1, self.store.max_bytes // page_size)}"
-                )
-                # Hold one ingest's changed pages in memory. With the 2 MiB default the
-                # growing index spills pages mid-transaction, each spill syncing the
-                # journal first (#47). The commit still syncs as before.
-                connection.execute(f"PRAGMA cache_size=-{_WRITE_CACHE_KIB}")
-                connection.execute("BEGIN IMMEDIATE")
-            else:
-                version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in _READABLE_VERSIONS:
-                    raise StorageError("history_index_version_unsupported")
-                connection.execute("PRAGMA query_only=ON")
-                connection.execute("BEGIN")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in _READABLE_VERSIONS:
+                raise StorageError("history_index_version_unsupported")
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
             yield connection
-            if write:
-                if self.store.usage()["bytes"] > self.store.max_bytes:
-                    connection.rollback()
-                    raise StorageError("storage_capacity_exceeded")
-                connection.commit()
         except sqlite3.Error as exc:
-            if write:
-                connection.rollback()
-            code = (
-                "storage_capacity_exceeded"
-                if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL
-                else "history_index_unavailable"
-            )
-            raise StorageError(code) from exc
+            raise StorageError(_storage_code(exc)) from exc
         finally:
             connection.close()
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+        keep = self._keep_writer
+        connection = self._writer if keep else None
+        try:
+            if connection is None:
+                connection = self._open_writer()
+                if keep:
+                    self._writer = connection
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            if self.store.usage()["bytes"] > self.store.max_bytes:
+                connection.rollback()
+                raise StorageError("storage_capacity_exceeded")
+            connection.commit()
+        except sqlite3.Error as exc:
+            if connection is not None:
+                connection.rollback()
+            raise StorageError(_storage_code(exc)) from exc
+        except BaseException:
+            # An error of the caller's rolled back when the connection closed; a kept
+            # connection is used again.
+            if keep and connection is not None:
+                connection.rollback()
+            raise
+        finally:
+            if not keep and connection is not None:
+                connection.close()
 
     def ingest(
         self,

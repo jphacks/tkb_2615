@@ -371,6 +371,33 @@ def _world_json(value: Any) -> Any:
     return json.loads(WorldState._canonical_text(value) if encoded is None else encoded)
 
 
+def _encoded_document(data: dict[str, Any], shape: dict[str, Any], encoder: Any) -> dict[str, Any]:
+    """_world_json(data), remembering the JSON of each field the hash tree hashes as one.
+
+    Each field is encoded once, for its document, its hash and its archive chunks. What
+    the kernel encoded reads back as the same bytes: its keys are str, in sorted order.
+    """
+    document = {}
+    for key in sorted(data):
+        value = data[key]
+        inner = shape.get(key)
+        if inner is not None and isinstance(value, dict) and all(map(_is_str, value)):
+            document[key] = _encoded_document(value, inner, encoder)
+            continue
+        encoded = native.canonical_json(value)
+        if encoded is None:
+            document[key] = json.loads(WorldState._canonical_text(value))
+            continue
+        document[key] = json.loads(encoded)
+        if isinstance(document[key], (dict, list)):
+            encoder.remember(document[key], encoded)
+    return document
+
+
+def _is_str(value: Any) -> bool:
+    return isinstance(value, str)
+
+
 def _event_document(record: EventLogRecord) -> Any:
     return _world_json(record.to_dict())
 
@@ -483,7 +510,7 @@ class CheckpointHistoryCache:
             cache.known_equal = 0
         data = world._canonical_data(include_event_log=False)
         data["model_state"] = _with_empty(world.model_state, histories)
-        world_document = _world_json(data)
+        world_document = _encoded_document(data, _WORLD_TREE, encoder)
         log = world.event_log
         if keeps_saved_bytes(log):
             raws = self._log_raws(log)

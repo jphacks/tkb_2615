@@ -71,7 +71,12 @@ from sheltersim.events.models import (
     EventStatus,
     ScheduledEvent,
 )
-from sheltersim.events.queue import DuplicateEventError, EventLog, EventQueue
+from sheltersim.events.queue import (
+    DuplicateEventError,
+    EventLog,
+    EventQueue,
+    keeps_saved_bytes,
+)
 from sheltersim.experiments.scenario import ResourceServiceConfig, ScenarioSpec
 
 
@@ -1773,11 +1778,20 @@ class WorldState:
             elif getattr(self, item.name) != getattr(other, item.name):
                 return False
         mine, theirs = self.event_log, other.event_log
+        if self.event_queue.pending() != other.event_queue.pending() or len(mine) != len(theirs):
+            return False
+        # The kernel shows other's records are exactly the ones my bytes restore, without
+        # building those; anything it can not show exactly is compared here.
+        records = theirs.records_from(known_equal_events)
         return (
-            self.event_queue.pending() == other.event_queue.pending()
-            and len(mine) == len(theirs)
-            and mine.records_from(known_equal_events) == theirs.records_from(known_equal_events)
-        )
+            keeps_saved_bytes(mine)
+            and native.same_saved_records(
+                records,
+                mine.items_bytes(known_equal_events, len(mine)),
+                EventLogRecord,
+                ScheduledEvent,
+            )
+        ) or mine.records_from(known_equal_events) == records
 
     @classmethod
     def from_json(cls, value: str) -> WorldState:
