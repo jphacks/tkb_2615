@@ -83,12 +83,15 @@ class MetricSnapshot:
         pending_support = [
             request for request in active_support if request.status is SupportRequestStatus.PENDING
         ]
+        staff_memo: dict[str, Any] = {}
         support_wait_details = {
             request.agent_id: {
                 "request_id": request.id,
                 "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
                 "reason_codes": list(
-                    support_wait_reason_codes(world, request.id, minute=sample_minute)
+                    support_wait_reason_codes(
+                        world, request.id, minute=sample_minute, staff_memo=staff_memo
+                    )
                 ),
             }
             for request in sorted(active_support, key=lambda item: item.agent_id)

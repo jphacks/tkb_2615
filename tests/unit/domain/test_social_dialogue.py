@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import MappingProxyType
 
+import pytest
 from support.paths import SCENARIO_100_AGENTS
 
 from sheltersim.contracts.workspace import HistoryQuery
@@ -16,7 +18,10 @@ from sheltersim.domain.population_lifecycle import (
     apply_population_presence_command,
 )
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
-from sheltersim.domain.social_dialogue import capture_social_state_context
+from sheltersim.domain.social_dialogue import (
+    capture_social_state_context,
+    validate_social_state_context,
+)
 from sheltersim.events.handlers import EventDispatcher, SocialInteractionHandler
 from sheltersim.events.models import EventKind, EventStatus, ScheduledEvent
 from sheltersim.experiments.branch import AddToiletCommand, BranchRuntime
@@ -313,3 +318,41 @@ def test_social_dialogue_rejects_future_proposal_state_without_applying_effects(
     assert outcome.status is EventStatus.FAILED
     assert "state context is invalid" in (outcome.detail or "")
     assert (world.agents[participant].stress, world.agents[participant].trust) == before
+
+
+def _context(**needs) -> dict:
+    return {
+        "schema_version": 1,
+        "captured_minute": 0,
+        "participants": {
+            "A001": {
+                "stress": 0.5,
+                "trust": 0.5,
+                "needs": {
+                    "toilet_urgency": 0.5,
+                    "hunger": 0.5,
+                    "fatigue": 0.5,
+                    "hydration_need": 0.5,
+                    **needs,
+                },
+                "affect": None,
+            }
+        },
+    }
+
+
+def test_a_context_is_refused_for_the_same_values_after_the_float_check() -> None:
+    """Floats within bounds skip the rule; everything else still goes through it."""
+    validate_social_state_context(_context(hunger=1), ["A001"], 1)
+    for value in (float("nan"), 1.5, -0.5, True, "0.5", None):
+        with pytest.raises(ValueError):
+            validate_social_state_context(_context(hunger=value), ["A001"], 1)
+    extra = _context()
+    extra["participants"]["A001"]["needs"]["other"] = 0.5
+    with pytest.raises(ValueError):
+        validate_social_state_context(extra, ["A001"], 1)
+    frozen = _context()
+    frozen["participants"]["A001"]["needs"] = MappingProxyType(
+        frozen["participants"]["A001"]["needs"]
+    )
+    validate_social_state_context(frozen, ["A001"], 1)

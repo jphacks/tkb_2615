@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from sheltersim.domain.distress_monitor import (
     distress_monitor_summary,
     record_distress_monitor_tick,
@@ -131,3 +133,28 @@ def test_a_fall_during_event_handling_and_a_rise_in_the_same_update_are_two_epis
         {"agent_id": "A001", "elapsed_minutes": 1}
     ]
     assert summary["high_distress_reascent_count"] == 1
+
+
+@pytest.mark.parametrize("value", [float("nan"), 1.5, -0.1, True, "0.5"])
+def test_values_a_float_check_does_not_accept_still_go_through_the_rule(value) -> None:
+    with pytest.raises((ValueError, TypeError)):
+        record_distress_monitor_tick(
+            {}, previous_by_agent={"A": value}, current_by_agent={"A": 0.5}, threshold=0.5
+        )
+    with pytest.raises((ValueError, TypeError)):
+        record_distress_monitor_tick(
+            {}, previous_by_agent={"A": 0.5}, current_by_agent={"A": value}, threshold=0.5
+        )
+
+
+def test_int_distress_within_bounds_is_accepted_and_bad_state_is_refused() -> None:
+    metrics: dict[str, float] = {}
+    record_distress_monitor_tick(
+        metrics, previous_by_agent={"A": 0}, current_by_agent={"A": 1}, threshold=0.5
+    )
+    assert metrics["acute_distress_monitor:A:current_run"] == 1.0
+    metrics["acute_distress_monitor:A:episodes"] = float("inf")
+    with pytest.raises(ValueError):
+        record_distress_monitor_tick(
+            metrics, previous_by_agent={"A": 0.0}, current_by_agent={"A": 1.0}, threshold=0.5
+        )

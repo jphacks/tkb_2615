@@ -522,3 +522,51 @@ def test_psychology_view_skips_audit_hash_without_changing_inputs() -> None:
     policy = SimplePsychologyPolicy()
     assert policy.explain_update(hashed, 0) == policy.explain_update(psychology_view, 0)
     assert world.canonical_json() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hunger", float("nan")),
+        ("hunger", 1.5),
+        ("stress", -0.5),
+        ("trust", float("inf")),
+        ("fatigue", True),
+        ("hydration_need", "0.5"),
+    ],
+)
+def test_applying_a_delta_refuses_what_its_checks_refuse(generated_scenario, field, value) -> None:
+    """Deltas of plain floats within bounds skip the checks, and nothing else does."""
+    from sheltersim.core.world import StateInvariantError
+
+    world = WorldState.from_scenario(generated_scenario)
+    delta = AgentStateDelta(
+        agent_id=next(iter(world.agents)),
+        minute_index=world.minute_index,
+        toilet_urgency=0.1,
+        hunger=0.1,
+        fatigue=0.1,
+        stress=0.1,
+        trust=0.1,
+        hydration_need=0.1,
+    )
+    object.__setattr__(delta, field, value)
+    with pytest.raises(StateInvariantError, match="invalid psychology update"):
+        apply_state_deltas(world, (delta,))
+
+
+def test_applying_a_delta_of_ints_within_bounds_is_accepted(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    agent_id = next(iter(world.agents))
+    delta = AgentStateDelta(
+        agent_id=agent_id,
+        minute_index=world.minute_index,
+        toilet_urgency=0,
+        hunger=1,
+        fatigue=0.5,
+        stress=0,
+        trust=1,
+        hydration_need=0,
+    )
+    apply_state_deltas(world, (delta,))
+    assert world.agents[agent_id].needs.hunger == 1 and world.agents[agent_id].trust == 1

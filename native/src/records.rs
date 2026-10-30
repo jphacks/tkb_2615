@@ -32,10 +32,11 @@ fn stable_id(value: &Bound<'_, PyAny>, optional: bool) -> PyResult<()> {
     let text = value
         .downcast_exact::<PyString>()
         .map_err(|_| Unsupported::new_err("an ID is not a str"))?;
-    if !is_stable_id(text.to_str()?) {
-        return Err(Unsupported::new_err("an ID is not stable"));
+    // A lone surrogate has no UTF-8 form, and is not a stable ID either.
+    match text.to_str() {
+        Ok(text) if is_stable_id(text) => Ok(()),
+        _ => Err(Unsupported::new_err("an ID is not stable")),
     }
-    Ok(())
 }
 
 fn plain_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {

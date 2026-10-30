@@ -22,6 +22,7 @@ from sheltersim.contracts.operations import (
     StaffSupportContinuityReceipt,
 )
 from sheltersim.contracts.population import population_context_people
+from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.world import WorldState
 from sheltersim.domain.common_operations import record_shared_operation
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
@@ -382,11 +383,15 @@ def ingest_applied_shared_operation_records(world: WorldState, outcomes: tuple[A
         ):
             continue
         state = world.model_state.get(SHARED_OPERATIONS_KEY, {})
+        history = state.get("history", ()) if isinstance(state, dict) else ()
+        # A record carries its event's realized minute (record_shared_operation), so the
+        # record of an event realized now is among the newest ones.
+        if getattr(outcome, "realized_minute", None) == world.minute_index and isinstance(
+            history, list
+        ):
+            history = records_since_previous_tick(history, world.minute_index)
         if isinstance(state, dict) and any(
-            row.get("event_id") == event.event_id
-            # The record of an event being applied, if any, was added just now.
-            for row in reversed(state.get("history", ()))
-            if isinstance(row, dict)
+            row.get("event_id") == event.event_id for row in history if isinstance(row, dict)
         ):
             continue
         receipt = _operation_record_adapter().validate_python(event.payload)

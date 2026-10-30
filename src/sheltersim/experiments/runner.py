@@ -61,8 +61,8 @@ from sheltersim.domain.movement import (
     advance_movement,
     facility_approach_route,
     finish_movement,
-    route_is_physically_clear,
     room_route_scope,
+    route_is_physically_clear,
     route_with_movement_time,
     start_movement,
 )
@@ -195,6 +195,7 @@ class OfflineSimulationController:
         self._parsed_configs: dict[tuple[str, int], tuple[Any, Any]] = {}
         self._model_selections: list[tuple[Any, dict[str, str]]] = []
         self._room_routes: dict[str, Any] = {"routes": {}}
+        self._zone_environments: dict[str, Any] = {}
         initialize_simulator_extensions(world)
         validate_simulator_extensions(world)
         proximity_model_id = selected_models(world.model_configs).get("social_proximity")
@@ -433,6 +434,7 @@ class OfflineSimulationController:
                 self._parsed_configs.clear()
                 self._model_selections.clear()
                 self._room_routes = {"routes": {}}
+                self._zone_environments = {}
         with (
             geometry_config_scope(self._parsed_configs),
             selected_models_scope(self._model_selections),
@@ -544,7 +546,10 @@ class OfflineSimulationController:
         elif phase is TickPhase.UPDATE_AGENT_STATE:
             self._update_movement(minute)
             view = WorldView.from_world(
-                world, include_state_hash=False, person_cache=self._person_contexts
+                world,
+                include_state_hash=False,
+                person_cache=self._person_contexts,
+                environment_cache=self._zone_environments,
             )
             deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
             if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
@@ -657,7 +662,11 @@ class OfflineSimulationController:
             view = (
                 WorldView.after_state_update(prior, world)
                 if prior is not None and prior.minute_index == minute
-                else WorldView.from_world(world, person_cache=self._person_contexts)
+                else WorldView.from_world(
+                    world,
+                    person_cache=self._person_contexts,
+                    environment_cache=self._zone_environments,
+                )
             )
             for proposal in self.decisions.propose_due(view, rng):
                 self._apply_proposal(
@@ -733,7 +742,10 @@ class OfflineSimulationController:
             result = self.information_policy.update(
                 # Information policies read the people and the minute, never the audit hash.
                 WorldView.from_world(
-                    self.world, include_state_hash=False, person_cache=self._person_contexts
+                    self.world,
+                    include_state_hash=False,
+                    person_cache=self._person_contexts,
+                    environment_cache=self._zone_environments,
                 ),
                 self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
                 rng,
@@ -1270,11 +1282,7 @@ class OfflineSimulationController:
                                 + 1.0
                             )
 
-        recorded_proposal = replace(
-            proposal,
-            target_id=target_id,
-            next_decision_at=agent.next_decision_at,
-        )
+        recorded_proposal = proposal.with_outcome(target_id, agent.next_decision_at)
         self.artifacts.record_decision(
             recorded_proposal,
             observed_state=observed_state,

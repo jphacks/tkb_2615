@@ -278,7 +278,7 @@ def reserve_sleep_bed(world: Any, agent_id: str) -> dict[str, Any] | None:
     raw_position = movement.get("positions", {}).get(agent_id, {})
     raw_start = raw_position.get("point") if isinstance(raw_position, dict) else None
     start = Point2D.model_validate(raw_start) if isinstance(raw_start, dict) else None
-    points_by_cell: dict[tuple[int, int], list[tuple[str, Point2D]]] = {}
+    points_by_cell: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for other_id, other in world.agents.items():
         if other_id == agent_id or other.zone_id != agent.zone_id:
             continue
@@ -286,9 +286,19 @@ def reserve_sleep_bed(world: Any, agent_id: str) -> dict[str, Any] | None:
         other_raw_point = other_record.get("point") if isinstance(other_record, dict) else None
         if not isinstance(other_raw_point, dict):
             continue
-        other_point = Point2D.model_validate(other_raw_point)
-        cell = (math.floor(other_point.x / 0.75), math.floor(other_point.y / 0.75))
-        points_by_cell.setdefault(cell, []).append((other_id, other_point))
+        other_x, other_y = other_raw_point.get("x"), other_raw_point.get("y")
+        # Only a position Point2D would not take as it is needs parsing, or raises.
+        if (
+            type(other_x) is not float
+            or type(other_y) is not float
+            or len(other_raw_point) != 2
+            or not math.isfinite(other_x)
+            or not math.isfinite(other_y)
+        ):
+            parsed_point = Point2D.model_validate(other_raw_point)
+            other_x, other_y = parsed_point.x, parsed_point.y
+        cell = (math.floor(other_x / 0.75), math.floor(other_y / 0.75))
+        points_by_cell.setdefault(cell, []).append((other_x, other_y))
     occupied = {
         (row["room_id"], row["bed_index"]) for row in reservations.values() if isinstance(row, dict)
     }
@@ -317,10 +327,10 @@ def reserve_sleep_bed(world: Any, agent_id: str) -> dict[str, Any] | None:
                 point
                 for dx in (-1, 0, 1)
                 for dy in (-1, 0, 1)
-                for _, point in points_by_cell.get((cell[0] + dx, cell[1] + dy), ())
+                for point in points_by_cell.get((cell[0] + dx, cell[1] + dy), ())
             )
             another_person_is_using_bed = any(
-                (point.x - bed.x) ** 2 + (point.y - bed.y) ** 2 <= 0.75**2
+                (point[0] - bed.x) ** 2 + (point[1] - bed.y) ** 2 <= 0.75**2
                 for point in neighboring_positions
             )
             if another_person_is_using_bed:

@@ -953,3 +953,246 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
         python_state = information.update(view, state, rng, zone_neighbors=neighbors)
         assert _same_bits_deep(rust_state.runtime_state, python_state.runtime_state), trial
     assert matched > 100 and raised > 0
+
+
+def _event_arguments(**changes) -> list:
+    fields = {
+        "event_id": "event-1",
+        "event_type": "tick",
+        "source_id": None,
+        "causation_id": "event-0",
+        "due_minute": 3,
+        "sequence": 4,
+        "priority": -1,
+        "payload": {},
+        "provenance": {},
+    }
+    return list((fields | changes).values())
+
+
+def test_the_event_kernel_freezes_values_as_python_does() -> None:
+    from types import MappingProxyType
+
+    from sheltersim.events.models import EventKind, ScheduledEvent, _freeze_json
+
+    payload = {
+        "a": [1, 2.5, "x", None, True, {"b": ()}],
+        "c": {"d": [[]], "e": -0.0, "é": 10**30},
+    }
+    frozen, provenance = native.scheduled_event_checked(
+        *_event_arguments(payload=payload, provenance={"p": [1]})
+    )
+    assert frozen == _freeze_json(payload)
+    assert type(frozen) is MappingProxyType and type(frozen["a"]) is tuple
+    assert type(frozen["a"][5]) is MappingProxyType
+    assert type(frozen["c"]["d"][0]) is tuple
+    assert provenance == _freeze_json({"p": [1]})
+    assert list(frozen) == list(payload)
+    event = ScheduledEvent("event-1", EventKind.ENDOGENOUS, 3, -1, 4, "tick", payload)
+    assert event.to_dict()["payload"] == {
+        "a": [1, 2.5, "x", None, True, {"b": []}],
+        "c": {"d": [[]], "e": -0.0, "é": 10**30},
+    }
+    payload["c"]["d"].append(1)
+    assert event.payload["c"]["d"] == ((),)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"event_id": "-starts-badly"},
+        {"event_id": "x" * 65},
+        {"event_id": None},
+        {"event_id": "with\nnewline"},
+        {"event_id": "é"},
+        {"event_id": "\ud800"},
+        {"event_type": ""},
+        {"source_id": "bad id"},
+        {"causation_id": 1},
+        {"due_minute": -1},
+        {"due_minute": True},
+        {"due_minute": 1.0},
+        {"sequence": -1},
+        {"priority": False},
+        {"payload": []},
+        {"provenance": None},
+        {"payload": {"a": float("nan")}},
+        {"payload": {"a": [float("inf")]}},
+        {"payload": {1: 2}},
+        {"payload": {"a": object()}},
+        {"payload": {"a": {1, 2}}},
+        {"provenance": {"a": b"bytes"}},
+    ],
+)
+def test_the_event_kernel_leaves_what_python_would_decide(changes) -> None:
+    """Each of these either raises in the Python checks or needs them to decide."""
+    from sheltersim.events.models import EventKind, ScheduledEvent
+
+    assert native.scheduled_event_checked(*_event_arguments(**changes)) is None
+    event_id, event_type, source_id, causation_id, due, sequence, priority, payload, provenance = (
+        _event_arguments(**changes)
+    )
+    with pytest.raises((ValueError, TypeError)):
+        ScheduledEvent(
+            event_id,
+            EventKind.ENDOGENOUS,
+            due,
+            priority,
+            sequence,
+            event_type,
+            payload,
+            source_id,
+            causation_id,
+            provenance,
+        )
+
+
+def test_the_event_kernel_leaves_frozen_values_and_subclasses_to_python() -> None:
+    from types import MappingProxyType
+
+    from sheltersim.events.models import EventKind, ScheduledEvent
+
+    class Text(str):
+        pass
+
+    class Number(float):
+        pass
+
+    frozen = MappingProxyType({"a": (1, 2)})
+    for payload in ({"a": frozen}, {"a": Text("x")}, {"a": Number(1.0)}, {Text("k"): 1}):
+        assert native.scheduled_event_checked(*_event_arguments(payload=payload)) is None
+    event = ScheduledEvent(
+        "event-1", EventKind.ENDOGENOUS, 3, 0, 4, "tick", {"a": frozen, "b": Text("x")}
+    )
+    assert event.to_dict()["payload"] == {"a": {"a": [1, 2]}, "b": "x"}
+
+
+def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    from sheltersim import policies
+
+    behavior = __import__("sheltersim.policies.behavior", fromlist=["_view_state_hash"])
+    assert policies is not None
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 240
+    kernel = native.view_state_hash
+    original = behavior._view_state_hash
+    compared = []
+
+    def checked(*arguments):
+        rust = original(*arguments)
+        assert kernel is native.view_state_hash
+        monkeypatch.setattr(native, "view_state_hash", lambda *_: None)
+        try:
+            python = original(*arguments)
+        finally:
+            monkeypatch.setattr(native, "view_state_hash", kernel)
+        assert rust == python
+        compared.append(rust)
+        return rust
+
+    monkeypatch.setattr(behavior, "_view_state_hash", checked)
+    run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.OFF)
+    assert len(compared) == 240
+
+
+@pytest.mark.parametrize("information", [False, True])
+@pytest.mark.parametrize("schema_version", [None, 6])
+@pytest.mark.parametrize("life_context", [False, True])
+def test_the_view_hash_kernel_covers_each_form_of_the_document(
+    generated_scenario, monkeypatch, information, schema_version, life_context
+) -> None:
+    """The document's optional parts, with unusual but valid values in the people's fields."""
+    from dataclasses import replace
+
+    from sheltersim.core.world import WorldState
+    from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
+    from sheltersim.policies import behavior
+
+    world = WorldState.from_scenario(generated_scenario)
+    if schema_version is not None:
+        world.schema_version = schema_version
+        world.model_configs.setdefault("resource_service", {"x": [1.5, None]})
+    if not information:
+        world.model_state.pop(INFORMATION_SPREAD_STATE_KEY, None)
+        state = None
+    else:
+        state = world.model_state.setdefault(INFORMATION_SPREAD_STATE_KEY, {"query_pressure": {}})
+        state["query_pressure"] = {agent_id: 0.25 for agent_id in world.agents}
+        world.model_configs.setdefault("information_spread", {"y": True})
+    world.model_state.pop("body_state_v1", None)
+    view = behavior.WorldView.from_world(world, include_state_hash=False)
+    first = next(iter(view.agents))
+    agents = {
+        **view.agents,
+        first: replace(
+            view.agents[first],
+            target_id='quote"and\\slash\n',
+            stress=1e-05,
+            trust=-0.0,
+            support_wait_minutes=10**20,
+            roles=("role", "役割"),
+            usual_wake_minute=None,
+        ),
+    }
+    arguments = (world, agents, view.facilities, state, life_context)
+    rust = behavior._view_state_hash(*arguments)
+    monkeypatch.setattr(native, "view_state_hash", lambda *_: None)
+    assert rust == behavior._view_state_hash(*arguments)
+
+
+def test_the_view_hash_kernel_leaves_values_json_rejects_to_python(generated_scenario) -> None:
+    from dataclasses import replace
+
+    from sheltersim.core.world import WorldState
+    from sheltersim.policies import behavior
+
+    world = WorldState.from_scenario(generated_scenario)
+    view = behavior.WorldView.from_world(world, include_state_hash=False)
+    first = next(iter(view.agents))
+    agents = {**view.agents, first: replace(view.agents[first], stress=float("nan"))}
+    with pytest.raises(ValueError):
+        behavior._view_state_hash(world, agents, view.facilities, None, False)
+
+
+def test_the_encoder_writes_floats_as_repr_does() -> None:
+    import math
+    import random
+
+    rng = random.Random(20261031)
+    edges = [
+        1e-4,
+        math.nextafter(1e-4, 0.0),
+        math.nextafter(1e-4, 1.0),
+        1e16,
+        math.nextafter(1e16, 0.0),
+        9007199254740993.0,
+        1.0,
+        0.1,
+        5e-324,
+        1.7976931348623157e308,
+        0.0,
+        -0.0,
+        123456.0,
+        1e15,
+        1e22,
+    ]
+    values = [*edges, *(-value for value in edges)]
+    for _ in range(50_000):
+        values.append(struct.unpack("<d", rng.getrandbits(64).to_bytes(8, "little"))[0])
+        values.append(rng.random())
+        values.append(rng.random() * 10.0 ** rng.randrange(-8, 20))
+        values.append(round(rng.random() * 1440.0, rng.randrange(6)))
+    import sheltersim_native
+
+    for value in values:
+        if math.isfinite(value):
+            assert sheltersim_native.float_json(value) == repr(value)
+
+
+def test_the_event_kernel_leaves_ints_of_any_size_to_python() -> None:
+    from sheltersim.events.models import EventKind, ScheduledEvent
+
+    assert native.scheduled_event_checked(*_event_arguments(sequence=2**70)) is None
+    assert ScheduledEvent("e-1", EventKind.ENDOGENOUS, 1, 0, 2**70, "tick").sequence == 2**70

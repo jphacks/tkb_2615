@@ -16,7 +16,12 @@ from sheltersim.contracts.policies import selected_models
 from sheltersim.contracts.population import PersonContext, population_context_people
 from sheltersim.core.rng import KeyedRandom, RNGKeyPart
 from sheltersim.core.world import WorldState
-from sheltersim.domain.environment import ZoneDemandView, zone_environment_view
+from sheltersim.domain.environment import (
+    ZONE_ENVIRONMENT_STATE_KEY,
+    ZoneDemandView,
+    ZoneEnvironmentView,
+    zone_environment_view,
+)
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.infrastructure import (
     active_environmental_stress,
@@ -151,6 +156,34 @@ class FacilityView:
     resource_active_agent_ids: tuple[str, ...] = ()
     resource_queue_agent_ids: tuple[str, ...] = ()
     facility_event_context_ids: tuple[str, ...] = ()
+
+
+def _zone_environment(
+    world: WorldState, zone_id: str, cache: dict[str, Any] | None
+) -> ZoneEnvironmentView:
+    """zone_environment_view(world, zone_id), which reads only model_configs and the
+    modifiers: a kept view is used while they are the same object and the same values."""
+    if cache is None:
+        return zone_environment_view(world, zone_id)
+    state = world.model_state.get(ZONE_ENVIRONMENT_STATE_KEY)
+    modifiers = state.get("modifiers") if isinstance(state, dict) else None
+    if (
+        cache.get("configs") is not world.model_configs
+        or cache.get("has_state") is not isinstance(state, dict)
+        or cache.get("modifiers") != modifiers
+    ):
+        cache.clear()
+        cache.update(
+            configs=world.model_configs,
+            has_state=isinstance(state, dict),
+            modifiers=deepcopy(modifiers),
+            views={},
+        )
+    views = cache["views"]
+    view = views.get(zone_id)
+    if view is None:
+        view = views[zone_id] = zone_environment_view(world, zone_id)
+    return view
 
 
 def _view_state_hash(
@@ -313,24 +346,22 @@ class WorldView:
             MappingProxyType({key: tuple(value) for key, value in sorted(groups.items())}),
         )
 
-    def immediate_need(self, agent_id: str) -> float:
-        """The largest of one person's stress and needs, each worked out once per view."""
-        needs_by_agent = self.__dict__.get("_immediate_needs")
-        if needs_by_agent is None:
-            needs_by_agent = {}
-            object.__setattr__(self, "_immediate_needs", needs_by_agent)
-        value = needs_by_agent.get(agent_id)
-        if value is None:
-            agent = self.agents[agent_id]
-            needs = agent.needs
-            value = needs_by_agent[agent_id] = max(
-                agent.stress,
-                needs.toilet_urgency,
-                needs.hunger,
-                needs.fatigue,
-                needs.hydration_need,
-            )
-        return value
+    def immediate_needs(self) -> dict[str, float]:
+        """The largest of each person's stress and needs; proposals read it many times."""
+        values = self.__dict__.get("_immediate_needs")
+        if values is None:
+            values = {}
+            for agent_id, agent in self.agents.items():
+                needs = agent.needs
+                values[agent_id] = max(
+                    agent.stress,
+                    needs.toilet_urgency,
+                    needs.hunger,
+                    needs.fatigue,
+                    needs.hydration_need,
+                )
+            object.__setattr__(self, "_immediate_needs", values)
+        return values
 
     @classmethod
     def from_world(
@@ -339,11 +370,14 @@ class WorldView:
         *,
         include_state_hash: bool = True,
         person_cache: dict[str, tuple[Any, PersonContext]] | None = None,
+        environment_cache: dict[str, Any] | None = None,
     ) -> WorldView:
         """Create a detached snapshot, optionally omitting its audit hash.
 
         ``person_cache`` keeps parsed person contexts between calls for one caller; a
         record is parsed again as soon as it differs from the copy kept with it.
+        ``environment_cache`` does the same for zone environments; the caller empties it
+        when model_configs may have been changed in place.
         """
         queue_tasks: dict[str, list[Any]] = {}
         information_state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
@@ -417,7 +451,8 @@ class WorldView:
             else {}
         )
         environment_by_zone = {
-            zone_id: zone_environment_view(world, zone_id) for zone_id in sorted(world.zones)
+            zone_id: _zone_environment(world, zone_id, environment_cache)
+            for zone_id in sorted(world.zones)
         }
         # What every person in a zone shares; each person's fields are added to a copy.
         zone_fields: dict[str, dict[str, Any]] = {}
@@ -739,6 +774,19 @@ class ActionProposal:
             selected[0].probability, self.selection_probability
         ):
             raise ValueError("proposal action must match one eligible candidate")
+
+    def with_outcome(self, target_id: str | None, next_decision_at: int) -> ActionProposal:
+        """replace(self, target_id=..., next_decision_at=...): the other checks read fields
+        that do not change, so only the timing is checked again."""
+        if type(next_decision_at) is not int or next_decision_at <= self.minute_index:
+            return replace(self, target_id=target_id, next_decision_at=next_decision_at)
+        proposal = object.__new__(ActionProposal)
+        object.__setattr__(
+            proposal,
+            "__dict__",
+            {**self.__dict__, "target_id": target_id, "next_decision_at": next_decision_at},
+        )
+        return proposal
 
 
 class BehaviorPolicy(Protocol):
@@ -1067,18 +1115,19 @@ class UtilityBehaviorPolicy:
             )
         elif agent.personal_context_present:
             family_peers = ()
-        pressure = view.immediate_need
+        pressure = view.immediate_needs()
         family_target = max(
             family_peers,
-            key=lambda peer_id: (pressure(peer_id), peer_id),
+            key=lambda peer_id: (pressure[peer_id], peer_id),
             default=None,
         )
+        help_threshold = distress + 0.15
         help_targets = tuple(
-            peer_id for peer_id in zone_peers if pressure(peer_id) > distress + 0.15
+            peer_id for peer_id in zone_peers if pressure[peer_id] > help_threshold
         )
         help_target = max(
             help_targets,
-            key=lambda peer_id: (pressure(peer_id), peer_id),
+            key=lambda peer_id: (pressure[peer_id], peer_id),
             default=None,
         )
         minute_of_day = view.minute_index % 1440
@@ -1171,17 +1220,17 @@ class UtilityBehaviorPolicy:
                     ),
                     (
                         ActionKind.CARE_FAMILY,
-                        family_target is not None and pressure(family_target) >= 0.25,
+                        family_target is not None and pressure[family_target] >= 0.25,
                         "co-located family or care-linked person has an unmet need",
                         0.12
-                        + (0.45 * pressure(family_target) if family_target is not None else 0.0),
+                        + (0.45 * pressure[family_target] if family_target is not None else 0.0),
                         int(family_target is not None and view.agents[family_target].stress >= 0.8),
                     ),
                     (
                         ActionKind.HELP_OTHERS,
                         help_target is not None,
                         "co-located person has substantially higher immediate need or stress",
-                        0.15 + (0.4 * pressure(help_target) if help_target is not None else 0.0),
+                        0.15 + (0.4 * pressure[help_target] if help_target is not None else 0.0),
                         int(help_target is not None and view.agents[help_target].stress >= 0.8),
                     ),
                 ]
@@ -1452,6 +1501,7 @@ def _target_for_action(view: WorldView, agent: AgentView, action: ActionKind) ->
         agent.needs.fatigue,
         agent.needs.hydration_need,
     )
+    pressure = view.immediate_needs()
     if action is ActionKind.CARE_FAMILY:
         peers = tuple(
             peer
@@ -1475,12 +1525,12 @@ def _target_for_action(view: WorldView, agent: AgentView, action: ActionKind) ->
         peers = tuple(
             peer
             for peer in view.zone_members.get(agent.zone_id, ())
-            if peer != agent.id and view.immediate_need(peer) > own_pressure + 0.15
+            if peer != agent.id and pressure[peer] > own_pressure + 0.15
         )
     eligible = tuple(peers)
     if not eligible:
         return None
-    return max(eligible, key=lambda peer: (view.immediate_need(peer), peer))
+    return max(eligible, key=lambda peer: (pressure[peer], peer))
 
 
 class BehaviorDecisionRunner:
