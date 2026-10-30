@@ -88,6 +88,9 @@ def test_documents_and_bytes_match_a_full_conversion_as_histories_change(
         yield "same entries in a new list"
         world.model_state["resource_service_v1"]["request_history"].clear()
         yield "history emptied"
+        world.model_state["with_int_keys"] = {"inner": {10: "a", 9: 1.5}}
+        world.model_state["body_state_v1"]["agents"] = {2: {"a": (1, 2)}, 10: None}
+        yield "object keys only json reads, inside and beside a history"
 
     for _ in changes():
         world_document, metric_document, encoder = cache.documents(world, metrics)

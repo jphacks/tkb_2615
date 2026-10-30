@@ -219,7 +219,7 @@ pub fn python_float_repr(value: f64) -> String {
     text
 }
 
-fn encode(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+pub(crate) fn encode(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     let mut encoder = Encoder {
         out: Vec::with_capacity(256),
     };
@@ -294,6 +294,9 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(records::view_state_hash, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::same_saved_records, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::index_row, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::record_json, module)?)?;
     module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;

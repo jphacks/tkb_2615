@@ -72,10 +72,13 @@ def canonical(value: Any) -> str:
 
 
 def digest(value: Any) -> str:
-    return hashlib.sha256(canonical(value).encode()).hexdigest()
+    encoded = native.canonical_json(value)
+    return hashlib.sha256(canonical(value).encode() if encoded is None else encoded).hexdigest()
 
 
-@functools.lru_cache(maxsize=4096)
+# Large enough for every key of a large Run: relationship keys alone are one per pair
+# of people, and a save reads them all again in order, which a smaller cache never holds.
+@functools.lru_cache(maxsize=1 << 18)
 def _private_field(key: str) -> bool:
     # Saved records reuse a small set of field names; match each name once (#47).
     return _PRIVATE.search(key) is not None
