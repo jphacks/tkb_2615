@@ -234,8 +234,17 @@ def record_shared_operation(world: WorldState, record: OperationHistoryRecord) -
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
     if not isinstance(state, dict):
         raise ValueError("shared_operations_v1 must be selected in the immutable Scenario")
+    # As in per-tick validation, only records since the previous tick are parsed:
+    # earlier ones passed that validation, and the run-boundary validation replays
+    # the whole history.
+    history = state.get("history")
+    recent = (
+        records_since_previous_tick(history, world.minute_index)
+        if isinstance(history, list)
+        else history
+    )
     try:
-        SharedOperationsState.model_validate(state)
+        SharedOperationsState.model_validate({**state, "history": recent})
     except (TypeError, ValueError) as exc:
         raise ValueError("shared_operations_v1 state is invalid before operation append") from exc
     if record.minute != world.minute_index:
@@ -248,7 +257,9 @@ def record_shared_operation(world: WorldState, record: OperationHistoryRecord) -
         or event_record.event.event_type != record.event_type
     ):
         raise ValueError("shared operation receipt requires a matching realized applied event")
-    if any(row.get("event_id") == record.event_id for row in state["history"]):
+    # A record carries its event's realized minute, here the current one, so an
+    # earlier record of the same event is among the recent ones.
+    if any(row.get("event_id") == record.event_id for row in recent):
         raise ValueError("shared operation event ID has already been recorded")
     common = record.model_dump(mode="json")
     if not _event_payload_matches(event_record, record):
