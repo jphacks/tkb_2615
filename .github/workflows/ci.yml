@@ -1,11 +1,11 @@
-# offline CI on Linux, Windows and macOS (#48), on every pull request to main and
-# by hand. On feature/rust-port it also builds and installs the Rust kernels
-# (native/), runs the tests with them, and on Linux once more without them.
+# offline CI on Linux, Windows and macOS (#48), on every pull request to main or
+# feature/rust-port and by hand. On feature/rust-port it also builds and installs the
+# Rust kernels (native/), runs the tests with them, and on Linux once more without them.
 name: オフラインCI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/rust-port]
   workflow_dispatch:
 
 permissions:
