@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
+from sheltersim import native
+from sheltersim.core.tick_validation import PairKeys
 from sheltersim.domain.models import (
     AgentInformationState,
     InformationBeliefStatus,
@@ -74,6 +77,26 @@ def upgrade_information_runtime_state(state: dict[str, Any]) -> dict[str, Any]:
                 ),
             ).to_dict()
     return state
+
+
+def _contact_key_is_good(pair_key: Any, agent_ids: set[str]) -> bool:
+    try:
+        pair = json.loads(pair_key)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(pair, list)
+        and len(pair) == 2
+        and all(isinstance(agent_id, str) for agent_id in pair)
+        and pair[0] in agent_ids
+        and pair[1] in agent_ids
+        and pair[0] != pair[1]
+        and json.dumps(pair, separators=(",", ":")) == pair_key
+    )
+
+
+# Keys naming two different current people, for the Rust kernel to look up first.
+_GOOD_CONTACT_KEYS = PairKeys()
 
 
 def validate_information_runtime_state(
@@ -152,7 +175,13 @@ def validate_information_runtime_state(
     contacts = state["contacts"]
     if not isinstance(contacts, dict) or len(contacts) > len(agent_ids) * 16:
         raise ValueError("information contacts must be a bounded object")
-    for pair_key, record in contacts.items():
+    contacts_valid = native.information_contacts_valid(
+        contacts,
+        _GOOD_CONTACT_KEYS.good_keys(agent_ids),
+        functools.partial(_contact_key_is_good, agent_ids=agent_ids),
+        duration_minutes,
+    )
+    for pair_key, record in () if contacts_valid else contacts.items():
         try:
             pair = json.loads(pair_key)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -186,8 +215,9 @@ def validate_information_runtime_state(
     query_pressure = state["query_pressure"]
     if not isinstance(query_pressure, dict) or set(query_pressure) != agent_ids:
         raise ValueError("information query pressure must contain exactly the known Agents")
-    for agent_id, pressure in query_pressure.items():
-        validate_unit_interval(f"information query pressure for {agent_id}", pressure)
+    if not native.unit_values_valid(query_pressure):
+        for agent_id, pressure in query_pressure.items():
+            validate_unit_interval(f"information query pressure for {agent_id}", pressure)
 
     support_requests = state["support_requests"]
     if not isinstance(support_requests, list):

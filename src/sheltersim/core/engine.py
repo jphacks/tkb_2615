@@ -115,7 +115,7 @@ class TickEngine:
 
         self.clock.advance()
         self.world.minute_index = self.clock.minute_index
-        self.world.validate(validate_event_history=False)
+        self.world.validate_after_tick()
         if self.trace_level is TraceLevel.SUMMARY:
             self._emit(TickTrace(minute_index=minute, phase=None))
         return self.world

@@ -10,9 +10,11 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Any
 
+from sheltersim import native
 from sheltersim.contracts.policies import selected_models
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.saved_items import SavedItems
+from sheltersim.core.tick_validation import TickValidationMemo
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_STATE_KEY,
     create_zone_environment_runtime_state,
@@ -256,8 +258,14 @@ class WorldState:
         *,
         _in_flight_event: ScheduledEvent | None = None,
         validate_event_history: bool = True,
+        _tick_memo: TickValidationMemo | None = None,
     ) -> None:
-        """Check world invariants, optionally auditing immutable EventLog history."""
+        """Check world invariants, optionally auditing immutable EventLog history.
+
+        _tick_memo is for validate_after_tick only: checks of what it shows unchanged
+        since the last end-of-tick check are skipped.
+        """
+        configs_unchanged = _tick_memo is not None and _tick_memo.configs_unchanged
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -267,10 +275,15 @@ class WorldState:
                 f"unsupported world-state schema version: {self.schema_version}"
             )
         try:
-            selected_models(self.model_configs)
+            if configs_unchanged:
+                psychology_model = _tick_memo.psychology_model
+            else:
+                psychology_model = selected_models(self.model_configs)["psychology"]
+                if _tick_memo is not None:
+                    _tick_memo.psychology_model = psychology_model
             from sheltersim.contracts.runtime import validate_declared_states
 
-            validate_declared_states(self)
+            validate_declared_states(self, tick_memo=_tick_memo)
         except ValueError as exc:
             raise StateInvariantError(str(exc)) from exc
         extension_keys = {
@@ -292,7 +305,9 @@ class WorldState:
             from sheltersim.domain.simulator_state import validate_simulator_extensions
 
             try:
-                validate_simulator_extensions(self, validate_event_history=validate_event_history)
+                validate_simulator_extensions(
+                    self, validate_event_history=validate_event_history, tick_memo=_tick_memo
+                )
             except (ValueError, KeyError, TypeError) as exc:
                 raise StateInvariantError("invalid simulator extension state") from exc
         resource_service_enabled = "resource_service" in self.model_configs
@@ -300,17 +315,25 @@ class WorldState:
             raise StateInvariantError(
                 "resource_service requires WorldState v6; v6 requires resource_service"
             )
+        resource_config = None
         if resource_service_enabled:
-            try:
-                resource_config = ResourceServiceConfig.model_validate(
-                    self.model_configs["resource_service"]
-                )
-            except ValueError as exc:
-                raise StateInvariantError(f"invalid resource_service config: {exc}") from exc
-            if self.model_configs["resource_service"] != resource_config.model_dump(mode="json"):
-                raise StateInvariantError(
-                    "resource_service config must contain the complete canonical v1 values"
-                )
+            if configs_unchanged:
+                resource_config = _tick_memo.resource_config
+            else:
+                try:
+                    resource_config = ResourceServiceConfig.model_validate(
+                        self.model_configs["resource_service"]
+                    )
+                except ValueError as exc:
+                    raise StateInvariantError(f"invalid resource_service config: {exc}") from exc
+                if self.model_configs["resource_service"] != resource_config.model_dump(
+                    mode="json"
+                ):
+                    raise StateInvariantError(
+                        "resource_service config must contain the complete canonical v1 values"
+                    )
+                if _tick_memo is not None:
+                    _tick_memo.resource_config = resource_config
             if RESOURCE_LEDGER_KEY not in self.model_state:
                 raise StateInvariantError("WorldState v6 requires a resource ledger")
             service_state = self.model_state.get("resource_service_v1")
@@ -460,17 +483,22 @@ class WorldState:
                     )
         elif "resource_service_v1" in self.model_state:
             raise StateInvariantError("resource_service state requires WorldState v6")
-        try:
-            information_config = InformationSpreadConfig.from_mapping(
-                self.model_configs.get("information_spread")
-            )
-        except ValueError as exc:
-            raise StateInvariantError(f"invalid information_spread config: {exc}") from exc
-        if "information_spread" in self.model_configs:
-            if self.model_configs["information_spread"] != information_config.to_dict():
-                raise StateInvariantError(
-                    "information_spread config must contain the complete canonical v1 values"
+        if configs_unchanged:
+            information_config = _tick_memo.information_config
+        else:
+            try:
+                information_config = InformationSpreadConfig.from_mapping(
+                    self.model_configs.get("information_spread")
                 )
+            except ValueError as exc:
+                raise StateInvariantError(f"invalid information_spread config: {exc}") from exc
+            if "information_spread" in self.model_configs:
+                if self.model_configs["information_spread"] != information_config.to_dict():
+                    raise StateInvariantError(
+                        "information_spread config must contain the complete canonical v1 values"
+                    )
+            if _tick_memo is not None:
+                _tick_memo.information_config = information_config
         if information_config.enabled:
             try:
                 validate_information_runtime_state(
@@ -485,7 +513,7 @@ class WorldState:
             raise StateInvariantError(
                 "information-spread state requires an enabled information_spread model"
             )
-        if selected_models(self.model_configs)["psychology"] in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
+        if psychology_model in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
             try:
                 validate_psychological_state(self.model_state.get(PSYCHOLOGICAL_STATE_KEY))
             except ValueError as exc:
@@ -573,7 +601,13 @@ class WorldState:
                 raise StateInvariantError("layout route capacity configuration is invalid")
 
         zone_occupancy: dict[str, int] = dict.fromkeys(self.zones, 0)
-        for agent in self.agents.values():
+        agents_valid = self.schema_version == 6 and native.world_agents_valid(
+            self.agents, self.zones, Activity, InitialNeedProfile, NeedState
+        )
+        if agents_valid:
+            for agent in self.agents.values():
+                zone_occupancy[agent.zone_id] += 1
+        for agent in () if agents_valid else self.agents.values():
             if agent.zone_id not in self.zones:
                 raise StateInvariantError(
                     f"Agent {agent.profile.id!r} references unknown zone {agent.zone_id!r}"
@@ -775,7 +809,9 @@ class WorldState:
         resource_completion_events_by_task: dict[str, list[ScheduledEvent]] = {}
         travel_events_by_task: dict[str, list[ScheduledEvent]] = {}
         staff_events_by_task: dict[str, list[ScheduledEvent]] = {}
-        for event in self.event_queue.pending():
+        # Nothing below changes the queue, and pending() sorts it at every call.
+        pending_events = self.event_queue.pending()
+        for event in pending_events:
             if event.event_type not in (
                 "toilet_service_complete",
                 "resource_service_complete",
@@ -967,13 +1003,10 @@ class WorldState:
             reservation = self.model_state[RESOURCE_LEDGER_KEY]["accounts"][resource_id][
                 "reservations"
             ].get(task.id)
-            service_config = ResourceServiceConfig.model_validate(
-                self.model_configs["resource_service"]
-            )
             expected_quantity = (
-                service_config.water_ml_per_service
+                resource_config.water_ml_per_service
                 if resource_id == "water_ml"
-                else service_config.food_meal_units_per_service
+                else resource_config.food_meal_units_per_service
             )
             if (
                 not isinstance(reservation, dict)
@@ -988,9 +1021,10 @@ class WorldState:
                 )
             active_resource_reservations.add(task.id)
             staff_member = self.staff.get(task.staff_id or "")
-            config = ResourceServiceConfig.model_validate(self.model_configs["resource_service"])
             required_skill = (
-                config.water_staff_skill if resource_id == "water_ml" else config.meal_staff_skill
+                resource_config.water_staff_skill
+                if resource_id == "water_ml"
+                else resource_config.meal_staff_skill
             )
             if (
                 staff_member is None
@@ -1003,7 +1037,7 @@ class WorldState:
                 raise StateInvariantError(
                     f"resource service task {task.id!r} needs one matching idle-skilled staff owner"
                 )
-        for event in self.event_queue.pending():
+        for event in pending_events:
             if event.event_type != "resource_service_complete":
                 continue
             task_id = event.payload.get("task_id")
@@ -1100,7 +1134,12 @@ class WorldState:
                 )
 
         requests_by_agent: dict[str, list[SupportRequestState]] = {}
-        for request in self.support_requests.values():
+        timeouts_by_request: dict[Any, list[ScheduledEvent]] | None = None
+        for request in (
+            self.support_requests.values()
+            if _tick_memo is None
+            else _tick_memo.requests_to_check(self.support_requests)
+        ):
             if not request.id or request.id not in self.support_requests:
                 raise StateInvariantError("support request mapping key must match its stable ID")
             if request.agent_id not in self.agents:
@@ -1205,12 +1244,14 @@ class WorldState:
                         f"support request {request.id!r} has assignment without assigned status"
                     )
             if request.status is SupportRequestStatus.PENDING:
-                expirations = [
-                    event
-                    for event in self.event_queue.pending()
-                    if event.event_type == "support_request_timeout"
-                    and event.payload.get("request_id") == request.id
-                ]
+                if timeouts_by_request is None:
+                    timeouts_by_request = {}
+                    for event in pending_events:
+                        if event.event_type == "support_request_timeout":
+                            timeouts_by_request.setdefault(
+                                event.payload.get("request_id"), []
+                            ).append(event)
+                expirations = timeouts_by_request.get(request.id, [])
                 if request.timeout_minute < self.duration_minutes and (
                     len(expirations) != 1 or expirations[0].due_minute != request.timeout_minute
                 ):
@@ -1311,7 +1352,7 @@ class WorldState:
                     validate_resource_ledger(*ledger_arguments)
                 else:
                     validate_resource_ledger_state(
-                        *ledger_arguments, minute_index=self.minute_index
+                        *ledger_arguments, minute_index=self.minute_index, tick_memo=_tick_memo
                     )
             except ValueError as exc:
                 raise StateInvariantError(f"invalid resource ledger: {exc}") from exc
@@ -1329,7 +1370,7 @@ class WorldState:
                 )
         except ValueError as exc:
             raise StateInvariantError(str(exc)) from exc
-        queued_events = self.event_queue.pending()
+        queued_events = pending_events
         queue_ids = {event.event_id for event in queued_events}
         queue_sequences = {event.sequence for event in queued_events}
         if any(self.event_log.contains_id(event_id) for event_id in queue_ids):
@@ -1343,6 +1384,29 @@ class WorldState:
         max_queued_sequence = max((event.sequence for event in queued_events), default=-1)
         if self.id_counters.get("event", 0) <= max(max_queued_sequence, max_realized_sequence):
             raise StateInvariantError("event ID counter must be greater than scheduled sequences")
+
+    def validate_after_tick(self) -> None:
+        """The per-tick validation, skipping what is proven unchanged since the last one.
+
+        With the rust kernels each world keeps a memo of the last passed check
+        (core/tick_validation.py); it does not outlive a failed one. Without them this
+        is validate(validate_event_history=False).
+        """
+        if not native.available():
+            self.validate(validate_event_history=False)
+            return
+        memo = self.__dict__.get("_tick_memo")
+        # Rules bound past times by the clock, so a memo only holds going forward.
+        if memo is None or memo.minute > self.minute_index:
+            memo = self.__dict__["_tick_memo"] = TickValidationMemo()
+        memo.begin(self)
+        try:
+            with memo.config_scope():
+                self.validate(validate_event_history=False, _tick_memo=memo)
+        except BaseException:
+            del self.__dict__["_tick_memo"]
+            raise
+        memo.commit(self)
 
     def allocate_event_sequence(self) -> int:
         """Reserve the next stable sequence number for a newly generated event."""

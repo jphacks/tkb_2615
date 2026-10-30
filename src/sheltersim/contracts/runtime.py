@@ -192,8 +192,15 @@ def initialize_declared_states(world: Any) -> None:
     validate_declared_states(world)
 
 
-def validate_declared_states(world: Any) -> None:
-    for namespace, descriptor in declared_states(world.model_configs).items():
+def validate_declared_states(world: Any, *, tick_memo: Any = None) -> None:
+    """Check the declared namespaces; see core/tick_validation.py for tick_memo."""
+    if tick_memo is None or not tick_memo.configs_unchanged:
+        descriptors = declared_states(world.model_configs)
+        if tick_memo is not None:
+            tick_memo.declared_states = descriptors
+    else:
+        descriptors = tick_memo.declared_states
+    for namespace, descriptor in descriptors.items():
         state = world.model_state.get(namespace)
         if (
             not isinstance(state, dict)
@@ -201,6 +208,12 @@ def validate_declared_states(world: Any) -> None:
             or state.get("schema_version") != descriptor.schema_version
         ):
             raise ValueError("missing or incompatible required model-state namespace")
+        if (
+            tick_memo is not None
+            and tick_memo.presence_unchanged
+            and namespace == "population_presence_v1"
+        ):
+            continue
         try:
             _CONTRACTS[namespace][1](world, state)
         except (TypeError, KeyError, ValueError) as exc:

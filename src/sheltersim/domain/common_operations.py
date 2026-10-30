@@ -44,11 +44,15 @@ def create_shared_operations_state() -> dict[str, Any]:
 
 
 def validate_shared_operations_state(
-    world: WorldState, *, validate_event_history: bool = True
+    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
 ) -> None:
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
     if state is None:
         return
+    if tick_memo is not None:
+        history = state.get("history") if isinstance(state, dict) else None
+        if isinstance(history, list) and tick_memo.no_new_operations(state, history):
+            return
     # Per-tick validation parses only the records from the tick that just ended (each
     # was checked against its event when appended); the run-boundary validation
     # replays the whole history and the care lifecycle.

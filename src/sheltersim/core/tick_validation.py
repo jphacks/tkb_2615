@@ -1,0 +1,299 @@
+"""What the check at the end of a tick may skip, because it is provably unchanged.
+
+WorldState.validate_after_tick keeps one TickValidationMemo per world, and only while
+the rust kernels are available; without them every tick runs the plain per-tick
+validation. A validation that fails discards the memo, so it only ever records facts
+about a state that passed. The memo holds no simulation state: dropping it costs one
+slower check and changes no result.
+
+Each saving rests on one of these arguments:
+
+- Config checks read only model_configs. They are skipped while model_configs equals
+  the copy taken after they last passed. Equality does not tell 1 from True or 1.0;
+  no tick writes model_configs, and the next full validation checks the values.
+- A relationship record holds immutable values, so it can only change by a write to
+  its dict, and dict watchers report every such write (native/src/watch.rs). The
+  lists whose content a rule reads are read at every check. A body relationship key
+  also depends on the Agent IDs, so a change of IDs checks them all.
+- A settled support request (resolved or unresolved) depends only on its own fields,
+  which SupportRequestState reports writing, on the set of Agent IDs, and on the clock
+  only through "not after the current minute". It is checked again when written or
+  when the Agent IDs change.
+- The population presence and lifecycle states and the geometry overlay are skipped
+  when their canonical JSON and everything else their rules read are unchanged.
+- The newest shared operations record is skipped while it and the rest of the state
+  are unchanged; new records are checked as they arrive.
+- used_reservation_ids is append-only, so only its new tail is checked in full; the
+  earlier IDs are compared with the ones that passed.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any
+
+from sheltersim import native
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sheltersim.core.world import WorldState
+
+_PRESENCE_KEY = "population_presence_v1"
+_LIFECYCLE_KEY = "population_lifecycle_v1"
+_OVERLAY_KEY = "geometry_overlay_v1"
+_OPERATIONS_KEY = "shared_operations_v1"
+
+
+class TickValidationMemo:
+    """Facts from the last passed end-of-tick check of one world."""
+
+    def __init__(self) -> None:
+        self.minute = -1
+        self._configs: dict[str, Any] | None = None
+        self._agent_ids: frozenset[str] = frozenset()
+        self._zone_ids: frozenset[str] = frozenset()
+        self._facility_zones: dict[str, str] = {}
+        self._saved_json: dict[str, bytes | None] = {}
+        self._presence_is_self_contained = False
+        # Results of the config checks, valid while configs_unchanged.
+        self.psychology_model: str | None = None
+        self.required_states: set[str] = set()
+        self.declared_states: dict[str, Any] = {}
+        self.resource_config: Any = None
+        self.information_config: Any = None
+        self.geometry_scope: dict[tuple[str, int], tuple[Any, Any]] = {}
+        self.body_config_json: bytes | None = None
+        # Facts of the check in progress, set by begin().
+        self.configs_unchanged = False
+        self.agents_unchanged = False
+        self.presence_unchanged = False
+        self.lifecycle_unchanged = False
+        self.overlay_unchanged = False
+        # Support requests: every value of the dict, in order, then which to recheck.
+        self._requests = native.values_snapshot()
+        self._open_requests: list[Any] = []
+        self._written_requests: list[Any] = []
+        self._added_requests: Any = []
+        self._checked_requests: list[Any] = []
+        # Relationship records written since the last check.
+        self.social_watch = native.record_watch()
+        self.body_watch = native.record_watch("topic_ids")
+        self._relationships_read: list[tuple[Any, Any]] = []
+        # used_reservation_ids: the IDs that passed, as a list and as a set.
+        self._used_ids: list[Any] = []
+        self._used_id_set: set[Any] = set()
+        # Shared operations: the newest record checked, and the state's other fields.
+        self._last_operation: Any = None
+        self._last_operation_json: bytes | None = None
+        self._operations_header_json: bytes | None = None
+        self._operations_unchanged = False
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> TickValidationMemo:
+        # A copied world holds new objects, so it starts with nothing proven.
+        return TickValidationMemo()
+
+    def begin(self, world: WorldState) -> None:
+        """Compare what the skipped checks read with the state that last passed."""
+        self.configs_unchanged = world.model_configs == self._configs
+        if not self.configs_unchanged:
+            self.geometry_scope.clear()
+        self.agents_unchanged = world.agents.keys() == self._agent_ids
+        if not self.agents_unchanged and self.body_watch is not None:
+            # A body relationship key's rule reads the Agent IDs.
+            self.body_watch.reset()
+        self._relationships_read = []
+        zones_unchanged = world.zones.keys() == self._zone_ids
+        model_state = world.model_state
+        previous = self._saved_json
+        current = {
+            key: saved_json(model_state.get(key))
+            for key in (_PRESENCE_KEY, _LIFECYCLE_KEY, _OVERLAY_KEY)
+        }
+        self._saved_json = current
+
+        def same(key: str) -> bool:
+            return current[key] is not None and current[key] == previous.get(key)
+
+        presence = model_state.get(_PRESENCE_KEY)
+        if not same(_PRESENCE_KEY):
+            self._presence_is_self_contained = _no_archive_paths(presence)
+        self.presence_unchanged = (
+            self.agents_unchanged
+            and zones_unchanged
+            and same(_PRESENCE_KEY)
+            and self._presence_is_self_contained
+        )
+        lifecycle = model_state.get(_LIFECYCLE_KEY)
+        self.lifecycle_unchanged = (
+            self.agents_unchanged
+            and zones_unchanged
+            and same(_LIFECYCLE_KEY)
+            and (presence is None or self.presence_unchanged)
+            # A pending relocation is compared with the tasks and the event queue.
+            and isinstance(lifecycle, dict)
+            and not lifecycle.get("pending_relocations")
+        )
+        overlay = model_state.get(_OVERLAY_KEY)
+        facility_zones = {key: item.zone_id for key, item in world.facilities.items()}
+        self.overlay_unchanged = (
+            self.configs_unchanged
+            and self.agents_unchanged
+            and facility_zones == self._facility_zones
+            and same(_OVERLAY_KEY)
+            # Rooms expire with the clock, and route access is compared with the graph.
+            and isinstance(overlay, dict)
+            and not overlay.get("temporary_rooms")
+            and not overlay.get("route_modifiers")
+        )
+        self._facility_zones = facility_zones
+        self.minute = world.minute_index
+
+    def commit(self, world: WorldState) -> None:
+        """Record what the passed check proved."""
+        if not self.configs_unchanged:
+            self._configs = deepcopy(world.model_configs)
+        self._agent_ids = frozenset(world.agents)
+        self._zone_ids = frozenset(world.zones)
+        self._settle_requests()
+        for watch, relationships in self._relationships_read:
+            watch.accept(relationships)
+        state = world.model_state.get(_OPERATIONS_KEY)
+        if isinstance(state, dict) and isinstance(state.get("history"), list):
+            self._remember_operations(state)
+
+    @contextmanager
+    def config_scope(self) -> Iterator[None]:
+        """Reuse parsed geometry configs between ticks while the configs are unchanged."""
+        from sheltersim.domain.geometry_overlay import _CONFIG_SCOPE
+
+        token = _CONFIG_SCOPE.set(self.geometry_scope)
+        try:
+            yield
+        finally:
+            _CONFIG_SCOPE.reset(token)
+
+    def relationships_to_check(self, watch: Any, relationships: dict[str, Any]) -> dict[str, Any]:
+        """The relationships written or added since the last check, whose rules read only
+        the record and its key; all of them without a watch or when that is not known."""
+        if watch is None:
+            return relationships
+        self._relationships_read.append((watch, relationships))
+        return watch.changed(relationships)
+
+    def requests_to_check(self, requests: dict[str, Any]) -> list[Any]:
+        """The support requests that are not settled, written or new since the last check.
+
+        Their order does not matter to a valid world; with several broken requests it
+        decides only which error is raised first.
+        """
+        added = self._requests.added_values(requests) if self.agents_unchanged else None
+        if added is None:
+            # The dict no longer starts with the requests held, or the Agents changed.
+            self._requests.clear()
+            self._open_requests = []
+            # Requests settled before still write to the old list, which is dropped.
+            self._written_requests = []
+            added = self._requests.added_values(requests)
+        self._added_requests = added
+        checked = {id(item): item for item in self._open_requests}
+        checked.update((id(item), item) for item in self._written_requests)
+        checked.update((id(item), item) for item in added)
+        self._checked_requests = list(checked.values())
+        return self._checked_requests
+
+    def _settle_requests(self) -> None:
+        from sheltersim.domain.models import SupportRequestStatus
+
+        still_open = []
+        for request in self._checked_requests:
+            if request.status in (SupportRequestStatus.RESOLVED, SupportRequestStatus.UNRESOLVED):
+                request.report_writes_to(self._written_requests)
+            else:
+                request.report_writes_to(None)
+                still_open.append(request)
+        self._open_requests = still_open
+        self._requests.extend(self._added_requests)
+        self._added_requests = []
+        self._written_requests.clear()
+
+    def reservation_ids(self, used_ids: list[Any]) -> set[Any] | None:
+        """The IDs as a set after checking the new tail, or None to check them all."""
+        known = self._used_id_set
+        count = len(self._used_ids)
+        # A ledger operation works on a copy of the list, so the list object changes.
+        if used_ids[:count] != self._used_ids:
+            return None
+        added = used_ids[count:]
+        for value in added:
+            if not isinstance(value, str) or value in known:
+                return None
+            known.add(value)
+        self._used_ids.extend(added)
+        return known
+
+    def remember_reservation_ids(self, used_ids: list[Any], used_id_set: set[Any]) -> None:
+        self._used_ids = list(used_ids)
+        self._used_id_set = used_id_set
+
+    def no_new_operations(self, state: dict[str, Any], history: list[Any]) -> bool:
+        """Whether the shared operations state is the one that last passed."""
+        newest = history[-1] if history else None
+        self._operations_unchanged = (
+            self._operations_header_json is not None
+            and newest is self._last_operation
+            and saved_json(newest) == self._last_operation_json
+            and _operations_header_json(state) == self._operations_header_json
+        )
+        return self._operations_unchanged
+
+    def _remember_operations(self, state: dict[str, Any]) -> None:
+        if self._operations_unchanged:
+            return
+        history = state["history"]
+        self._last_operation = history[-1] if history else None
+        self._last_operation_json = saved_json(self._last_operation)
+        self._operations_header_json = _operations_header_json(state)
+
+
+def saved_json(value: Any) -> bytes | None:
+    """The value's canonical JSON, or None if it has none, which never compares as same."""
+    try:
+        return native.canonical_json(value)
+    except ValueError:
+        # For example a str that cannot be encoded; the rules decide about it.
+        return None
+
+
+def _operations_header_json(state: dict[str, Any]) -> bytes | None:
+    return saved_json({k: v for k, v in state.items() if k != "history"})
+
+
+def _no_archive_paths(presence: Any) -> bool:
+    """Whether no presence record points into other model state, which may change."""
+    if not isinstance(presence, dict):
+        return False
+    people = presence.get("people")
+    return isinstance(people, dict) and not any(
+        isinstance(person, dict) and person.get("archive_path") for person in people.values()
+    )
+
+
+class PairKeys:
+    """Keys checked good for one set of Agent IDs, for the rust relationship checks.
+
+    A key's check depends on the key and the Agent IDs alone. A different set of IDs
+    gets a new set of keys, so a world never reads keys checked for other people.
+    """
+
+    def __init__(self) -> None:
+        self._current: tuple[frozenset[str], set[str]] = (frozenset(), set())
+
+    def good_keys(self, agent_ids: Any) -> set[str]:
+        """The good keys for these IDs (a set or a dict's keys view)."""
+        ids, keys = self._current
+        if agent_ids != ids:
+            ids, keys = frozenset(agent_ids), set()
+            self._current = (ids, keys)
+        return keys

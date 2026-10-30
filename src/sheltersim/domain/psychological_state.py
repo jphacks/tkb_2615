@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from sheltersim import native
 from sheltersim.domain.models import validate_unit_interval
 
 PSYCHOLOGICAL_STATE_KEY = "psychological_distress_v1"
@@ -140,7 +141,7 @@ def validate_psychological_state(state: Any) -> None:
         "daily_observed_minutes",
         "completed_days",
     }
-    for agent_id, record in agents.items():
+    for agent_id, record in () if native.psychological_agents_valid(agents) else agents.items():
         if (
             not isinstance(agent_id, str)
             or not agent_id

@@ -118,6 +118,23 @@
 
 **見込み：** tick 約283秒 → 約150秒。7日分は約400秒。
 
+**毎 tick の検証（実装済み）：**
+
+- `TickEngine.step` の終わりの検証は `WorldState.validate_after_tick` です。`validate(validate_event_history=False)` と同じ規則を通しますが、前の分から変わっていないと示せるものを省きます（`core/tick_validation.py`）。何を省くかとその根拠は `docs/architecture.md` にあります。完全な検証（`validate()`）の結果は変わりません。
+- 大きな辞書の走査は、Rust の確認（`native/src/validation.rs`）を先に通します。Rust の確認は「すべて規則を満たす」と分かったときだけ受け入れ、それ以外は Python の規則が判定します。エラーの文は Python の規則からだけ出ます。
+- 社会関係・体調の関係の記録は、長い Run ではメモリ上に散らばり、Rust で全部を読むだけで 1 tick に数ミリ秒かかります。そこで CPython の dict watcher（Python 3.12 以降）で、書き込まれた記録だけを確かめます（`native/src/watch.rs`）。安定 ABI の外なので、関数は ctypes で探します。
+- Rust の部品がないときは、毎 tick `validate(validate_event_history=False)` を実行します。
+
+**計測（7日分、画面からの経路、world・events・KPI のハッシュは一致、2026-10-31）：**
+
+| 処理 | 前 | 後 |
+|---|---:|---:|
+| 毎 tick の検証（1 tick あたり） | 約7 ms（`step` と各段階の差） | 1.45 ms |
+| 毎 tick の検証（7日分） | 70.9秒（同） | 14.6秒 |
+| `TickEngine.step` と各段階の合計の差 | 70.9秒 | 15.3秒 |
+
+ほかの計算も同時に動く中での計測で、段階の合計は同じ回で 192秒から 233秒に増えています。
+
 **ここまでに入れたもの（状態の持ち主はまだ Python）：**
 
 計測すると、次の一歩は状態の持ち主を移すことではなく、計算を移すことと、毎回の作り直しをやめることでした。これらの段階の計算は、状態を Rust に移さなくても下がります。
@@ -183,6 +200,7 @@ Python に任せる場合（型の違う値、不正な状態、trace が要る�
 |---|---|
 | 計算の結果 | 7日分の world・events・KPI のハッシュ（`--expect`）。1日分・短い Run は各 PR で、7日分は段階ごとに測る |
 | 移したまとまりの値 | 毎 tick、Python の実装と Rust の値をビット単位で比べる（`tests/integration/test_native_kernels.py`） |
+| 毎 tick の検証 | 壊した状態を tick で止めること、止めるエラーが省かない検証と同じこと（`tests/integration/test_tick_validation.py`） |
 | 保存の形 | Rust が作る正規化した JSON・chunk・目録が、Python のものと1バイト違わないこと（B3 までは目録・ハッシュも同じ） |
 | 速さ | 計測器の「Run の終わりだけを測る」機能（`--from-project`・`--fork-minute`）で、7日目の保存と tick を数分で測る |
 | 3つの OS | このブランチの CI（Rust の部品を作って入れたテストと、Linux では部品なしのテスト） |
