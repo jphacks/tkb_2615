@@ -722,9 +722,18 @@ class TimelineStore:
             child.world.event_log.records[: len(checkpoint.world_state["event_log"])],
             checkpoint.world_state["event_log"],
         )
-        self.record(
-            child, fork_minute=minute, history_cache=history_cache, inherit_index_from=branch_id
-        )
+        try:
+            self.record(
+                child,
+                fork_minute=minute,
+                history_cache=history_cache,
+                inherit_index_from=branch_id,
+            )
+        except BaseException:
+            # The child is new (checked above); a save that failed after writing its
+            # pointer, while indexing, must not leave a branch the index lacks (#288).
+            self.store.forget_unindexed_branch(self.project_id, self.run_id, child_id)
+            raise
         return child
 
     def frame(self, branch_id: str, minute: int) -> dict[str, Any]:

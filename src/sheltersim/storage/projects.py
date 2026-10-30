@@ -477,6 +477,22 @@ class ProjectStore:
             if not (directory / "branch.json").exists():
                 (directory / "status.json").unlink(missing_ok=True)
 
+    def forget_unindexed_branch(self, project_id: str, run_id: str, branch_id: str) -> None:
+        """Remove the pointer of a new branch whose first save was not indexed (#288).
+
+        A fork saves the child's pointer and then indexes it; when indexing fails, the
+        pointer would name a branch the index lacks and block a retry under its ID.
+        Checkpoint chunks and manifests are shared by content and stay.
+        """
+        with self.transaction():
+            directory = self._path(project_id, "runs", run_id, "branches", branch_id)
+            pointer = directory / "branch.json"
+            if pointer.exists():
+                size = pointer.stat().st_size
+                retry_while_shared(lambda: pointer.unlink())
+                self._wrote(-size, -1)
+            (directory / "status.json").unlink(missing_ok=True)
+
     def branch_status(self, project_id: str, run_id: str, branch_id: str) -> str | None:
         """A branch's recorded computation status, or None before its first one."""
         path = self._path(project_id, "runs", run_id, "branches", branch_id, "status.json")
