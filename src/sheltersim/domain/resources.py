@@ -344,9 +344,13 @@ def _validate_ledger_balances(
         )
 
     used_ids = ledger.get("used_reservation_ids")
-    if not isinstance(used_ids, list) or any(
-        not _valid_id(value) if check_every_reservation_id else not isinstance(value, str)
-        for value in used_ids
+    # The list grows with every reservation: plain strings are recognized by their types.
+    if not isinstance(used_ids, list) or (
+        (check_every_reservation_id or not {str}.issuperset(map(type, used_ids)))
+        and any(
+            not _valid_id(value) if check_every_reservation_id else not isinstance(value, str)
+            for value in used_ids
+        )
     ):
         raise ResourceLedgerError("resource ledger reservation IDs are invalid")
     if len(used_ids) != len(set(used_ids)):

@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+mod contacts;
 mod eventlog;
 mod psychology;
 mod validation;
@@ -243,7 +244,16 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
             if agent.len() != psychology::AGENT_FIELDS {
                 return Err(Unsupported::new_err("agent inputs have the wrong length"));
             }
-            Ok(psychology::step(&globals, agent))
+            let row = psychology::step(&globals, agent);
+            // Values outside AgentStateDelta's bounds are left to its Python checks.
+            let in_bounds = |value: f64| (0.0..=1.0).contains(&value);
+            if !row[..5].iter().copied().all(in_bounds)
+                || !(0.0..=1440.0).contains(&row[5])
+                || !row[6..].iter().copied().all(in_bounds)
+            {
+                return Err(Unsupported::new_err("a new value is out of bounds"));
+            }
+            Ok(row)
         })
         .collect()
 }
@@ -257,6 +267,9 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_problem, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_problem, module)?)?;
+    module.add_function(wrap_pyfunction!(contacts::fsum, module)?)?;
+    module.add_function(wrap_pyfunction!(contacts::information_contacts_without_messages, module)?)?;
+    module.add_function(wrap_pyfunction!(contacts::social_channel_update, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
     module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;

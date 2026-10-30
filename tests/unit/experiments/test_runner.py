@@ -19,6 +19,7 @@ from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.geometry_overlay import reserve_sleep_bed
 from sheltersim.domain.models import ZoneEdgeState
+from sheltersim.domain.movement import route_is_physically_clear
 from sheltersim.domain.simulator_state import simulator_signatures
 from sheltersim.events.effects import (
     EffectProgram,
@@ -193,6 +194,49 @@ def _with_alternate_route(world: WorldState, edge_id: str, travel_minutes: int) 
     for opening in world.model_configs["spatial_constraints"]["openings"]:
         if {"route_sleeping_corridor", "route_corridor_toilet"} & set(opening["edge_ids"]):
             opening["edge_ids"].append(edge_id)
+
+
+def test_closed_routes_follow_each_input_they_depend_on(generated_scenario) -> None:
+    """The kept answer must be replaced by any edit, also one inside a kept object."""
+    world = WorldState.from_scenario(generated_scenario)
+    controller = OfflineSimulationController(world, ArtifactSink())
+    geometry = world.model_configs["facility_geometry"]
+
+    def fresh(mobility: str) -> set[str]:
+        return {
+            route["edge_id"]
+            for route in geometry["routes"]
+            if not route_is_physically_clear(world, route["edge_id"], mobility=mobility)
+        }
+
+    def assert_current() -> None:
+        for mobility in ("independent", "assisted", "wheelchair"):
+            first = controller._physically_closed_edges(geometry, mobility)
+            assert first == fresh(mobility)
+            assert controller._physically_closed_edges(geometry, mobility) is first
+
+    assert_current()
+    route = geometry["routes"][0]
+    start, end = route["points"][0], route["points"][1]
+    x = (start["x"] + end["x"]) / 2.0
+    y = (start["y"] + end["y"]) / 2.0
+    overlay = world.model_state["geometry_overlay_v1"]
+    overlay["partitions"]["partition-test"] = {
+        "polygon_m": [
+            {"x": x - 0.1, "y": y - 0.1},
+            {"x": x + 0.1, "y": y - 0.1},
+            {"x": x + 0.1, "y": y + 0.1},
+        ],
+        "source_ids": ["ASM-TEST-PARTITION"],
+    }
+    assert_current()
+    assert route["edge_id"] in controller._physically_closed_edges(geometry, "independent")
+    del overlay["partitions"]["partition-test"]
+    assert_current()
+    assert route["edge_id"] not in controller._physically_closed_edges(geometry, "independent")
+    route["width_m"] = 0.1
+    assert_current()
+    assert route["edge_id"] in controller._physically_closed_edges(geometry, "independent")
 
 
 def test_equipment_transfer_replans_resident_trip_to_moved_facility(generated_scenario) -> None:

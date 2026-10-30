@@ -55,6 +55,26 @@ def psychology_integrated(globals_: list[float], agents: list[list[float]]) -> l
         return None
 
 
+def information_contacts_without_messages(*arguments: Any) -> tuple | None:
+    """One tick of InformationSpreadPolicy.update while nobody holds a belief, or None."""
+    if _native is None:
+        return None
+    try:
+        return _native.information_contacts_without_messages(*arguments)
+    except (_native.Unsupported, TypeError):
+        return None
+
+
+def social_channel_update(*arguments: Any) -> tuple | None:
+    """One tick of ExpressivenessChannelOpennessPolicy.update, or None."""
+    if _native is None:
+        return None
+    try:
+        return _native.social_channel_update(*arguments)
+    except (_native.Unsupported, TypeError):
+        return None
+
+
 def social_relationships_problem(
     relationships: Any, good_keys: set[Any], key_problem: Any
 ) -> int | None:
