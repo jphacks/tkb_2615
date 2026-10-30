@@ -158,3 +158,36 @@ def test_full_runner_combines_social_synchrony_with_natural_recovery(
     assert world.agents[high_id].stress < 0.8
     assert world.agents[low_id].stress < 0.8
     assert world.agents[low_id].stress > 0.1
+
+
+def test_a_tick_without_a_psychology_trace_gets_the_same_deltas(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    """Without a trace the runner builds no per-agent trace parts; at every tick the
+    deltas equal those of explain_update, value for value and bit for bit."""
+    import struct
+
+    from sheltersim.policies.psychology import IntegratedDistressLifeStatePolicy
+
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 360
+    scenario = ScenarioSpec.model_validate(document)
+    compared = []
+    without_traces = IntegratedDistressLifeStatePolicy.deltas_without_traces
+
+    def checked(self, view, minute):
+        fast = without_traces(self, view, minute)
+        expected = self.explain_update(view, minute).deltas
+        assert len(fast) == len(expected)
+        for a, b in zip(fast, expected, strict=True):
+            for name in a.__dataclass_fields__:
+                x, y = getattr(a, name), getattr(b, name)
+                assert x == y and type(x) is type(y), (minute, a.agent_id, name, x, y)
+                if isinstance(x, float):
+                    assert struct.pack("<d", x) == struct.pack("<d", y)
+        compared.append(minute)
+        return fast
+
+    monkeypatch.setattr(IntegratedDistressLifeStatePolicy, "deltas_without_traces", checked)
+    run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
+    assert compared == list(range(360))
