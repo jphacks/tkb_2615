@@ -122,7 +122,9 @@ each OS, because both call the same libm.
 
 - `ValuesSnapshot`: the values of a dict at the last check, held so that the next
   check can tell by identity that the dict still starts with them. It lets the
-  end-of-tick check (`WorldState.validate_after_tick`) skip settled support requests.
+  end-of-tick check (`WorldState.validate_after_tick`) skip settled support requests, and
+  the scans of unsettled requests during a tick (`WorldState.unsettled_support_requests`)
+  read only the rest.
 
 - `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
   Each record is its Python object, its canonical JSON bytes, or both; the indexes
@@ -132,7 +134,8 @@ each OS, because both call the same libm.
   that passes the `EventLogRecord`/`ScheduledEvent` checks. A record object is made
   only when Python reads it. `split_json_array` cuts a saved chunk into item bytes.
   Day 7: Checkpoint load 17.4 s → 4.2 s, a fork near day 7 24.0 s → 6.2 s
-  (docs/rust-port.md).
+  (docs/rust-port.md). Appending reads a record's index fields through interned names, and
+  skips the `Mapping` check of a provenance value that is a str.
 
 - `sensitive_candidates(raws)` (stage B3): the distinct object keys of the JSON texts
   `raws`, and their distinct string values the privacy patterns could match, read in

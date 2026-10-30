@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -27,6 +27,7 @@ from sheltersim.contracts.operations import (
     TemporaryRoomGeometry,
 )
 from sheltersim.contracts.spatial import SpatialConstraints, SpatialObstacle
+from sheltersim.core.context import ContextScope
 
 GEOMETRY_OVERLAY_KEY = "geometry_overlay_v1"
 
@@ -41,23 +42,17 @@ _CONFIG_SCOPE: ContextVar[dict[tuple[str, int], tuple[Any, Any]] | None] = Conte
 _EMPTY_SPATIAL_CONSTRAINTS: dict[str, Any] = {}
 
 
-@contextmanager
 def geometry_config_scope(
     parsed: dict[tuple[str, int], tuple[Any, Any]] | None = None,
-) -> Iterator[None]:
+) -> AbstractContextManager[None]:
     """Reuse parsed facility geometry configs while model_configs cannot change.
 
     ``parsed`` carries the parses from an earlier scope; the caller clears it when the
     configs may have changed.
     """
     if _CONFIG_SCOPE.get() is not None:
-        yield
-        return
-    token = _CONFIG_SCOPE.set({} if parsed is None else parsed)
-    try:
-        yield
-    finally:
-        _CONFIG_SCOPE.reset(token)
+        return nullcontext()
+    return ContextScope(_CONFIG_SCOPE, {} if parsed is None else parsed)
 
 
 def _parsed_config(name: str, raw: Any, model: Any) -> Any:

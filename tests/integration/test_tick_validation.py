@@ -18,7 +18,7 @@ from sheltersim import native
 from sheltersim.core.engine import TickEngine, TickPhase
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.models import SupportRequestState, SupportRequestStatus
-from sheltersim.experiments.runner import run_scenario
+from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
 
@@ -520,3 +520,111 @@ def test_a_second_watch_on_a_dict_leaves_the_first_reading_everything(finished_w
     key = next(iter(relationships))
     relationships[key]["contact_count"] += 1
     assert second.changed(relationships) == {key: relationships[key]}
+
+
+def _unsettled_scan(world: WorldState) -> list[SupportRequestState]:
+    return [
+        request
+        for request in world.support_requests.values()
+        if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
+    ]
+
+
+def _assert_scans_agree(world: WorldState) -> None:
+    """What a caller keeps of the kept list is what it keeps of every request, in order."""
+    kept = [
+        request
+        for request in world.unsettled_support_requests()
+        if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
+    ]
+    expected = _unsettled_scan(world)
+    assert [id(request) for request in kept] == [id(request) for request in expected]
+
+
+def test_the_unsettled_requests_equal_a_scan_in_every_tick_phase(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 480
+    original = OfflineSimulationController._run_phase
+    open_seen = [0]
+
+    def checked(self, phase, world, minute, rng):
+        original(self, phase, world, minute, rng)
+        _assert_scans_agree(world)
+        open_seen[0] += len(_unsettled_scan(world))
+
+    monkeypatch.setattr(OfflineSimulationController, "_run_phase", checked)
+    run_scenario(ScenarioSpec.model_validate(document), tmp_path)
+    assert open_seen[0] > 0
+
+
+def test_a_reopened_request_is_seen_in_the_order_of_the_dict(finished_world) -> None:
+    world = _checked_world(finished_world)
+    settled = [
+        request
+        for request in world.support_requests.values()
+        if request.status in (SupportRequestStatus.RESOLVED, SupportRequestStatus.UNRESOLVED)
+    ]
+    request = settled[len(settled) // 2]
+    request.status = SupportRequestStatus.PENDING
+    _assert_scans_agree(world)
+    assert request in _unsettled_scan(world)
+    # The check rejects the state (no timeout event); a kept memo must not hide it either way.
+    memo = world.__dict__.get("_tick_memo")
+    if memo is not None:
+        memo.begin(world)
+        memo.requests_to_check(world.support_requests)
+        memo.commit(world)
+        _assert_scans_agree(world)
+        assert memo._open_requests == [
+            item
+            for item in world.support_requests.values()
+            if item.status not in (SupportRequestStatus.RESOLVED, SupportRequestStatus.UNRESOLVED)
+        ]
+
+
+def test_an_added_request_is_seen_before_the_next_check(finished_world) -> None:
+    world = _checked_world(finished_world)
+    world.support_requests["new-request"] = SupportRequestState(
+        id="new-request",
+        agent_id=next(iter(world.agents)),
+        requested_minute=0,
+        timeout_minute=1,
+    )
+    _assert_scans_agree(world)
+    assert world.support_requests["new-request"] in list(world.unsettled_support_requests())
+
+
+def test_replaced_or_removed_requests_are_not_read_from_the_memo(finished_world) -> None:
+    world = _checked_world(finished_world)
+    request = _settled(world)
+    # A new object with an open status in the place of a settled one.
+    world.support_requests[request.id] = replace(request, status=SupportRequestStatus.PENDING)
+    _assert_scans_agree(world)
+    assert world.support_requests[request.id] in _unsettled_scan(world)
+
+    world = _checked_world(finished_world)
+    last_key = next(reversed(world.support_requests))
+    del world.support_requests[last_key]
+    _assert_scans_agree(world)
+
+    world = _checked_world(finished_world)
+    world.support_requests = {
+        key: value for key, value in list(world.support_requests.items())[:-1]
+    }
+    _assert_scans_agree(world)
+
+
+def test_a_swapped_or_copied_world_reads_its_own_requests(finished_world) -> None:
+    world = _checked_world(finished_world)
+    candidate = WorldState.from_dict(world.to_dict())
+    world.__dict__.update(candidate.__dict__)
+    _settled(world).status = SupportRequestStatus.PENDING
+    _assert_scans_agree(world)
+
+    world = _checked_world(finished_world)
+    twin = copy.deepcopy(world, {id(world.event_log): world.event_log})
+    _settled(twin).status = SupportRequestStatus.PENDING
+    _assert_scans_agree(twin)
+    _assert_scans_agree(world)
