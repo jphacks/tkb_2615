@@ -113,13 +113,14 @@ def test_fork_saves_the_child_of_the_source_checkpoint(
     assert store.load_branch("p", "r", "main")[1].to_json() == parent_before
 
 
-def test_a_forked_branch_index_inherits_the_rows_a_fresh_ingest_derives(
+def test_a_forked_branch_reads_the_rows_a_fresh_ingest_derives(
     tmp_path, generated_scenario, saved_timeline
 ):
-    """Draft for #223: rows copied from the parent equal the rows derived from scratch."""
+    """#256: a forked branch stores no rows before its fork minute and reads its
+    parent's instead; what it reads equals the rows derived from its head from scratch."""
     import sqlite3
 
-    from sheltersim.storage.history_index import HistoryIndex
+    from sheltersim.storage.history_index import HistoryIndex, _scope, _segments
 
     store, timeline = saved_timeline(tmp_path, generated_scenario)
     timeline.advance("main", COMPUTED_UNTIL, checkpoint_interval=CHECKPOINT_INTERVAL)
@@ -130,17 +131,83 @@ def test_a_forked_branch_index_inherits_the_rows_a_fresh_ingest_derives(
     db = sqlite3.connect(index.path)
 
     def rows(branch):
-        tables = {}
-        for table in ("records", "entities", "tokens", "generations"):
-            found = db.execute(f"SELECT * FROM {table} WHERE branch=?", (branch,)).fetchall()
-            tables[table] = sorted(row[1:] for row in found)
+        scope, args = _scope(_segments(db, branch))
+        tables = {
+            "records": sorted(
+                db.execute(
+                    f"SELECT r.kind,r.key,r.minute,r.payload FROM records r WHERE {scope}", args
+                )
+            )
+        }
+        for table, column in (("entities", "entity"), ("tokens", "token")):
+            tables[table] = sorted(
+                db.execute(
+                    f"SELECT r.kind,r.key,e.{column} FROM {table} e JOIN records r ON "
+                    f"r.branch=e.branch AND r.kind=e.kind AND r.key=e.key WHERE {scope}",
+                    args,
+                )
+            )
         heads = db.execute("SELECT minute,counts FROM heads WHERE branch=?", (branch,))
         tables["heads"] = heads.fetchall()
         return tables
 
-    inherited, fresh = rows("child"), rows("fresh")
-    assert inherited == fresh
-    assert len(inherited["records"]) > 0
+    child, fresh = rows("child"), rows("fresh")
+    assert child["heads"] == fresh["heads"]
+    for table in ("records", "entities", "tokens"):
+        assert set(fresh[table]) <= set(child[table])
+    # Besides, it reads the decisions the parent recorded while computing before the
+    # fork minute, which live only in the index and no Checkpoint (#213).
+    extra = set(child["records"]) - set(fresh["records"])
+    assert extra and {(kind, minute < SEEK_MINUTE) for kind, _, minute, _ in extra} == {
+        ("actions", True)
+    }
+    stored = db.execute("SELECT minute FROM records WHERE branch='child'").fetchall()
+    assert all(minute >= SEEK_MINUTE - 1 for (minute,) in stored)
+
+
+def test_a_forked_branch_answers_history_before_its_fork_through_its_parent(
+    tmp_path, generated_scenario, saved_timeline
+):
+    """#256: a search of a forked branch before its fork minute reads its parent's
+    rows; conversation turns stay with their branch; a rebuilt branch stores its own."""
+    import sqlite3
+
+    from sheltersim.contracts.workspace import HistoryQuery
+    from sheltersim.storage.history_index import HistoryIndex
+
+    store, timeline = saved_timeline(tmp_path, generated_scenario)
+    timeline.advance("main", COMPUTED_UNTIL, checkpoint_interval=CHECKPOINT_INTERVAL)
+    index = HistoryIndex(store, "p", "r")
+    index.add_turn("main", {"turn_id": "turn-1", "minute": 10, "conversation_id": "talk"})
+    timeline.fork("main", SEEK_MINUTE, "child")
+
+    def items(branch, **query):
+        reference = store.branch_reference("p", "r", branch)
+        found, cursor = [], None
+        while True:
+            page = index.search(
+                branch,
+                HistoryQuery(limit=100, cursor=cursor, **query),
+                reference.checkpoint_hash,
+                reference.computed_until,
+            )
+            found.extend(page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                return found
+
+    before_fork = {"kind": "events", "start": 0, "end": SEEK_MINUTE - 1}
+    expected = items("main", **before_fork)
+    assert expected and items("child", **before_fork) == expected
+    talk = {"kind": "conversations", "start": 0, "end": COMPUTED_UNTIL}
+    assert len(items("main", **talk)) == 1
+    assert items("child", **talk) == []
+
+    _, head = store.load_branch("p", "r", "child")
+    index.ingest("child", head, rebuild=True)
+    with sqlite3.connect(index.path) as db:
+        assert db.execute("SELECT COUNT(*) FROM lineage WHERE branch='child'").fetchone() == (0,)
+    assert items("child", **before_fork) == expected
 
 
 def test_frames_read_while_a_save_is_indexed_match_the_frames_after(
