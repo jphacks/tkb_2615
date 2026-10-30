@@ -1,4 +1,4 @@
-"""Optional Rust kernels (experiment/rust-native only).
+"""Optional Rust kernels (docs/rust-port.md).
 
 Without the sheltersim_native extension, or with SHELTERSIM_NATIVE=0, every
 function here returns None and callers use their Python implementation. A kernel
