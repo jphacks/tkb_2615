@@ -299,6 +299,11 @@ def compatible_router_settings(router: LLMRouter, recorded: dict[str, Any]) -> b
     return all(current.get(key) == value for key, value in recorded.items())
 
 
+# A computation with at least this many saves indexes them in another process
+# (storage/index_writer.py); a shorter one indexes each save before computing on.
+BACKGROUND_INDEX_MIN_SAVES = 8
+
+
 class TimelineStore:
     """One persisted Run's checkpoint index and exact branch reconstruction API."""
 
@@ -324,6 +329,7 @@ class TimelineStore:
         observations: list[dict[str, Any]] | None = None,
         history_cache: CheckpointHistoryCache | None = None,
         inherit_index_from: str | None = None,
+        indexer: Any = None,
     ) -> Checkpoint:
         if router is not None:
             runtime.runtime_state["llm"] = router.snapshot_state()
@@ -357,14 +363,18 @@ class TimelineStore:
             checkpoint,
             expected_checkpoint_hash=prior.checkpoint_hash if prior else None,
         )
-        from sheltersim.storage.history_index import HistoryIndex
+        if indexer is not None:
+            # A long computation's saves are indexed in another process, in order.
+            indexer.submit(checkpoint, observations or [])
+        else:
+            from sheltersim.storage.history_index import HistoryIndex
 
-        HistoryIndex(self.store, self.project_id, self.run_id).ingest(
-            runtime.branch_id,
-            checkpoint,
-            observations=observations,
-            inherit_from=inherit_index_from,
-        )
+            HistoryIndex(self.store, self.project_id, self.run_id).ingest(
+                runtime.branch_id,
+                checkpoint,
+                observations=observations,
+                inherit_from=inherit_index_from,
+            )
         self._cache_frame(runtime, checkpoint)
         return checkpoint
 
@@ -629,34 +639,56 @@ class TimelineStore:
         # the EventLog of the head it continues from.
         history_cache = CheckpointHistoryCache()
         history_cache.seed_events(runtime.world.event_log.records, head.world_state["event_log"])
-        while runtime.world.minute_index < target_minute:
-            if cancelled is not None and cancelled():
-                break
-            engine.step()
-            if runtime.world.minute_index % checkpoint_interval == 0:
+        indexer = None
+        if (target_minute - head.simulation_minute) // checkpoint_interval >= (
+            BACKGROUND_INDEX_MIN_SAVES
+        ):
+            from sheltersim.storage.index_writer import BackgroundIndexer
+
+            indexer = BackgroundIndexer(self.store, self.project_id, self.run_id, branch_id)
+        try:
+            while runtime.world.minute_index < target_minute:
+                if cancelled is not None and cancelled():
+                    break
+                engine.step()
+                if runtime.world.minute_index % checkpoint_interval == 0:
+                    self.record(
+                        runtime,
+                        fork_minute=reference.fork_minute,
+                        router=router,
+                        observations=sink.observations,
+                        history_cache=history_cache,
+                        indexer=indexer,
+                    )
+                    sink.observations.clear()
+                    last_recorded_minute = runtime.world.minute_index
+            if runtime.world.minute_index == head.simulation_minute:
+                if indexer is not None:
+                    indexer.close()
+                return BranchRuntime.from_checkpoint(
+                    head, branch_id=branch_id, parent_branch_id=reference.parent_branch_id
+                )
+            # A boundary that ended on the interval is already durable; record only an
+            # unsaved remainder (odd target or cancellation between boundaries).
+            if runtime.world.minute_index != last_recorded_minute:
                 self.record(
                     runtime,
                     fork_minute=reference.fork_minute,
                     router=router,
                     observations=sink.observations,
                     history_cache=history_cache,
+                    indexer=indexer,
                 )
-                sink.observations.clear()
-                last_recorded_minute = runtime.world.minute_index
-        if runtime.world.minute_index == head.simulation_minute:
-            return BranchRuntime.from_checkpoint(
-                head, branch_id=branch_id, parent_branch_id=reference.parent_branch_id
-            )
-        # A boundary that ended on the interval is already durable; record only an
-        # unsaved remainder (odd target or cancellation between boundaries).
-        if runtime.world.minute_index != last_recorded_minute:
-            self.record(
-                runtime,
-                fork_minute=reference.fork_minute,
-                router=router,
-                observations=sink.observations,
-                history_cache=history_cache,
-            )
+        except BaseException:
+            if indexer is not None:
+                try:
+                    indexer.close()
+                except StorageError:
+                    pass  # The computation's own error is the one to report.
+            raise
+        if indexer is not None:
+            # The computation ends only once its saves are indexed.
+            indexer.close()
         return runtime
 
     def fork(
