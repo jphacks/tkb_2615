@@ -327,3 +327,22 @@ def test_the_rust_saved_record_checks_name_the_model_fields() -> None:
     record_fields, event_fields = sheltersim_native.saved_record_fields()
     assert set(record_fields) == {item.name for item in dataclasses.fields(EventLogRecord)}
     assert set(event_fields) == _EVENT_FIELDS
+
+
+def test_of_types_from_gives_the_records_of_of_types_from_a_position(make_event) -> None:
+    log = EventLog()
+    for sequence, kind in enumerate(["a", "b", "c", "a", "b"]):
+        log.append(
+            EventLogRecord(
+                event=make_event(f"event-{sequence}", sequence=sequence, event_type=kind),
+                realized_minute=sequence,
+                status=EventStatus.APPLIED,
+            )
+        )
+    wanted = {"a", "b", "missing"}
+    records = log.of_types(wanted)
+    positions = [0, 1, 3, 4]
+    for start in range(7):
+        expected = [record for record, at in zip(records, positions, strict=True) if at >= start]
+        assert log.of_types_from(wanted, start) == expected
+    assert [record.event.sequence for record in log.of_types_from({"a"}, 1)] == [3]

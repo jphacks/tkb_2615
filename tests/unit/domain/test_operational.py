@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -170,23 +169,8 @@ def _set_minute(world: WorldState, minute: int) -> None:
 
 
 def _rehash_checkpoint_document(document: dict[str, object]) -> None:
-    encoded_state = json.dumps(
-        document["world_state"],
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-    document["state_hash"] = hashlib.sha256(encoded_state).hexdigest()
-    body = {key: value for key, value in document.items() if key != "checkpoint_hash"}
-    encoded_body = json.dumps(
-        body,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-    document["checkpoint_hash"] = hashlib.sha256(encoded_body).hexdigest()
+    document["state_hash"] = Checkpoint.document_hashes(document)[0]
+    document["checkpoint_hash"] = Checkpoint.document_hashes(document)[1]
 
 
 def test_shipment_delay_keeps_event_identity_and_applies_ledger_once_after_checkpoint() -> None:

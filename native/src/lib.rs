@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+mod checkpoint;
 mod contacts;
 mod eventlog;
 mod psychology;
@@ -266,6 +267,8 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;
     module.add_function(wrap_pyfunction!(float_repr, module)?)?;
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;

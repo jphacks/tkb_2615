@@ -33,7 +33,8 @@ Checkpoint document) and times them.
   of `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
   allow_nan=False).encode()` for plain JSON values. Other values, NaN and infinity
   raise `Unsupported`, so the caller falls back to `json`.
-  Not used on this branch: replacing `json` alone saved about 1% (see below).
+  `core/checkpoint_cache.py` uses `canonical_json` for what a Checkpoint save encodes;
+  elsewhere replacing `json` alone saved about 1% (see below).
 
 - `psychology_integrated(globals, agents)`: one minute of
   `IntegratedDistressLifeStatePolicy` with `BodyDynamicsFormula` (simple needs and
@@ -92,6 +93,25 @@ Checkpoint document) and times them.
   Day 7: Checkpoint load 17.4 s → 4.2 s, a fork near day 7 24.0 s → 6.2 s
   (docs/rust-port.md).
 
+- `sensitive_candidates(raws)` (stage B3): the distinct object keys of the JSON texts
+  `raws`, and their distinct string values the privacy patterns could match, read in
+  parallel without the GIL. The patterns stay in Python (`storage/projects.py`); the
+  kernel leaves out only strings that can not match them, as explained at the top of
+  `src/checkpoint.rs`. A Checkpoint save passes all its new chunks at once, and each
+  history index row is checked through it.
+
+- `chunk_hashes(items, chunks)` (stage B3): the SHA-256 of `[item,item,...]` for each
+  `(start, count)` of a list of item bytes, in parallel and without joining them. These
+  are the leaves of the Checkpoint v2 hash tree (`core/checkpoint_cache.py`) and the
+  archive's chunk keys.
+
+- `EventStore.active_lifecycle_records()`: the `agent_action_lifecycle` records that
+  decide each agent's active action, in the order a full pass inserts the agents, from
+  an index kept as records are added. The runner calls it at each fork and resume
+  instead of making every lifecycle record's object. `EventStore.of_types_from(types,
+  start)` reads a type's records from a position, for a reader that keeps its result as
+  the log grows.
+
 ## Results so far (WSL2, 16 cores, generated Scenario, 100 people)
 
 | Check | Python | Rust |
@@ -101,6 +121,15 @@ Checkpoint document) and times them.
 | Same, JSON + SHA-256 | 3,864 ms | 1,256 ms |
 | One day, project route (develop 4272b40) | 71.7 s | 70.8 s (same world/events/KPI hashes) |
 | Full offline tests | — | 1372 passed, 4 skipped |
+
+### Checkpoint save (stage B3)
+
+| Check | Before | After |
+|---:|---:|---:|
+| One late save, `TimelineStore.record` (near day 7) | 1,076 ms | 420 ms |
+| Both hashes | 376 ms | 20 ms |
+| Privacy check of the new chunks | 119 ms | 10 ms |
+| Seven days, `TimelineStore.record` (336 saves) | 288.8 s | 125.2 s (same world/events/KPI hashes) |
 
 ### Psychology update (tick prototype)
 

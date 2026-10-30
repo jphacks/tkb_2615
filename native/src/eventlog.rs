@@ -37,7 +37,19 @@ struct Fields {
     payload_status_completed: bool,
     facility_id: Option<String>,
     provenance_objects: Vec<String>,
+    // For agent_action_lifecycle records only.
+    transition: Option<String>,
 }
+
+/// What one agent_action_lifecycle record does to its agent's active action.
+#[derive(Clone, Copy, PartialEq)]
+enum LifecycleStep {
+    Set,
+    End,
+    Other,
+}
+
+const ACTION_LIFECYCLE_EVENT_TYPE: &str = "agent_action_lifecycle";
 
 #[pyclass(module = "sheltersim_native")]
 pub struct EventStore {
@@ -53,6 +65,10 @@ pub struct EventStore {
     first_care_request: HashMap<String, String>,
     completed_support_kinds: HashMap<String, Vec<String>>,
     applied_facility_events: HashMap<String, Vec<String>>,
+    // In append order: each agent_action_lifecycle record with a str agent_id.
+    lifecycle: Vec<(u32, LifecycleStep, usize)>,
+    lifecycle_agents: Vec<String>,
+    lifecycle_agent_ids: HashMap<String, u32>,
     // Records an audit checked and the bounds it checked them against.
     audited: usize,
     audit_bounds: (Option<i64>, Option<i64>),
@@ -91,6 +107,9 @@ impl EventStore {
             first_care_request: HashMap::new(),
             completed_support_kinds: HashMap::new(),
             applied_facility_events: HashMap::new(),
+            lifecycle: Vec::new(),
+            lifecycle_agents: Vec::new(),
+            lifecycle_agent_ids: HashMap::new(),
             audited: 0,
             audit_bounds: (None, None),
             encoder: None,
@@ -169,6 +188,27 @@ impl EventStore {
                 if !events.contains(&fields.event_id) {
                     events.push(fields.event_id.clone());
                 }
+            }
+        }
+        if fields.event_type == ACTION_LIFECYCLE_EVENT_TYPE {
+            if let Some(agent) = &fields.agent_id {
+                let agent = match self.lifecycle_agent_ids.get(agent) {
+                    Some(id) => *id,
+                    None => {
+                        let id = self.lifecycle_agents.len() as u32;
+                        self.lifecycle_agents.push(agent.clone());
+                        self.lifecycle_agent_ids.insert(agent.clone(), id);
+                        id
+                    }
+                };
+                let step = match fields.transition.as_deref() {
+                    Some("started" | "continued") => LifecycleStep::Set,
+                    Some("completed" | "interrupted" | "abandoned" | "censored") => {
+                        LifecycleStep::End
+                    }
+                    _ => LifecycleStep::Other,
+                };
+                self.lifecycle.push((agent, step, index));
             }
         }
         for key in fields.provenance_objects {
@@ -347,6 +387,60 @@ impl EventStore {
         self.records_of(py, indices.into_iter())
     }
 
+    /// The agent_action_lifecycle records that decide each agent's active action, in
+    /// the order a pass over all of them inserts the agents into a dict: a pass over
+    /// just these gives the same dict, without making the other records' objects.
+    fn active_lifecycle_records(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        // Agent -> (position of its dict entry, its last record that set the entry).
+        let mut active: HashMap<u32, (usize, usize)> = HashMap::new();
+        for (order, (agent, step, index)) in self.lifecycle.iter().enumerate() {
+            match step {
+                LifecycleStep::Set => {
+                    active
+                        .entry(*agent)
+                        .and_modify(|entry| entry.1 = *index)
+                        .or_insert((order, *index));
+                }
+                LifecycleStep::End => {
+                    active.remove(agent);
+                }
+                LifecycleStep::Other => {}
+            }
+        }
+        let mut entries: Vec<(usize, usize)> = active.into_values().collect();
+        entries.sort_unstable();
+        self.records_of(py, entries.into_iter().map(|(_, index)| index))
+    }
+
+    /// The records of event_types at position start or later, in append order.
+    fn of_types_from(
+        &mut self,
+        py: Python<'_>,
+        event_types: &Bound<'_, PyAny>,
+        start: usize,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let mut indices: Vec<usize> = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::new();
+        for name in event_types.try_iter()? {
+            let name = name?;
+            let Ok(text) = name.downcast::<PyString>() else {
+                continue;
+            };
+            if let Some(id) = self.type_ids.get(text.to_str()?) {
+                if seen.insert(*id) {
+                    if let Some(list) = self.by_type.get(id) {
+                        let first = list.partition_point(|index| *index < start);
+                        indices.extend(list[first..].iter().copied());
+                    }
+                }
+            }
+        }
+        if seen.len() > 1 {
+            indices.sort_unstable();
+        }
+        self.records_of(py, indices.into_iter())
+    }
+
     /// The records from start on, in append order.
     #[pyo3(signature = (start=0))]
     fn records_from(&mut self, py: Python<'_>, start: usize) -> PyResult<Vec<Py<PyAny>>> {
@@ -466,6 +560,9 @@ impl EventStore {
             first_care_request: self.first_care_request.clone(),
             completed_support_kinds: self.completed_support_kinds.clone(),
             applied_facility_events: self.applied_facility_events.clone(),
+            lifecycle: self.lifecycle.clone(),
+            lifecycle_agents: self.lifecycle_agents.clone(),
+            lifecycle_agent_ids: self.lifecycle_agent_ids.clone(),
             audited: self.audited,
             audit_bounds: self.audit_bounds,
             encoder: self.encoder.as_ref().map(|encoder| encoder.clone_ref(py)),
@@ -497,10 +594,10 @@ fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
             provenance_objects.push(pair.get_item(0)?.extract()?);
         }
     }
+    let event_type: String = event.getattr("event_type")?.extract()?;
     Ok(Fields {
         event_id: event.getattr("event_id")?.extract()?,
         sequence: event.getattr("sequence")?.extract()?,
-        event_type: event.getattr("event_type")?.extract()?,
         minute: record.getattr("realized_minute")?.extract()?,
         applied: status == "applied",
         request_id: as_str(&mapping_get(&payload, "request_id")?),
@@ -512,6 +609,12 @@ fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
             .unwrap_or(false),
         facility_id: as_str(&mapping_get(&payload, "facility_id")?),
         provenance_objects,
+        transition: if event_type == ACTION_LIFECYCLE_EVENT_TYPE {
+            as_str(&mapping_get(&payload, "transition")?)
+        } else {
+            None
+        },
+        event_type,
     })
 }
 
@@ -564,6 +667,7 @@ fn fields_of_bytes(bytes: &[u8]) -> Result<Fields, String> {
             == Some("completed"),
         facility_id: payload_text("facility_id"),
         provenance_objects,
+        transition: payload_text("transition"),
     })
 }
 

@@ -295,7 +295,7 @@ def test_h00_baseline_contract_freezes_seed_models_and_source_categories(
 
     initial_world = WorldState.from_scenario(baseline)
     checkpoint = Checkpoint.capture(initial_world)
-    assert checkpoint.schema_version == contract["checkpoint_schema_version"] == 1
+    assert checkpoint.schema_version == contract["checkpoint_schema_version"] == 2
     assert checkpoint.world_state_schema_version == contract["world_state_schema_version"] == 5
 
     writer = RunArtifactWriter(baseline, tmp_path / "initial-artifacts", trace_level=TraceLevel.OFF)

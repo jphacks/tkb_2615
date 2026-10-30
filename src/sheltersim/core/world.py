@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
@@ -1495,9 +1494,12 @@ class WorldState:
         return json.loads(self.canonical_json())
 
     def state_digest(self) -> str:
-        """The SHA-256 of canonical_json(): storage digest(to_dict()), whose canonical
-        JSON is the same text, without parsing it back and encoding it again."""
-        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+        """The state_hash a Checkpoint of this world holds, from a validated world."""
+        from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+
+        self.validate()
+        document, _, encoder = CheckpointHistoryCache().documents(self, None)
+        return encoder.world_tree_digest(document)
 
     @classmethod
     def from_dict(
@@ -1717,16 +1719,29 @@ class WorldState:
                 raise
             raise StateInvariantError(f"invalid WorldState document: {exc}") from exc
 
-    def same_state(self, other: WorldState, *, known_equal_events: int = 0) -> bool:
+    def same_state(
+        self,
+        other: WorldState,
+        *,
+        known_equal_events: int = 0,
+        known_equal_histories: Mapping[tuple[str, str], int] | None = None,
+    ) -> bool:
         """Whether two worlds hold equal state, so they pass the same validation.
 
         The first known_equal_events EventLog records of both worlds are already known
-        to be equal and are not compared. Pending events compare in queue order.
+        to be equal and are not compared, and likewise the first entries of each
+        model_state list in known_equal_histories, by its (name, field). Pending events
+        compare in queue order.
         """
         for item in fields(self):
             if item.name in {"event_queue", "event_log"}:
                 continue
-            if getattr(self, item.name) != getattr(other, item.name):
+            if item.name == "model_state" and known_equal_histories:
+                if not _same_model_state(
+                    self.model_state, other.model_state, known_equal_histories
+                ):
+                    return False
+            elif getattr(self, item.name) != getattr(other, item.name):
                 return False
         mine, theirs = self.event_log, other.event_log
         return (
@@ -1826,3 +1841,31 @@ class WorldState:
         if isinstance(value, set):
             return sorted(value)
         raise TypeError(f"value of type {type(value).__name__} is not JSON serializable")
+
+
+def _same_model_state(
+    mine: dict[str, Any], theirs: dict[str, Any], known: Mapping[tuple[str, str], int]
+) -> bool:
+    """mine == theirs, except for the leading list entries known to be equal."""
+    if mine.keys() != theirs.keys():
+        return False
+    fields_of = {}
+    for name, field_name in known:
+        fields_of.setdefault(name, set()).add(field_name)
+    for name, state in mine.items():
+        other = theirs[name]
+        lists = fields_of.get(name)
+        if lists is None or not isinstance(state, dict) or not isinstance(other, dict):
+            if state != other:
+                return False
+            continue
+        if state.keys() != other.keys():
+            return False
+        for key, value in state.items():
+            count = known.get((name, key), 0) if key in lists else 0
+            if not count:
+                if value != other[key]:
+                    return False
+            elif len(value) != len(other[key]) or value[count:] != other[key][count:]:
+                return False
+    return True

@@ -13,7 +13,7 @@
 | EffectProgram | 対象、時刻、仮定を持つ型付き・上限付き介入計画 |
 | Project / Run / Branch | ローカルworkspace、Scenario版、Run状態、独立した履歴 |
 
-主要schemaは個別に版管理しています。現在の形式にはScenarioSpec v3、ProfileSpec v2、拡張状態に応じてWorldState v5またはv6、Checkpoint v1があります。契約変更時は現行validatorと移行テストを確認してください。版の異なるデータは互換とは限りません。
+主要schemaは個別に版管理しています。現在の形式にはScenarioSpec v3、ProfileSpec v2、拡張状態に応じてWorldState v5またはv6、Checkpoint v2（v1も読めます）があります。契約変更時は現行validatorと移行テストを確認してください。版の異なるデータは互換とは限りません。
 
 Scenario JSON、Run manifest、CheckpointはJSONを使います。eventとdecisionはJSONL、metricsはCSVを使う場合があります。Run manifestにはseed、モデル版、仮定、source ID、実行mode、hash、LLM利用量とfallback集計（llm_usage.outcomes、llm-integration.md参照）を記録します。有効なsubsystemにより、追加の版管理済みtrace成果物が作られます。
 

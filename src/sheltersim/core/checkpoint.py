@@ -44,7 +44,11 @@ class Checkpoint:
     # Set by a capture with a history cache, for saving the just-captured object.
     _encoder: CanonicalEncoder | None = field(default=None, init=False, repr=False, compare=False)
 
-    CURRENT_SCHEMA_VERSION = 1
+    # v1 hashes are the SHA-256 of the canonical JSON of the whole document; v2 hashes
+    # are trees over chunk hashes (core/checkpoint_cache.py). Saves write the current
+    # version; a v1 Checkpoint keeps loading and verifying under its own rule.
+    CURRENT_SCHEMA_VERSION = 2
+    SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 
     @classmethod
     def capture(
@@ -92,9 +96,8 @@ class Checkpoint:
     ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder] | None]:
         # The restored objects are returned only when they share nothing.
         world.validate()
-        encoder = None
-        digest = _digest
         if history_cache is None:
+            encoder = CanonicalEncoder()
             world_document = world.to_dict()
             metric_document = (
                 metrics.to_dict() if metrics is not None else {"schema_version": 3, "snapshots": []}
@@ -102,7 +105,6 @@ class Checkpoint:
         else:
             # world.to_dict() would validate the same world again.
             world_document, metric_document, encoder = history_cache.documents(world, metrics)
-            digest = encoder.digest
         versions = _model_versions(world)
         if model_versions is not None:
             versions.update(deepcopy(model_versions))
@@ -111,14 +113,14 @@ class Checkpoint:
             "world_state_schema_version": world.schema_version,
             "scenario_id": world.scenario_id,
             "simulation_minute": world.minute_index,
-            "state_hash": digest(world_document),
+            "state_hash": encoder.world_tree_digest(world_document),
             "model_versions": versions,
             "world_state": world_document,
             "metrics_state": metric_document,
             "runtime_state": deepcopy(runtime_state or {}),
         }
         try:
-            checkpoint_hash = digest(body)
+            checkpoint_hash = encoder.body_tree_digest(body)
         except (TypeError, ValueError) as exc:
             raise CheckpointError(
                 f"checkpoint state must contain finite JSON values: {exc}"
@@ -130,20 +132,26 @@ class Checkpoint:
             return checkpoint, checkpoint._validate(hashes_verified=True)
         # EventLog documents an earlier capture restored are not parsed again. The
         # restored world equals the world validated above, or is validated itself.
-        restored, _ = checkpoint._validate(
+        restored, restored_metrics = checkpoint._validate(
             hashes_verified=True,
             restored_events=history_cache.restored_events(),
             restored_log=history_cache.restored_log(),
+            restored_samples=history_cache.restored_metrics(),
             shared=encoder.spliced_lists(),
             validate_world=False,
         )
-        equal = restored.same_state(world, known_equal_events=history_cache.restored_events_equal())
+        equal = restored.same_state(
+            world,
+            known_equal_events=history_cache.restored_events_equal(),
+            known_equal_histories=history_cache.known_equal_histories(),
+        )
         if not equal:
             try:
                 restored.validate()
             except StateInvariantError as exc:
                 raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         history_cache.remember_restored(restored.event_log, equal=equal)
+        history_cache.remember_restored_metrics(restored_metrics)
         object.__setattr__(checkpoint, "_encoder", encoder)
         # The restored world shares the history lists of the captured documents.
         return checkpoint, None
@@ -301,7 +309,7 @@ class Checkpoint:
         }
         if not isinstance(document, dict) or set(document) != expected_fields:
             raise CheckpointError("checkpoint fields do not match the supported schema")
-        if document.get("schema_version") != cls.CURRENT_SCHEMA_VERSION:
+        if document.get("schema_version") not in cls.SUPPORTED_SCHEMA_VERSIONS:
             raise CheckpointError(
                 f"unsupported checkpoint schema version: {document.get('schema_version')!r}"
             )
@@ -338,8 +346,9 @@ class Checkpoint:
         shared: Sequence[Any] = (),
         validate_world: bool = True,
         restored_log: Any = None,
+        restored_samples: Any = ([], []),
     ) -> tuple[WorldState, MetricsRecorder]:
-        if self.schema_version != self.CURRENT_SCHEMA_VERSION:
+        if self.schema_version not in self.SUPPORTED_SCHEMA_VERSIONS:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
         if self.world_state_schema_version not in (5, 6):
             raise CheckpointError(
@@ -387,7 +396,8 @@ class Checkpoint:
                     _restored_log=restored_log,
                 )
                 metrics = MetricsRecorder.from_dict(
-                    deepcopy(self.metrics_state, {id(item): item for item in shared})
+                    deepcopy(self.metrics_state, {id(item): item for item in shared}),
+                    _leading=restored_samples,
                 )
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
@@ -406,6 +416,9 @@ class Checkpoint:
         events = self.world_state.get("event_log")
         if isinstance(events, SavedItems):
             encoder.splice(events, events.raws, self.world_state)
+        if self.schema_version != 1:
+            digest = encoder.world_tree_digest(self.world_state)
+        elif isinstance(events, SavedItems):
             digest = encoder.digest(self.world_state)
         else:
             world_raw = canonical_bytes(self.world_state)
@@ -418,12 +431,25 @@ class Checkpoint:
     def _verify_body_hash(self, encoder: CanonicalEncoder) -> None:
         body = self._body_dict()
         encoder.contain(body)
-        if encoder.digest(body) != self.checkpoint_hash:
+        digest = encoder.body_tree_digest if self.schema_version != 1 else encoder.digest
+        if digest(body) != self.checkpoint_hash:
             raise CheckpointError("checkpoint integrity hash mismatch")
 
     def _verify_hashes(self) -> None:
         """Check both hashes without restoring, for a document restored before."""
         self._verify_body_hash(self._verified_world_encoder())
+
+    @staticmethod
+    def document_hashes(document: dict[str, Any]) -> tuple[str, str]:
+        """The state_hash and checkpoint_hash a Checkpoint document should hold.
+
+        Follows the rule of the document's own schema_version; the document is only read.
+        """
+        body = {key: value for key, value in document.items() if key != "checkpoint_hash"}
+        if document.get("schema_version") == 1:
+            return _digest(document["world_state"]), _digest(body)
+        encoder = CanonicalEncoder()
+        return encoder.world_tree_digest(document["world_state"]), encoder.body_tree_digest(body)
 
     def _body_dict(self) -> dict[str, Any]:
         return {

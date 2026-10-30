@@ -254,7 +254,7 @@ def _as_v2_archive(directory: Path) -> None:
     import hashlib
     import json
 
-    from sheltersim.storage.checkpoints import _encoded
+    from sheltersim.core.checkpoint_cache import canonical_bytes as _encoded
 
     (directory / "chunks").mkdir(exist_ok=True)
     for path in directory.glob("*.json"):
@@ -337,7 +337,7 @@ def test_a_v3_manifest_with_changed_locations_fails_closed(tmp_path):
     import hashlib
 
     from sheltersim.core.checkpoint import CheckpointError
-    from sheltersim.storage.checkpoints import _encoded
+    from sheltersim.core.checkpoint_cache import canonical_bytes as _encoded
 
     checkpoint = Checkpoint.capture(
         WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))

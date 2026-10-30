@@ -84,7 +84,7 @@ def test_fork_saves_the_child_of_the_source_checkpoint(
         expected.runtime_state["fork_origin"] = {
             "branch_id": "main",
             "minute": minute,
-            "state_hash": digest(source.world.to_dict()),
+            "state_hash": source_checkpoint.state_hash,
             "checkpoint_hash": source_checkpoint.checkpoint_hash,
         }
         request = {"minute": minute, "child_id": "child", "approved": True}
@@ -108,7 +108,7 @@ def test_fork_saves_the_child_of_the_source_checkpoint(
     assert result == {
         "branch_id": "child",
         "minute": minute,
-        "state_hash": digest(expected.world.to_dict()),
+        "state_hash": expected.world.state_digest(),
     }
     assert store.load_branch("p", "r", "main")[1].to_json() == parent_before
 

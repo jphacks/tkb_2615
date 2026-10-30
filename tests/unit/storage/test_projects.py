@@ -12,19 +12,29 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 from pathlib import Path
 
 import pytest
 from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY
 
+from sheltersim import native
 from sheltersim.contracts.api import BranchReference
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.branch import BranchRuntime
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import CheckpointArchive
-from sheltersim.storage.projects import ProjectStore, StorageError, digest, safe_document
+from sheltersim.storage.projects import (
+    ProjectStore,
+    StorageError,
+    _reject_sensitive_checkpoint_content,
+    canonical,
+    digest,
+    safe_document,
+    safe_row,
+)
 
 try:
     import fcntl
@@ -199,8 +209,6 @@ def test_sensitive_checkpoint_is_rejected_before_anything_is_written(
 
 
 def test_split_object_field_names_are_privacy_checked(tmp_path):
-    from sheltersim.storage.projects import _reject_sensitive_checkpoint_content
-
     archive = CheckpointArchive(tmp_path, content_check=_reject_sensitive_checkpoint_content)
     with pytest.raises(StorageError, match="sensitive"):
         archive._prepare_validated_document(
@@ -613,3 +621,112 @@ def test_a_file_shared_for_a_moment_on_windows_is_tried_again(monkeypatch):
 
     with pytest.raises(PermissionError):
         projects.retry_while_shared(always_shared, attempts=3)
+
+
+_PRIVATE_DOCUMENTS = [
+    {"api_key": "x"},
+    {"nested": [{"Full Name": 1}]},
+    ["call 090-1234-5678"],
+    ["+81 90-1234-5678"],
+    ["０９０-１２３４-５６７８"],
+    {"note": "write to person@example.org today"},
+    ["token sk-abcdefghijkl0123"],
+    ["token sk-ant-abcdefgh"],
+    ["Token SK-ABCDEFGHIJKL"],
+    ["token ſk-abcdefghijkl"],
+    ["token sK-abcdefghijkl"],
+    ["BEARER abc"],
+    ["line\nBearer\tabc"],
+    ['quoted "person@example.org"'],
+    ["あ 090-1234-5678"],
+]
+_CLEAN_DOCUMENTS = [
+    {"task-1": "task-1", "id": "task-abcdefghijk", "text": "あいう"},
+    [1.5, -2, None, True, "2026-10-31", 'a "quoted" \\ \n string'],
+    ["bearing", "1-2", "١", "minute 12-34"],
+    {"a": {"b": [{"c": "no-digits - here"}]}},
+    [],
+    {},
+]
+
+
+def test_the_privacy_check_of_chunk_bytes_decides_as_the_check_of_the_document() -> None:
+    """A chunk's bytes are checked in Rust when possible; nothing sensitive gets through."""
+
+    def verdict(document: object, raw: bytes | None) -> bool:
+        try:
+            _reject_sensitive_checkpoint_content([(document, raw)])
+        except StorageError:
+            return False
+        return True
+
+    for document, clean in [
+        *((item, False) for item in _PRIVATE_DOCUMENTS),
+        *((item, True) for item in _CLEAN_DOCUMENTS),
+    ]:
+        raw = canonical(document).encode()
+        assert verdict(document, None) is clean, document
+        assert verdict(document, raw) is clean, document
+
+
+def test_the_strings_rust_leaves_out_can_not_match_the_privacy_patterns() -> None:
+    """Every string the kernel does not return is one safe_document() leaves as it is."""
+    if not native.available():
+        pytest.skip("the sheltersim_native extension is not installed")
+    generator = random.Random(2615)
+    pieces = [
+        *'@-  .:_+\n\t"\\',
+        *"0123456789abKkSsfz",
+        "ſ",
+        "K",
+        "١",
+        "１",
+        "²",
+        "あ",
+        "sk-",
+        "SK-",
+        "ant-",
+        "abcdefghijkl",
+        "bearer ",
+        "Bearer",
+        "090",
+        "1234",
+        "5678",
+        "person@example.org",
+    ]
+    returned = 0
+    for _ in range(20_000):
+        text = "".join(generator.choices(pieces, k=generator.randrange(1, 9)))
+        _, strings = native.sensitive_candidates([canonical([text]).encode()])
+        if strings:
+            assert strings == [text]
+            returned += 1
+        else:
+            assert safe_document(text) == text, text
+    assert returned > 1000
+
+
+def test_a_changed_item_of_a_history_chunk_is_checked_at_the_next_save(tmp_path) -> None:
+    """Items already stored are not what makes a chunk safe: new bytes are always read."""
+    archive = CheckpointArchive(
+        tmp_path / "archive", content_check=_reject_sensitive_checkpoint_content
+    )
+    items = [{"value": index} for index in range(300)]
+    checkpoint_hash = "0" * 64
+    archive._encode_validated_document({"items": items}, checkpoint_hash=checkpoint_hash)
+    items[10] = {"value": "person@example.org"}
+    with pytest.raises(StorageError, match="sensitive"):
+        archive._encode_validated_document({"items": items}, checkpoint_hash=checkpoint_hash)
+
+
+@pytest.mark.parametrize("row", [*_PRIVATE_DOCUMENTS, *_CLEAN_DOCUMENTS, {"pair": (1, "a")}])
+def test_safe_row_gives_what_safe_document_gives(row) -> None:
+    if not isinstance(row, dict):
+        row = {"items": row}
+    try:
+        expected = safe_document(row)
+    except StorageError:
+        with pytest.raises(StorageError):
+            safe_row(row)
+        return
+    assert safe_row(row) == (expected, canonical(expected))

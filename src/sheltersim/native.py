@@ -171,3 +171,16 @@ def split_json_array(raw: bytes) -> list[bytes] | None:
     Raises ValueError when raw is not one JSON array.
     """
     return None if _native is None else _native.split_json_array(raw)
+
+
+def sensitive_candidates(raws: list[bytes]) -> tuple[list[str], list[str]] | None:
+    """The distinct object keys of the JSON texts raws, and their distinct string values the
+    privacy patterns could match, or None without the kernel. Every other string value
+    can not match them (native/src/checkpoint.rs). Raises ValueError on a bad string."""
+    return None if _native is None else _native.sensitive_candidates(raws)
+
+
+def chunk_hashes(items: list[bytes], chunks: list[tuple[int, int]]) -> list[str] | None:
+    """The SHA-256 hex digest of b"[" + b",".join(items[start : start + count]) + b"]" for
+    each (start, count) of chunks, computed in parallel, or None without the kernel."""
+    return None if _native is None else _native.chunk_hashes(items, chunks)

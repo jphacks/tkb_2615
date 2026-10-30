@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised on Windows.
     fcntl = None
     import msvcrt
 
+from sheltersim import native
 from sheltersim.contracts.api import BranchReference, EvidenceReference, RunReference
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
@@ -140,6 +141,22 @@ def safe_document(value: Any) -> Any:
     raise StorageError("saved data must be finite JSON")
 
 
+def safe_row(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """safe_document(row) and its canonical() text.
+
+    Rust reads the row's canonical JSON for the keys and strings to check, so a row with
+    nothing sensitive, nearly all of them, is not walked in Python: its JSON read back is
+    the same plain value.
+    """
+    raw = native.canonical_json(row)
+    if raw is not None:
+        keys, strings = native.sensitive_candidates([raw])
+        if not strings and not any(_private_field(key) for key in keys):
+            return json.loads(raw), raw.decode()
+    safe = safe_document(row)
+    return safe, canonical(safe)
+
+
 # Kept restored worlds are dropped once no read has used them for this long, so the
 # local server does not hold their memory after the reads (#46).
 _RESTORED_IDLE_SECONDS = 60.0
@@ -157,9 +174,26 @@ def _copy_restored(
     return deepcopy(world, memo), deepcopy(metrics)
 
 
-def _reject_sensitive_checkpoint_content(value: Any) -> None:
-    if safe_document(value) != value:
-        raise StorageError("checkpoint contains sensitive data")
+def _reject_sensitive_checkpoint_content(chunks: list[tuple[Any, bytes | None]]) -> None:
+    """Reject (value, canonical JSON if known) pairs: chunks not stored before.
+
+    From the bytes, the same keys and strings are checked as in safe_document(), with the
+    same functions, but each distinct one once and without building or walking a document.
+    A value may be a function returning the document, for when only Python reads it.
+    """
+    raws = [raw for _, raw in chunks if raw is not None]
+    candidates = native.sensitive_candidates(raws) if raws else None
+    if candidates is not None:
+        keys, strings = candidates
+        if any(_private_field(key) for key in keys):
+            raise StorageError("sensitive fields cannot be persisted")
+        if any(safe_document(text) != text for text in strings):
+            raise StorageError("checkpoint contains sensitive data")
+    for value, raw in chunks:
+        if raw is None or candidates is None:
+            document = value() if callable(value) else value
+            if safe_document(document) != document:
+                raise StorageError("checkpoint contains sensitive data")
 
 
 class ProjectStore:
@@ -703,8 +737,13 @@ class ProjectStore:
         encoder: CanonicalEncoder | None = None,
     ) -> None:
         with self.transaction(), self._usage_measured_once():
-            run = self.run(project_id, reference.run_id)
-            scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
+            # A Run's Scenario is immutable, so one writer reads it once.
+            inputs = {} if encoder is None else encoder.run_inputs
+            scenario = inputs.get((project_id, reference.run_id))
+            if scenario is None:
+                run = self.run(project_id, reference.run_id)
+                scenario = self.scenario(project_id, run["scenario_id"], run["scenario_version"])
+                inputs[(project_id, reference.run_id)] = scenario
             document = document_source()
             world = document["world_state"]
             if (
@@ -761,19 +800,21 @@ class ProjectStore:
             # Chunks of the branch's previous save (or of this Checkpoint, saved by
             # another branch) are referred to where they are, not written again.
             known = checkpoint_path if checkpoint_path.exists() else None
-            if known is None and path.exists():
-                known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
-            origin = checkpoint.runtime_state.get("fork_origin")
-            if (
-                known is None
-                and reference.parent_branch_id is not None
-                and isinstance(origin, dict)
-            ):
-                # A new child's first save shares most chunks with the Checkpoint it was
-                # forked from.
-                origin_hash = origin.get("checkpoint_hash")
-                if isinstance(origin_hash, str) and re.fullmatch(r"[a-f0-9]{64}", origin_hash):
-                    known = checkpoint_path.with_name(f"{origin_hash}.json")
+            # A writer's later saves know the locations of its earlier saves' chunks.
+            if known is None and not (encoder is not None and encoder.pack_locations):
+                if path.exists():
+                    known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
+                origin = checkpoint.runtime_state.get("fork_origin")
+                if (
+                    known is None
+                    and reference.parent_branch_id is not None
+                    and isinstance(origin, dict)
+                ):
+                    # A new child's first save shares most chunks with the Checkpoint it
+                    # was forked from.
+                    origin_hash = origin.get("checkpoint_hash")
+                    if isinstance(origin_hash, str) and re.fullmatch(r"[a-f0-9]{64}", origin_hash):
+                        known = checkpoint_path.with_name(f"{origin_hash}.json")
             archive = CheckpointArchive(
                 checkpoint_path.parent,
                 max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
@@ -1049,11 +1090,9 @@ class ProjectStore:
             not isinstance(document, dict)
             or set(document) != fields
             or type(document["schema_version"]) is not int
-            or document["schema_version"] != 1
+            or document["schema_version"] not in Checkpoint.SUPPORTED_SCHEMA_VERSIONS
             or document["checkpoint_hash"] != checkpoint_hash
-            or digest({k: v for k, v in document.items() if k != "checkpoint_hash"})
-            != checkpoint_hash
-            or digest(document["world_state"]) != document["state_hash"]
+            or Checkpoint.document_hashes(document) != (document["state_hash"], checkpoint_hash)
             or safe_document(document) != document
         ):
             raise StorageError("checkpoint_recorded_document_integrity_mismatch")

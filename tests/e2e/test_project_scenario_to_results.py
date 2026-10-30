@@ -129,7 +129,7 @@ def test_arrivals_typed_on_the_project_screen_show_in_the_comparison(
     main, arrivals = comparison["frames"]
     # The main line run over HTTP ends where the pinned run of the same form ends.
     contract = json.loads(REGRESSION_CONTRACT.read_text(encoding="utf-8"))["generated_small"]
-    assert main["state_hash"] == contract["expected_final_state_sha256"]
+    assert main["state_hash"] == contract["expected_final_state_tree_sha256"]
     assert arrivals["kpis"]["population"] == main["kpis"]["population"] + 10
     [difference] = comparison["differences"]
     assert difference["branch_id"] == "arrivals"
