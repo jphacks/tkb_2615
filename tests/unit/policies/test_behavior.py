@@ -7,10 +7,12 @@ tests/integration/test_behavior_policy.py.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import pytest
 from support.paths import BASELINE_100_7D, SCENARIO_100_AGENTS
 
+from sheltersim import native
 from sheltersim.core.rng import CounterRNG, KeyedRandom
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity
@@ -20,6 +22,7 @@ from sheltersim.policies.behavior import (
     ActionCandidate,
     ActionKind,
     ActionProposal,
+    AgentView,
     BehaviorDecisionRunner,
     IneligibleDecisionError,
     PriorityRuleBehaviorPolicy,
@@ -32,6 +35,42 @@ from sheltersim.policies.behavior import (
 
 def make_world() -> WorldState:
     return WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+
+
+def test_world_view_gives_every_person_each_field_of_the_view(generated_scenario) -> None:
+    """from_world fills a view's fields directly; none may fall back to the class default."""
+    view = WorldView.from_world(WorldState.from_scenario(generated_scenario))
+    names = set(AgentView.__dataclass_fields__)
+    for agent in view.agents.values():
+        assert set(agent.__dict__) == names
+        assert AgentView(**agent.__dict__) == agent
+        with pytest.raises(FrozenInstanceError):
+            agent.stress = 1.0
+
+
+def test_world_view_hash_is_the_same_with_and_without_the_kernel(
+    generated_scenario, monkeypatch
+) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    with_kernel = WorldView.from_world(world).state_hash
+    monkeypatch.setattr(native, "canonical_sha256", lambda value: None)
+    assert WorldView.from_world(world).state_hash == with_kernel
+
+
+def test_world_view_person_cache_follows_a_changed_record(generated_scenario) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    cache: dict[str, Any] = {}
+    plain = WorldView.from_world(world)
+    assert WorldView.from_world(world, person_cache=cache) == plain
+    assert WorldView.from_world(world, person_cache=cache) == plain
+    assert cache
+    people = world.model_configs["population_context"]["people"]
+    identity = sorted(people)[0]
+    # An edit inside the record, not a new record, must also be seen.
+    people[identity]["usual_wake_minute"] = 123
+    view = WorldView.from_world(world, person_cache=cache)
+    assert view.agents[identity].usual_wake_minute == 123
+    assert view == WorldView.from_world(world)
 
 
 def test_world_view_is_detached_read_only_and_canonical() -> None:

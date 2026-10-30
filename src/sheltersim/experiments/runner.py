@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable
 
-from sheltersim.contracts.policies import selected_models
+from sheltersim.contracts.policies import selected_models, selected_models_scope
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import WorldState
@@ -37,6 +38,7 @@ from sheltersim.domain.distress_monitor import record_distress_monitor_tick
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import facility_has_independent_queues
 from sheltersim.domain.geometry_overlay import (
+    GEOMETRY_OVERLAY_KEY,
     geometry_config_scope,
     parsed_facility_geometry,
     release_sleep_bed,
@@ -181,6 +183,8 @@ class OfflineSimulationController:
         llm_router: LLMRouter | None = None,
     ) -> None:
         self.world = world
+        self._person_contexts: dict[str, Any] = {}
+        self._closed_edges: dict[str, tuple[Any, set[str]]] = {}
         self.active_actions = active_action_index(world)
         initialize_simulator_extensions(world)
         validate_simulator_extensions(world)
@@ -412,7 +416,7 @@ class OfflineSimulationController:
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
         # No phase edits model_configs, so the facility geometry is parsed once per phase.
-        with geometry_config_scope():
+        with geometry_config_scope(), selected_models_scope():
             self._run_phase(phase, world, minute, rng)
 
     def _run_phase(
@@ -518,7 +522,9 @@ class OfflineSimulationController:
             self._consider_social_contact_events(outcomes)
         elif phase is TickPhase.UPDATE_AGENT_STATE:
             self._update_movement(minute)
-            view = WorldView.from_world(world, include_state_hash=False)
+            view = WorldView.from_world(
+                world, include_state_hash=False, person_cache=self._person_contexts
+            )
             deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
             if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
                 # No psychology trace is recorded, so its per-agent parts are not built.
@@ -534,13 +540,28 @@ class OfflineSimulationController:
                 psychology_result = self.psychology.explain_update(view, minute)
             base_deltas = psychology_result.deltas
             if self.stress_policy.parameters.enabled:
-                result = self.stress_policy.update(
-                    view,
-                    base_deltas,
-                    rng,
-                    zone_neighbors=self.zone_neighbors,
-                    runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                # The Rust kernel computes the same result when it is installed, and is
+                # left out when a trace needs the Python contact records.
+                native_update = getattr(self.stress_policy, "native_update", None)
+                result = (
+                    native_update(
+                        view,
+                        base_deltas,
+                        rng,
+                        zone_neighbors=self.zone_neighbors,
+                        runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                    )
+                    if native_update is not None and self.artifacts.trace_level is TraceLevel.OFF
+                    else None
                 )
+                if result is None:
+                    result = self.stress_policy.update(
+                        view,
+                        base_deltas,
+                        rng,
+                        zone_neighbors=self.zone_neighbors,
+                        runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                    )
                 final_deltas = result.deltas
                 world.model_state[SOCIAL_RUNTIME_STATE_KEY] = result.runtime_state
                 for contact in result.contacts if "social_network_v1" in world.model_state else ():
@@ -610,7 +631,7 @@ class OfflineSimulationController:
                 )
             apply_state_deltas(world, final_deltas)
         elif phase is TickPhase.PROPOSE_ACTIONS:
-            view = WorldView.from_world(world)
+            view = WorldView.from_world(world, person_cache=self._person_contexts)
             for proposal in self.decisions.propose_due(view, rng):
                 self._apply_proposal(
                     proposal,
@@ -668,13 +689,29 @@ class OfflineSimulationController:
     def _sample_information_contacts(self, minute: int, rng: KeyedRandom) -> None:
         if self.information_policy is None:
             return
-        result = self.information_policy.update(
-            # Information policies read the people and the minute, never the audit hash.
-            WorldView.from_world(self.world, include_state_hash=False),
-            self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
-            rng,
-            zone_neighbors=self.zone_neighbors,
+        # While no message exists, the Rust kernel needs only the people's zones. No
+        # trace here: it records the contacts.
+        result = (
+            self.information_policy.native_update(
+                self.world.agents,
+                minute,
+                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
+                rng,
+                zone_neighbors=self.zone_neighbors,
+            )
+            if self.artifacts.trace_level is TraceLevel.OFF
+            else None
         )
+        if result is None:
+            result = self.information_policy.update(
+                # Information policies read the people and the minute, never the audit hash.
+                WorldView.from_world(
+                    self.world, include_state_hash=False, person_cache=self._person_contexts
+                ),
+                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
+                rng,
+                zone_neighbors=self.zone_neighbors,
+            )
         self.world.model_state[INFORMATION_SPREAD_STATE_KEY] = result.runtime_state
         for proposal in result.proposals:
             due_minute = minute + 1
@@ -1851,6 +1888,33 @@ class OfflineSimulationController:
         finish_movement(world, agent.id)
         return False
 
+    def _physically_closed_edges(self, geometry_raw: Any, mobility: str) -> set[str]:
+        """The surveyed routes that a person of this mobility cannot pass.
+
+        They depend only on the geometry and constraint configs and the overlay's
+        partitions and moved facilities, and are computed again when any of these differ
+        from the copies kept with the answer. Every trip plan asks, for every route.
+        """
+        world = self.world
+        overlay = world.model_state.get(GEOMETRY_OVERLAY_KEY)
+        inputs = (
+            geometry_raw,
+            world.model_configs.get("spatial_constraints"),
+            overlay is None,
+            None if overlay is None else overlay.get("partitions"),
+            None if overlay is None else overlay.get("facility_points"),
+        )
+        known = self._closed_edges.get(mobility)
+        if known is not None and known[0] == inputs:
+            return known[1]
+        closed = {
+            route.edge_id
+            for route in parsed_facility_geometry(geometry_raw).routes
+            if not route_is_physically_clear(world, route.edge_id, mobility=mobility)
+        }
+        self._closed_edges[mobility] = (deepcopy(inputs), closed)
+        return closed
+
     def _route(
         self, origin_zone_id: str, destination_zone_id: str, agent_id: str
     ) -> ZoneRoute | None:
@@ -1859,14 +1923,7 @@ class OfflineSimulationController:
         space = self.space
         geometry_raw = self.world.model_configs.get("facility_geometry")
         if agent is not None and geometry_raw is not None:
-            geometry = parsed_facility_geometry(geometry_raw)
-            inaccessible = {
-                route.edge_id
-                for route in geometry.routes
-                if not route_is_physically_clear(
-                    self.world, route.edge_id, mobility=agent.profile.mobility
-                )
-            }
+            inaccessible = self._physically_closed_edges(geometry_raw, agent.profile.mobility)
             if inaccessible:
                 graph = ZoneGraph(
                     zones=self.space.graph.zones,

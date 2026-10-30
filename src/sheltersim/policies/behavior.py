@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+from sheltersim import native
 from sheltersim.contracts.policies import selected_models
 from sheltersim.contracts.population import PersonContext, population_context_people
 from sheltersim.core.rng import KeyedRandom, RNGKeyPart
@@ -32,6 +34,25 @@ from sheltersim.domain.psychological_state import (
     LIFE_STATE_PSYCHOLOGY_POLICIES,
     PSYCHOLOGICAL_STATE_KEY,
 )
+
+_NO_RECORD: Mapping[str, Any] = MappingProxyType({})
+
+
+def _parsed_person_contexts(
+    world: WorldState, cache: dict[str, tuple[Any, PersonContext]] | None
+) -> dict[str, PersonContext]:
+    """Parse each person's context, reusing a cached parse of an equal record."""
+    people = population_context_people(world)
+    if cache is None:
+        return {identity: PersonContext.model_validate(raw) for identity, raw in people.items()}
+    parsed = {}
+    for identity, raw in people.items():
+        entry = cache.get(identity)
+        if entry is None or entry[0] != raw:
+            entry = (deepcopy(raw), PersonContext.model_validate(raw))
+            cache[identity] = entry
+        parsed[identity] = entry[1]
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -168,8 +189,18 @@ class WorldView:
         )
 
     @classmethod
-    def from_world(cls, world: WorldState, *, include_state_hash: bool = True) -> WorldView:
-        """Create a detached snapshot, optionally omitting its audit hash."""
+    def from_world(
+        cls,
+        world: WorldState,
+        *,
+        include_state_hash: bool = True,
+        person_cache: dict[str, tuple[Any, PersonContext]] | None = None,
+    ) -> WorldView:
+        """Create a detached snapshot, optionally omitting its audit hash.
+
+        ``person_cache`` keeps parsed person contexts between calls for one caller; a
+        record is parsed again as soon as it differs from the copy kept with it.
+        """
         queue_tasks: dict[str, list[Any]] = {}
         information_state = world.model_state.get(INFORMATION_SPREAD_STATE_KEY)
         for task in world.active_tasks.values():
@@ -188,10 +219,7 @@ class WorldView:
         presence_people = (
             presence_state.get("people", {}) if isinstance(presence_state, dict) else {}
         )
-        context_people = {
-            identity: PersonContext.model_validate(raw)
-            for identity, raw in population_context_people(world).items()
-        }
+        context_people = _parsed_person_contexts(world, person_cache)
         has_population_context = bool(context_people)
         autonomy_enabled = bool(
             world.model_configs.get("simulator_extensions", {}).get("enabled", False)
@@ -247,158 +275,130 @@ class WorldView:
         environment_by_zone = {
             zone_id: zone_environment_view(world, zone_id) for zone_id in sorted(world.zones)
         }
-        environmental_by_agent = {}
-        for agent_id, agent in world.agents.items():
-            base_stress, event_ids, source_id = active_environmental_stress(world, agent.zone_id)
-            conditions = environment_by_zone[agent.zone_id]
-            environmental_by_agent[agent_id] = (
-                base_stress + conditions.temperature_stress_per_minute,
-                tuple(sorted(set(event_ids) | set(conditions.condition_modifier_event_ids))),
-                conditions.condition_assumption_ids[0]
-                if conditions.temperature_stress_per_minute and conditions.condition_assumption_ids
-                else source_id,
-            )
-        agents = {
-            agent_id: AgentView(
-                id=agent.id,
-                group_id=(
-                    presence_people.get(agent_id, {}).get("household_id", agent.profile.group_id)
-                    if isinstance(presence_people.get(agent_id, {}), dict)
-                    else agent.profile.group_id
+        # What every person in a zone shares; each person's fields are added to a copy.
+        zone_fields: dict[str, dict[str, Any]] = {}
+        for zone_id, conditions in environment_by_zone.items():
+            base_stress, event_ids, source_id = active_environmental_stress(world, zone_id)
+            zone_fields[zone_id] = {
+                "environmental_stress_per_minute": (
+                    base_stress + conditions.temperature_stress_per_minute
                 ),
-                zone_id=agent.zone_id,
-                mobility=Mobility(agent.profile.mobility),
-                support_need=agent.profile.support_need,
-                stress_sensitivity=agent.profile.stress_sensitivity,
-                rng_key=agent.profile.rng_key,
-                activity=Activity(agent.activity),
-                target_id=agent.target_id,
-                needs=NeedView(
-                    toilet_urgency=agent.needs.toilet_urgency,
-                    hunger=agent.needs.hunger,
-                    fatigue=agent.needs.fatigue,
-                    hydration_need=agent.needs.hydration_need,
+                "environmental_stressor_event_ids": tuple(
+                    sorted(set(event_ids) | set(conditions.condition_modifier_event_ids))
                 ),
-                stress=agent.stress,
-                chronic_distress=psychology_agents.get(agent_id, {}).get("long_term_distress", 0.0),
-                trust=agent.trust,
-                next_decision_at=agent.next_decision_at,
-                resource_service_enabled=world.schema_version == 6,
-                queue_task_id=(queue_tasks[agent_id][0].id if queue_tasks.get(agent_id) else None),
-                queue_kind=(queue_tasks[agent_id][0].kind if queue_tasks.get(agent_id) else None),
-                queue_target_id=(
-                    queue_tasks[agent_id][0].resource_id if queue_tasks.get(agent_id) else None
+                "environmental_assumption_source_id": (
+                    conditions.condition_assumption_ids[0]
+                    if conditions.temperature_stress_per_minute
+                    and conditions.condition_assumption_ids
+                    else source_id
                 ),
-                queue_wait_minutes=(
-                    max(0, world.minute_index - queue_tasks[agent_id][0].start_minute)
-                    if queue_tasks.get(agent_id)
-                    else 0
+                "ambient_noise_level": conditions.ambient_noise_level,
+                "rest_efficiency_multiplier": conditions.rest_efficiency_multiplier,
+                "zone_environment_modifier_event_ids": conditions.noise_modifier_event_ids,
+                "zone_environment_assumption_ids": conditions.noise_assumption_ids,
+                "ventilation_effectiveness": conditions.ventilation_effectiveness,
+                "lighting_level": conditions.lighting_level,
+                "privacy_level": conditions.privacy_level,
+                "temperature_c": conditions.temperature_c,
+                "ventilation_hygiene_growth_per_minute": (
+                    conditions.ventilation_hygiene_growth_per_minute
                 ),
-                support_request_id=agent.support_request_id,
-                support_request_status=(
-                    world.support_requests[agent.support_request_id].status.value
-                    if agent.support_request_id in world.support_requests
-                    else None
+                "privacy_discontent_per_minute": conditions.privacy_discontent_per_minute,
+                "condition_modifier_event_ids": conditions.condition_modifier_event_ids,
+                "condition_assumption_ids": conditions.condition_assumption_ids,
+                "demand_modifiers": conditions.demand_modifiers,
+                "min_rest_decision_minutes": conditions.min_rest_decision_minutes,
+                "max_rest_decision_minutes": conditions.max_rest_decision_minutes,
+                "sanitation_level": sanitation_by_zone.get(zone_id, 1.0),
+            }
+        resource_service_enabled = world.schema_version == 6
+        minute_index = world.minute_index
+        support_requests = world.support_requests
+        query_pressure = None if information_state is None else information_state["query_pressure"]
+        agents = {}
+        # AgentView has no __post_init__, so a person's view is one dict of its fields;
+        # three views per tick spend most of their time in the generated __init__.
+        for agent_id, agent in sorted(world.agents.items()):
+            profile = agent.profile
+            needs = agent.needs
+            presence = presence_people.get(agent_id, _NO_RECORD)
+            body = body_agents.get(agent_id, _NO_RECORD)
+            queue = queue_tasks.get(agent_id)
+            queue_task = queue[0] if queue else None
+            request_id = agent.support_request_id
+            request = support_requests[request_id] if request_id in support_requests else None
+            context = context_people.get(agent_id)
+            misinformation = misinformation_by_agent[agent_id]
+            mobility = profile.mobility
+            activity = agent.activity
+            fields = {
+                **zone_fields[agent.zone_id],
+                "id": agent.id,
+                "group_id": (
+                    presence.get("household_id", profile.group_id)
+                    if isinstance(presence, dict)
+                    else profile.group_id
                 ),
-                support_assigned_staff_id=(
-                    world.support_requests[agent.support_request_id].assigned_staff_id
-                    if agent.support_request_id in world.support_requests
-                    else None
+                "zone_id": agent.zone_id,
+                "mobility": mobility if type(mobility) is Mobility else Mobility(mobility),
+                "support_need": profile.support_need,
+                "stress_sensitivity": profile.stress_sensitivity,
+                "rng_key": profile.rng_key,
+                "activity": activity if type(activity) is Activity else Activity(activity),
+                "target_id": agent.target_id,
+                "needs": NeedView(
+                    needs.toilet_urgency, needs.hunger, needs.fatigue, needs.hydration_need
                 ),
-                support_wait_minutes=(
-                    max(
-                        0,
-                        world.minute_index
-                        - world.support_requests[agent.support_request_id].requested_minute,
-                    )
-                    if agent.support_request_id in world.support_requests
-                    else 0
+                "stress": agent.stress,
+                "chronic_distress": psychology_agents.get(agent_id, _NO_RECORD).get(
+                    "long_term_distress", 0.0
                 ),
-                support_cooldown_remaining_minutes=max(
-                    0, agent.support_cooldown_until - world.minute_index
+                "trust": agent.trust,
+                "next_decision_at": agent.next_decision_at,
+                "resource_service_enabled": resource_service_enabled,
+                "queue_task_id": queue_task.id if queue_task is not None else None,
+                "queue_kind": queue_task.kind if queue_task is not None else None,
+                "queue_target_id": queue_task.resource_id if queue_task is not None else None,
+                "queue_wait_minutes": (
+                    max(0, minute_index - queue_task.start_minute) if queue_task is not None else 0
                 ),
-                information_query_pressure=(
-                    information_state["query_pressure"][agent_id]
-                    if information_state is not None
-                    else 0.0
+                "support_request_id": request_id,
+                "support_request_status": request.status.value if request is not None else None,
+                "support_assigned_staff_id": (
+                    request.assigned_staff_id if request is not None else None
                 ),
-                misinformation_belief_pressure=misinformation_by_agent[agent_id][0],
-                misinformation_effect_sources=misinformation_by_agent[agent_id][1],
-                environmental_stress_per_minute=environmental_by_agent[agent_id][0],
-                environmental_stressor_event_ids=environmental_by_agent[agent_id][1],
-                environmental_assumption_source_id=environmental_by_agent[agent_id][2],
-                ambient_noise_level=environment_by_zone[agent.zone_id].ambient_noise_level,
-                rest_efficiency_multiplier=(
-                    environment_by_zone[agent.zone_id].rest_efficiency_multiplier
+                "support_wait_minutes": (
+                    max(0, minute_index - request.requested_minute) if request is not None else 0
                 ),
-                zone_environment_modifier_event_ids=(
-                    environment_by_zone[agent.zone_id].noise_modifier_event_ids
+                "support_cooldown_remaining_minutes": max(
+                    0, agent.support_cooldown_until - minute_index
                 ),
-                zone_environment_assumption_ids=(
-                    environment_by_zone[agent.zone_id].noise_assumption_ids
+                "information_query_pressure": (
+                    query_pressure[agent_id] if information_state is not None else 0.0
                 ),
-                ventilation_effectiveness=environment_by_zone[
-                    agent.zone_id
-                ].ventilation_effectiveness,
-                lighting_level=environment_by_zone[agent.zone_id].lighting_level,
-                privacy_level=environment_by_zone[agent.zone_id].privacy_level,
-                temperature_c=environment_by_zone[agent.zone_id].temperature_c,
-                ventilation_hygiene_growth_per_minute=environment_by_zone[
-                    agent.zone_id
-                ].ventilation_hygiene_growth_per_minute,
-                privacy_discontent_per_minute=environment_by_zone[
-                    agent.zone_id
-                ].privacy_discontent_per_minute,
-                condition_modifier_event_ids=environment_by_zone[
-                    agent.zone_id
-                ].condition_modifier_event_ids,
-                condition_assumption_ids=environment_by_zone[
-                    agent.zone_id
-                ].condition_assumption_ids,
-                demand_modifiers=environment_by_zone[agent.zone_id].demand_modifiers,
-                min_rest_decision_minutes=(
-                    environment_by_zone[agent.zone_id].min_rest_decision_minutes
+                "misinformation_belief_pressure": misinformation[0],
+                "misinformation_effect_sources": misinformation[1],
+                "sleep_debt_minutes": body.get("sleep_debt_minutes", 0.0),
+                "uncertainty": body.get("uncertainty", 0.0),
+                "reassurance": body.get("reassurance", 0.0),
+                "discontent": body.get("discontent", 0.0),
+                "positive_affect": body.get("positive_affect", 0.5),
+                "negative_affect": body.get("negative_affect", 0.0),
+                "hygiene_need": body.get("hygiene_need", 0.0),
+                "caregiver_ids": tuple(context.caregiver_ids) if context is not None else (),
+                "care_for_ids": tuple(context.care_for_ids) if context is not None else (),
+                "parent_ids": tuple(context.parent_ids) if context is not None else (),
+                "roles": tuple(context.roles) if context is not None else (),
+                "usual_wake_minute": context.usual_wake_minute if context is not None else None,
+                "usual_sleep_minute": context.usual_sleep_minute if context is not None else None,
+                "required_sleep_minutes": (
+                    context.required_sleep_minutes if context is not None else None
                 ),
-                max_rest_decision_minutes=(
-                    environment_by_zone[agent.zone_id].max_rest_decision_minutes
-                ),
-                sleep_debt_minutes=body_agents.get(agent_id, {}).get("sleep_debt_minutes", 0.0),
-                uncertainty=body_agents.get(agent_id, {}).get("uncertainty", 0.0),
-                reassurance=body_agents.get(agent_id, {}).get("reassurance", 0.0),
-                discontent=body_agents.get(agent_id, {}).get("discontent", 0.0),
-                positive_affect=body_agents.get(agent_id, {}).get("positive_affect", 0.5),
-                negative_affect=body_agents.get(agent_id, {}).get("negative_affect", 0.0),
-                hygiene_need=body_agents.get(agent_id, {}).get("hygiene_need", 0.0),
-                sanitation_level=sanitation_by_zone.get(agent.zone_id, 1.0),
-                caregiver_ids=tuple(context_people[agent_id].caregiver_ids)
-                if agent_id in context_people
-                else (),
-                care_for_ids=tuple(context_people[agent_id].care_for_ids)
-                if agent_id in context_people
-                else (),
-                parent_ids=tuple(context_people[agent_id].parent_ids)
-                if agent_id in context_people
-                else (),
-                roles=tuple(context_people[agent_id].roles) if agent_id in context_people else (),
-                usual_wake_minute=(
-                    context_people[agent_id].usual_wake_minute
-                    if agent_id in context_people
-                    else None
-                ),
-                usual_sleep_minute=(
-                    context_people[agent_id].usual_sleep_minute
-                    if agent_id in context_people
-                    else None
-                ),
-                required_sleep_minutes=(
-                    context_people[agent_id].required_sleep_minutes
-                    if agent_id in context_people
-                    else None
-                ),
-                personal_context_present=agent_id in context_people,
-            )
-            for agent_id, agent in sorted(world.agents.items())
-        }
+                "personal_context_present": context is not None,
+            }
+            view = object.__new__(AgentView)
+            object.__setattr__(view, "__dict__", fields)
+            agents[agent_id] = view
         operational = world.model_state.get("operational_events_v1", {})
         facilities = {
             facility_id: FacilityView(
@@ -533,14 +533,16 @@ class WorldView:
                     }
                     for agent in agents.values()
                 ]
-            encoded = json.dumps(
-                state_data,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-            state_hash = hashlib.sha256(encoded).hexdigest()
+            state_hash = native.canonical_sha256(state_data)
+            if state_hash is None:
+                encoded = json.dumps(
+                    state_data,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
+                state_hash = hashlib.sha256(encoded).hexdigest()
         return cls(
             minute_index=world.minute_index,
             agents=agents,

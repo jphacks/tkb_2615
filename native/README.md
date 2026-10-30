@@ -42,6 +42,26 @@ Checkpoint document) and times them.
   and `sum` is CPython 3.12's compensated sum, so the results are the same floats.
   The runner uses it through `IntegratedDistressLifeStatePolicy.native_deltas` when
   no trace needs the per-agent parts, instead of `deltas_without_traces`.
+  A new value outside `AgentStateDelta`'s bounds raises `Unsupported`, so its Python
+  checks raise the same error; otherwise those checks are skipped.
+
+- `social_channel_update(...)`: one tick of `ExpressivenessChannelOpennessPolicy.update`
+  (contact sampling, durations, cooldowns, the bounded stress synchrony and its traces),
+  through `native_update`. `CounterRNG` draws, `math.fsum` (`fsum`, exposed for tests),
+  `max`/`min` ties and float order are those of Python. Contacts whose weights sum to
+  zero make the Python code raise, so they are left to it.
+
+- `information_contacts_without_messages(...)`: one tick of
+  `InformationSpreadPolicy.update` while no message, belief or support-request record
+  exists: decayed query pressure, sampled contacts and their records. It needs only
+  people's IDs and zones, so the runner builds no `WorldView` for it. Any message
+  sends the tick to Python.
+
+  Both raise `Unsupported` for any value of another type or any state Python would
+  reject, and neither runs when a trace needs the Python contact records.
+  Seven days, run beside the previous commit: `update_agent_state` 76.4 s -> 26.1 s,
+  `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
+  (docs/rust-port.md).
 
 - `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
   `psychological_agents_valid`, `agent_dynamics_valid`, `movement_positions_valid`,

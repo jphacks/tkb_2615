@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from copy import deepcopy
 from typing import Any
 
 from sheltersim import native
@@ -71,8 +70,9 @@ def update_psychological_state(
         ("high_distress_threshold", high_distress_threshold),
     ):
         validate_unit_interval(name, value)
-    result = deepcopy(state)
-    agents = result["agents"]
+    # Validated above: each record holds numbers only, so this is a deep copy.
+    agents = {agent_id: dict(record) for agent_id, record in state["agents"].items()}
+    result = {**state, "agents": agents}
     for agent_id, acute in sorted(acute_by_agent.items()):
         validate_unit_interval(f"acute distress for {agent_id}", acute)
         record = agents.get(agent_id)

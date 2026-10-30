@@ -119,20 +119,13 @@ class EventDispatcher:
         """Apply due events in order; observe each committed outcome before the next."""
         outcomes: list[EventLogRecord] = []
         for event in world.event_queue.due(minute):
-            current = next(
-                (
-                    pending
-                    for pending in world.event_queue.pending()
-                    if pending.event_id == event.event_id
-                ),
-                None,
-            )
+            current = world.event_queue.find(event.event_id)
             if current is None:
                 # A preceding event in this same due batch may cancel this
                 # snapshot entry (departure, shift interruption, or replacement).
                 # The cancellation path already emitted the single audit record.
                 continue
-            if current is not None and current.to_dict() != event.to_dict():
+            if current is not event and current.to_dict() != event.to_dict():
                 # A preceding due event may have replaced this item with a new schedule.
                 continue
             handler = self.handlers.get(event.event_type)
@@ -169,7 +162,7 @@ class EventDispatcher:
                         if SOCIAL_NETWORK_STATE_KEY in world.model_state:
                             observe_event(world, event, minute)
 
-            if any(pending.event_id == event.event_id for pending in world.event_queue.pending()):
+            if world.event_queue.find(event.event_id) is not None:
                 world.event_queue.remove(event.event_id)
             record = world.event_log.find(event.event_id)
             if record is not None:
