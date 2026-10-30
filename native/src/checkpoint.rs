@@ -16,8 +16,9 @@
 
 use std::collections::HashSet;
 
+use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
@@ -188,4 +189,282 @@ pub fn chunk_hashes(
             })
             .collect()
     }))
+}
+
+// Keys of an index row that link it to events, by how the row holds them.
+const EVENT_REFERENCE_KEYS: [&str; 2] = ["event_id", "causation_id"];
+const EVENT_REFERENCE_LISTS: [&str; 5] = [
+    "event_ids",
+    "source_event_ids",
+    "causation_event_ids",
+    "modifier_event_ids",
+    "environmental_stressor_event_ids",
+];
+// Deeper rows are left to Python.
+const MAX_ROW_DEPTH: usize = 64;
+
+fn strings_of<'py>(list: &Bound<'py, PyList>, into: &mut Vec<Bound<'py, PyString>>) {
+    for item in list.iter() {
+        if let Ok(text) = item.downcast_into_exact::<PyString>() {
+            into.push(text);
+        }
+    }
+}
+
+/// `_identities` and `_event_references` of `storage/history_index.py` over one value.
+/// False for a value that is not plain lists, str-keyed dicts and JSON scalars.
+fn row_links<'py>(
+    value: &Bound<'py, PyAny>,
+    identities: &mut Vec<Bound<'py, PyString>>,
+    references: &mut Vec<Bound<'py, PyString>>,
+    depth: usize,
+) -> PyResult<bool> {
+    if depth == 0 {
+        return Ok(false);
+    }
+    if let Ok(object) = value.downcast_exact::<PyDict>() {
+        for (key, item) in object.iter() {
+            let Ok(name) = key.downcast_exact::<PyString>() else {
+                return Ok(false);
+            };
+            let name = name.to_str()?;
+            let container = item.is_exact_instance_of::<PyDict>() || item.is_exact_instance_of::<PyList>();
+            let identity = name.ends_with("_id") || name.ends_with("_ids");
+            if identity {
+                if let Ok(text) = item.downcast_exact::<PyString>() {
+                    identities.push(text.clone());
+                } else if let Ok(list) = item.downcast_exact::<PyList>() {
+                    strings_of(list, identities);
+                }
+            }
+            let single = EVENT_REFERENCE_KEYS.contains(&name);
+            if single && item.is_exact_instance_of::<PyString>() {
+                references.push(item.clone().downcast_into_exact::<PyString>()?);
+            } else if EVENT_REFERENCE_LISTS.contains(&name) && item.is_exact_instance_of::<PyList>() {
+                strings_of(item.downcast_exact::<PyList>()?, references);
+            } else if container {
+                // Identities are not read under an identity key; references are.
+                let mut unread = Vec::new();
+                let into = if identity { &mut unread } else { &mut *identities };
+                if !row_links(&item, into, references, depth - 1)? {
+                    return Ok(false);
+                }
+            } else if !plain_scalar(&item) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    } else if let Ok(list) = value.downcast_exact::<PyList>() {
+        for item in list.iter() {
+            if !row_links(&item, identities, references, depth - 1)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(plain_scalar(value))
+    }
+}
+
+fn plain_scalar(value: &Bound<'_, PyAny>) -> bool {
+    value.is_none()
+        || value.is_exact_instance_of::<PyString>()
+        || value.is_exact_instance_of::<PyInt>()
+        || value.is_exact_instance_of::<PyBool>()
+        || value.is_exact_instance_of::<PyFloat>()
+}
+
+/// What `HistoryIndex` stores of one row of plain lists, str-keyed dicts and JSON scalars:
+/// its canonical JSON, the SHA-256 of that, its identities and event references, and the
+/// keys and strings the privacy check reads. None for any other row.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn index_row<'py>(
+    py: Python<'py>,
+    row: &Bound<'py, PyDict>,
+) -> PyResult<
+    Option<(
+        Bound<'py, PyString>,
+        String,
+        Vec<Bound<'py, PyString>>,
+        Vec<Bound<'py, PyString>>,
+        Vec<String>,
+        Vec<String>,
+    )>,
+> {
+    let mut identities = Vec::new();
+    let mut references = Vec::new();
+    if !row_links(row.as_any(), &mut identities, &mut references, MAX_ROW_DEPTH)? {
+        return Ok(None);
+    }
+    let Ok(raw) = crate::encode(row.as_any()) else {
+        return Ok(None);
+    };
+    let (keys, strings) =
+        candidates(&raw).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let hash = Sha256::digest(&raw).iter().map(|byte| format!("{byte:02x}")).collect();
+    let text = std::str::from_utf8(&raw).map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    Ok(Some((
+        PyString::new(py, text),
+        hash,
+        identities,
+        references,
+        keys.into_iter().collect(),
+        strings.into_iter().collect(),
+    )))
+}
+
+// Deeper values are left to the caller, which compares the restored records.
+const MAX_SAME_DEPTH: usize = 64;
+
+/// Whether value, from a live record, is exactly what reading document gives once frozen:
+/// the same types (an int is not a float), with the text of each number as Python writes
+/// it. Anything else, such as a subclass or a plain dict, is reported as different.
+fn same_frozen(value: &Bound<'_, PyAny>, document: &serde_json::Value, depth: usize) -> PyResult<bool> {
+    use serde_json::Value;
+    if depth == 0 {
+        return Ok(false);
+    }
+    Ok(match document {
+        Value::Null => value.is_none(),
+        Value::Bool(flag) => {
+            value.is_exact_instance_of::<PyBool>() && value.downcast_exact::<PyBool>()?.is_true() == *flag
+        }
+        Value::String(text) => match value.downcast_exact::<PyString>() {
+            Ok(string) => string.to_str()? == text,
+            Err(_) => false,
+        },
+        Value::Number(number) => {
+            let text = number.to_string();
+            if let Ok(float) = value.downcast_exact::<PyFloat>() {
+                crate::python_float_repr(float.value()) == text
+            } else if value.is_exact_instance_of::<PyInt>() {
+                value.str()?.to_str()? == text
+            } else {
+                false
+            }
+        }
+        Value::Array(items) => match value.downcast_exact::<PyTuple>() {
+            Ok(tuple) if tuple.len() == items.len() => {
+                for (item, document) in tuple.iter().zip(items) {
+                    if !same_frozen(&item, document, depth - 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+        Value::Object(object) => {
+            // SAFETY: only the address of the type object is read.
+            let proxy = unsafe { std::ptr::addr_of_mut!(ffi::PyDictProxy_Type) };
+            if value.get_type().as_ptr() != proxy.cast() || value.len()? != object.len() {
+                return Ok(false);
+            }
+            for (key, document) in object {
+                // The counts are equal, so finding every key finds them all.
+                match value.get_item(key) {
+                    Ok(item) => {
+                        if !same_frozen(&item, document, depth - 1)? {
+                            return Ok(false);
+                        }
+                    }
+                    Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(value.py()) => {
+                        return Ok(false)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            true
+        }
+    })
+}
+
+fn same_attribute(owner: &Bound<'_, PyAny>, name: &str, document: &serde_json::Value) -> PyResult<bool> {
+    match document.get(name) {
+        Some(field) => same_frozen(&owner.getattr(name)?, field, MAX_SAME_DEPTH),
+        None => Ok(false),
+    }
+}
+
+fn same_enum(owner: &Bound<'_, PyAny>, name: &str, document: &serde_json::Value) -> PyResult<bool> {
+    match document.get(name) {
+        Some(field) => same_frozen(&owner.getattr(name)?.getattr("value")?, field, 1),
+        None => Ok(false),
+    }
+}
+
+fn same_record(
+    record: &Bound<'_, PyAny>,
+    document: &serde_json::Value,
+    types: (&Bound<'_, PyAny>, &Bound<'_, PyAny>),
+) -> PyResult<bool> {
+    use crate::eventlog::{EVENT_FIELDS, RECORD_FIELDS};
+    let exact = |value: &serde_json::Value, count: usize| value.as_object().is_some_and(|fields| fields.len() == count);
+    let Some(event_document) = document.get("event") else {
+        return Ok(false);
+    };
+    if !exact(document, RECORD_FIELDS.len()) || !exact(event_document, EVENT_FIELDS.len()) {
+        return Ok(false);
+    }
+    if !record.get_type().is(types.0) {
+        return Ok(false);
+    }
+    let event = record.getattr("event")?;
+    if !event.get_type().is(types.1) {
+        return Ok(false);
+    }
+    for name in RECORD_FIELDS {
+        let same = match name {
+            "event" => true,
+            "status" => same_enum(record, name, document)?,
+            _ => same_attribute(record, name, document)?,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    for name in EVENT_FIELDS {
+        let same = if name == "kind" {
+            same_enum(&event, name, event_document)?
+        } else {
+            same_attribute(&event, name, event_document)?
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether each of records is exactly the record that restoring the saved bytes of the
+/// same position gives, read without building that record. A false says nothing about
+/// `==`; the caller then compares restored records.
+#[pyfunction]
+pub fn same_saved_records(
+    py: Python<'_>,
+    records: &Bound<'_, PyList>,
+    raws: Vec<Bound<'_, PyBytes>>,
+    record_type: &Bound<'_, PyAny>,
+    event_type: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    if records.len() != raws.len() {
+        return Ok(false);
+    }
+    let slices: Vec<&[u8]> = raws.iter().map(|raw| raw.as_bytes()).collect();
+    let documents: Result<Vec<serde_json::Value>, _> = py.allow_threads(|| {
+        slices
+            .par_iter()
+            .map(|raw| serde_json::from_slice(raw))
+            .collect()
+    });
+    let Ok(documents) = documents else {
+        return Ok(false);
+    };
+    for (record, document) in records.iter().zip(&documents) {
+        if !same_record(&record, document, (record_type, event_type))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

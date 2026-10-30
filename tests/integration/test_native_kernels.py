@@ -1199,6 +1199,230 @@ def test_the_event_kernel_leaves_ints_of_any_size_to_python() -> None:
     assert ScheduledEvent("e-1", EventKind.ENDOGENOUS, 1, 0, 2**70, "tick").sequence == 2**70
 
 
+_INDEX_ROWS = [
+    {"minute": 1},
+    {
+        "minute": 1,
+        "event_id": "e-1",
+        "causation_id": "e-0",
+        "agent_id": "a-1",
+        "actor_ids": ["a", 1],
+    },
+    # An identity key is not read below; an event reference key is, if it holds no str.
+    {"minute": 1, "agent_id": {"zone_id": "z", "event_id": "e-2"}, "list_id": [{"staff_id": "s"}]},
+    {"minute": 1, "event_id": {"event_id": "e-3", "zone_id": "z"}, "causation_id": ["e-4"]},
+    {"minute": 1, "event_ids": ["e-5", 1, "e-5"], "source_event_ids": [], "x_id": None},
+    {"minute": 1, "source_event_ids": "e-6", "modifier_event_ids": ["e-7"], "other": 1.5},
+    {
+        "minute": 1,
+        "causation_event_ids": ["e-8", ["e-9"]],
+        "environmental_stressor_event_ids": ["e"],
+    },
+    {"minute": 1, "rows": [{"agent_id": "a", "more": [[{"event_id": "e-10", "b_ids": ["b"]}]]}]},
+    {"minute": 1, "文": '避難所\n"', "big": 2**70, "flag": True, "none": None, "float": 1e22},
+    {"minute": 1, "note": "call 090-1234-5678", "contact": "a@example.com"},
+    {"minute": 1, "api_key": "x"},
+]
+
+
+@pytest.mark.parametrize("row", _INDEX_ROWS)
+def test_index_row_reads_a_row_as_the_python_functions_do(row: dict) -> None:
+    import hashlib
+
+    from sheltersim.storage.history_index import _event_references, _identities
+    from sheltersim.storage.projects import _private_field, canonical
+
+    read = native.index_row(row)
+    assert read is not None
+    encoded, payload_hash, identities, references, keys, strings = read
+    assert encoded == canonical(row)
+    assert payload_hash == hashlib.sha256(encoded.encode()).hexdigest()
+    assert set(identities) == _identities(row)
+    assert set(references) == _event_references(row)
+    assert (set(keys), set(strings)) == tuple(
+        map(set, native.sensitive_candidates([encoded.encode()]))
+    )
+    if "api_key" in row:
+        assert any(map(_private_field, keys))
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"minute": 1, "values": (1, 2)},
+        {"minute": 1, "agent_id": ("a", "b")},
+        {"minute": 1, 2: "a"},
+        {"minute": 1, "inner": {2: "a"}},
+        {"minute": float("nan")},
+        {"minute": 1, "value": object()},
+        {"minute": 1, "ids": [{1: 2}]},
+    ],
+)
+def test_index_row_leaves_any_other_row_to_python(row: dict) -> None:
+    assert native.index_row(row) is None
+
+
+def test_a_row_stored_through_the_kernel_is_the_row_stored_without_it(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from sheltersim.storage.history_index import HistoryIndex, _RecordBatch
+    from sheltersim.storage.projects import ProjectStore
+
+    def stored(name: str) -> list:
+        root = tmp_path / name
+        (root / "p" / "runs" / "r").mkdir(parents=True)
+        index = HistoryIndex(ProjectStore(root), "p", "r")
+        with index.connect(write=True) as db, _RecordBatch(db, "main") as records:
+            for row in _INDEX_ROWS:
+                # A container in a record's columns is an error with or without the kernel.
+                if "api_key" not in row and not isinstance(row.get("event_id"), dict):
+                    records.put("events", row)
+            records.put("events", {"minute": 1, "trigger": {"b": "two words", "a": "one"}})
+            records.put("events", {"minute": 1, "trigger": ("c", "d")})
+        with sqlite3.connect(index.path) as db:
+            return [
+                sorted(db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+                for table in ("records", "entities", "tokens")
+            ]
+
+    with_kernel = stored("with")
+    monkeypatch.setattr(native, "index_row", lambda _row: None)
+    assert stored("without") == with_kernel
+
+
+def _record(payload: dict, *, kind: str = "endogenous", status: str = "applied", **fields: object):
+    from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
+
+    event = ScheduledEvent(
+        "event-1",
+        EventKind(kind),
+        3,
+        -1,
+        7,
+        "tick",
+        payload=payload,
+        source_id=fields.pop("source_id", None),
+        provenance={"origin": "test", "values": [1, 2.5]},
+    )
+    return EventLogRecord(event, 4, EventStatus(status), fields.pop("detail", None))
+
+
+def _same_records(records: list, raws: list[bytes]) -> bool:
+    from sheltersim.events.models import EventLogRecord, ScheduledEvent
+
+    return native.same_saved_records(records, raws, EventLogRecord, ScheduledEvent)
+
+
+_SAMPLE_PAYLOAD = {
+    "int": 1,
+    "big": 2**80,
+    "float": 1.0,
+    "tiny": 1e-300,
+    "huge": 1e22,
+    "minus_zero": -0.0,
+    "flag": True,
+    "none": None,
+    "text": '\u6587"\\\n',
+    "list": [1, [2.5, {"a": []}], {}],
+    "object": {"b": {"c": [None]}},
+}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"detail": "why", "source_id": "source-1"}],
+)
+def test_same_saved_records_accepts_a_record_and_its_saved_bytes(fields: dict) -> None:
+    from sheltersim.events.queue import record_bytes, record_from_bytes
+
+    record = _record(_SAMPLE_PAYLOAD, **fields)
+    raw = record_bytes(record)
+    assert record_from_bytes(raw) == record
+    assert _same_records([record], [raw])
+    assert _same_records([], [])
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"int": 2},
+        {"int": 1.0},
+        {"int": True},
+        {"float": 1},
+        {"flag": 1},
+        {"none": 0},
+        {"none": "null"},
+        {"text": "other"},
+        {"list": [1, [2.5, {"a": [0]}], {}]},
+        {"list": [1, [2.5, {"a": []}]]},
+        {"object": {"b": {"c": [None], "d": 1}}},
+        {"object": {"b": {"d": [None]}}},
+        {"object": {}},
+        {"added": 1},
+    ],
+)
+def test_same_saved_records_refuses_a_record_of_other_values(changed: dict) -> None:
+    from sheltersim.events.queue import record_bytes
+
+    raw = record_bytes(_record(_SAMPLE_PAYLOAD))
+    assert not _same_records([_record({**_SAMPLE_PAYLOAD, **changed})], [raw])
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"status": "failed"},
+        {"kind": "exogenous"},
+        {"detail": "why"},
+        {"source_id": "source-2"},
+    ],
+)
+def test_same_saved_records_refuses_other_fields(other: dict) -> None:
+    from sheltersim.events.queue import record_bytes
+
+    raw = record_bytes(_record({}))
+    assert not _same_records([_record({}, **other)], [raw])
+
+
+def test_same_saved_records_reads_every_field_of_the_bytes() -> None:
+    from sheltersim.events.queue import record_bytes
+
+    record = _record({})
+    document = json.loads(record_bytes(record))
+    for changed in (
+        {**document, "extra": 1},
+        {**document, "event": {**document["event"], "extra": 1}},
+        {key: value for key, value in document.items() if key != "detail"},
+        {**document, "realized_minute": 5},
+        {**document, "event": {**document["event"], "sequence": 8}},
+        {**document, "event": {**document["event"], "priority": 0}},
+        {**document, "event": {**document["event"], "provenance": {}}},
+    ):
+        assert not _same_records([record], [json.dumps(changed).encode()])
+    assert not _same_records([record], [b"not json"])
+    assert not _same_records([record], [])
+    assert not _same_records([object()], [record_bytes(record)])
+
+
+def test_same_saved_records_leaves_other_mappings_and_subclasses_to_the_caller() -> None:
+    import dataclasses
+
+    from sheltersim.events.queue import record_bytes
+
+    class Text(str):
+        pass
+
+    record = _record({"text": "a"})
+    raw = record_bytes(record)
+    plain = dataclasses.replace(record)
+    object.__setattr__(plain.event, "payload", {"text": "a"})
+    assert not _same_records([plain], [raw])
+    object.__setattr__(plain.event, "payload", _record({"text": Text("a")}).event.payload)
+    assert not _same_records([plain], [raw])
+
+
 def _same_items(current: list, documents: list, start: int = 0) -> bool:
     return native.same_json_items(current, documents, start, len(current))
 

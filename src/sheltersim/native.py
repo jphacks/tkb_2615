@@ -153,6 +153,20 @@ def world_agents_valid(
     )
 
 
+def index_row(row: dict[str, Any]) -> tuple[str, str, list, list, list, list] | None:
+    """(canonical JSON, its SHA-256, identities, event references, keys, strings to check) of a
+    row of plain lists, str-keyed dicts and JSON scalars (storage/history_index.py), or None
+    for any other row or without the kernel. Identities and references may repeat."""
+    return None if _native is None else _native.index_row(row)
+
+
+def same_saved_records(records: list[Any], raws: list[bytes], *types: type) -> bool | None:
+    """Whether each of records (of the types EventLogRecord and ScheduledEvent) is exactly the
+    record restoring raws gives, read from the bytes; a false says nothing about ==, and
+    the caller compares restored records. None without the kernel."""
+    return None if _native is None else _native.same_saved_records(records, raws, *types)
+
+
 def same_json_items(current: Any, documents: list[Any], start: int, count: int) -> bool | None:
     """Whether each of current[:count] is exactly documents[start + i], types included
     (1, 1.0 and True differ, and a tuple and a list), or None without the kernel."""
