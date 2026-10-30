@@ -384,3 +384,26 @@ def test_a_chunk_that_comes_back_in_a_later_save_is_not_written_again(tmp_path):
     # The third save wrote nothing: its chunks are all in the first save's pack.
     assert archive.new_files == 0
     assert len(list((tmp_path / "packs").glob("*.pack"))) == 2
+
+
+def test_a_childs_first_save_refers_to_the_chunks_of_the_checkpoint_it_was_forked_from(
+    tmp_path, saved_timeline
+):
+    """A new branch has no earlier save; its first save takes the chunk locations of
+    the Checkpoint its fork_origin names, so it packs only the chunks that differ."""
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    origin = store.branch_reference("p", "r", "main").checkpoint_hash
+    packs = store._path("p", "runs", "r", "checkpoints") / "packs"
+    before = {path.name for path in packs.glob("*.pack")}
+    timeline.fork("main", 30, "child")
+    head = store.branch_reference("p", "r", "child").checkpoint_hash
+    parent, child = (
+        CheckpointArchive.pack_locations(_manifest(store, name)) for name in (origin, head)
+    )
+    shared = set(parent) & set(child)
+    assert shared and all(child[key] == parent[key] for key in shared)
+    new = {path.name for path in packs.glob("*.pack")} - before
+    assert len(new) == 1
+    written = [key for key, location in child.items() if f"{location[0]}.pack" in new]
+    assert 0 < len(written) < len(shared)

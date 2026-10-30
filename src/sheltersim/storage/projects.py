@@ -742,6 +742,17 @@ class ProjectStore:
             known = checkpoint_path if checkpoint_path.exists() else None
             if known is None and path.exists():
                 known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
+            origin = checkpoint.runtime_state.get("fork_origin")
+            if (
+                known is None
+                and reference.parent_branch_id is not None
+                and isinstance(origin, dict)
+            ):
+                # A new child's first save shares most chunks with the Checkpoint it was
+                # forked from.
+                origin_hash = origin.get("checkpoint_hash")
+                if isinstance(origin_hash, str) and re.fullmatch(r"[a-f0-9]{64}", origin_hash):
+                    known = checkpoint_path.with_name(f"{origin_hash}.json")
             archive = CheckpointArchive(
                 checkpoint_path.parent,
                 max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),
