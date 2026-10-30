@@ -1,4 +1,4 @@
-//! Experimental Rust kernels for ShelterSim (experiment/rust-native only).
+//! Rust kernels for ShelterSim (docs/rust-port.md).
 //!
 //! `canonical_json` writes the bytes of
 //! `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 mod checkpoint;
 mod contacts;
 mod eventlog;
+mod history;
 mod psychology;
 mod records;
 mod validation;
@@ -293,6 +294,7 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(records::view_state_hash, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
+    module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;

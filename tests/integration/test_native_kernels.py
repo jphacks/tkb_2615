@@ -7,6 +7,7 @@ branch builds and installs it.
 
 from __future__ import annotations
 
+import copy
 import json
 import struct
 
@@ -1196,3 +1197,50 @@ def test_the_event_kernel_leaves_ints_of_any_size_to_python() -> None:
 
     assert native.scheduled_event_checked(*_event_arguments(sequence=2**70)) is None
     assert ScheduledEvent("e-1", EventKind.ENDOGENOUS, 1, 0, 2**70, "tick").sequence == 2**70
+
+
+def _same_items(current: list, documents: list, start: int = 0) -> bool:
+    return native.same_json_items(current, documents, start, len(current))
+
+
+def test_same_json_items_accepts_only_exactly_the_same_values() -> None:
+    entry = {"a": 1, "b": [1.5, None, True, "x", {"c": [2]}], "d": 10**30}
+    document = json.loads(json.dumps(entry))
+    assert _same_items([entry], [document])
+    assert _same_items([entry], [{"dropped": 1}, document], 1)
+    for other in (
+        {**entry, "a": True},
+        {**entry, "a": 1.0},
+        {**entry, "a": 2},
+        {**entry, "d": 10**30 + 1},
+        {**entry, "b": tuple(entry["b"])},
+        {**entry, "b": [1.5, None, True, "y", {"c": [2]}]},
+        {**entry, "b": [1.5, None, 1, "x", {"c": [2]}]},
+        {**entry, "b": [1.5, None, True, "x", {"c": [2], "e": 1}]},
+        {**entry, "extra": 1},
+        {key: value for key, value in entry.items() if key != "a"},
+        {**{key: value for key, value in entry.items() if key != "a"}, "e": 1},
+    ):
+        assert not _same_items([other], [document]), other
+
+
+def test_same_json_items_tells_float_zeros_and_leaves_other_types_out() -> None:
+    assert not _same_items([{"a": -0.0}], [{"a": 0.0}])
+
+    class Text(str):
+        pass
+
+    assert not _same_items([{"a": Text("x")}], [{"a": "x"}])
+    assert not _same_items([{1: "x"}], [{"1": "x"}])
+    deep: list = []
+    for _ in range(40):
+        deep = [deep]
+    assert not _same_items([deep], [copy.deepcopy(deep)])
+
+
+def test_same_json_items_rejects_counts_outside_either_list() -> None:
+    assert not native.same_json_items([1], [1], 0, 2)
+    assert not native.same_json_items([1, 2], [1], 0, 2)
+    assert not native.same_json_items([1], [1], 1, 1)
+    assert native.same_json_items([1, 2], [1], 0, 1)
+    assert not native.same_json_items((1,), [1], 0, 1)

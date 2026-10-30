@@ -12,8 +12,6 @@ with that Python code at every tick and is skipped without the extension. CI on 
 branch builds and installs the extension on Linux, Windows and macOS, and on Linux
 runs the tests once more without it.
 
-The first prototypes were made on `experiment/rust-native`.
-
 ## Build and use without installing
 
 ```shell
@@ -104,6 +102,13 @@ Checkpoint document) and times them.
   `(start, count)` of a list of item bytes, in parallel and without joining them. These
   are the leaves of the Checkpoint v2 hash tree (`core/checkpoint_cache.py`) and the
   archive's chunk keys.
+
+- `same_json_items(current, documents, start, count)` (stage B3, `src/history.rs`): whether
+  each of `current[:count]` is exactly `documents[start + i]`, with the types: 1, 1.0 and
+  True differ, a tuple and a list differ, and floats compare by their bits. A save compares
+  each append-only history with the documents of its last save, and its full validation
+  does not read the entries found unchanged (`core/save_validation.py`). Anything that is
+  not a plain JSON value compares as different, and the rules read the entry again.
 
 - `EventStore.active_lifecycle_records()`: the `agent_action_lifecycle` records that
   decide each agent's active action, in the order a full pass inserts the agents, from

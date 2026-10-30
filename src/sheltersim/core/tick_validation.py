@@ -6,6 +6,10 @@ validation. A validation that fails discards the memo, so it only ever records f
 about a state that passed. The memo holds no simulation state: dropping it costs one
 slower check and changes no result.
 
+"Full validation" below is world.validate(), which runs at every Checkpoint save. It reads
+everything these savings skip; of old history it skips only entries it finds exactly
+unchanged since they last passed (core/save_validation.py).
+
 Each saving rests on one of these arguments:
 
 - Config checks read only model_configs. They are skipped while model_configs equals

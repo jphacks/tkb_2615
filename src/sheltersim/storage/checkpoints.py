@@ -175,7 +175,7 @@ class CheckpointArchive:
                     for i in range(0, len(keys), self.chunk_records)
                 ],
             }
-        if isinstance(value, dict) and self._size(value) > 65_536:
+        if isinstance(value, dict) and self._exceeds(value, 65_536):
             if self.content_check is not None:
                 # Field names of a split object live in the manifest, not a chunk.
                 self.content_check([(dict.fromkeys(value), None)])
@@ -206,8 +206,10 @@ class CheckpointArchive:
             self.encoder.remember_chunk(items, start, count, key)
         return key
 
-    def _size(self, value: Any) -> int:
-        return len(canonical_bytes(value)) if self.encoder is None else self.encoder.size(value)
+    def _exceeds(self, value: Any, limit: int) -> bool:
+        if self.encoder is None:
+            return len(canonical_bytes(value)) > limit
+        return self.encoder.exceeds(value, limit)
 
     def encode(self, checkpoint: Checkpoint) -> dict[str, Any]:
         return self._encode_validated_document(

@@ -21,6 +21,7 @@ from sheltersim.contracts.operations import (
     StaffSupportContinuityReceipt,
 )
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.tick_validation import saved_json
 from sheltersim.core.world import WorldState
 from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.events.models import EventStatus
@@ -44,7 +45,11 @@ def create_shared_operations_state() -> dict[str, Any]:
 
 
 def validate_shared_operations_state(
-    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
+    world: WorldState,
+    *,
+    validate_event_history: bool = True,
+    tick_memo: Any = None,
+    history_memo: Any = None,
 ) -> None:
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
     if state is None:
@@ -60,16 +65,27 @@ def validate_shared_operations_state(
     history = state.get("history") if isinstance(state, dict) else None
     if not validate_event_history and isinstance(history, list):
         checked = {**state, "history": records_since_previous_tick(history, world.minute_index)}
+    # A save's validation continues the replay after the records unchanged since the
+    # last one; a truncated history has no fixed start to replay from.
+    seen_events: set[str] = set()
+    care: dict[str, CareRequestState] = {}
+    last_minute = 0
+    replay_memo = history_memo if isinstance(history, list) and not _truncated(state) else None
+    if replay_memo is not None:
+        kept = replay_memo.resume((SHARED_OPERATIONS_KEY, "history"), _staff_operations_json(world))
+        if kept is not None:
+            start, (seen_events, care, last_minute) = kept
+            checked = {**state, "history": history[start:]}
     try:
         parsed = SharedOperationsState.model_validate(checked)
     except (TypeError, ValueError) as exc:
         raise ValueError("shared_operations_v1 has an invalid exact schema") from exc
-    if len(state["history"]) > MAX_SHARED_OPERATION_HISTORY or any(
-        a.minute > b.minute for a, b in zip(parsed.history, parsed.history[1:])
+    if (
+        len(state["history"]) > MAX_SHARED_OPERATION_HISTORY
+        or any(a.minute > b.minute for a, b in zip(parsed.history, parsed.history[1:]))
+        or (parsed.history and last_minute > parsed.history[0].minute)
     ):
         raise ValueError("shared_operations_v1 history is over limit or out of time order")
-    seen_events: set[str] = set()
-    care: dict[str, CareRequestState] = {}
     for item in parsed.history:
         if item.minute > world.minute_index or item.event_id in seen_events:
             raise ValueError(
@@ -231,6 +247,21 @@ def validate_shared_operations_state(
         )
         if not receipt_matches or not _event_payload_matches(record, latest):
             raise ValueError("truncated care request head disagrees with its applied event")
+    if replay_memo is not None:
+        last_minute = parsed.history[-1].minute if parsed.history else last_minute
+        replay_memo.keep(
+            (SHARED_OPERATIONS_KEY, "history"), len(history), (seen_events, care, last_minute)
+        )
+
+
+def _truncated(state: Any) -> bool:
+    return not isinstance(state, dict) or state.get("history_truncated") is not False
+
+
+def _staff_operations_json(world: WorldState) -> bytes | None:
+    """What the rule for an old StaffOperationReceipt reads besides the receipt."""
+    operations = world.model_state.get("staff_operations_v1", {})
+    return saved_json(operations.get("history", ()) if isinstance(operations, dict) else ())
 
 
 def record_shared_operation(world: WorldState, record: OperationHistoryRecord) -> None:

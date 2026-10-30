@@ -113,8 +113,14 @@ def validate_resource_ledger(
     resources: Any,
     agent_ids: set[str] | None = None,
     zone_ids: set[str] | None = None,
+    *,
+    history_memo: Any = None,
 ) -> None:
-    """Replay the exact audit schema and compare it with current balances."""
+    """Replay the exact audit schema and compare it with current balances.
+
+    With a history_memo, records unchanged since the last save's replay are not read
+    again; the replay continues from its state after them (core/save_validation.py).
+    """
     used_ids = _validate_ledger_balances(ledger, resources, agent_ids, zone_ids)
     accounts = ledger["accounts"]
     audit = ledger.get("audit")
@@ -127,7 +133,15 @@ def validate_resource_ledger(
     used_history_set: set[str] = set()
     event_ids: set[str] = set()
     last_audit_minute = 0
-    for index, record in enumerate(audit):
+    start = 0
+    if history_memo is not None:
+        kept = history_memo.resume(
+            (RESOURCE_LEDGER_KEY, "audit"), (ledger["warehouse_id"], agent_ids)
+        )
+        if kept is not None:
+            start, resumed = kept
+            replay_accounts, used_history, used_history_set, event_ids, last_audit_minute = resumed
+    for index, record in enumerate(audit[start:], start):
         _validate_audit_record(record, ledger)
         if record["minute"] < last_audit_minute:
             raise ResourceLedgerError("resource audit minutes must be non-decreasing")
@@ -260,6 +274,12 @@ def validate_resource_ledger(
             raise ResourceLedgerError(f"resource {resource_id!r} source IDs do not match audit")
         if account["reservations"] != replay["reservations"]:
             raise ResourceLedgerError(f"resource {resource_id!r} reservations do not match audit")
+    if history_memo is not None:
+        history_memo.keep(
+            (RESOURCE_LEDGER_KEY, "audit"),
+            len(audit),
+            (replay_accounts, used_history, used_history_set, event_ids, last_audit_minute),
+        )
 
 
 def validate_resource_ledger_state(

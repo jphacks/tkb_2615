@@ -1,4 +1,4 @@
-"""Optional Rust kernels (experiment/rust-native only).
+"""Optional Rust kernels (docs/rust-port.md).
 
 Without the sheltersim_native extension, or with SHELTERSIM_NATIVE=0, every
 function here returns None and callers use their Python implementation. A kernel
@@ -151,6 +151,16 @@ def world_agents_valid(
     return _native is not None and _native.world_agents_valid(
         agents, zones, activity_type, initial_needs_type, needs_type
     )
+
+
+def same_json_items(current: Any, documents: list[Any], start: int, count: int) -> bool | None:
+    """Whether each of current[:count] is exactly documents[start + i], types included
+    (1, 1.0 and True differ, and a tuple and a list), or None without the kernel."""
+    if _native is None:
+        return None
+    if type(current) is not list:
+        return False
+    return _native.same_json_items(current, documents, start, count)
 
 
 def _dict_watchers_installed() -> bool:
