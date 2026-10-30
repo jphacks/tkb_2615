@@ -192,3 +192,80 @@ def test_every_save_matches_a_full_capture_and_the_public_encoder(
         )
     # A save writes one pack of the chunks it adds; the others stay where they are.
     assert len(list((directory / "packs").glob("*.pack"))) <= len(saved) + 1
+
+
+def _index_tables(path) -> dict:
+    import sqlite3
+
+    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+        return {
+            table: sorted(db.execute(f"SELECT * FROM {table}").fetchall())
+            for table in ("records", "entities", "tokens", "generations", "heads", "checkpoints")
+        }
+
+
+def test_a_long_computation_indexed_in_another_process_gets_the_same_index(
+    tmp_path, monkeypatch, saved_timeline, generated_scenario
+):
+    """A computation with many saves indexes them in another process
+    (storage/index_writer.py); the index equals the one indexing each save directly."""
+    from sheltersim.experiments import timeline as timeline_module
+    from sheltersim.storage.index_writer import BackgroundIndexer
+
+    started = []
+    original = BackgroundIndexer.__init__
+
+    def counting(self, *args, **kwargs):
+        started.append(1)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(BackgroundIndexer, "__init__", counting)
+    store, timeline = saved_timeline(tmp_path / "background", generated_scenario)
+    timeline.advance("main", 90, checkpoint_interval=10)
+    assert started == [1]
+    monkeypatch.setattr(timeline_module, "BACKGROUND_INDEX_MIN_SAVES", 10**6)
+    direct_store, direct = saved_timeline(tmp_path / "direct", generated_scenario)
+    direct.advance("main", 90, checkpoint_interval=10)
+    assert started == [1]
+    index_path = ("p", "runs", "r", "history.sqlite")
+    assert _index_tables(store._path(*index_path)) == _index_tables(direct_store._path(*index_path))
+
+
+def test_an_indexing_error_in_the_other_process_fails_the_computation(tmp_path, saved_timeline):
+    """A send that skips records the index lacks is refused in the indexing process and
+    reported by close(), never indexed as if it continued the index."""
+    import json
+    import sqlite3
+
+    from sheltersim.storage.index_writer import BackgroundIndexer
+    from sheltersim.storage.projects import StorageError
+
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 30)
+    _, head = store.load_branch("p", "r", "main")
+    path = store._path("p", "runs", "r", "history.sqlite")
+    with sqlite3.connect(path) as db:
+        (counts,) = db.execute("SELECT counts FROM heads WHERE branch='main'").fetchone()
+        counts = json.loads(counts)
+        held = counts["events"]
+        counts["events"] = held - 2  # The index now holds two records fewer.
+        db.execute("UPDATE heads SET counts=? WHERE branch='main'", (json.dumps(counts),))
+    indexer = BackgroundIndexer(store, "p", "r", "main")
+    indexer.events_from = held  # This send starts after the records the index lacks.
+    indexer.submit(head, [])
+    with pytest.raises(StorageError, match="history_index_out_of_step"):
+        indexer.close()
+
+
+def test_a_long_computation_without_resource_samples_is_indexed_in_another_process(
+    tmp_path, saved_timeline
+):
+    """scenario_100_agents keeps no resource samples; its sends carry none."""
+    from sheltersim.storage.history_index import HistoryIndex
+
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 90, checkpoint_interval=10)
+    with HistoryIndex(store, "p", "r").connect() as db:
+        head = db.execute("SELECT minute FROM heads WHERE branch='main'").fetchone()
+        saved = db.execute("SELECT COUNT(*) FROM checkpoints WHERE branch='main'").fetchone()
+    assert head[0] == 90 and saved[0] == 10
