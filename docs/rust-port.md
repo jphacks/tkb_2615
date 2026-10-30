@@ -334,6 +334,58 @@ EventLog の比較の保証：`same_saved_records` は保存した bytes を読�
 
 **残り：** 毎 tick の検証を除くと、残りは 1 tick あたり約 5 ms で、最大のものでも `WorldView.from_world` の約 0.5 ms です。これより先は、状態の持ち主を Rust に移さないと大きくは下がりません。支援の依頼（7日目で約3,300件）を毎分3回走査する分（約 0.2 ms）は、終わった依頼を飛ばせば減りますが、依頼の書き込みの通知を毎 tick の検証と共有する必要があるので、検証を担当する作業と合わせて考えます。
 
+### B4 の続き：tick の残りの時間
+
+同じ負荷で start commit（`478feae`）と並べて測りました。行の単位で見ると（cProfile は関数呼び出しの多いコードを重く見せるので、スタックを抜き取る計測を使いました）、残りは「規則の計算」ではなく、終わった依頼の走査と細かい作り直しでした。モデルの式と係数は変えていません。
+
+**入れたもの：**
+
+| 処理 | 変えたこと | 根拠・読む入力 |
+|---|---|---|
+| 支援の依頼の走査（`assign_pending`、指標、苦情の確認、スタッフの支援の完了） | `WorldState.unsettled_support_requests()` で、終わっていない依頼だけを読む | 前の毎 tick の検証の記憶（`TickValidationMemo.unsettled_requests`）。解決済み・未解決の依頼は書き込みを知らせる。辞書が同じオブジェクトで始まること（`ValuesSnapshot`）を呼ぶたびに確かめ、新しい依頼を足す。終わった依頼が開き直された、辞書が差し替わった、記憶がない（分岐の直後、`SHELTERSIM_NATIVE=0`）ときは全部を読む。順序は辞書の順で、呼ぶ側が状態を読むので、結果は全部を読むときと同じ。毎 tick の全段階の比較テスト（`test_the_unsettled_requests_equal_a_scan_in_every_tick_phase`）と、開き直し・追加・削除・差し替え・写しのテスト |
+| 段階ごとのスコープ（設備の形状、`selected_models`、部屋の経路、検証の設定） | ジェネレーターの `contextmanager` をやめ、クラス（`core/context.py`）にする | 値を入れて戻すだけで、入れ子のときの動きも同じ |
+| Python の GC | 計算の間の最も若い世代の回収を 50,000 個ごとから 200,000 個ごとにする（`core/collection.py`） | 結果に関わらない。後述の計測 |
+| 依頼の状態・イベントの種類と状態の enum | すでに enum なら呼び直さない（検証で 1 tick 約33回、記録で約29回） | `Enum(x)` は `x` がその enum なら `x` を返す |
+| `.value` の読み取り（提案、`from_world`、EventLog の索引） | `._value_` を読む | `.value` は enum の property を通すだけで、同じ値 |
+| 関係のキー（`[受け手, 送り手]` の JSON） | `ordered_pair_key` で同じ入力の結果を覚える（1 tick 約44回） | 文字列2つだけの純粋な関数。ほかの型は `json` |
+| 指標の `source_ids_json` | `native.canonical_json` で作る | 同じ設定の `json.dumps` と1バイト違わない（比較テストあり）。扱えない値は `json` |
+| `NeedView`、`AgentStateDelta` | 生成された `__init__`・関数呼び出しを通さず dict で作る | 確認のない `NeedView`、確認済みの値の `AgentStateDelta`（`within_bounds` と同じ） |
+| `from_world` の人の文脈の項目 | 解析済みの `PersonContext`（凍結）と一緒に覚える | 元の記録が変われば解析し直すので、一緒に作り直される |
+| EventLog の索引（`fields_of_record`） | 属性名を intern し、来歴の値が文字列なら `Mapping` の確認を省く | 文字列は `Mapping` ではない |
+| 苦痛の監視の値の確認 | `math.isfinite` を比較 1 回にする | `0.0 <= value < inf` は有限で負でないことと同じ（NaN は偽） |
+
+**モデル担当の方に見ていただく Python の変更（結果は同じ）：** `policies/behavior.py`（`propose` の `action._value_`、`_need_view`、`_person_fields`）、`policies/psychology.py`（`native_deltas` の組み立て）、`domain/distress_monitor.py`（値の確認の書き方）、`domain/social_network.py`・`domain/body_state.py`（キーの作り方）。式と係数の変更はありません。
+
+**GC の計測（7日目近くの 1,500 分、回収にかかった時間の合計）：** 50,000 個で 1.03秒、200,000 個で 0.45秒、1,000,000 個で 0.27秒。回収の対象の多くは、保存までの間だけ生きるオブジェクトなので、間隔を広げると読まずに済みます。200,000 より広げても得は小さくなります。
+
+**計測（7日分、画面からの経路、2026-10-31。world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041` は一致。もう1人の作業と同時に実行し、start commit と同じ負荷で比較）：**
+
+| 処理 | 前（秒） | 後（秒） |
+|---:|---:|---:|
+| `propose_actions` | 19.65 | 18.55 |
+| `update_agent_state` | 18.43 | 17.70 |
+| `dispatch_due_events` | 11.90 | 9.84 |
+| `arbitrate_actions` | 12.02 | 7.10 |
+| `collect_metrics` | 4.67 | 2.13 |
+| `sample_endogenous_events` | 1.85 | 1.79 |
+| `validate_after_tick` | 14.16 | 12.50 |
+| tick（`TickEngine.step`） | 84.05 | 70.47 |
+| 計算スレッドの CPU 時間（全体） | 191.3 | 174.0 |
+| 全体（実時間） | 304.6 | 303.3 |
+
+実時間の全体が下がっていないのは、この回では `TimelineStore.record` の実時間（228秒）の約半分が CPU を使わない待ち（CPU 時間は 104秒）で、索引のプロセスとディスクを待っていたためです。同時に複数の Run が同じディスクに書いていました。tick の短縮は、負荷がないときの `step` の 60.9秒に比（16%）で当てはめると約10秒です。7日目近くの 1,100 分だけを並べて測ると、1 tick あたり 6.14 ms から 5.46 ms（0.68 ms、7日分に直すと約7秒）で、見込みの幅は約7〜10秒です。
+
+保存の違いは、同じ回で 1,024 個のファイルを比べ、すべて1バイトも違わないことを確かめました。残りの1つ（`history.sqlite`）はファイルの配置が違いますが、全表の 約900万行は同じです。GC の間隔を広げたときのメモリは、Run の全体では測っていません。7日目近くの分岐（読み込みの山が 4.9 GB）から 1,500 分では、山は増えませんでした。
+
+**入れなかったもの：**
+
+- 共有の運営の `support_requests` を、書き込みの通知（`RecordWatch`）で読み飛ばす：検証の側だけで約 0.05 ms。`record_shared_operation` の側は同じ通知を読めません（`changed` は読むと通知を消します）。短縮に見合いません。
+- `used_reservation_ids` のリストの検索（1 tick 約 0.04 ms）：覚えた集合を使うには、失敗した操作の差し戻しを確かめる比較が要り、その比較も全部を読みます。
+- `model_configs` の比較（検証とコントローラーで各 約 0.05 ms）：省くと、その場の書き換えを見つける根拠がなくなります。
+- `view_state_hash`（約 0.16 ms）、`social_channel_update`（約 0.17 ms）、`information_contacts_without_messages`（約 0.10 ms）：時間の多くは Python の値の読み書き（1項目あたり約 30 ns）で、SHA-256 ではありません。社会の伝播は、結果の接触の dict を Python に作る分が大きく、状態の持ち主を移さないと減りません。
+
+**残り：** 1 tick あたり約 5.0 ms（検証 約 0.9 ms を含む）。最大は `from_world` の約 0.4 ms で、ほかは 0.2 ms 以下の Python の処理に散らばっています。これより先は、1か所あたり 0.05 ms 未満の変更を重ねるか、状態の持ち主を移すことになり、前者は危険と手間に見合わないので、ここで止めました。`experiments/timeline.py` の `record_decision` の `json.dumps`（大きさの確認だけ、約 0.07 ms）は、保存の担当の範囲なのでそのままです。
+
 ### B5：OS をまたいだ決定性と、モデル版の確定
 
 数学関数を純 Rust のライブラリ（`libm`）に固定し、3つの OS で同じ結果になることを確かめます。ここで結果が変わるので、モデル版を上げます（モデル担当の方の合意が必要です）。

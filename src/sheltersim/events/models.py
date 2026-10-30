@@ -121,7 +121,8 @@ class ScheduledEvent:
                 self.provenance,
             )
             if checked is not None:
-                object.__setattr__(self, "kind", EventKind(self.kind))
+                if type(self.kind) is not EventKind:
+                    object.__setattr__(self, "kind", EventKind(self.kind))
                 object.__setattr__(self, "payload", checked[0])
                 object.__setattr__(self, "provenance", checked[1])
                 return
@@ -200,7 +201,8 @@ class EventLogRecord:
             or self.realized_minute < 0
         ):
             raise ValueError("realized_minute must be a non-negative integer")
-        object.__setattr__(self, "status", EventStatus(self.status))
+        if type(self.status) is not EventStatus:
+            object.__setattr__(self, "status", EventStatus(self.status))
 
     def to_dict(self) -> dict[str, Any]:
         return {

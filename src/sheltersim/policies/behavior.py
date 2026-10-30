@@ -44,7 +44,7 @@ _NO_RECORD: Mapping[str, Any] = MappingProxyType({})
 
 
 def _parsed_person_contexts(
-    world: WorldState, cache: dict[str, tuple[Any, PersonContext]] | None
+    world: WorldState, cache: dict[str, tuple[Any, ...]] | None
 ) -> dict[str, PersonContext]:
     """Parse each person's context, reusing a cached parse of an equal record."""
     people = population_context_people(world)
@@ -60,6 +60,50 @@ def _parsed_person_contexts(
     return parsed
 
 
+def _fields_of_person(context: PersonContext | None) -> dict[str, Any]:
+    """The fields of an AgentView read from a person's context."""
+    if context is None:
+        return {
+            "caregiver_ids": (),
+            "care_for_ids": (),
+            "parent_ids": (),
+            "roles": (),
+            "usual_wake_minute": None,
+            "usual_sleep_minute": None,
+            "required_sleep_minutes": None,
+            "personal_context_present": False,
+        }
+    return {
+        "caregiver_ids": tuple(context.caregiver_ids),
+        "care_for_ids": tuple(context.care_for_ids),
+        "parent_ids": tuple(context.parent_ids),
+        "roles": tuple(context.roles),
+        "usual_wake_minute": context.usual_wake_minute,
+        "usual_sleep_minute": context.usual_sleep_minute,
+        "required_sleep_minutes": context.required_sleep_minutes,
+        "personal_context_present": True,
+    }
+
+
+_NO_PERSON_FIELDS = _fields_of_person(None)
+
+
+def _person_fields(
+    contexts: dict[str, PersonContext], cache: dict[str, tuple[Any, ...]] | None
+) -> dict[str, dict[str, Any]]:
+    """_fields_of_person of each context; a PersonContext is frozen, so what is read from
+    a cached parse is kept with it."""
+    if cache is None:
+        return {identity: _fields_of_person(context) for identity, context in contexts.items()}
+    fields = {}
+    for identity, context in contexts.items():
+        entry = cache[identity]
+        if len(entry) == 2:
+            entry = cache[identity] = (*entry, _fields_of_person(context))
+        fields[identity] = entry[2]
+    return fields
+
+
 @dataclass(frozen=True)
 class NeedView:
     """Detached read-only copy of an Agent's current needs."""
@@ -68,6 +112,22 @@ class NeedView:
     hunger: float
     fatigue: float
     hydration_need: float = 0.0
+
+
+def _need_view(needs: Any) -> NeedView:
+    """NeedView of the four needs, without the generated __init__; views make 200 per tick."""
+    view = object.__new__(NeedView)
+    object.__setattr__(
+        view,
+        "__dict__",
+        {
+            "toilet_urgency": needs.toilet_urgency,
+            "hunger": needs.hunger,
+            "fatigue": needs.fatigue,
+            "hydration_need": needs.hydration_need,
+        },
+    )
+    return view
 
 
 @dataclass(frozen=True)
@@ -369,7 +429,7 @@ class WorldView:
         world: WorldState,
         *,
         include_state_hash: bool = True,
-        person_cache: dict[str, tuple[Any, PersonContext]] | None = None,
+        person_cache: dict[str, tuple[Any, ...]] | None = None,
         environment_cache: dict[str, Any] | None = None,
     ) -> WorldView:
         """Create a detached snapshot, optionally omitting its audit hash.
@@ -398,6 +458,7 @@ class WorldView:
             presence_state.get("people", {}) if isinstance(presence_state, dict) else {}
         )
         context_people = _parsed_person_contexts(world, person_cache)
+        person_fields = _person_fields(context_people, person_cache)
         has_population_context = bool(context_people)
         autonomy_enabled = bool(
             world.model_configs.get("simulator_extensions", {}).get("enabled", False)
@@ -506,12 +567,12 @@ class WorldView:
             queue_task = queue[0] if queue else None
             request_id = agent.support_request_id
             request = support_requests[request_id] if request_id in support_requests else None
-            context = context_people.get(agent_id)
             misinformation = misinformation_by_agent[agent_id]
             mobility = profile.mobility
             activity = agent.activity
             fields = {
                 **zone_fields[agent.zone_id],
+                **person_fields.get(agent_id, _NO_PERSON_FIELDS),
                 "id": agent.id,
                 "group_id": (
                     presence.get("household_id", profile.group_id)
@@ -525,9 +586,7 @@ class WorldView:
                 "rng_key": profile.rng_key,
                 "activity": activity if type(activity) is Activity else Activity(activity),
                 "target_id": agent.target_id,
-                "needs": NeedView(
-                    needs.toilet_urgency, needs.hunger, needs.fatigue, needs.hydration_need
-                ),
+                "needs": _need_view(needs),
                 "stress": agent.stress,
                 "chronic_distress": psychology_agents.get(agent_id, _NO_RECORD).get(
                     "long_term_distress", 0.0
@@ -542,7 +601,7 @@ class WorldView:
                     max(0, minute_index - queue_task.start_minute) if queue_task is not None else 0
                 ),
                 "support_request_id": request_id,
-                "support_request_status": request.status.value if request is not None else None,
+                "support_request_status": request.status._value_ if request is not None else None,
                 "support_assigned_staff_id": (
                     request.assigned_staff_id if request is not None else None
                 ),
@@ -564,16 +623,6 @@ class WorldView:
                 "positive_affect": body.get("positive_affect", 0.5),
                 "negative_affect": body.get("negative_affect", 0.0),
                 "hygiene_need": body.get("hygiene_need", 0.0),
-                "caregiver_ids": tuple(context.caregiver_ids) if context is not None else (),
-                "care_for_ids": tuple(context.care_for_ids) if context is not None else (),
-                "parent_ids": tuple(context.parent_ids) if context is not None else (),
-                "roles": tuple(context.roles) if context is not None else (),
-                "usual_wake_minute": context.usual_wake_minute if context is not None else None,
-                "usual_sleep_minute": context.usual_sleep_minute if context is not None else None,
-                "required_sleep_minutes": (
-                    context.required_sleep_minutes if context is not None else None
-                ),
-                "personal_context_present": context is not None,
             }
             view = object.__new__(AgentView)
             object.__setattr__(view, "__dict__", fields)
@@ -656,9 +705,7 @@ class WorldView:
             needs = agent.needs
             body = body_agents.get(agent_id, _NO_RECORD)
             fields = before.__dict__.copy()
-            fields["needs"] = NeedView(
-                needs.toilet_urgency, needs.hunger, needs.fatigue, needs.hydration_need
-            )
+            fields["needs"] = _need_view(needs)
             fields["stress"] = agent.stress
             fields["chronic_distress"] = psychology_agents.get(agent_id, _NO_RECORD).get(
                 "long_term_distress", 0.0
@@ -1265,8 +1312,8 @@ class UtilityBehaviorPolicy:
             (
                 math.exp((utility + priority * 0.5 - maximum) / temperature)
                 * (
-                    demand_modifiers[action.value].probability_multiplier
-                    if action.value in demand_modifiers
+                    demand_modifiers[action._value_].probability_multiplier
+                    if action._value_ in demand_modifiers
                     else 1.0
                 )
                 if eligible
@@ -1286,7 +1333,7 @@ class UtilityBehaviorPolicy:
             _candidate(
                 action,
                 eligible,
-                _demand_trigger(candidate_trigger, demand_modifiers.get(action.value)),
+                _demand_trigger(candidate_trigger, demand_modifiers.get(action._value_)),
                 utility + priority * 0.5,
                 priority,
                 probability,
