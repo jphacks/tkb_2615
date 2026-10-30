@@ -802,7 +802,7 @@ def _record_relationship(
     if record is None:
         if len(relationships) >= MAX_SOCIAL_RELATIONSHIPS:
             return
-        record = relationships[key] = {
+        relationships[key] = {
             "contact_count": 0,
             "trust": 0.5,
             "contact_minutes": 0,
@@ -810,6 +810,7 @@ def _record_relationship(
             "last_interaction": None,
             "topic_ids": [],
         }
+        record = relationships[key]
     previous_minute = record["last_contact_minute"]
     elapsed = 0 if previous_minute is None else max(0, minute - previous_minute)
     gain = state["config"]["relationship_trust_gain"]
