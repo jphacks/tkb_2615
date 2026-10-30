@@ -112,7 +112,10 @@ class Checkpoint:
         else:
             # world.to_dict() would validate the same world again.
             world_document, metric_document, encoder = history_cache.documents(world, metrics)
-        versions = _model_versions(world)
+        signatures = (
+            None if history_cache is None else history_cache.model_signatures(world.model_configs)
+        )
+        versions = _model_versions(world, signatures)
         if model_versions is not None:
             versions.update(deepcopy(model_versions))
         body = {
@@ -146,6 +149,7 @@ class Checkpoint:
             restored_samples=history_cache.restored_metrics(),
             shared=encoder.spliced_lists(),
             validate_world=False,
+            installed_signatures=signatures,
         )
         equal = restored.same_state(
             world,
@@ -174,8 +178,9 @@ class Checkpoint:
             raise CheckpointError("checkpoint model versions do not match the active runtime")
         return world
 
-    def _legacy_queue_migration_required(self) -> bool:
-        installed = model_signatures(self.world_state.get("model_configs", {}))
+    def _legacy_queue_migration_required(self, installed: dict[str, str] | None = None) -> bool:
+        if installed is None:
+            installed = model_signatures(self.world_state.get("model_configs", {}))
         recorded = {
             key: value
             for key, value in self.model_versions.items()
@@ -211,13 +216,14 @@ class Checkpoint:
         *,
         encoder: CanonicalEncoder | None = None,
         borrow: bool = False,
+        installed_signatures: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         # encoder holds the canonical JSON of world_state. Saved and captured
         # documents are read from canonical JSON, so reading it again copies them,
         # key order included, faster than deepcopy; SavedItems are immutable and
         # shared. With borrow the caller only reads the world it restores and
         # discards it, so the document itself is returned when it needs no migration.
-        migration = self._legacy_queue_migration_required()
+        migration = self._legacy_queue_migration_required(installed_signatures)
         if borrow and not migration:
             return self.world_state
         if encoder is None:
@@ -354,6 +360,7 @@ class Checkpoint:
         validate_world: bool = True,
         restored_log: Any = None,
         restored_samples: Any = ([], []),
+        installed_signatures: dict[str, str] | None = None,
     ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version not in self.SUPPORTED_SCHEMA_VERSIONS:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
@@ -394,7 +401,9 @@ class Checkpoint:
                 # A capture's restore check only reads the restored world and then
                 # discards it, so it is built on the captured documents, not copies.
                 world = WorldState.from_dict(
-                    self._world_document_for_restore(shared, borrow=True),
+                    self._world_document_for_restore(
+                        shared, borrow=True, installed_signatures=installed_signatures
+                    ),
                     _restored_events=restored_events,
                     _shared=shared,
                     _validate=validate_world,
@@ -504,7 +513,7 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _model_versions(world: WorldState) -> dict[str, str]:
+def _model_versions(world: WorldState, signatures: dict[str, str] | None = None) -> dict[str, str]:
     versions: dict[str, str] = {}
     for name, config in sorted(world.model_configs.items()):
         declared = config.get("model_version", config.get("model_id", config.get("version")))
@@ -512,5 +521,5 @@ def _model_versions(world: WorldState) -> dict[str, str]:
     effect_state = world.model_state.get("effect_program_v1")
     if effect_state is not None:
         versions["effect_program_interpreter"] = str(effect_state.get("schema_version", "invalid"))
-    versions.update(model_signatures(world.model_configs))
+    versions.update(model_signatures(world.model_configs) if signatures is None else signatures)
     return versions

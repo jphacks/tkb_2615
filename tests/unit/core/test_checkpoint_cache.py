@@ -96,7 +96,8 @@ def test_documents_and_bytes_match_a_full_conversion_as_histories_change(
         for value in (world_document, metric_document, body, world_document["model_state"]):
             raw = canonical_bytes(value)
             assert encoder.encode(value) == raw
-            assert encoder.size(value) == len(raw)
+            assert not encoder.exceeds(value, len(raw))
+            assert encoder.exceeds(value, len(raw) - 1)
             assert encoder.digest(value) == hashlib.sha256(raw).hexdigest()
         if earlier is not None:
             # A later capture never changes the documents of an earlier one.
@@ -412,3 +413,29 @@ def test_the_saved_bytes_of_a_replaced_event_log_are_read_anew(live_checkpoint_w
     _realize(world, "replaced")
     again = Checkpoint.capture(world, history_cache=cache)
     assert again.checkpoint_hash == Checkpoint.capture(world).checkpoint_hash
+
+
+def test_a_writer_computes_model_signatures_again_only_for_other_configs(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    import sheltersim.core.checkpoint_cache as cache_module
+
+    calls = []
+    signatures = cache_module.model_signatures
+
+    def counted(configs):
+        calls.append(configs)
+        return signatures(configs)
+
+    monkeypatch.setattr(cache_module, "model_signatures", counted)
+    world = live_checkpoint_world
+    cache = CheckpointHistoryCache()
+    Checkpoint.capture(world, history_cache=cache)
+    saved = Checkpoint.capture(world, history_cache=cache)
+    assert len(calls) == 1
+    assert saved.model_versions == Checkpoint.capture(world).model_versions
+
+    world.model_configs["added_by_the_test"] = {"version": 1}
+    saved = Checkpoint.capture(world, history_cache=cache)
+    assert len(calls) == 2
+    assert saved.model_versions == Checkpoint.capture(world).model_versions

@@ -35,6 +35,7 @@ from dataclasses import asdict, fields
 from typing import Any
 
 from sheltersim import native
+from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.save_validation import SaveValidationMemo
 from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
@@ -111,7 +112,6 @@ class CanonicalEncoder:
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
         self._tree_nodes: dict[int, tuple[Any, str]] = {}
-        self._sizes: dict[int, tuple[Any, int]] = {}
 
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
@@ -201,22 +201,27 @@ class CanonicalEncoder:
     def encode(self, value: Any) -> bytes:
         return b"".join(self.parts(value))
 
-    def size(self, value: Any) -> int:
-        """len(canonical_bytes(value)) without joining spliced lists."""
-        kept = self._sizes.get(id(value))
-        if kept is not None and kept[0] is value:
-            return kept[1]
+    def exceeds(self, value: Any, limit: int) -> bool:
+        """Whether len(canonical_bytes(value)) > limit, without reading all of a spliced list."""
+        return self._size_up_to(value, limit) > limit
+
+    def _size_up_to(self, value: Any, limit: int) -> int:
+        """The size of value, or any size above limit once it is known to exceed it."""
         items = self.list_items(value)
         if items is not None:
-            size = 2 + sum(map(len, items)) + max(len(items) - 1, 0)
-        elif self._is_container(value):
-            fields = sum(
-                len(canonical_bytes(key)) + 1 + self.size(item) for key, item in value.items()
-            )
-            size = 2 + max(len(value) - 1, 0) + fields
-        else:
+            size = 2 + max(len(items) - 1, 0)
+            for item in items:
+                size += len(item)
+                if size > limit:
+                    break
+            return size
+        if not self._is_container(value):
             return len(self._leaf(value))
-        self._sizes[id(value)] = (value, size)
+        size = 2 + max(len(value) - 1, 0)
+        for key, item in value.items():
+            size += len(canonical_bytes(key)) + 1 + self._size_up_to(item, limit - size)
+            if size > limit:
+                break
         return size
 
     def digest(self, value: Any) -> str:
@@ -430,6 +435,19 @@ class CheckpointHistoryCache:
         self._event_raws: list[bytes] | None = None
         self._raws_equal = 0
         self._validation: SaveValidationMemo | None = None
+        # The model signatures of the last configs, by their canonical JSON.
+        self._signatures: tuple[bytes, dict[str, str]] | None = None
+
+    def model_signatures(self, configs: dict[str, Any]) -> dict[str, str]:
+        """contracts.policies.model_signatures(configs); the same configs compute it once.
+
+        It reads only the configs and the installed catalog, which do not change while a
+        writer runs. Do not change the returned dict.
+        """
+        key = canonical_bytes(configs)
+        if self._signatures is None or self._signatures[0] != key:
+            self._signatures = (key, model_signatures(configs))
+        return self._signatures[1]
 
     def validation_memo(self, world: WorldState) -> SaveValidationMemo | None:
         """The memo for validating world before this save, without the rust kernels None.
