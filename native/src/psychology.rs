@@ -3,47 +3,7 @@
 //! returning the same floats as the Python code: every operation keeps its order,
 //! and `py_max`/`py_min` return the first argument on a tie as Python's do.
 
-#[inline]
-pub(crate) fn py_max(first: f64, second: f64) -> f64 {
-    if second > first {
-        second
-    } else {
-        first
-    }
-}
-
-#[inline]
-pub(crate) fn py_min(first: f64, second: f64) -> f64 {
-    if second < first {
-        second
-    } else {
-        first
-    }
-}
-
-/// sum() of floats as CPython 3.12 computes it: the int start 0 plus the first
-/// item, then Neumaier's compensated summation, adding a finite non-zero
-/// compensation at the end.
-fn py_sum(values: &[f64]) -> f64 {
-    let Some((first, rest)) = values.split_first() else {
-        return 0.0;
-    };
-    let mut total = 0.0 + first;
-    let mut compensation = 0.0;
-    for &value in rest {
-        let next = total + value;
-        if total.abs() >= value.abs() {
-            compensation += (total - next) + value;
-        } else {
-            compensation += (value - next) + total;
-        }
-        total = next;
-    }
-    if compensation != 0.0 && compensation.is_finite() {
-        total += compensation;
-    }
-    total
-}
+use crate::core::mathx::{self, py_max, py_min, py_sum};
 
 #[inline]
 fn clamp(value: f64) -> f64 {
@@ -119,8 +79,8 @@ pub const AGENT_FIELDS: usize = 32;
 
 /// The 12 floats of the agent's new state: toilet_urgency, hunger, fatigue,
 /// hydration_need, stress, sleep_debt_minutes, uncertainty, reassurance,
-/// discontent, positive_affect, negative_affect, hygiene_need.
-pub fn step(g: &Globals, a: &[f64]) -> [f64; 12] {
+/// discontent, positive_affect, negative_affect, hygiene_need. `None` where math.exp raises.
+pub fn step(g: &Globals, a: &[f64]) -> Option<[f64; 12]> {
     let activity = a[0];
     let rest_efficiency = a[1];
     let (toilet, hunger, fatigue, hydration) = (a[2], a[3], a[4], a[5]);
@@ -268,12 +228,12 @@ pub fn step(g: &Globals, a: &[f64]) -> [f64; 12] {
     let life_feedback = feedback - information_feedback;
 
     // IntegratedDistressLifeStatePolicy: exact mean reversion over one minute.
-    let decay = (-kappa * 1.0).exp();
+    let decay = mathx::exp(-kappa * 1.0)?;
     let natural = (baseline - stress_before) * (1.0 - decay);
     let multiplier = if kappa == 0.0 {
         1.0
     } else {
-        -(-kappa * 1.0).exp_m1() / kappa
+        -mathx::expm1(-kappa * 1.0)? / kappa
     };
     let forced = py_sum(&[
         need_pressure_stress * multiplier,
@@ -284,7 +244,7 @@ pub fn step(g: &Globals, a: &[f64]) -> [f64; 12] {
         information_feedback * multiplier,
     ]);
     let stress = clamp(stress_before + (natural + forced));
-    [
+    Some([
         new_toilet,
         new_hunger,
         new_fatigue,
@@ -297,5 +257,5 @@ pub fn step(g: &Globals, a: &[f64]) -> [f64; 12] {
         positive,
         negative,
         hygiene,
-    ]
+    ])
 }

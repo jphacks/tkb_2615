@@ -3,6 +3,7 @@ name = "sheltersim_native"
 version = "0.1.0"
 edition = "2021"
 publish = false
+build = "build.rs"
 
 [lib]
 name = "sheltersim_native"
@@ -10,7 +11,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }
+indexmap = "2"
+itoa = "1"
 rayon = "1.10"
+rustc-hash = "2"
+smallvec = "1"
 ryu = "1.0"
 sha2 = "0.10"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }

@@ -1,0 +1,20 @@
+# Run with `cargo clippy --manifest-path native/Cargo.toml -- -D clippy::disallowed_methods`.
+# Float results must stay the bits CPython computes, and dict order must never move.
+disallowed-methods = [
+    { path = "f64::exp", reason = "use core::mathx::exp, which calls the libm CPython calls" },
+    { path = "f64::exp_m1", reason = "use core::mathx::expm1, which calls the libm CPython calls" },
+    { path = "f64::powf", reason = "use core::mathx::pow; LLVM folds powf(x, 2.0) to x * x" },
+    { path = "f64::powi", reason = "use core::mathx::pow; CPython's ** always calls libm pow" },
+    { path = "f64::hypot", reason = "use core::mathx::hypot, CPython's own algorithm" },
+    { path = "f64::max", reason = "use core::mathx::py_max: first argument on a tie, NaN as Python" },
+    { path = "f64::min", reason = "use core::mathx::py_min: first argument on a tie, NaN as Python" },
+    { path = "f64::clamp", reason = "keeps -0.0 and panics on NaN bounds; use py_min(hi, py_max(lo, x))" },
+    { path = "f64::round", reason = "rounds ties away from zero; use core::mathx::py_round or py_round_int" },
+    { path = "std::vec::Vec::swap_remove", reason = "moves the last element; order must stay Python's" },
+    { path = "indexmap::IndexMap::swap_remove", reason = "use shift_remove; dict order must stay Python's" },
+    { path = "indexmap::IndexMap::swap_remove_entry", reason = "use shift_remove_entry" },
+    { path = "indexmap::IndexMap::swap_remove_full", reason = "use shift_remove_full" },
+    { path = "indexmap::IndexMap::swap_remove_index", reason = "use shift_remove_index" },
+    { path = "indexmap::IndexMap::remove", reason = "this is swap_remove; use shift_remove" },
+    { path = "indexmap::IndexMap::remove_entry", reason = "this is swap_remove_entry; use shift_remove_entry" },
+]
