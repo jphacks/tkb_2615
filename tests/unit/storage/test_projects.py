@@ -533,28 +533,32 @@ def test_texts_are_redacted_as_by_the_secret_and_phone_patterns() -> None:
 
 def test_a_save_counts_its_own_writes_onto_one_measurement(tmp_path, saved_timeline) -> None:
     """#237: a save measures the disk once, and the usage it reaches by counting its
-    own writes, on the thread that writes them, equals measuring the disk at its end."""
+    own writes equals measuring the disk again at its end."""
+    from contextlib import contextmanager
+
     store, timeline = saved_timeline(tmp_path)
     measured = []
     ends = []
     original_measure = store._measure_usage
-    original_publish = store.publish_save
+    original_session = store._usage_measured_once
 
     def measure():
         measured.append(1)
         return original_measure()
 
-    def publish(*args):
+    @contextmanager
+    def session():
         before = len(measured)
-        original_publish(*args)
-        ends.append((len(measured) - before, store.usage(), original_measure()))
+        with original_session():
+            yield
+            ends.append((len(measured) - before, store.usage(), original_measure()))
 
     store._measure_usage = measure
-    store.publish_save = publish
+    store._usage_measured_once = session
     timeline.advance("main", 60)
     assert len(ends) == 2
     for measurements, counted, again in ends:
-        assert measurements == 0
+        assert measurements == 1
         assert (counted["bytes"], counted["files"]) == (again["bytes"], again["files"])
 
 

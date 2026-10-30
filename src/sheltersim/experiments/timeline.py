@@ -310,11 +310,9 @@ class _SaveThread:
 
     A save's document is detached once captured, and nothing here shortens or reorders
     what a save does: its files are written, synced and published as without the thread.
-    The computation only stops waiting for the disk, which needs no GIL. Everything that
-    needs the GIL for long (checks, hashes, compression) stays on the computation's
-    thread, since sharing the GIL would slow both. Each save starts after the one before
-    it has finished, and a save that failed stops the computation at its next save or at
-    its end. Until then the head on disk is the last save finished.
+    The computation only stops waiting for the disk, which needs no GIL. Each save starts
+    after the one before it has finished, and a save that failed stops the computation
+    at its next save or at its end. Until then the head on disk is the last save finished.
     """
 
     def __init__(self) -> None:
@@ -405,23 +403,20 @@ class TimelineStore:
             fork_minute=prior.fork_minute if prior else fork_minute,
             computed_until=checkpoint.simulation_minute,
         )
-        # runtime.checkpoint() captured and validated this object just now and it is not
-        # shared, so the store need not validate it again. Whatever fails here stops the
-        # computation now; only the writing may run on the saver's thread.
-        write_save = self.store.save_captured_branch(
-            self.project_id,
-            reference,
-            checkpoint,
-            expected_checkpoint_hash=prior.checkpoint_hash if prior else None,
-            deferred=saver is not None,
-        )
         # The world goes on after this method, so its frame is rendered here.
         frame = self._frame(runtime, checkpoint)
         # The caller may clear its list as soon as this method returns.
         observed = None if observations is None else list(observations)
 
-        def finish() -> None:
-            used_bytes = None if write_save is None else write_save()
+        def write() -> None:
+            # runtime.checkpoint() captured and validated this object just now and it
+            # is not shared, so the store need not validate it again.
+            self.store.save_captured_branch(
+                self.project_id,
+                reference,
+                checkpoint,
+                expected_checkpoint_hash=prior.checkpoint_hash if prior else None,
+            )
             if indexer is not None:
                 # A long computation's saves are indexed in another process, in order.
                 indexer.submit(checkpoint, observed or [])
@@ -434,12 +429,12 @@ class TimelineStore:
                     observations=observed,
                     inherit_from=inherit_index_from,
                 )
-            self._cache_frame(frame, checkpoint, used_bytes)
+            self._cache_frame(frame, checkpoint)
 
         if saver is None:
-            finish()
+            write()
         else:
-            saver.submit(finish)
+            saver.submit(write)
         return checkpoint
 
     def _frame(self, runtime: BranchRuntime, checkpoint: Checkpoint) -> dict[str, Any] | None:
@@ -457,9 +452,7 @@ class TimelineStore:
         except (OSError, StorageError):
             return None
 
-    def _cache_frame(
-        self, frame: dict[str, Any] | None, checkpoint: Checkpoint, used_bytes: int | None
-    ) -> None:
+    def _cache_frame(self, frame: dict[str, Any] | None, checkpoint: Checkpoint) -> None:
         """Keep a frame of a durable Checkpoint; a failure only means readers reconstruct it."""
         from sheltersim.storage.frames import FrameCache
 
@@ -467,7 +460,7 @@ class TimelineStore:
             return
         try:
             FrameCache(self.store, self.project_id, self.run_id).put(
-                checkpoint.checkpoint_hash, frame, used_bytes=used_bytes
+                checkpoint.checkpoint_hash, frame
             )
         except (OSError, StorageError):
             pass
