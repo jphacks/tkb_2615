@@ -139,6 +139,40 @@ UIで作るScenarioは、必ず図面（`facility_geometry`）と認知（`agent
 - 仕切りや設備の移設のように、KPIに現れにくい空間の変化は、人の歩く経路（`movement_v1`の`journeys`）や移動の完了イベントが通る区画で確かめます。移動時間は分単位なので、数メートルの違いは時間に出ません。
 - 区画の環境（騒音、明るさ、換気、プライバシー、気温、行動の起こりやすさ）は、続いている間に人の状態（疲れ、衛生の必要度、不満、ストレス）へ積み上がります。期限が切れる時刻に、まだ効いていることを確かめてから比べます。疲れ・衛生・不満はKPIにないので、全員の平均を直接比べます。
 
+## 全経路の確認（Rust移植のゲート）
+
+7日分のハッシュの確認は、生成Scenarioが通る処理しか確かめません（メッセージや信念、介入、記録した応答などを通りません）。tickのコードを移す前に、`benchmarks/gate_all_paths.py`で、そこを通る小さなofflineのScenarioの結果も確かめます。移植の段階の合格の条件のひとつです。結果と届いていない処理は[rust-port.md](rust-port.md)に書きます。
+
+~~~shell
+python benchmarks/gate_all_paths.py --output 出力先 --expect fixtures/gate-all-paths.json
+python benchmarks/gate_all_paths.py --output 出力先 --determinism
+python benchmarks/gate_all_paths.py --output 出力先 --coverage
+~~~
+
+- 各Scenarioは自分のプロセスで動き、終わりの世界ごとにworld・events・KPIのハッシュと時間を`出力先/summary.json`に書きます。ネットワークへの接続は失敗させます。LLMの応答は、手元の台本のProviderが書いた応答テープとその再生だけを使います。
+- `--expect`：`fixtures/gate-all-paths.json`のハッシュと比べます。モデルや規則を意図して変えてハッシュが変わったときは、理由をPull Requestに書いて、`--write-expected`で更新します。理由が説明できない変化は不具合として調べます。この値はLinuxのものです（OSをまたいだ一致は段階B5で確かめます）。
+- `--determinism`：別のプロセス、別の`PYTHONHASHSEED`、保存を読むScenarioでは別の`RAYON_NUM_THREADS`、Rustのkernelなし（`SHELTERSIM_NATIVE=0`）で動かして、1回目と比べます。WindowsとmacOSでは`--no-python-kernels`を付けます（RustとPythonの数学関数が同じなのはLinuxだけです）。
+- 分岐・再開・Checkpointの往復は、1つのScenarioの中でまっすぐのRunと比べます（`must_match`）。tickの順序に効くものを省いて同じになることは、この比較で確かめます。
+- `--coverage`：tick側のコード（`core`、`domain`、`events`、`policies`、`experiments/runner.py`）のどの行に届いたかを、ファイルごとに`coverage-native.md`（Rustのkernelあり）と`coverage-both.md`（なしの回も合わせたもの）に書きます。
+- `policies`のモデルや、EffectProgramの操作を足したら、ここにもScenarioを足します。`tests/integration/test_all_paths_gate.py`は、モデルの一覧がここに入っていないと失敗します。
+- 介入が拒否された結果と、有効な入力でRunが止まる結果（`known_stops`のScenario）も、期待値に入れます。直したら期待値が変わるので気づけます。止まるものは、見つけたときにIssueにします。
+- 全件を動かすテストには`long_simulation`の印を付けます。通常のpytestは、1つの小さなScenarioだけを動かします。
+
+## 振る舞いの比較
+
+ハッシュが変わる変更（段階B5など）では、合格の条件はハッシュの一致ではなく決定性になります。どれだけ振る舞いが変わったかは、`benchmarks/compare_behaviour.py`で確かめます。
+
+~~~shell
+python benchmarks/compare_behaviour.py --collect 変更前の出力先
+python benchmarks/compare_behaviour.py --collect 変更後の出力先    # 変更したコードで
+python benchmarks/compare_behaviour.py 変更前の出力先 変更後の出力先
+~~~
+
+- KPIごとの平均、seedごとのばらつき、差をMarkdownの表に書きます。ラベルは結果の画面と同じ日本語です。
+- 同じseedどうしなら各seedを比べ、違うseedなら2つの集団として比べます。差が標準誤差の2倍を超えたKPIを「揺れより大きい」とします。何も変えていなくても、20個に1個ほどは偶然ここに入ります。
+- 同じコードの別のseedどうしを比べると、何も変えていないときの差の大きさが分かります。
+- 比べるのは差の大きさまでで、どちらが正しいかは決めません。係数の多くは実測で校正されていません。
+
 ## 不具合を見つけたとき
 
 テストで不具合が見つかったら、テストで隠さずにIssueにします（例：#65）。
