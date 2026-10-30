@@ -180,7 +180,12 @@ def _second_run(store):
 
 
 def test_two_runs_compute_at_once_up_to_the_limit(tmp_path, monkeypatch, saved_timeline):
-    """Different Runs compute in parallel processes, up to max_jobs (#48)."""
+    """Different Runs compute in parallel processes, up to max_jobs (#48).
+
+    The check that both compute at once asks each for far more than the time it takes
+    to start the other process, then cancels them, so it does not depend on how fast
+    either computes (a 30-minute target finished first on Linux CI).
+    """
     monkeypatch.setenv("SHELTERSIM_LLM_MODE", "offline")
     store, _ = saved_timeline(tmp_path)
     _second_run(store)
@@ -189,14 +194,20 @@ def test_two_runs_compute_at_once_up_to_the_limit(tmp_path, monkeypatch, saved_t
     try:
         api.submit("p", "r", "main", 30)
         api.submit("p", "r2", "main", 30)
+        api.wait_idle(timeout=300)
+        heads = {store.branch_reference("p", run, "main").checkpoint_hash for run in ("r", "r2")}
+        assert len(heads) == 1
+        computed = {store.branch_reference("p", run, "main").computed_until for run in ("r", "r2")}
+        assert computed == {30}
+        api.submit("p", "r", "main", duration)
+        api.submit("p", "r2", "main", duration)
         assert {store.run("p", run)["status"] for run in ("r", "r2")} == {"running"}
         assert len(multiprocessing.active_children()) == 2
+        api.post(["p", "runs", "r", "cancel"], {})
+        api.post(["p", "runs", "r2", "cancel"], {})
         api.wait_idle(timeout=300)
     finally:
         api.close()
-    heads = {store.branch_reference("p", run, "main").checkpoint_hash for run in ("r", "r2")}
-    assert len(heads) == 1
-    assert {store.branch_reference("p", run, "main").computed_until for run in ("r", "r2")} == {30}
     api = ProjectAPI(store, recover=False, worker="process", max_jobs=1)
     try:
         api.submit("p", "r", "main", duration)
