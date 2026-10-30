@@ -176,8 +176,10 @@ class _SealedItems:
         self.items: list[Any] = []
         self.documents: list[Any] = []
         self.raws: list[bytes] = []
-        # What a restore check made from the leading documents, if anything.
+        # What a restore check made from the leading documents, if anything, and how
+        # many of them are known to equal their items.
         self.restored: list[Any] = []
+        self.restored_equal = 0
 
     def update(self, current: Sequence[Any]) -> None:
         """Reuse the cached items still in current and convert the others.
@@ -203,6 +205,7 @@ class _SealedItems:
             documents.append(document)
             raws.append(canonical_bytes(document))
         self.restored = self.restored[start : start + kept]
+        self.restored_equal = max(0, min(self.restored_equal - start, kept))
         self.items, self.documents, self.raws = list(current), documents, raws
 
     def _position(self, item: Any) -> int:
@@ -327,14 +330,24 @@ class CheckpointHistoryCache:
         events.items, events.documents = list(records), list(documents)
         events.raws = [canonical_bytes(document) for document in documents]
         events.restored = list(records)
+        # The items are the restored records themselves.
+        events.restored_equal = len(records)
         return True
 
     def restored_events(self) -> list[EventLogRecord]:
         """Records restored from the leading event_log documents of the last documents()."""
         return list(self._events.restored)
 
-    def remember_restored(self, records: Sequence[EventLogRecord]) -> None:
-        """Keep the records a restore check made from the last documents()."""
+    def restored_events_equal(self) -> int:
+        """How many leading restored_events() are known to equal the captured records."""
+        return self._events.restored_equal
+
+    def remember_restored(self, records: Sequence[EventLogRecord], *, equal: bool) -> None:
+        """Keep the records a restore check made from the last documents().
+
+        equal says whether the check showed them equal to the captured records.
+        """
         if len(records) != len(self._events.items):
             raise ValueError("restored EventLog does not match the captured documents")
         self._events.restored = list(records)
+        self._events.restored_equal = len(records) if equal else 0
