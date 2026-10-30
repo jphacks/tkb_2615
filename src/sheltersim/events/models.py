@@ -87,6 +87,24 @@ class ScheduledEvent:
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self._check(json_checked=False)
+
+    @classmethod
+    def from_saved(cls, document: Mapping[str, Any]) -> ScheduledEvent:
+        """The event of a to_dict() document read back from hash-checked canonical JSON.
+
+        Its payload and provenance are finite JSON values already, so they are not
+        encoded again to check that; every other check runs and they are frozen.
+        """
+        if not isinstance(document, Mapping) or set(document) != _EVENT_FIELDS:
+            return cls(**document)
+        event = cls.__new__(cls)
+        for name in _EVENT_FIELDS:
+            object.__setattr__(event, name, document[name])
+        event._check(json_checked=True)
+        return event
+
+    def _check(self, *, json_checked: bool) -> None:
         _validate_id("event_id", self.event_id)
         _validate_id("event_type", self.event_type)
         _validate_id("source_id", self.source_id, optional=True)
@@ -99,13 +117,14 @@ class ScheduledEvent:
             raise ValueError("event priority must be an integer")
         if not isinstance(self.payload, dict) or not isinstance(self.provenance, dict):
             raise ValueError("event payload and provenance must be objects")
-        try:
-            dumps(self.payload, allow_nan=False, default=_json_default)
-            dumps(self.provenance, allow_nan=False, default=_json_default)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "event payload and provenance must contain finite JSON values"
-            ) from exc
+        if not json_checked:
+            try:
+                dumps(self.payload, allow_nan=False, default=_json_default)
+                dumps(self.provenance, allow_nan=False, default=_json_default)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "event payload and provenance must contain finite JSON values"
+                ) from exc
         object.__setattr__(self, "payload", _freeze_json(self.payload))
         object.__setattr__(self, "provenance", _freeze_json(self.provenance))
 
@@ -127,6 +146,22 @@ class ScheduledEvent:
             "causation_id": self.causation_id,
             "provenance": _thaw_json(self.provenance),
         }
+
+
+_EVENT_FIELDS = frozenset(
+    {
+        "event_id",
+        "kind",
+        "due_minute",
+        "priority",
+        "sequence",
+        "event_type",
+        "payload",
+        "source_id",
+        "causation_id",
+        "provenance",
+    }
+)
 
 
 @dataclass(frozen=True)

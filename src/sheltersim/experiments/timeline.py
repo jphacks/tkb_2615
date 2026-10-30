@@ -421,8 +421,13 @@ class TimelineStore:
     def seek(self, branch_id: str, minute: int) -> BranchRuntime:
         return self._seek(branch_id, minute)[0]
 
-    def _seek(self, branch_id: str, minute: int) -> tuple[BranchRuntime, Checkpoint]:
-        """seek(), and the saved Checkpoint its runtime was restored from."""
+    def _seek(
+        self, branch_id: str, minute: int, *, keep: bool = True
+    ) -> tuple[BranchRuntime, Checkpoint]:
+        """seek(), and the saved Checkpoint its runtime was restored from.
+
+        With keep=False the store keeps no copy of the restored world for later reads.
+        """
         reference = self.store.branch_reference(self.project_id, self.run_id, branch_id)
         if (
             type(minute) is not int
@@ -431,7 +436,7 @@ class TimelineStore:
             raise TimelineError("minute is outside this branch's computed range")
         _, checkpoint_hash = self._nearest_checkpoint(branch_id, minute, reference)
         checkpoint, restored = self.store.load_restored_checkpoint(
-            self.project_id, self.run_id, checkpoint_hash
+            self.project_id, self.run_id, checkpoint_hash, keep=keep
         )
         if checkpoint.checkpoint_hash != checkpoint_hash:
             raise TimelineError("timeline checkpoint hash mismatch")
@@ -670,7 +675,8 @@ class TimelineStore:
             self.project_id, "runs", self.run_id, "branches", child_id, "branch.json"
         ).exists():
             raise TimelineError("child branch already exists")
-        source, saved = self._seek(branch_id, minute)
+        # A fork reads its source once; a kept copy would serve no later read.
+        source, saved = self._seek(branch_id, minute, keep=False)
         # The child is taken from this Checkpoint, which also holds both hashes of
         # the source.
         if (

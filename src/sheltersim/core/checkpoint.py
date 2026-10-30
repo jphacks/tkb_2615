@@ -349,7 +349,9 @@ class Checkpoint:
             world_raw = self._verified_world_bytes()
         try:
             if restored_events is None:
-                world = WorldState.from_dict(self._world_document_for_restore(raw=world_raw))
+                world = WorldState.from_dict(
+                    self._world_document_for_restore(raw=world_raw), _saved_json=True
+                )
                 metrics = MetricsRecorder.from_dict(deepcopy(self.metrics_state))
             else:
                 # A capture's restore check discards the restored world, and the
@@ -359,6 +361,7 @@ class Checkpoint:
                     _restored_events=restored_events,
                     _shared=shared,
                     _validate=validate_world,
+                    _saved_json=True,
                 )
                 metrics = MetricsRecorder.from_dict(
                     deepcopy(self.metrics_state, {id(item): item for item in shared})
