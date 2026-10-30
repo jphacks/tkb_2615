@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import operator
+from bisect import bisect_left
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -131,6 +132,8 @@ class _PythonEventLog:
     )
     # Each event type's records with their append positions, for validators that
     # check a few types and need not read the whole log.
+    # Results derived from the records so far, kept by readers for when the log has grown.
+    derived: dict[Any, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
     _by_type: dict[str, list[tuple[int, EventLogRecord]]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -197,6 +200,16 @@ class _PythonEventLog:
     def of_types(self, event_types: Collection[str]) -> list[EventLogRecord]:
         """The records whose event has one of event_types, in append order."""
         lists = [self._by_type[kind] for kind in event_types if kind in self._by_type]
+        if len(lists) == 1:
+            return [record for _, record in lists[0]]
+        return [record for _, record in heapq.merge(*lists, key=operator.itemgetter(0))]
+
+    def of_types_from(self, event_types: Collection[str], start: int) -> list[EventLogRecord]:
+        """The records of event_types at position start or later, in append order."""
+        lists = [
+            rows[bisect_left(rows, start, key=operator.itemgetter(0)) :]
+            for rows in (self._by_type[kind] for kind in event_types if kind in self._by_type)
+        ]
         if len(lists) == 1:
             return [record for _, record in lists[0]]
         return [record for _, record in heapq.merge(*lists, key=operator.itemgetter(0))]
@@ -367,6 +380,8 @@ class _NativeEventLog:
     def __init__(self, _records: Iterable[EventLogRecord] = ()) -> None:
         self._store = native.event_store()
         self._store.set_codecs(record_bytes, record_from_bytes)
+        # Results derived from the records so far, kept by readers for when the log has grown.
+        self.derived: dict[Any, Any] = {}
         for record in _records:
             self.append(record)
 
@@ -446,6 +461,10 @@ class _NativeEventLog:
         """The records whose event has one of event_types, in append order."""
         return self._store.of_types(event_types)
 
+    def of_types_from(self, event_types: Collection[str], start: int) -> list[EventLogRecord]:
+        """The records of event_types at position start or later, in append order."""
+        return self._store.of_types_from(event_types, start)
+
     def active_lifecycle_records(self) -> list[EventLogRecord]:
         """The agent_action_lifecycle records a pass needs for each agent's active action."""
         return self._store.active_lifecycle_records()
@@ -478,6 +497,7 @@ class _NativeEventLog:
         # Records are frozen and shared, as a deepcopy with them in its memo shares them.
         copied = _NativeEventLog.__new__(_NativeEventLog)
         copied._store = self._store.copy()
+        copied.derived = {}
         memo[id(self)] = copied
         return copied
 

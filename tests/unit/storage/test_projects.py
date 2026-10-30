@@ -654,7 +654,7 @@ def test_the_privacy_check_of_chunk_bytes_decides_as_the_check_of_the_document()
 
     def verdict(document: object, raw: bytes | None) -> bool:
         try:
-            _reject_sensitive_checkpoint_content(document, raw)
+            _reject_sensitive_checkpoint_content([(document, raw)])
         except StorageError:
             return False
         return True
@@ -696,7 +696,7 @@ def test_the_strings_rust_leaves_out_can_not_match_the_privacy_patterns() -> Non
     returned = 0
     for _ in range(20_000):
         text = "".join(generator.choices(pieces, k=generator.randrange(1, 9)))
-        _, strings = native.sensitive_candidates(canonical([text]).encode())
+        _, strings = native.sensitive_candidates([canonical([text]).encode()])
         if strings:
             assert strings == [text]
             returned += 1

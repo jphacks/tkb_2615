@@ -42,6 +42,9 @@ from sheltersim.experiments.metrics import MetricsRecorder
 
 def canonical_bytes(value: Any) -> bytes:
     """The UTF-8 canonical JSON that Checkpoint hashes and archive chunks use."""
+    encoded = native.canonical_json(value)
+    if encoded is not None:
+        return encoded
     return json.dumps(
         value,
         sort_keys=True,
@@ -251,7 +254,7 @@ class CanonicalEncoder:
         ]
         if items is None:
             keys = [
-                hashlib.sha256(_list_bytes(value[start : start + size])).hexdigest()
+                hashlib.sha256(canonical_bytes(value[start : start + size])).hexdigest()
                 for start, size in chunks
             ]
         else:
@@ -269,11 +272,6 @@ class CanonicalEncoder:
         return hashlib.sha256(_TREE_LIST + canonical_bytes([count, keys])).hexdigest()
 
 
-def _list_bytes(items: list[Any]) -> bytes:
-    encoded = native.canonical_json(items)
-    return canonical_bytes(items) if encoded is None else encoded
-
-
 class _SealedItems:
     """Documents and canonical bytes of the items of one growing list."""
 
@@ -288,6 +286,8 @@ class _SealedItems:
         # many of them are known to equal their items.
         self.restored: list[Any] = []
         self.restored_equal = 0
+        # How many leading items the last update() found equal to their documents.
+        self.known_equal = 0
 
     def update(self, current: Sequence[Any]) -> None:
         """Reuse the cached items still in current and convert the others.
@@ -314,6 +314,7 @@ class _SealedItems:
             raws.append(canonical_bytes(document))
         self.restored = self.restored[start : start + kept]
         self.restored_equal = max(0, min(self.restored_equal - start, kept))
+        self.known_equal = kept if self._still_equal else 0
         self.items, self.documents, self.raws = list(current), documents, raws
 
     def _position(self, item: Any) -> int:
@@ -325,8 +326,10 @@ class _SealedItems:
 
 
 def _world_json(value: Any) -> Any:
-    # The conversion WorldState.to_dict() applies to every value it serializes.
-    return json.loads(WorldState._canonical_text(value))
+    # The conversion WorldState.to_dict() applies to every value it serializes. A value
+    # the kernel leaves to json (a frozen record's payload) takes the json path.
+    encoded = native.canonical_json(value)
+    return json.loads(WorldState._canonical_text(value) if encoded is None else encoded)
 
 
 def _event_document(record: EventLogRecord) -> Any:
@@ -402,12 +405,10 @@ class CheckpointHistoryCache:
         ]
         data = world._canonical_data(include_event_log=False)
         data["model_state"] = _with_empty(world.model_state, histories)
-        world_document = json.loads(WorldState._canonical_text(data))
+        world_document = _world_json(data)
         log = world.event_log
         if keeps_saved_bytes(log):
-            raws = log.items_bytes(0, len(log))
-            if not self._same_leading_raws(raws):
-                self._log, self._raws_equal = None, 0
+            raws = self._log_raws(log)
             self._event_raws = raws
             world_document["event_log"] = SavedItems(raws)
             encoder.splice(world_document["event_log"], raws, world_document)
@@ -438,13 +439,21 @@ class CheckpointHistoryCache:
                 encoder.splice(resource_snapshots, list(self._resource_snapshots.raws))
         return world_document, metric_document, encoder
 
-    def _same_leading_raws(self, raws: list[bytes]) -> bool:
+    def _log_raws(self, log: EventLog) -> list[bytes]:
         # A Rust EventLog that only grew returns the same bytes objects; a replaced
-        # one makes its bytes anew.
+        # one makes its bytes anew, and then nothing known about the old one holds.
         known = self._event_raws
-        if known is None or len(known) > len(raws):
-            return False
-        return not known or (known[0] is raws[0] and known[-1] is raws[len(known) - 1])
+        count = len(log)
+        if known is not None and len(known) <= count:
+            if not known:
+                return log.items_bytes(0, count)
+            if (
+                log.items_bytes(0, 1)[0] is known[0]
+                and log.items_bytes(len(known) - 1, len(known))[0] is known[-1]
+            ):
+                return [*known, *log.items_bytes(len(known), count)]
+        self._log, self._raws_equal = None, 0
+        return log.items_bytes(0, count)
 
     def seed_events(self, log: EventLog, documents: Sequence[Any]) -> bool:
         """Start from a log a Checkpoint restore made from its event_log documents.
@@ -480,6 +489,27 @@ class CheckpointHistoryCache:
         # They belong to a live world's EventLog, which a restore check never extends.
         self._log = None
         return True
+
+    def known_equal_histories(self) -> dict[tuple[str, str], int]:
+        """How many leading entries of each model_state history equal their documents.
+
+        The last documents() compared them, so a restore check need not compare them
+        again: the restored world holds those documents.
+        """
+        return {
+            path: cache.known_equal
+            for path, cache in self._model_histories.items()
+            if cache.known_equal
+        }
+
+    def restored_metrics(self) -> tuple[list[Any], list[dict[str, int]]]:
+        """What the last restore check made of the leading samples of the last documents()."""
+        return list(self._snapshots.restored), list(self._resource_snapshots.restored)
+
+    def remember_restored_metrics(self, metrics: MetricsRecorder) -> None:
+        """Keep the samples a restore check made from the last documents()."""
+        self._snapshots.restored = list(metrics.snapshots)
+        self._resource_snapshots.restored = list(metrics.resource_snapshots or [])
 
     def restored_events(self) -> list[EventLogRecord]:
         """Records restored from the leading event_log documents of the last documents().

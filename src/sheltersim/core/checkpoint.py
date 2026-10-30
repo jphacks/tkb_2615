@@ -132,20 +132,26 @@ class Checkpoint:
             return checkpoint, checkpoint._validate(hashes_verified=True)
         # EventLog documents an earlier capture restored are not parsed again. The
         # restored world equals the world validated above, or is validated itself.
-        restored, _ = checkpoint._validate(
+        restored, restored_metrics = checkpoint._validate(
             hashes_verified=True,
             restored_events=history_cache.restored_events(),
             restored_log=history_cache.restored_log(),
+            restored_samples=history_cache.restored_metrics(),
             shared=encoder.spliced_lists(),
             validate_world=False,
         )
-        equal = restored.same_state(world, known_equal_events=history_cache.restored_events_equal())
+        equal = restored.same_state(
+            world,
+            known_equal_events=history_cache.restored_events_equal(),
+            known_equal_histories=history_cache.known_equal_histories(),
+        )
         if not equal:
             try:
                 restored.validate()
             except StateInvariantError as exc:
                 raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         history_cache.remember_restored(restored.event_log, equal=equal)
+        history_cache.remember_restored_metrics(restored_metrics)
         object.__setattr__(checkpoint, "_encoder", encoder)
         # The restored world shares the history lists of the captured documents.
         return checkpoint, None
@@ -340,6 +346,7 @@ class Checkpoint:
         shared: Sequence[Any] = (),
         validate_world: bool = True,
         restored_log: Any = None,
+        restored_samples: Any = ([], []),
     ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version not in self.SUPPORTED_SCHEMA_VERSIONS:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
@@ -389,7 +396,8 @@ class Checkpoint:
                     _restored_log=restored_log,
                 )
                 metrics = MetricsRecorder.from_dict(
-                    deepcopy(self.metrics_state, {id(item): item for item in shared})
+                    deepcopy(self.metrics_state, {id(item): item for item in shared}),
+                    _leading=restored_samples,
                 )
         except (StateInvariantError, ValueError, TypeError) as exc:
             raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc

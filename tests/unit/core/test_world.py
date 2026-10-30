@@ -374,3 +374,31 @@ def test_same_state_compares_every_field_and_skips_only_known_equal_records() ->
     assert not copy.same_state(world, known_equal_events=1)
     # Records known to be equal already are not compared again.
     assert copy.same_state(world, known_equal_events=2)
+
+
+def test_same_state_skips_only_the_known_equal_entries_of_a_model_history() -> None:
+    world = WorldState.from_scenario(ScenarioSpec.load(SCENARIO_100_AGENTS))
+    world.model_state["test_only"] = {"history": [{"i": 0}, {"i": 1}], "other": 1}
+    known = {("test_only", "history"): 1}
+    copy = WorldState.from_dict(world.to_dict())
+    assert copy.same_state(world, known_equal_histories=known)
+
+    copy.model_state["test_only"]["history"][1]["i"] = 5
+    assert not copy.same_state(world, known_equal_histories=known)
+    copy = WorldState.from_dict(world.to_dict())
+    copy.model_state["test_only"]["history"].append({"i": 2})
+    assert not copy.same_state(world, known_equal_histories=known)
+    copy = WorldState.from_dict(world.to_dict())
+    copy.model_state["test_only"]["other"] = 2
+    assert not copy.same_state(world, known_equal_histories=known)
+    copy = WorldState.from_dict(world.to_dict())
+    del copy.model_state["test_only"]["other"]
+    assert not copy.same_state(world, known_equal_histories=known)
+    copy = WorldState.from_dict(world.to_dict())
+    copy.model_state["added"] = {}
+    assert not copy.same_state(world, known_equal_histories=known)
+    # A leading entry is what the caller vouches for, and is not compared.
+    copy = WorldState.from_dict(world.to_dict())
+    copy.model_state["test_only"]["history"][0]["i"] = 5
+    assert copy.same_state(world, known_equal_histories=known)
+    assert not copy.same_state(world)

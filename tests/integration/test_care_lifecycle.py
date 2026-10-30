@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 
 from sheltersim.core.engine import TraceLevel
+from sheltersim.domain.care_receipts import care_history_by_agent
+from sheltersim.events.queue import EventLog
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 
@@ -31,3 +34,13 @@ def test_full_day_shared_care_receipts_keep_each_transition_observation(
 
     assert world.minute_index == 1440
     world.validate()
+
+    # The rows a frame reuses as the EventLog grows are the rows of a full pass.
+    records = world.event_log.records_from(0)
+    grown = SimpleNamespace(event_log=EventLog())
+    for end in range(0, len(records) + 500, 500):
+        for record in records[len(grown.event_log) : end]:
+            grown.event_log.append(record)
+        full_pass = SimpleNamespace(event_log=copy.deepcopy(grown.event_log))
+        assert care_history_by_agent(grown) == care_history_by_agent(full_pass)
+    assert care_history_by_agent(grown)

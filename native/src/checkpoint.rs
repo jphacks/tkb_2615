@@ -119,12 +119,29 @@ fn candidates(raw: &[u8]) -> Result<(HashSet<String>, HashSet<String>), String> 
     Ok((keys, strings))
 }
 
-/// The distinct object keys of raw, and its distinct string values the privacy
-/// patterns could match. Raises ValueError when a string can not be read.
+/// The distinct object keys of the JSON texts raws, and their distinct string values
+/// the privacy patterns could match, read in parallel without the GIL. Raises ValueError
+/// when a string can not be read.
 #[pyfunction]
-pub fn sensitive_candidates(py: Python<'_>, raw: &[u8]) -> PyResult<(Vec<String>, Vec<String>)> {
+pub fn sensitive_candidates(
+    py: Python<'_>,
+    raws: Vec<Bound<'_, PyBytes>>,
+) -> PyResult<(Vec<String>, Vec<String>)> {
+    let slices: Vec<&[u8]> = raws.iter().map(|raw| raw.as_bytes()).collect();
     let (keys, strings) = py
-        .allow_threads(|| candidates(raw))
+        .allow_threads(|| {
+            slices
+                .par_iter()
+                .map(|raw| candidates(raw))
+                .try_reduce(
+                    || (HashSet::new(), HashSet::new()),
+                    |(mut keys, mut strings), (more_keys, more_strings)| {
+                        keys.extend(more_keys);
+                        strings.extend(more_strings);
+                        Ok((keys, strings))
+                    },
+                )
+        })
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
     Ok((keys.into_iter().collect(), strings.into_iter().collect()))
 }

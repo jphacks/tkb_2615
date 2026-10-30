@@ -20,8 +20,8 @@ from typing import Any, Callable
 
 from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
-from sheltersim.core.checkpoint_cache import CanonicalEncoder
-from sheltersim.core.saved_items import SavedItems, json_default
+from sheltersim.core.checkpoint_cache import CanonicalEncoder, canonical_bytes
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 
@@ -36,17 +36,6 @@ ARCHIVE_STORAGE_TYPES = frozenset(
 _SAVED_EVENT_LOG = ("world_state", "event_log")
 
 
-def _encoded(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-        default=json_default,
-    ).encode()
-
-
 class CheckpointArchive:
     """Storage representation only; restores the unchanged Checkpoint and its hashes."""
 
@@ -56,17 +45,17 @@ class CheckpointArchive:
         *,
         chunk_records: int = 128,
         max_new_bytes: int | None = None,
-        content_check: Callable[[Any, bytes | None], None] | None = None,
+        content_check: Callable[[list[tuple[Any, bytes | None]]], None] | None = None,
         encoder: CanonicalEncoder | None = None,
         known_locations: dict[str, tuple[str, int, int]] | None = None,
     ) -> None:
         self.directory = directory
         self.chunk_records = chunk_records
         self.max_new_bytes = max_new_bytes
-        # Called on every chunk value (and large-object field names) that is not
-        # already stored, with the chunk's canonical JSON. Stored chunks passed the same
-        # check when first written. The value may be a function returning it, so a check
-        # that reads the bytes does not parse a slice of SavedItems.
+        # Called with every chunk that is not already stored, as (value, canonical JSON)
+        # pairs, and with large-object field names. Stored chunks passed the same check
+        # when first written. A value may be a function returning it, so a check that
+        # reads the bytes does not parse a slice of SavedItems.
         self.content_check = content_check
         # The encoder of a just-captured Checkpoint already holds the bytes of the
         # history it reused; chunks and sizes are the same with or without it.
@@ -75,8 +64,9 @@ class CheckpointArchive:
         self.new_files = 0
         self.chunk_directory = directory / "chunks"
         self.pack_directory = directory / "packs"
-        self._staged: dict[str, bytes] | None = None
-        self._staged_bytes = 0
+        # The new chunks of the save being prepared: their values and bytes, then each
+        # chunk compressed, once the content checks have passed.
+        self._staged: dict[str, tuple[Any, bytes]] | None = None
         # Where saved chunks in packs are: the locations of a manifest saved before
         # and, through the encoder, of every save of the same writer. A save refers
         # to them instead of writing them again (any other chunk is a v1/v2 file).
@@ -118,24 +108,29 @@ class CheckpointArchive:
         if self._staged is None:
             raise CheckpointError("checkpoint chunks are written only by a prepared save")
         if raw is None:
-            raw = _encoded(value)
+            raw = canonical_bytes(value)
         if len(raw) > 16_777_216:
             raise CheckpointError("checkpoint chunk exceeds the supported size")
         key = hashlib.sha256(raw).hexdigest()
         if self._stored(key):
             return key
-        if self.content_check is not None:
-            self.content_check(value, raw)
-        compressed = gzip.compress(raw, compresslevel=3, mtime=0)
-        if (
-            self.max_new_bytes is not None
-            and self.new_bytes + self._staged_bytes + len(compressed) > self.max_new_bytes
-        ):
-            raise CheckpointError("checkpoint storage capacity exceeded")
-        self._staged[key] = compressed
-        self._staged_bytes += len(compressed)
+        self._staged[key] = (value, raw)
         self._referenced[key] = None
         return key
+
+    def _compressed_chunks(self, staged: dict[str, tuple[Any, bytes]]) -> dict[str, bytes]:
+        """Check all new chunks of a save at once, then compress them."""
+        if self.content_check is not None and staged:
+            self.content_check(list(staged.values()))
+        compressed = {
+            key: gzip.compress(raw, compresslevel=3, mtime=0) for key, (_, raw) in staged.items()
+        }
+        if (
+            self.max_new_bytes is not None
+            and self.new_bytes + sum(map(len, compressed.values())) > self.max_new_bytes
+        ):
+            raise CheckpointError("checkpoint storage capacity exceeded")
+        return compressed
 
     def _write_pack(self, name: str, data: bytes) -> None:
         """Publish one pack; a pack with the same name holds the same bytes."""
@@ -183,7 +178,7 @@ class CheckpointArchive:
         if isinstance(value, dict) and self._size(value) > 65_536:
             if self.content_check is not None:
                 # Field names of a split object live in the manifest, not a chunk.
-                self.content_check(dict.fromkeys(value), None)
+                self.content_check([(dict.fromkeys(value), None)])
             return {
                 "kind": "object",
                 "fields": {key: self._pack(item) for key, item in sorted(value.items())},
@@ -212,7 +207,7 @@ class CheckpointArchive:
         return key
 
     def _size(self, value: Any) -> int:
-        return len(_encoded(value)) if self.encoder is None else self.encoder.size(value)
+        return len(canonical_bytes(value)) if self.encoder is None else self.encoder.size(value)
 
     def encode(self, checkpoint: Checkpoint) -> dict[str, Any]:
         return self._encode_validated_document(
@@ -242,13 +237,12 @@ class CheckpointArchive:
     ) -> dict[str, Any]:
         """Pack and run content checks without writing; _write_prepared publishes the pack."""
         self._check_directories()
-        self._staged, self._staged_bytes, self._referenced = {}, 0, {}
+        self._staged, self._referenced = {}, {}
         try:
             packed = self._pack(document)
-        except BaseException:
-            self._staged, self._staged_bytes = None, 0
-            raise
-        staged, self._staged, self._staged_bytes = self._staged, None, 0
+            staged = self._compressed_chunks(self._staged)
+        finally:
+            self._staged = None
         self._new_pack = None
         if staged:
             data = b"".join(staged.values())
@@ -270,7 +264,7 @@ class CheckpointArchive:
             "schema_version": 1,
             "storage_type": "checkpoint_archive_v3",
             **body,
-            "manifest_hash": hashlib.sha256(_encoded(body)).hexdigest(),
+            "manifest_hash": hashlib.sha256(canonical_bytes(body)).hexdigest(),
         }
 
     def _write_prepared(self) -> None:
@@ -438,7 +432,7 @@ class CheckpointArchive:
         body = {"checkpoint_hash": record["checkpoint_hash"], "document": record["document"]}
         if record["storage_type"] == "checkpoint_archive_v3":
             body["locations"] = record.get("locations")
-        if hashlib.sha256(_encoded(body)).hexdigest() != record.get("manifest_hash"):
+        if hashlib.sha256(canonical_bytes(body)).hexdigest() != record.get("manifest_hash"):
             raise CheckpointError("checkpoint archive manifest integrity mismatch")
         if record["storage_type"] == "checkpoint_archive_v3":
             self._locations = self.pack_locations(record)

@@ -214,8 +214,18 @@ class MetricsRecorder:
         return document
 
     @classmethod
-    def from_dict(cls, document: dict[str, Any]) -> MetricsRecorder:
-        """Restore legacy KPI snapshots and optional resource samples."""
+    def from_dict(
+        cls,
+        document: dict[str, Any],
+        *,
+        _leading: tuple[list[MetricSnapshot], list[dict[str, int]]] = ([], []),
+    ) -> MetricsRecorder:
+        """Restore legacy KPI snapshots and optional resource samples.
+
+        _leading holds what an earlier restore made of the leading samples of this same
+        document (a Checkpoint capture's restore check): they are shared, and only the
+        samples after them are read and checked.
+        """
         if (
             not isinstance(document, dict)
             or not isinstance(document.get("schema_version"), int)
@@ -240,8 +250,8 @@ class MetricsRecorder:
             raise ValueError("metric accumulator snapshots must be a list")
         recorder = cls()
         try:
-            restored_snapshots = []
-            for item in snapshots:
+            restored_snapshots = list(_leading[0])
+            for item in snapshots[len(_leading[0]) :]:
                 row = dict(item)
                 if version < 3:
                     row.setdefault("support_no_qualified_worker_count", 0)
@@ -254,17 +264,25 @@ class MetricsRecorder:
             recorder.snapshots = restored_snapshots
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid metric accumulator: {exc}") from exc
-        minutes = [item.minute_index for item in recorder.snapshots]
+        # The leading samples were checked; from the last of them on the rest are.
+        checked = max(len(_leading[0]) - 1, 0)
+        minutes = [item.minute_index for item in recorder.snapshots[checked:]]
         if any(minute < 0 for minute in minutes) or minutes != sorted(set(minutes)):
             raise ValueError("metric accumulator minutes must be unique and increasing")
         if version == 1 and "resource_snapshots" in document:
             raise ValueError("metric accumulator v1 cannot contain resource snapshots")
         if "resource_snapshots" in document:
             resource_snapshots = document["resource_snapshots"]
-            if not isinstance(resource_snapshots, list) or len(resource_snapshots) != len(minutes):
+            if not isinstance(resource_snapshots, list) or len(resource_snapshots) != len(
+                snapshots
+            ):
                 raise ValueError("resource metric snapshots must align with metric snapshots")
             expected_resource_fields = {"minute_index", *RESOURCE_METRIC_FIELDS}
-            for item, expected_minute in zip(resource_snapshots, minutes, strict=True):
+            leading = len(_leading[1])
+            for item, sample in zip(
+                resource_snapshots[leading:], recorder.snapshots[leading:], strict=True
+            ):
+                expected_minute = sample.minute_index
                 if not isinstance(item, dict) or set(item) != expected_resource_fields:
                     raise ValueError("resource metric snapshot fields do not match schema v1")
                 if item["minute_index"] != expected_minute or any(
@@ -273,5 +291,8 @@ class MetricsRecorder:
                     if key != "minute_index"
                 ):
                     raise ValueError("resource metric snapshot values are invalid")
-            recorder.resource_snapshots = [dict(item) for item in resource_snapshots]
+            recorder.resource_snapshots = [
+                *_leading[1],
+                *(dict(item) for item in resource_snapshots[leading:]),
+            ]
         return recorder

@@ -88,11 +88,11 @@ def split_json_array(raw: bytes) -> list[bytes] | None:
     return None if _native is None else _native.split_json_array(raw)
 
 
-def sensitive_candidates(raw: bytes) -> tuple[list[str], list[str]] | None:
-    """The distinct object keys of the JSON text raw, and its distinct string values the
+def sensitive_candidates(raws: list[bytes]) -> tuple[list[str], list[str]] | None:
+    """The distinct object keys of the JSON texts raws, and their distinct string values the
     privacy patterns could match, or None without the kernel. Every other string value
     can not match them (native/src/checkpoint.rs). Raises ValueError on a bad string."""
-    return None if _native is None else _native.sensitive_candidates(raw)
+    return None if _native is None else _native.sensitive_candidates(raws)
 
 
 def chunk_hashes(items: list[bytes], chunks: list[tuple[int, int]]) -> list[str] | None:

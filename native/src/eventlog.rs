@@ -412,6 +412,35 @@ impl EventStore {
         self.records_of(py, entries.into_iter().map(|(_, index)| index))
     }
 
+    /// The records of event_types at position start or later, in append order.
+    fn of_types_from(
+        &mut self,
+        py: Python<'_>,
+        event_types: &Bound<'_, PyAny>,
+        start: usize,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let mut indices: Vec<usize> = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::new();
+        for name in event_types.try_iter()? {
+            let name = name?;
+            let Ok(text) = name.downcast::<PyString>() else {
+                continue;
+            };
+            if let Some(id) = self.type_ids.get(text.to_str()?) {
+                if seen.insert(*id) {
+                    if let Some(list) = self.by_type.get(id) {
+                        let first = list.partition_point(|index| *index < start);
+                        indices.extend(list[first..].iter().copied());
+                    }
+                }
+            }
+        }
+        if seen.len() > 1 {
+            indices.sort_unstable();
+        }
+        self.records_of(py, indices.into_iter())
+    }
+
     /// The records from start on, in append order.
     #[pyo3(signature = (start=0))]
     fn records_from(&mut self, py: Python<'_>, start: usize) -> PyResult<Vec<Py<PyAny>>> {

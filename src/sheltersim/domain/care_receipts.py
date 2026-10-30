@@ -415,9 +415,14 @@ def care_history_by_agent(world: WorldState, *, limit: int = 20) -> dict[str, li
 
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise ValueError("care history limit must be between 1 and 100")
-    rows: dict[str, list[dict[str, Any]]] = {}
+    # A writer renders a frame at every save. The EventLog only grows, so the rows made
+    # for its earlier records are kept with it and only the new records are read.
+    log = world.event_log
+    position, rows = log.derived.get(("care_history", limit), (0, {}))
     # The care event types' records, in append order, without reading the others.
-    for record in world.event_log.of_types({"care_support_transition", "staff_support_continuity"}):
+    for record in log.of_types_from(
+        {"care_support_transition", "staff_support_continuity"}, position
+    ):
         event = record.event
         if record.status is not EventStatus.APPLIED:
             continue
@@ -459,7 +464,8 @@ def care_history_by_agent(world: WorldState, *, limit: int = 20) -> dict[str, li
             history = rows.setdefault(identity, [])
             history.append(person_row)
             del history[:-limit]
-    return rows
+    log.derived[("care_history", limit)] = (len(log), rows)
+    return {identity: [dict(row) for row in history] for identity, history in rows.items()}
 
 
 def support_kind_for_agent(world: WorldState, agent_id: str) -> str:

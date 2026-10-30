@@ -158,23 +158,26 @@ def _copy_restored(
     return deepcopy(world, memo), deepcopy(metrics)
 
 
-def _reject_sensitive_checkpoint_content(value: Any, raw: bytes | None = None) -> None:
-    """Reject value, a chunk not stored before; raw is its canonical JSON, if known.
+def _reject_sensitive_checkpoint_content(chunks: list[tuple[Any, bytes | None]]) -> None:
+    """Reject (value, canonical JSON if known) pairs: chunks not stored before.
 
-    From raw, the same keys and strings are checked as in safe_document(), with the same
-    functions, but only each distinct one and without building or walking the document.
+    From the bytes, the same keys and strings are checked as in safe_document(), with the
+    same functions, but each distinct one once and without building or walking a document.
+    A value may be a function returning the document, for when only Python reads it.
     """
-    candidates = native.sensitive_candidates(raw) if raw is not None else None
-    if candidates is None:
-        document = value() if callable(value) else value
-        if safe_document(document) != document:
+    raws = [raw for _, raw in chunks if raw is not None]
+    candidates = native.sensitive_candidates(raws) if raws else None
+    if candidates is not None:
+        keys, strings = candidates
+        if any(_private_field(key) for key in keys):
+            raise StorageError("sensitive fields cannot be persisted")
+        if any(safe_document(text) != text for text in strings):
             raise StorageError("checkpoint contains sensitive data")
-        return
-    keys, strings = candidates
-    if any(_private_field(key) for key in keys):
-        raise StorageError("sensitive fields cannot be persisted")
-    if any(safe_document(text) != text for text in strings):
-        raise StorageError("checkpoint contains sensitive data")
+    for value, raw in chunks:
+        if raw is None or candidates is None:
+            document = value() if callable(value) else value
+            if safe_document(document) != document:
+                raise StorageError("checkpoint contains sensitive data")
 
 
 class ProjectStore:
@@ -776,19 +779,21 @@ class ProjectStore:
             # Chunks of the branch's previous save (or of this Checkpoint, saved by
             # another branch) are referred to where they are, not written again.
             known = checkpoint_path if checkpoint_path.exists() else None
-            if known is None and path.exists():
-                known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
-            origin = checkpoint.runtime_state.get("fork_origin")
-            if (
-                known is None
-                and reference.parent_branch_id is not None
-                and isinstance(origin, dict)
-            ):
-                # A new child's first save shares most chunks with the Checkpoint it was
-                # forked from.
-                origin_hash = origin.get("checkpoint_hash")
-                if isinstance(origin_hash, str) and re.fullmatch(r"[a-f0-9]{64}", origin_hash):
-                    known = checkpoint_path.with_name(f"{origin_hash}.json")
+            # A writer's later saves know the locations of its earlier saves' chunks.
+            if known is None and not (encoder is not None and encoder.pack_locations):
+                if path.exists():
+                    known = checkpoint_path.with_name(f"{prior['checkpoint_hash']}.json")
+                origin = checkpoint.runtime_state.get("fork_origin")
+                if (
+                    known is None
+                    and reference.parent_branch_id is not None
+                    and isinstance(origin, dict)
+                ):
+                    # A new child's first save shares most chunks with the Checkpoint it
+                    # was forked from.
+                    origin_hash = origin.get("checkpoint_hash")
+                    if isinstance(origin_hash, str) and re.fullmatch(r"[a-f0-9]{64}", origin_hash):
+                        known = checkpoint_path.with_name(f"{origin_hash}.json")
             archive = CheckpointArchive(
                 checkpoint_path.parent,
                 max_new_bytes=max(0, self.max_bytes - self.usage()["bytes"] - 65_536),

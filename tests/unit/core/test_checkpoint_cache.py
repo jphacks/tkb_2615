@@ -14,7 +14,7 @@ from dataclasses import replace
 import pytest
 
 from sheltersim import native
-from sheltersim.core.checkpoint import Checkpoint
+from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache, canonical_bytes
 from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.world import WorldState
@@ -348,3 +348,67 @@ def test_a_restore_check_extends_the_last_checks_eventlog(
     saved = Checkpoint.capture(world)
     seeded.seed_events(world.event_log, saved.world_state["event_log"])
     assert seeded.restored_log() is None
+
+
+def test_a_new_kpi_sample_is_still_checked_when_earlier_ones_are_reused(
+    live_checkpoint_world,
+) -> None:
+    """A restore check reads only the new samples, and still refuses a bad one."""
+    world = live_checkpoint_world
+    metrics = MetricsRecorder()
+    cache = CheckpointHistoryCache()
+    metrics.capture(world)
+    first = metrics.snapshots[0]
+
+    def add_sample(minute: int) -> None:
+        metrics.snapshots.append(replace(first, minute_index=minute))
+
+    add_sample(first.minute_index + 1)
+    Checkpoint.capture(world, metrics=metrics, history_cache=cache)
+    assert len(cache.restored_metrics()[0]) == 2
+
+    add_sample(first.minute_index + 2)
+    checkpoint = Checkpoint.capture(world, metrics=metrics, history_cache=cache)
+    assert checkpoint.checkpoint_hash == Checkpoint.capture(world, metrics=metrics).checkpoint_hash
+    assert len(cache.restored_metrics()[0]) == 3
+    assert metrics.to_dict() == MetricsRecorder.from_dict(checkpoint.metrics_state).to_dict()
+
+    add_sample(first.minute_index + 2)
+    with pytest.raises(CheckpointError, match="unique and increasing"):
+        Checkpoint.capture(world, metrics=metrics, history_cache=cache)
+
+
+def test_a_history_entry_changed_in_place_is_compared_again_by_the_restore_check(
+    live_checkpoint_world,
+) -> None:
+    """Known-equal counts come from comparing with the documents at this very save."""
+    world = live_checkpoint_world
+    world.model_state.setdefault("body_state_v1", {"history": []})
+    path = ("body_state_v1", "history")
+    history = world.model_state[path[0]][path[1]]
+    history.extend({"minute": index} for index in range(3))
+    cache = CheckpointHistoryCache()
+    cache.documents(world, None)
+    assert cache.known_equal_histories().get(path, 0) == 0
+    cache.documents(world, None)
+    assert cache.known_equal_histories()[path] == len(history)
+    history[0]["minute"] = 99
+    cache.documents(world, None)
+    assert cache.known_equal_histories().get(path, 0) == 0
+
+
+def test_the_saved_bytes_of_a_replaced_event_log_are_read_anew(live_checkpoint_world) -> None:
+    if not native.available():
+        pytest.skip("the sheltersim_native extension is not installed")
+    world = live_checkpoint_world
+    cache = CheckpointHistoryCache()
+    Checkpoint.capture(world, history_cache=cache)
+    _realize(world, "grown")
+    grown = Checkpoint.capture(world, history_cache=cache)
+    assert grown.checkpoint_hash == Checkpoint.capture(world).checkpoint_hash
+
+    restored = WorldState.from_dict(world.to_dict())
+    world.event_log = restored.event_log
+    _realize(world, "replaced")
+    again = Checkpoint.capture(world, history_cache=cache)
+    assert again.checkpoint_hash == Checkpoint.capture(world).checkpoint_hash
