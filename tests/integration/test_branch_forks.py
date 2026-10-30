@@ -103,3 +103,32 @@ def test_a_fork_keeps_no_copy_of_the_world_it_read(tmp_path, saved_timeline) -> 
     timeline.advance("main", 60)
     timeline.fork("main", 30, "child")
     assert store._restored == {}
+
+
+def test_a_fork_whose_index_write_fails_leaves_no_branch_and_can_be_retried(
+    tmp_path, monkeypatch, saved_timeline
+) -> None:
+    """#288: the child's pointer is saved before its index rows; when indexing fails
+    the pointer is removed, so the branch list and a retry under the same ID work."""
+    import pytest
+
+    from sheltersim.storage.history_index import HistoryIndex
+    from sheltersim.storage.projects import StorageError
+
+    store, timeline = saved_timeline(tmp_path)
+    timeline.advance("main", 60)
+    ingest = HistoryIndex.ingest
+
+    def full_disk(self, branch, checkpoint, **kwargs):
+        if branch == "child":
+            raise StorageError("storage_capacity_exceeded")
+        return ingest(self, branch, checkpoint, **kwargs)
+
+    monkeypatch.setattr(HistoryIndex, "ingest", full_disk)
+    with pytest.raises(StorageError, match="storage_capacity_exceeded"):
+        timeline.fork("main", 30, "child")
+    assert [branch["branch_id"] for branch in store.branches("p", "r")] == ["main"]
+    monkeypatch.setattr(HistoryIndex, "ingest", ingest)
+    child = timeline.fork("main", 30, "child")
+    assert child.world.minute_index == 30
+    assert store.branch_reference("p", "r", "child").computed_until == 30
