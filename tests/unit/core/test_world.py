@@ -363,8 +363,9 @@ def test_same_state_compares_every_field_and_skips_only_known_equal_records() ->
     copy = WorldState.from_dict(world.to_dict())
     copy.model_state["test_only"] = {"value": 1}
     assert not copy.same_state(world)
-    copy = WorldState.from_dict(world.to_dict())
-    copy.event_log._records[1] = copy.event_log._records[0]
+    document = world.to_dict()
+    document["event_log"][1]["detail"] = "a different outcome note"
+    copy = WorldState.from_dict(document)
     assert not copy.same_state(world)
     assert not copy.same_state(world, known_equal_events=1)
     # Records known to be equal already are not compared again.

@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+mod eventlog;
 mod psychology;
 mod validation;
 
@@ -250,5 +251,6 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_problem, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_problem, module)?)?;
+    module.add_class::<eventlog::EventStore>()?;
     Ok(())
 }

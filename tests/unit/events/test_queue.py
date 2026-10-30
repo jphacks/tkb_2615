@@ -133,6 +133,9 @@ def test_events_by_id_reads_realized_events_first_without_copying_the_log(make_e
 
 
 def test_an_audit_checks_only_new_records_while_earlier_ones_are_unchanged(make_event) -> None:
+    """The Python EventLog, whose record list code could edit directly."""
+    from sheltersim.events.queue import _PythonEventLog as EventLog
+
     records = _records(4)
     log = EventLog(_records=records[:3])
     log.validate(minute_index=3, duration_minutes=10)
@@ -163,3 +166,102 @@ def test_an_audit_checks_only_new_records_while_earlier_ones_are_unchanged(make_
     with pytest.raises(ValueError, match="outside the scenario duration"):
         log.validate(minute_index=4, duration_minutes=3)
     log.validate(minute_index=4, duration_minutes=10)
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_both_event_logs_answer_alike(make_event, implementation) -> None:
+    """The EventLog held in Rust (feature/rust-port) answers every method as the Python
+    one does, refuses the same duplicates, and audits realization times."""
+    from sheltersim import native
+    from sheltersim.events.models import EventKind, ScheduledEvent
+    from sheltersim.events.queue import _NativeEventLog, _PythonEventLog
+
+    if implementation == "native" and not native.available():
+        pytest.skip("the sheltersim_native extension is not installed")
+    log_type = _NativeEventLog if implementation == "native" else _PythonEventLog
+
+    def record(index, event_type, status="applied", payload=None, provenance=None):
+        return EventLogRecord(
+            event=ScheduledEvent(
+                event_id=f"e{index}",
+                kind=EventKind.EXOGENOUS,
+                due_minute=index,
+                priority=0,
+                sequence=index,
+                event_type=event_type,
+                payload=payload or {},
+                provenance=provenance or {},
+            ),
+            realized_minute=index // 2,
+            status=status,
+        )
+
+    records = [
+        record(0, "a", provenance={"marker": {"k": 1}, "plain": "x"}),
+        record(
+            1,
+            "care_support_transition",
+            payload={
+                "request_id": "req",
+                "agent_id": "A1",
+                "support_kind": "meal",
+                "status": "completed",
+            },
+        ),
+        record(2, "facility_outage", payload={"facility_id": "f1"}),
+        record(3, "facility_recovery", "failed", payload={"facility_id": "f1"}),
+        record(4, "b", provenance={"marker": {"k": 2}}),
+        record(5, "a", "failed"),
+        record(6, "care_support_transition", payload={"request_id": "req", "status": "x"}),
+    ]
+    log = log_type(_records=records)
+    expected = _PythonEventLog(_records=records)
+    assert len(log) == len(expected) == 7
+    assert log.records == expected.records and log == expected
+    assert log.find("e3") is records[3] and log.find("missing") is None
+    assert log.contains_id("e2") and not log.contains_id("e9")
+    assert log.contains_sequence(4) and not log.contains_sequence(9)
+    assert log.max_sequence == 6
+    assert log.at_minute(1) == expected.at_minute(1) == (records[2], records[3])
+    assert log.event_types() == expected.event_types()
+    assert log.of_types({"b", "a"}) == expected.of_types({"b", "a"})
+    assert log.of_types(["facility_outage"]) == [records[2]]
+    assert log.with_provenance_object("marker") == expected.with_provenance_object("marker")
+    assert log.with_provenance_object("plain") == []
+    assert log.has_prior_care_request("req", "e6") and not log.has_prior_care_request("req", "e1")
+    assert log.completed_support_kinds("A1") == frozenset({"meal"})
+    assert log.applied_facility_event_ids("f1") == frozenset({"e2"})
+    assert log.recent(3) == expected.recent(3)
+    assert log.recent_matching(frozenset({"a"}), limit=5, scan_limit=3) == (
+        expected.recent_matching(frozenset({"a"}), limit=5, scan_limit=3)
+    )
+    assert log.records_from(5) == records[5:] and log.last() is records[6]
+    assert log.event_ids() == [f"e{index}" for index in range(7)]
+    with pytest.raises(DuplicateEventError, match="already realized"):
+        log.append(record(0, "a"))
+    duplicate_sequence = EventLogRecord(
+        event=ScheduledEvent(
+            event_id="other",
+            kind=EventKind.EXOGENOUS,
+            due_minute=0,
+            priority=0,
+            sequence=3,
+            event_type="a",
+        ),
+        realized_minute=0,
+        status="applied",
+    )
+    with pytest.raises(DuplicateEventError, match="sequence 3 already realized"):
+        log.append(duplicate_sequence)
+    log.validate(minute_index=3, duration_minutes=10)
+    with pytest.raises(ValueError, match="future realization"):
+        log.validate(minute_index=2, duration_minutes=10)
+    with pytest.raises(ValueError, match="outside the scenario duration"):
+        log.validate(minute_index=3, duration_minutes=3)
+    import copy
+
+    # As storage.projects._copy_restored copies a world: frozen records are shared.
+    copied = copy.deepcopy(log, {id(item): item for item in records})
+    assert copied == log and copied is not log and copied.find("e1") is records[1]
+    copied.append(record(7, "c"))
+    assert len(copied) == 8 and len(log) == 7

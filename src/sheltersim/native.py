@@ -73,3 +73,8 @@ def body_relationships_problem(
     if _native is None:
         return None
     return _native.body_relationships_problem(relationships, agents, parsed_keys, parse_key) or 0
+
+
+def event_store() -> Any:
+    """A new Rust EventLog store (sheltersim_native.EventStore), or None."""
+    return None if _native is None else _native.EventStore()

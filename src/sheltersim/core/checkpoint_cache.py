@@ -356,7 +356,7 @@ class CheckpointHistoryCache:
         log, restored = self._log, self._events.restored
         if log is None or len(log) != len(restored):
             return None
-        if restored and log._records[-1] is not restored[-1]:
+        if restored and log.last() is not restored[-1]:
             return None
         return log
 

@@ -1654,11 +1654,11 @@ class WorldState:
                 continue
             if getattr(self, item.name) != getattr(other, item.name):
                 return False
-        mine, theirs = self.event_log._records, other.event_log._records
+        mine, theirs = self.event_log, other.event_log
         return (
             self.event_queue.pending() == other.event_queue.pending()
             and len(mine) == len(theirs)
-            and mine[known_equal_events:] == theirs[known_equal_events:]
+            and mine.records_from(known_equal_events) == theirs.records_from(known_equal_events)
         )
 
     @classmethod

@@ -6,7 +6,9 @@ import heapq
 import operator
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
+from sheltersim import native
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
 
 
@@ -83,7 +85,7 @@ class EventQueue:
 
 
 @dataclass
-class EventLog:
+class _PythonEventLog:
     """Append-only outcomes for events that were attempted at a due minute."""
 
     _records: list[EventLogRecord] = field(default_factory=list, repr=False)
@@ -180,6 +182,17 @@ class EventLog:
     def records(self) -> tuple[EventLogRecord, ...]:
         """Read-only view of realized outcomes in append order."""
         return tuple(self._records)
+
+    def records_from(self, start: int = 0) -> list[EventLogRecord]:
+        """The records from position start on, in append order."""
+        return self._records[start:]
+
+    def last(self) -> EventLogRecord | None:
+        return self._records[-1] if self._records else None
+
+    def event_ids(self) -> list[str]:
+        """The realized event IDs in append order."""
+        return [record.event.event_id for record in self._records]
 
     def __len__(self) -> int:
         return len(self._records)
@@ -304,6 +317,146 @@ class EventLog:
         self._audit_bounds = (minute_index, duration_minutes)
 
 
+class _NativeEventLog:
+    """The EventLog with its indexes held in Rust (sheltersim_native.EventStore,
+    docs/rust-port.md stage B1); the same methods and errors as _PythonEventLog.
+
+    Records are the frozen EventLogRecord objects appended; they are only appended,
+    so IDs and sequences stay unique and the audit checks realization times.
+    """
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __init__(self, _records: Iterable[EventLogRecord] = ()) -> None:
+        self._store = native.event_store()
+        for record in _records:
+            self.append(record)
+
+    def append(self, record: EventLogRecord) -> None:
+        refused = self._store.append(record)
+        if refused == 1:
+            raise DuplicateEventError(f"event {record.event.event_id!r} already realized")
+        if refused == 2:
+            raise DuplicateEventError(f"event sequence {record.event.sequence} already realized")
+
+    def contains_id(self, event_id: str) -> bool:
+        return isinstance(event_id, str) and self._store.contains_id(event_id)
+
+    def find(self, event_id: str) -> EventLogRecord | None:
+        """Return one immutable realized event in constant time from the derived index."""
+        return self._store.find(event_id)
+
+    def has_prior_care_request(self, request_id: str, current_event_id: str) -> bool:
+        """Detect request-ID reuse across full EventLog history, including expired state tails."""
+        first = self._store.first_care_request_event(request_id)
+        return first is not None and first != current_event_id
+
+    def completed_support_kinds(self, agent_id: str) -> frozenset[str]:
+        """Return support types with applied completion records for one Agent."""
+        return frozenset(self._store.completed_support_kinds(agent_id))
+
+    def applied_facility_event_ids(self, facility_id: str) -> frozenset[str]:
+        """Return applied outage/recovery IDs associated with one facility."""
+        return frozenset(self._store.applied_facility_event_ids(facility_id))
+
+    def contains_sequence(self, sequence: int) -> bool:
+        return self._store.contains_sequence(sequence)
+
+    @property
+    def max_sequence(self) -> int:
+        """Highest realized sequence, maintained as outcomes are appended."""
+        return self._store.max_sequence
+
+    def at_minute(self, minute: int) -> tuple[EventLogRecord, ...]:
+        return tuple(self._store.at_minute(minute))
+
+    def event_types(self) -> frozenset[str]:
+        """The event types of the realized records."""
+        return frozenset(self._store.event_types())
+
+    def with_provenance_object(self, key: str) -> list[EventLogRecord]:
+        """The records whose event provenance holds an object at key, in append order."""
+        return self._store.with_provenance_object(key)
+
+    def of_types(self, event_types: Collection[str]) -> list[EventLogRecord]:
+        """The records whose event has one of event_types, in append order."""
+        return self._store.of_types(event_types)
+
+    @property
+    def records(self) -> tuple[EventLogRecord, ...]:
+        """Read-only view of realized outcomes in append order."""
+        return tuple(self._store.records_from(0))
+
+    def records_from(self, start: int = 0) -> list[EventLogRecord]:
+        """The records from position start on, in append order."""
+        return self._store.records_from(start)
+
+    def last(self) -> EventLogRecord | None:
+        return self._store.last()
+
+    def event_ids(self) -> list[str]:
+        """The realized event IDs in append order."""
+        return self._store.event_ids()
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, (_NativeEventLog, _PythonEventLog)):
+            return NotImplemented
+        return len(self) == len(other) and self.records_from(0) == other.records_from(0)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _NativeEventLog:
+        # Records are frozen and shared, as a deepcopy with them in its memo shares them.
+        copied = _NativeEventLog.__new__(_NativeEventLog)
+        copied._store = self._store.copy()
+        memo[id(self)] = copied
+        return copied
+
+    def __repr__(self) -> str:
+        return f"EventLog({len(self)} records)"
+
+    def recent(self, limit: int = 100) -> tuple[EventLogRecord, ...]:
+        """Bounded observational tail; avoids copying the complete realized log."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("invalid event tail limit")
+        return tuple(self._store.recent(limit))
+
+    def recent_matching(
+        self,
+        event_types: frozenset[str],
+        *,
+        limit: int = 200,
+        scan_limit: int = 5000,
+    ) -> tuple[tuple[EventLogRecord, ...], bool]:
+        if (
+            type(limit) is not int
+            or not 1 <= limit <= 1000
+            or type(scan_limit) is not int
+            or not 1 <= scan_limit <= 10000
+        ):
+            raise ValueError("invalid event tail search limit")
+        found, more = self._store.recent_matching(event_types, limit, scan_limit)
+        return tuple(found), more
+
+    def validate(
+        self, *, minute_index: int | None = None, duration_minutes: int | None = None
+    ) -> None:
+        """Audit realization times before minute_index and within duration_minutes.
+
+        Records are only appended, with unique IDs and sequences; records an earlier
+        audit checked, at an earlier or the same minute, are not checked again.
+        """
+        problem = self._store.audit(minute_index, duration_minutes)
+        if problem == 3:
+            raise ValueError("event log cannot contain future realization times")
+        if problem == 4:
+            raise ValueError("event log is outside the scenario duration")
+
+
+EventLog: Any = _NativeEventLog if native.available() else _PythonEventLog
+
+
 class EventsById(Mapping[str, ScheduledEvent]):
     """Pending and realized events by ID, read through the EventLog index.
 
@@ -321,7 +474,7 @@ class EventsById(Mapping[str, ScheduledEvent]):
 
     def __iter__(self) -> Iterator[str]:
         yield from (event_id for event_id in self._pending if not self._log.contains_id(event_id))
-        yield from (record.event.event_id for record in self._log._records)
+        yield from self._log.event_ids()
 
     def __len__(self) -> int:
         return len(self._log) + sum(
