@@ -56,7 +56,7 @@ class CheckpointArchive:
         *,
         chunk_records: int = 128,
         max_new_bytes: int | None = None,
-        content_check: Callable[[Any], None] | None = None,
+        content_check: Callable[[Any, bytes | None], None] | None = None,
         encoder: CanonicalEncoder | None = None,
         known_locations: dict[str, tuple[str, int, int]] | None = None,
     ) -> None:
@@ -64,7 +64,9 @@ class CheckpointArchive:
         self.chunk_records = chunk_records
         self.max_new_bytes = max_new_bytes
         # Called on every chunk value (and large-object field names) that is not
-        # already stored. Stored chunks passed the same check when first written.
+        # already stored, with the chunk's canonical JSON. Stored chunks passed the same
+        # check when first written. The value may be a function returning it, so a check
+        # that reads the bytes does not parse a slice of SavedItems.
         self.content_check = content_check
         # The encoder of a just-captured Checkpoint already holds the bytes of the
         # history it reused; chunks and sizes are the same with or without it.
@@ -123,7 +125,7 @@ class CheckpointArchive:
         if self._stored(key):
             return key
         if self.content_check is not None:
-            self.content_check(value)
+            self.content_check(value, raw)
         compressed = gzip.compress(raw, compresslevel=3, mtime=0)
         if (
             self.max_new_bytes is not None
@@ -181,7 +183,7 @@ class CheckpointArchive:
         if isinstance(value, dict) and self._size(value) > 65_536:
             if self.content_check is not None:
                 # Field names of a split object live in the manifest, not a chunk.
-                self.content_check(dict.fromkeys(value))
+                self.content_check(dict.fromkeys(value), None)
             return {
                 "kind": "object",
                 "fields": {key: self._pack(item) for key, item in sorted(value.items())},
@@ -204,7 +206,7 @@ class CheckpointArchive:
         key = hashlib.sha256(raw).hexdigest()
         if len(raw) > 16_777_216 or not self._stored(key):
             # Only a new chunk reads its items (SavedItems parses them).
-            key = self._put(value[start : start + count], raw)
+            key = self._put(lambda: value[start : start + count], raw)
         if self.encoder is not None:
             self.encoder.remember_chunk(items, start, count, key)
         return key

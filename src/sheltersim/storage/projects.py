@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised on Windows.
     fcntl = None
     import msvcrt
 
+from sheltersim import native
 from sheltersim.contracts.api import BranchReference, EvidenceReference, RunReference
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
@@ -157,8 +158,22 @@ def _copy_restored(
     return deepcopy(world, memo), deepcopy(metrics)
 
 
-def _reject_sensitive_checkpoint_content(value: Any) -> None:
-    if safe_document(value) != value:
+def _reject_sensitive_checkpoint_content(value: Any, raw: bytes | None = None) -> None:
+    """Reject value, a chunk not stored before; raw is its canonical JSON, if known.
+
+    From raw, the same keys and strings are checked as in safe_document(), with the same
+    functions, but only each distinct one and without building or walking the document.
+    """
+    candidates = native.sensitive_candidates(raw) if raw is not None else None
+    if candidates is None:
+        document = value() if callable(value) else value
+        if safe_document(document) != document:
+            raise StorageError("checkpoint contains sensitive data")
+        return
+    keys, strings = candidates
+    if any(_private_field(key) for key in keys):
+        raise StorageError("sensitive fields cannot be persisted")
+    if any(safe_document(text) != text for text in strings):
         raise StorageError("checkpoint contains sensitive data")
 
 
