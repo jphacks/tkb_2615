@@ -12,6 +12,7 @@ from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.tick_validation import PairKeys, saved_json
 from sheltersim.core.world import WorldState
+from sheltersim.domain.models import ordered_pair_key
 from sheltersim.policies.affect import create_affect_policy
 
 BODY_STATE_KEY = "body_state_v1"
@@ -767,7 +768,7 @@ def _recorded_contact_distance(world: WorldState, first_id: str, second_id: str)
 
 
 def _relationship_trust(state: dict[str, Any], recipient: str, sender: str) -> float:
-    key = json.dumps([recipient, sender], separators=(",", ":"))
+    key = ordered_pair_key(recipient, sender)
     record = state["relationships"].get(key)
     value = record.get("trust") if isinstance(record, dict) else None
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.5
@@ -796,7 +797,7 @@ def _record_relationship(
     causation_id: str | None = None,
     model_configs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    key = json.dumps([recipient, sender], separators=(",", ":"))
+    key = ordered_pair_key(recipient, sender)
     relationships = state["relationships"]
     record = relationships.get(key)
     if record is None:

@@ -5,8 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from importlib.resources import files
@@ -15,6 +14,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from sheltersim.contracts.extensions import ExtensionModel, Identifier
+from sheltersim.core.context import ContextScope
 from sheltersim.domain.psychological_state import (
     INTEGRATED_PSYCHOLOGY_POLICY_VERSION,
     LIFE_STATE_PSYCHOLOGY_POLICIES,
@@ -161,23 +161,17 @@ _SELECTION_SCOPE: ContextVar[list[tuple[Any, dict[str, str]]] | None] = ContextV
 )
 
 
-@contextmanager
 def selected_models_scope(
     selections: list[tuple[Any, dict[str, str]]] | None = None,
-) -> Iterator[None]:
+) -> AbstractContextManager[None]:
     """Reuse the selection of each model_configs object while it cannot change.
 
     ``selections`` carries the results of an earlier scope; the caller clears it when the
     configs may have changed.
     """
     if _SELECTION_SCOPE.get() is not None:
-        yield
-        return
-    token = _SELECTION_SCOPE.set([] if selections is None else selections)
-    try:
-        yield
-    finally:
-        _SELECTION_SCOPE.reset(token)
+        return nullcontext()
+    return ContextScope(_SELECTION_SCOPE, [] if selections is None else selections)
 
 
 def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:

@@ -4,7 +4,7 @@ Python collects its youngest generation after every 700 new container objects, a
 each third-generation collection walks every live object. A day of computation for
 100 people keeps millions of history objects alive, so those collections took about
 7% of the time (#234). While a computation runs or a Checkpoint loads, the youngest
-generation is collected after 50,000 new objects instead; the previous thresholds
+generation is collected after 200,000 new objects instead; the previous thresholds
 are restored when the last such section ends. This is process-wide, so it also
 applies to other threads while a section is active.
 """
@@ -16,7 +16,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-_YOUNGEST_THRESHOLD = 50_000
+_YOUNGEST_THRESHOLD = 200_000
 _OLDER_THRESHOLDS = (20, 10)
 
 _lock = threading.Lock()

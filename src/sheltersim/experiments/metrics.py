@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from sheltersim import native
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import SupportRequestStatus
 from sheltersim.domain.resources import RESOURCE_METRIC_FIELDS, resource_metric_values
@@ -14,6 +15,14 @@ from sheltersim.domain.staff import (
     support_wait_reason_codes,
     support_waited_minutes,
 )
+
+
+def _source_ids_json(source_ids: dict[str, Any]) -> str:
+    encoded = native.canonical_json(source_ids)
+    if encoded is not None:
+        return encoded.decode()
+    # The kernel leaves any value it does not handle, NaN included, to json.
+    return json.dumps(source_ids, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -60,10 +69,9 @@ class MetricSnapshot:
         )
         stresses = [agent.stress for agent in world.agents.values()]
         high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
-        # Most requests of a long Run are settled, so they are read once here.
         active_support = [
             request
-            for request in world.support_requests.values()
+            for request in world.unsettled_support_requests()
             if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
         ]
         active_support_agent_ids = sorted(request.agent_id for request in active_support)
@@ -153,12 +161,7 @@ class MetricSnapshot:
             support_wait_staff_off_shift_request_minutes=world.metric_state.get(
                 "support_wait_staff_off_shift_request_minutes", 0.0
             ),
-            source_ids_json=json.dumps(
-                source_ids,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
+            source_ids_json=_source_ids_json(source_ids),
         )
 
     def csv_row(self) -> dict[str, Any]:

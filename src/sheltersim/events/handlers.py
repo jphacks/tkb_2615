@@ -2597,7 +2597,7 @@ def _interrupt_support_task(
     request = next(
         (
             request
-            for request in world.support_requests.values()
+            for request in world.unsettled_support_requests()
             if request.status is SupportRequestStatus.ASSIGNED and request.task_id == task_id
         ),
         None,

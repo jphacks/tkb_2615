@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -443,6 +445,18 @@ class NeedState:
     def validate(self) -> None:
         """Reject values outside the declared 0..1 simulation scale."""
         _validate_need_levels(self)
+
+
+@functools.lru_cache(maxsize=65_536)
+def _text_pair_key(first: str, second: str) -> str:
+    return json.dumps([first, second], separators=(",", ":"))
+
+
+def ordered_pair_key(first: Any, second: Any) -> str:
+    """The JSON key of an ordered pair of IDs, which a tick makes about 40 times."""
+    if type(first) is str and type(second) is str:
+        return _text_pair_key(first, second)
+    return json.dumps([first, second], separators=(",", ":"))
 
 
 def validate_unit_interval(name: str, value: float) -> None:

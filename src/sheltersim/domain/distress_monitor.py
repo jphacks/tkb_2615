@@ -54,7 +54,8 @@ def record_distress_monitor_tick(
         recovered_total = metrics.get(total_key, 0.0)
         recovered_count = metrics.get(count_key, 0.0)
         for value in (run, longest, episodes, recovered_total, recovered_count):
-            if not math.isfinite(value) or value < 0.0:
+            # Not finite or negative; NaN fails the comparison.
+            if not 0.0 <= value < math.inf:
                 raise ValueError("distress monitor state must be finite and non-negative")
 
         was_high = previous >= threshold
