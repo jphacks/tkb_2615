@@ -24,6 +24,26 @@ PYTHONPATH=src SHELTERSIM_LLM_MODE=offline python benchmarks/investigate_perform
 
 `--route library` は単体実行、`--route project` は `ProjectAPI.submit()` からworker完了までを測ります。`--scenario-file` で承認済みScenarioのローカルコピーを指定できます。生Scenarioには人口情報が含まれる場合があるため、出力先はGit管理外にします。`result.json` の処理別時間は内側の処理を含む累積値なので合計しません。修正前後の比較では `world_hash`、`events_hash`、`metrics_hash` が一致することも確認します。ネットワーク接続は計測中に拒否します。
 
+### ハッシュの比較
+
+`--expect` に前の計測の `result.json` を渡すと、`world_hash`・`events_hash`・`metrics_hash` を比べます。結果は `result.json` の `expected_hashes` に記録し、1つでも違えば終了コード1で終わります。同じScenario・期間で、変更の前後の計算結果が変わっていないことを確かめるときに使います。
+
+```shell
+PYTHONPATH=src SHELTERSIM_LLM_MODE=offline python benchmarks/investigate_performance.py \
+  --scenario generated --duration 1440 --route project --output /tmp/sheltersim-perf-after \
+  --expect /tmp/sheltersim-perf-before/result.json
+```
+
+### 長いRunの終わりだけを測る
+
+7日分のような長いRunの終わりの保存とtickは、Runを最初から計算し直さずに測れます。前の `--route project` の計測が残した `projects` を `--from-project` に渡し、`--fork-minute` の時刻で `main` から介入なしの子Branch（`late-{分}`）を作って、そこから `--duration` 分だけ計算します。Scenarioは保存されたRunのものを使います。分岐にかかった時間は `result.json` の `late_window.fork_seconds` に記録します。同じ時刻からは1回しか分岐できないので、測り直すときは別の時刻を選ぶか、元の計測をやり直します。子Branchの最後の世界は、元のRunの同じ時刻の世界と同じなので、元のRunの終わりまで計算すれば `--expect` で比べられます。
+
+```shell
+PYTHONPATH=src SHELTERSIM_LLM_MODE=offline python benchmarks/investigate_performance.py \
+  --route project --from-project /tmp/sheltersim-perf-7d/projects --fork-minute 9600 \
+  --duration 240 --output /tmp/sheltersim-perf-7d-late
+```
+
 ## 保持した1日計測
 
 次の結果は、コードSHA `19e5cde0a4d59de140582e45b6c9dce3e2b04b7b` の時点で取得した、Linux x86_64・CPython 3.12.14・報告CPU数3の単一seed（2026）結果です。1ケースあたり1440分、trace level `off`、offline modeを使用し、有料API呼び出しはありません。元の作業環境に含まれていたScenarioの絶対パスだけを移管時にリポジトリ相対パスへ置き換えています。値と計測対象は変更していません。

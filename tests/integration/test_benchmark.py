@@ -71,3 +71,53 @@ def test_scaled_benchmark_runs_are_reproducible_and_record_measurements(tmp_path
     assert "Trace (MiB)" in markdown
     assert "Trace volume is measured separately" in markdown
     assert "single-seed result is descriptive only" in markdown
+
+
+def test_a_late_window_reaches_the_full_runs_hashes_and_a_mismatch_fails(tmp_path: Path) -> None:
+    """benchmarks/investigate_performance.py can fork a saved Run and measure only its
+    end; --expect compares the world, events and KPI hashes with an earlier result."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    script = root / "benchmarks" / "investigate_performance.py"
+
+    def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(script), "--route", "project", *arguments],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=600,
+        )
+
+    full = tmp_path / "full"
+    assert run("--duration", "40", "--output", str(full)).returncode == 0
+    late = run(
+        "--duration",
+        "10",
+        "--from-project",
+        str(full / "projects"),
+        "--fork-minute",
+        "30",
+        "--output",
+        str(tmp_path / "late"),
+        "--expect",
+        str(full / "result.json"),
+    )
+    assert late.returncode == 0, late.stderr
+    result = json.loads((tmp_path / "late" / "result.json").read_text(encoding="utf-8"))
+    assert result["late_window"]["fork_minute"] == 30
+    assert result["expected_hashes"]["mismatched"] == []
+
+    shorter = run(
+        "--duration",
+        "30",
+        "--output",
+        str(tmp_path / "shorter"),
+        "--expect",
+        str(full / "result.json"),
+    )
+    assert shorter.returncode == 1
+    assert "hashes differ" in shorter.stderr
