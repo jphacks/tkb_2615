@@ -323,7 +323,11 @@ def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
 
 
 def validate_body_state(
-    world: WorldState, *, validate_event_history: bool = True, tick_memo: Any = None
+    world: WorldState,
+    *,
+    validate_event_history: bool = True,
+    tick_memo: Any = None,
+    history_memo: Any = None,
 ) -> None:
     """Reject partial state, unknown people, out-of-range values and malformed evidence."""
     state = world.model_state.get(BODY_STATE_KEY)
@@ -443,6 +447,8 @@ def validate_body_state(
     history = state["history"]
     if not validate_event_history:
         history = records_since_previous_tick(history, world.minute_index)
+    elif history_memo is not None:
+        history = history_memo.unread((BODY_STATE_KEY, "history"), history, historical_ids)
     for item in history:
         expected = {"event_id", "minute", "kind", "actor_ids", "topic_id", "causation_id", "deltas"}
         if (

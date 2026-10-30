@@ -66,7 +66,12 @@ class Checkpoint:
         history_cache: history converted and restore-checked by an earlier capture
         is reused, and the result is the same Checkpoint.
         """
-        return cls._capture(world, metrics, runtime_state, model_versions, history_cache)[0]
+        try:
+            return cls._capture(world, metrics, runtime_state, model_versions, history_cache)[0]
+        except BaseException:
+            if history_cache is not None:
+                history_cache.forget_validation()
+            raise
 
     @classmethod
     def capture_restored(
@@ -95,7 +100,9 @@ class Checkpoint:
         history_cache: CheckpointHistoryCache | None,
     ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder] | None]:
         # The restored objects are returned only when they share nothing.
-        world.validate()
+        world.validate(
+            _history_memo=None if history_cache is None else history_cache.validation_memo(world)
+        )
         if history_cache is None:
             encoder = CanonicalEncoder()
             world_document = world.to_dict()

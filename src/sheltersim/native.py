@@ -132,6 +132,16 @@ def world_agents_valid(
     )
 
 
+def same_json_items(current: Any, documents: list[Any], start: int, count: int) -> bool | None:
+    """Whether each of current[:count] is exactly documents[start + i], types included
+    (1, 1.0 and True differ, and a tuple and a list), or None without the kernel."""
+    if _native is None:
+        return None
+    if type(current) is not list:
+        return False
+    return _native.same_json_items(current, documents, start, count)
+
+
 def _dict_watchers_installed() -> bool:
     """Hand the dict watcher functions, which are outside the stable ABI, to the kernel."""
     try:
