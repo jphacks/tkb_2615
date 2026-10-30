@@ -78,6 +78,27 @@
 
 **合格の条件：** 7日分のハッシュの一致、全テスト、7日目の Checkpoint の読み込みと分岐の時間。
 
+**読み込みの作り（実装済み）：**
+
+- 復元のための読み込み（`CheckpointArchive.decode_restored`）は、`world_state.event_log` の chunk を記録ごとの bytes に切り分けます（`sheltersim_native.split_json_array`）。文書の中では、bytes を持つ読み取り専用の列（`core/saved_items.py` の `SavedItems`）になります。要素は、Python が読むたびに新しく解析します。
+- 2つのハッシュは、記録の bytes をつないで計算します（書き出し直しません）。
+- EventLog は bytes から Rust の中で組み立てます（`EventLog.from_saved`・`extend_saved`）。解析は並列で行い、足す順は今と同じです。
+- bytes だけでハッシュを確かめると、書き方の違う JSON も通ってしまいます。そこで組み立てるときに、各記録について次を確かめます。合わない記録は `CheckpointError` になります。
+  - 保存が書く正規化した JSON と1バイト違わないこと
+  - `EventLogRecord`・`ScheduledEvent` と同じ検査（項目、状態、種類、ID、整数）に通ること
+- 保存側の履歴キャッシュ（`CheckpointHistoryCache`）は、Rust の EventLog の記録をオブジェクトの同一性ではなく位置と bytes で追います。読み込んだ記録は、続きの保存でも作り直しません。読み込み・分岐の直後の保存では、復元の確認は新しい記録だけを比べます。
+- 分岐の始点の数え方（`history_index`）は、記録の bytes から実現時刻を読みます（`saved_realized_minute`）。
+
+**計測（7日目、2026-10-30）：**
+
+| 処理 | 前 | 後 |
+|---|---:|---:|
+| Checkpoint の読み込み（`load_checkpoint`） | 17.4秒 | 4.2秒 |
+| 7日目近くでの分岐 | 24.0秒 | 6.2秒 |
+| 7日分の計算（画面からの経路、world・events・KPI のハッシュは一致） | 631.7秒 | 556.2秒 |
+| └ Checkpoint の作成 | 約192秒 | 163.1秒 |
+| 最大メモリ（RSS） | 5.8 GB（develop の 650.5秒の回） | 4.8 GB |
+
 **見込み：**
 
 - 読み込み：約18秒 → 数秒

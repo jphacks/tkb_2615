@@ -52,6 +52,16 @@ Checkpoint document) and times them.
   Day-7 world: per-tick validation 10.1 ms → 6.4 ms (social 3.23 → 0.98 ms, body
   2.40 → 0.86 ms).
 
+- `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
+  Each record is its Python object, its canonical JSON bytes, or both; the indexes
+  (ID, sequence, minute, type, provenance keys, care requests, support kinds, facility
+  events) live in Rust. `extend_saved` builds the log from saved bytes, parsing and
+  checking them in parallel without the GIL: each must be the canonical JSON of a record
+  that passes the `EventLogRecord`/`ScheduledEvent` checks. A record object is made
+  only when Python reads it. `split_json_array` cuts a saved chunk into item bytes.
+  Day 7: Checkpoint load 17.4 s → 4.2 s, a fork near day 7 24.0 s → 6.2 s
+  (docs/rust-port.md).
+
 ## Results so far (WSL2, 16 cores, generated Scenario, 100 people)
 
 | Check | Python | Rust |

@@ -17,7 +17,9 @@ from bisect import bisect_left
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.domain.social_dialogue import virtual_dialogue_example
+from sheltersim.events.queue import saved_realized_minute
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest, safe_document
 
 _SCHEMA = """
@@ -503,10 +505,15 @@ class HistoryIndex:
                 # Events and KPI samples before the fork minute are the parent's rows;
                 # histories are read again from the minute before, as after a save.
                 fork_minute = checkpoint.simulation_minute
-                counts["events"] = _leading(
-                    checkpoint.world_state["event_log"],
-                    lambda record: record["realized_minute"] < fork_minute,
-                )
+                events = checkpoint.world_state["event_log"]
+                if isinstance(events, SavedItems):
+                    counts["events"] = _leading(
+                        events.raws, lambda raw: saved_realized_minute(raw) < fork_minute
+                    )
+                else:
+                    counts["events"] = _leading(
+                        events, lambda record: record["realized_minute"] < fork_minute
+                    )
                 counts["kpis"] = _leading(
                     checkpoint.metrics_state["snapshots"],
                     lambda sample: sample["minute_index"] < fork_minute,

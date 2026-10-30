@@ -297,3 +297,33 @@ def test_an_event_log_read_back_from_saved_bytes_makes_records_when_read(impleme
     assert log.with_provenance_object("marker") == records[1::2]
     with pytest.raises(DuplicateEventError):
         log_type.from_saved([saved[0], saved[0]])
+
+
+def test_the_realized_minute_of_saved_bytes_is_the_records_own() -> None:
+    """A payload key of the same name never shadows the record's realized_minute."""
+    from sheltersim.events.models import EventKind, ScheduledEvent
+    from sheltersim.events.queue import record_bytes, saved_realized_minute
+
+    event = ScheduledEvent(
+        event_id="nested-minute",
+        kind=EventKind.EXOGENOUS,
+        due_minute=3,
+        priority=0,
+        sequence=1,
+        event_type="unknown_test_event",
+        payload={"realized_minute": 99, "rows": [{"realized_minute": 98}]},
+    )
+    record = EventLogRecord(event=event, realized_minute=7, status=EventStatus.APPLIED)
+    assert saved_realized_minute(record_bytes(record)) == 7
+
+
+def test_the_rust_saved_record_checks_name_the_model_fields() -> None:
+    import dataclasses
+
+    sheltersim_native = pytest.importorskip("sheltersim_native")
+
+    from sheltersim.events.models import _EVENT_FIELDS
+
+    record_fields, event_fields = sheltersim_native.saved_record_fields()
+    assert set(record_fields) == {item.name for item in dataclasses.fields(EventLogRecord)}
+    assert set(event_fields) == _EVENT_FIELDS

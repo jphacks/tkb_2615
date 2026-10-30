@@ -28,7 +28,9 @@ from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
 from sheltersim.core.collection import fewer_collections
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.world import WorldState
+from sheltersim.events.queue import keeps_saved_bytes
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.storage.checkpoints import ARCHIVE_STORAGE_TYPES, CheckpointArchive
@@ -122,7 +124,7 @@ def safe_document(value: Any) -> Any:
             if not isinstance(key, str) or _private_field(key):
                 raise StorageError("sensitive fields cannot be persisted")
         return {key: safe_document(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, SavedItems)):
         return [safe_document(item) for item in value]
     if isinstance(value, str):
         return _redact(value)
@@ -147,7 +149,10 @@ def _copy_restored(
     world: WorldState, metrics: MetricsRecorder
 ) -> tuple[WorldState, MetricsRecorder]:
     """An independent copy; EventLog records and scheduled events are frozen and shared."""
-    memo: dict[int, Any] = {id(record): record for record in world.event_log.records}
+    # The Rust EventLog's copy shares its records already, made or not.
+    memo: dict[int, Any] = (
+        {} if keeps_saved_bytes(world.event_log) else {id(r): r for r in world.event_log.records}
+    )
     memo.update({id(event): event for event in world.event_queue.pending()})
     return deepcopy(world, memo), deepcopy(metrics)
 

@@ -78,3 +78,11 @@ def body_relationships_problem(
 def event_store() -> Any:
     """A new Rust EventLog store (sheltersim_native.EventStore), or None."""
     return None if _native is None else _native.EventStore()
+
+
+def split_json_array(raw: bytes) -> list[bytes] | None:
+    """The bytes of each item of the canonical JSON array raw, or None without the kernel.
+
+    Raises ValueError when raw is not one JSON array.
+    """
+    return None if _native is None else _native.split_json_array(raw)

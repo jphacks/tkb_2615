@@ -21,19 +21,26 @@ import hashlib
 import json
 import operator
 from collections.abc import Callable, Iterator, Sequence
+from copy import deepcopy
 from dataclasses import asdict, fields
 from typing import Any
 
+from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
-from sheltersim.events.queue import EventLog
+from sheltersim.events.queue import EventLog, keeps_saved_bytes
 from sheltersim.experiments.metrics import MetricsRecorder
 
 
 def canonical_bytes(value: Any) -> bytes:
     """The UTF-8 canonical JSON that Checkpoint hashes and archive chunks use."""
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=json_default,
     ).encode()
 
 
@@ -68,6 +75,11 @@ class CanonicalEncoder:
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
         self._lists[id(value)] = (value, items)
+        for container in containers:
+            self._containers[id(container)] = container
+
+    def contain(self, *containers: dict[str, Any]) -> None:
+        """Encode containers key by key, as objects on the path to a spliced value."""
         for container in containers:
             self._containers[id(container)] = container
 
@@ -278,6 +290,12 @@ class CheckpointHistoryCache:
         self._pack_locations: dict[str, tuple[str, int, int]] = {}
         # The EventLog of the last restore check (see restored_log()).
         self._log: EventLog | None = None
+        # For a Rust EventLog, which keeps each record's bytes, records are followed
+        # by position: the item bytes of the last documents() (the same objects
+        # while the log only grows), and how many leading restored records are known
+        # to equal the captured ones.
+        self._event_raws: list[bytes] | None = None
+        self._raws_equal = 0
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None
@@ -290,9 +308,19 @@ class CheckpointHistoryCache:
         data = world._canonical_data(include_event_log=False)
         data["model_state"] = _with_empty(world.model_state, histories)
         world_document = json.loads(WorldState._canonical_text(data))
-        self._events.update(world.event_log.records)
-        world_document["event_log"] = list(self._events.documents)
-        encoder.splice(world_document["event_log"], list(self._events.raws), world_document)
+        log = world.event_log
+        if keeps_saved_bytes(log):
+            raws = log.items_bytes(0, len(log))
+            if not self._same_leading_raws(raws):
+                self._log, self._raws_equal = None, 0
+            self._event_raws = raws
+            world_document["event_log"] = SavedItems(raws)
+            encoder.splice(world_document["event_log"], raws, world_document)
+        else:
+            self._event_raws = None
+            self._events.update(log.records)
+            world_document["event_log"] = list(self._events.documents)
+            encoder.splice(world_document["event_log"], list(self._events.raws), world_document)
         for path in histories:
             cache = self._model_histories[path]
             cache.update(_containers(world.model_state, path)[-1][path[-1]])
@@ -315,15 +343,34 @@ class CheckpointHistoryCache:
                 encoder.splice(resource_snapshots, list(self._resource_snapshots.raws))
         return world_document, metric_document, encoder
 
-    def seed_events(self, records: Sequence[EventLogRecord], documents: Sequence[Any]) -> bool:
-        """Start from records a Checkpoint restore made from its event_log documents.
+    def _same_leading_raws(self, raws: list[bytes]) -> bool:
+        # A Rust EventLog that only grew returns the same bytes objects; a replaced
+        # one makes its bytes anew.
+        known = self._event_raws
+        if known is None or len(known) > len(raws):
+            return False
+        return not known or (known[0] is raws[0] and known[-1] is raws[len(known) - 1])
 
-        records[i] must be the record restored from documents[i], and the documents
-        must never change. A restored record converts back to its document when the
-        document has exactly the record's fields, so the first capture then reuses
-        both instead of converting and restoring the whole EventLog. Returns whether
-        the documents were used.
+    def seed_events(self, log: EventLog, documents: Sequence[Any]) -> bool:
+        """Start from a log a Checkpoint restore made from its event_log documents.
+
+        The first len(documents) records of log must be the records restored from
+        documents, and the documents must never change. A restored record converts
+        back to its document when the document has exactly the record's fields, so
+        the first capture then reuses both instead of converting and restoring the
+        whole EventLog. Returns whether the documents were used.
         """
+        if keeps_saved_bytes(log):
+            if not isinstance(documents, SavedItems) or len(log) < len(documents):
+                return False
+            # The log was built from these bytes, so its leading records are the ones
+            # a restore check builds from them, and a copy of a log of only those
+            # records is what the first restore check would build and then extend.
+            self._event_raws = log.items_bytes(0, len(documents))
+            self._raws_equal = len(documents)
+            self._log = deepcopy(log) if len(log) == len(documents) else None
+            return True
+        records = log.records[: len(documents)]
         if len(records) != len(documents) or any(
             set(document) != _RECORD_FIELDS or set(document["event"]) != _EVENT_FIELDS
             for document in documents
@@ -340,11 +387,16 @@ class CheckpointHistoryCache:
         return True
 
     def restored_events(self) -> list[EventLogRecord]:
-        """Records restored from the leading event_log documents of the last documents()."""
-        return list(self._events.restored)
+        """Records restored from the leading event_log documents of the last documents().
+
+        Empty for a Rust EventLog, whose restore check extends restored_log() instead.
+        """
+        return [] if self._event_raws is not None else list(self._events.restored)
 
     def restored_events_equal(self) -> int:
-        """How many leading restored_events() are known to equal the captured records."""
+        """How many leading restored records are known to equal the captured records."""
+        if self._event_raws is not None:
+            return self._raws_equal
         return self._events.restored_equal
 
     def restored_log(self) -> EventLog | None:
@@ -353,20 +405,36 @@ class CheckpointHistoryCache:
         That restored world was discarded, so the next restore check may append the
         new records to its EventLog instead of indexing every record again.
         """
-        log, restored = self._log, self._events.restored
-        if log is None or len(log) != len(restored):
+        log = self._log
+        if log is None:
+            return None
+        if self._event_raws is not None:
+            # It was built from the leading item bytes of the last documents().
+            count = len(log)
+            if count > len(self._event_raws) or (
+                count and log.items_bytes(count - 1, count)[0] is not self._event_raws[count - 1]
+            ):
+                return None
+            return log
+        restored = self._events.restored
+        if len(log) != len(restored):
             return None
         if restored and log.last() is not restored[-1]:
             return None
         return log
 
-    def remember_restored(
-        self, records: Sequence[EventLogRecord], *, equal: bool, log: EventLog | None = None
-    ) -> None:
-        """Keep the records a restore check made from the last documents(), and its log.
+    def remember_restored(self, log: EventLog, *, equal: bool) -> None:
+        """Keep the EventLog a restore check made from the last documents().
 
-        equal says whether the check showed them equal to the captured records.
+        equal says whether the check showed its records equal to the captured records.
         """
+        if self._event_raws is not None:
+            if len(log) != len(self._event_raws):
+                raise ValueError("restored EventLog does not match the captured documents")
+            self._raws_equal = len(log) if equal else 0
+            self._log = log
+            return
+        records = log.records
         if len(records) != len(self._events.items):
             raise ValueError("restored EventLog does not match the captured documents")
         self._events.restored = list(records)

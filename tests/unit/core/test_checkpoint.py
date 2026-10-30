@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 from support.paths import FAILURE_DAY3, SMALL_REPLAY
 
+from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError, CheckpointSchedule
+from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -275,3 +278,59 @@ def test_verifying_a_checkpoint_encodes_its_world_once_and_restores_a_detached_w
     world.model_state["behavior-model"]["adaptive_state"].append(1.0)
     world.metric_state["model_accumulator"] = 0.0
     assert checkpoint.to_json() == saved
+
+
+def _with_saved_event_log(checkpoint: Checkpoint, encode) -> dict:
+    """The Checkpoint's document with its EventLog as item bytes, rehashed over them."""
+    document = json.loads(checkpoint.to_json())
+    world = document["world_state"]
+    raws = [encode(item) for item in world["event_log"]]
+    world["event_log"] = SavedItems(raws)
+    encoder = CanonicalEncoder()
+    encoder.splice(world["event_log"], raws, world)
+    document["state_hash"] = encoder.digest(world)
+    body = {key: value for key, value in document.items() if key != "checkpoint_hash"}
+    encoder.contain(body)
+    document["checkpoint_hash"] = encoder.digest(body)
+    return document
+
+
+def _canonical(item) -> bytes:
+    return json.dumps(
+        item, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode()
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the Rust EventLog")
+def test_a_checkpoint_with_saved_event_bytes_restores_without_making_records(
+    live_checkpoint_world,
+) -> None:
+    """B1: the hashes are checked over the item bytes and the EventLog is built from
+    them; a record is made only when read, and the restored world is the same."""
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    document = _with_saved_event_log(checkpoint, _canonical)
+    assert document["checkpoint_hash"] == checkpoint.checkpoint_hash
+    loaded, (world, _) = Checkpoint._load(document)
+    count = len(live_checkpoint_world.event_log)
+    assert count and world.event_log.unread() == count
+    assert loaded.to_json() == checkpoint.to_json()
+    assert world.canonical_json() == live_checkpoint_world.canonical_json()
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the Rust EventLog")
+def test_a_saved_event_record_that_is_not_canonical_json_fails_closed(
+    live_checkpoint_world,
+) -> None:
+    """Hashes over item bytes alone would accept any spelling of a record, so each must
+    be the canonical JSON a save writes."""
+    checkpoint = Checkpoint.capture(live_checkpoint_world)
+    spaced = _with_saved_event_log(
+        checkpoint, lambda item: json.dumps(item, sort_keys=True).encode()
+    )
+    with pytest.raises(CheckpointError, match="not canonical JSON"):
+        Checkpoint._load(spaced)
+    unknown = _with_saved_event_log(
+        checkpoint, lambda item: _canonical({**item, "status": "maybe"})
+    )
+    with pytest.raises(CheckpointError, match="unknown event status"):
+        Checkpoint._load(unknown)

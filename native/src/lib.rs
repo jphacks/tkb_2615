@@ -94,33 +94,7 @@ impl Encoder {
     }
 
     fn string(&mut self, text: &str) {
-        // json's ensure_ascii=False escapes only '"', '\\' and control characters.
-        self.out.push(b'"');
-        let bytes = text.as_bytes();
-        let mut start = 0;
-        for (index, &byte) in bytes.iter().enumerate() {
-            let escape: &[u8] = match byte {
-                b'"' => b"\\\"",
-                b'\\' => b"\\\\",
-                b'\n' => b"\\n",
-                b'\r' => b"\\r",
-                b'\t' => b"\\t",
-                0x08 => b"\\b",
-                0x0c => b"\\f",
-                0x00..=0x1f => b"",
-                _ => continue,
-            };
-            self.out.extend_from_slice(&bytes[start..index]);
-            if escape.is_empty() {
-                self.out
-                    .extend_from_slice(format!("\\u{:04x}", byte).as_bytes());
-            } else {
-                self.out.extend_from_slice(escape);
-            }
-            start = index + 1;
-        }
-        self.out.extend_from_slice(&bytes[start..]);
-        self.out.push(b'"');
+        write_json_string(&mut self.out, text);
     }
 
     fn float(&mut self, value: f64) -> PyResult<()> {
@@ -131,6 +105,38 @@ impl Encoder {
         Ok(())
     }
 }
+
+/// A JSON string as json.dumps(ensure_ascii=False) writes it.
+pub(crate) fn write_json_string(out: &mut Vec<u8>, text: &str) {
+    // json's ensure_ascii=False escapes only '"', '\\' and control characters.
+    out.push(b'"');
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        let escape: &[u8] = match byte {
+            b'"' => b"\\\"",
+            b'\\' => b"\\\\",
+            b'\n' => b"\\n",
+            b'\r' => b"\\r",
+            b'\t' => b"\\t",
+            0x08 => b"\\b",
+            0x0c => b"\\f",
+            0x00..=0x1f => b"",
+            _ => continue,
+        };
+        out.extend_from_slice(&bytes[start..index]);
+        if escape.is_empty() {
+            out
+                .extend_from_slice(format!("\\u{:04x}", byte).as_bytes());
+        } else {
+            out.extend_from_slice(escape);
+        }
+        start = index + 1;
+    }
+    out.extend_from_slice(&bytes[start..]);
+    out.push(b'"');
+}
+
 
 fn py_int_repr(number: &Bound<'_, PyInt>) -> PyResult<String> {
     let int_type = number.py().get_type::<PyInt>();
@@ -252,5 +258,7 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validation::social_relationships_problem, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_problem, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
+    module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
+    module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;
     Ok(())
 }

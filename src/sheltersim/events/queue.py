@@ -218,6 +218,11 @@ class _PythonEventLog:
         """The EventLog of saved records, each the canonical JSON of its to_dict()."""
         return cls([record_from_bytes(raw) for raw in items])
 
+    def extend_saved(self, items: Iterable[bytes]) -> None:
+        """Append saved records, each the canonical JSON of its to_dict()."""
+        for raw in items:
+            self.append(record_from_bytes(raw))
+
     def items_bytes(self, start: int, end: int) -> list[bytes]:
         """The canonical JSON of the records from start to end."""
         return [record_bytes(record) for record in self._records[start:end]]
@@ -372,14 +377,24 @@ class _NativeEventLog:
         Their indexes are read from the bytes; a record object is made when read.
         """
         log = cls()
-        refused = log._store.extend_saved(items)
-        if refused:
-            raise DuplicateEventError("saved EventLog repeats an event ID or sequence")
+        log.extend_saved(items)
         return log
+
+    def extend_saved(self, items: Iterable[bytes]) -> None:
+        """Append saved records, each the canonical JSON of its to_dict().
+
+        Each must be the canonical JSON of a valid record, or ValueError is raised.
+        """
+        if self._store.extend_saved(items):
+            raise DuplicateEventError("saved EventLog repeats an event ID or sequence")
 
     def items_bytes(self, start: int, end: int) -> list[bytes]:
         """The canonical JSON of the records from start to end."""
         return self._store.items_bytes(start, end)
+
+    def unread(self) -> int:
+        """How many records read back from saved bytes have no object yet."""
+        return self._store.unread()
 
     def append(self, record: EventLogRecord) -> None:
         refused = self._store.append(record)
@@ -504,6 +519,22 @@ class _NativeEventLog:
 
 
 EventLog: Any = _NativeEventLog if native.available() else _PythonEventLog
+
+
+def saved_realized_minute(raw: bytes) -> int:
+    """The realized_minute of a record saved as canonical JSON, without parsing it.
+
+    Canonical JSON orders a record's keys detail, event, realized_minute, status, so
+    the last ',"realized_minute":' is the record's own: any later one would sit in
+    the status, which is one of the EventStatus values.
+    """
+    start = raw.rindex(b',"realized_minute":') + 19
+    return int(raw[start : raw.index(b",", start)])
+
+
+def keeps_saved_bytes(log: Any) -> bool:
+    """Whether log is the Rust EventLog, which keeps each record's saved bytes."""
+    return isinstance(log, _NativeEventLog)
 
 
 class EventsById(Mapping[str, ScheduledEvent]):

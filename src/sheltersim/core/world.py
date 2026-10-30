@@ -12,6 +12,7 @@ from typing import Any
 
 from sheltersim.contracts.policies import selected_models
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_STATE_KEY,
     create_zone_environment_runtime_state,
@@ -1456,9 +1457,13 @@ class WorldState:
         _saved_json the document was read from hash-checked canonical JSON, so event
         payloads are not encoded again to check they are JSON (ScheduledEvent.from_saved).
         With _borrow the new world keeps the document's objects instead of copies; only
-        a caller that reads the world and discards it may pass it. _restored_log is
+        a caller that reads the world and discards it, or that owns a new document,
+        may pass it. _restored_log is
         such a discarded world's EventLog of the leading event_log documents; the new
         records are appended to it, keeping its indexes, instead of building a new one.
+
+        An event_log read back as item bytes (SavedItems) builds the EventLog from
+        them; each record is made when read (EventLog.from_saved).
         """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
@@ -1598,21 +1603,26 @@ class WorldState:
             leading = _restored_log if _restored_log is not None else _restored_events
             if len(leading) > len(document["event_log"]):
                 raise StateInvariantError("restored EventLog records exceed the document")
-            new_records = (
-                EventLogRecord(
-                    event=event_from(item["event"]),
-                    realized_minute=item["realized_minute"],
-                    status=EventStatus(item["status"]),
-                    detail=item["detail"],
-                )
-                for item in document["event_log"][len(leading) :]
-            )
-            if _restored_log is not None:
-                log = _restored_log
-                for record in new_records:
-                    log.append(record)
+            saved = document["event_log"]
+            if isinstance(saved, SavedItems):
+                log = _restored_log if _restored_log is not None else EventLog(_restored_events)
+                log.extend_saved(saved.raws[len(log) :])
             else:
-                log = EventLog([*_restored_events, *new_records])
+                new_records = (
+                    EventLogRecord(
+                        event=event_from(item["event"]),
+                        realized_minute=item["realized_minute"],
+                        status=EventStatus(item["status"]),
+                        detail=item["detail"],
+                    )
+                    for item in saved[len(leading) :]
+                )
+                if _restored_log is not None:
+                    log = _restored_log
+                    for record in new_records:
+                        log.append(record)
+                else:
+                    log = EventLog([*_restored_events, *new_records])
             world = cls(
                 scenario_id=document["scenario_id"],
                 seed=document["seed"],

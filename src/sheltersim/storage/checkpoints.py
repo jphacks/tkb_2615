@@ -14,11 +14,14 @@ import os
 import re
 import tempfile
 from bisect import bisect_right
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable
 
+from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CanonicalEncoder
+from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricsRecorder
 
@@ -29,10 +32,18 @@ ARCHIVE_STORAGE_TYPES = frozenset(
     {"checkpoint_archive_v1", "checkpoint_archive_v2", "checkpoint_archive_v3"}
 )
 
+# The list a restore reads as item bytes (SavedItems) when the Rust EventLog is there.
+_SAVED_EVENT_LOG = ("world_state", "event_log")
+
 
 def _encoded(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=json_default,
     ).encode()
 
 
@@ -144,8 +155,11 @@ class CheckpointArchive:
             Path(temporary).unlink(missing_ok=True)
 
     def _pack(self, value: Any) -> dict[str, Any]:
-        if isinstance(value, list) and len(value) > self.chunk_records:
-            items = self.encoder.list_items(value) if self.encoder is not None else None
+        if isinstance(value, (list, SavedItems)) and len(value) > self.chunk_records:
+            if isinstance(value, SavedItems):
+                items = value.raws
+            else:
+                items = self.encoder.list_items(value) if self.encoder is not None else None
             return {
                 "kind": "list_v2",
                 "chunks": [
@@ -177,18 +191,22 @@ class CheckpointArchive:
             "chunk": self._put(value, None if self.encoder is None else self.encoder.encode(value)),
         }
 
-    def _put_slice(self, value: list[Any], items: list[bytes] | None, start: int) -> str:
+    def _put_slice(self, value: Sequence[Any], items: list[bytes] | None, start: int) -> str:
         count = min(self.chunk_records, len(value) - start)
-        if items is None or self.encoder is None:
+        if items is None:
             return self._put(value[start : start + count])
-        key = self.encoder.chunk_key(items, start, count)
-        if key is not None and self._stored(key):
-            # The same item bytes as a chunk saved before by this writer.
-            return key
-        key = self._put(
-            value[start : start + count], b"[" + b",".join(items[start : start + count]) + b"]"
-        )
-        self.encoder.remember_chunk(items, start, count, key)
+        if self.encoder is not None:
+            key = self.encoder.chunk_key(items, start, count)
+            if key is not None and self._stored(key):
+                # The same item bytes as a chunk saved before by this writer.
+                return key
+        raw = b"[" + b",".join(items[start : start + count]) + b"]"
+        key = hashlib.sha256(raw).hexdigest()
+        if len(raw) > 16_777_216 or not self._stored(key):
+            # Only a new chunk reads its items (SavedItems parses them).
+            key = self._put(value[start : start + count], raw)
+        if self.encoder is not None:
+            self.encoder.remember_chunk(items, start, count, key)
         return key
 
     def _size(self, value: Any) -> int:
@@ -264,6 +282,14 @@ class CheckpointArchive:
             self.encoder.pack_locations.update(prepared)
 
     def _get(self, key: str) -> Any:
+        raw = self._get_raw(key)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise CheckpointError("checkpoint chunk is missing or corrupt") from exc
+
+    def _get_raw(self, key: str) -> bytes:
+        """The hash-checked bytes of one chunk."""
         if not isinstance(key, str) or not _HASH.fullmatch(key):
             raise CheckpointError("invalid checkpoint chunk hash")
         location = self._locations.get(key)
@@ -288,17 +314,28 @@ class CheckpointArchive:
                     raw = member.read(16_777_217)
             if len(raw) > 16_777_216 or hashlib.sha256(raw).hexdigest() != key:
                 raise CheckpointError("checkpoint chunk integrity/size mismatch")
-            return json.loads(raw)
-        except (OSError, EOFError, json.JSONDecodeError) as exc:
+            return raw
+        except (OSError, EOFError) as exc:
             raise CheckpointError("checkpoint chunk is missing or corrupt") from exc
 
-    def _unpack(self, node: dict[str, Any], *, depth: int = 0) -> Any:
+    def _unpack(
+        self,
+        node: dict[str, Any],
+        *,
+        depth: int = 0,
+        path: tuple[str, ...] = (),
+        saved: bool = False,
+    ) -> Any:
+        # With saved, a restore reads the EventLog as item bytes, which the Rust
+        # EventLog parses and checks (SavedItems); anything else is parsed here.
         if depth > 64 or not isinstance(node, dict):
             raise CheckpointError("invalid checkpoint archive structure")
         if node.get("kind") == "value" and set(node) == {"kind", "chunk"}:
             return self._get(node["chunk"])
         if node.get("kind") == "list_v2" and set(node) == {"kind", "chunks", "starts", "length"}:
             self._indexed_list_metadata(node)
+            if saved and path == _SAVED_EVENT_LOG and native.available():
+                return self._saved_items(node)
             values = []
             for index, key in enumerate(node["chunks"]):
                 chunk = self._get(key)
@@ -326,9 +363,25 @@ class CheckpointArchive:
             return values
         if node.get("kind") == "object" and set(node) == {"kind", "fields"}:
             return {
-                key: self._unpack(value, depth=depth + 1) for key, value in node["fields"].items()
+                key: self._unpack(value, depth=depth + 1, path=(*path, key), saved=saved)
+                for key, value in node["fields"].items()
             }
         raise CheckpointError("unsupported checkpoint archive node")
+
+    def _saved_items(self, node: dict[str, Any]) -> SavedItems:
+        raws: list[bytes] = []
+        for index, key in enumerate(node["chunks"]):
+            if node["starts"][index] != len(raws):
+                raise CheckpointError("indexed list chunk/offset mismatch")
+            try:
+                items = native.split_json_array(self._get_raw(key))
+            except ValueError as exc:
+                raise CheckpointError("list chunk has incompatible type") from exc
+            assert items is not None
+            raws.extend(items)
+        if len(raws) != node["length"]:
+            raise CheckpointError("indexed list length mismatch")
+        return SavedItems(raws)
 
     def decode(self, record: dict[str, Any]) -> Checkpoint:
         return self.decode_restored(record)[0]
@@ -339,7 +392,7 @@ class CheckpointArchive:
         """decode(), and the world and metrics its restore check built."""
         self._validate_manifest(record)
         # Each chunk is parsed anew, so the unpacked document is not shared.
-        checkpoint, restored = Checkpoint._load(self._unpack(record["document"]))
+        checkpoint, restored = Checkpoint._load(self._unpack(record["document"], saved=True))
         if checkpoint.checkpoint_hash != record["checkpoint_hash"]:
             raise CheckpointError("checkpoint archive pointer hash mismatch")
         return checkpoint, restored

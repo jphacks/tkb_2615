@@ -11,8 +11,12 @@ import hashlib
 import json
 from dataclasses import replace
 
+import pytest
+
+from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache, canonical_bytes
+from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.world import WorldState
 from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventKind, ScheduledEvent
@@ -36,6 +40,12 @@ def _realize(world: WorldState, name: str) -> None:
 
 def _sample(metrics: MetricsRecorder, minute: int) -> None:
     metrics.snapshots.append(replace(metrics.snapshots[0], minute_index=minute))
+
+
+def _restored_before(kwargs: dict) -> int:
+    """How many records a restore check's from_dict had restored before."""
+    log = kwargs.get("_restored_log")
+    return len(log) if log is not None else len(kwargs["_restored_events"])
 
 
 def _full_documents(world: WorldState, metrics: MetricsRecorder) -> tuple[dict, dict]:
@@ -106,7 +116,7 @@ def test_cached_capture_is_the_full_capture_and_restores_only_new_records(
 
     def from_dict(cls, document, **kwargs):
         if "_restored_events" in kwargs:
-            reused.append((len(kwargs["_restored_events"]), len(document["event_log"])))
+            reused.append((_restored_before(kwargs), len(document["event_log"])))
         return original(cls, document, **kwargs)
 
     monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
@@ -133,10 +143,14 @@ def test_a_new_world_object_is_converted_and_restored_again(live_checkpoint_worl
     assert first.to_json() == Checkpoint.capture(world).to_json()
 
 
+@pytest.mark.skipif(native.available(), reason="the Python EventLog only")
 def test_a_cache_seeded_with_a_restored_event_log_captures_what_a_full_capture_does(
     live_checkpoint_world, monkeypatch
 ) -> None:
-    """A load or a fork seeds the EventLog its restore made, so the first save reuses it."""
+    """A load or a fork seeds the EventLog its restore made, so the first save reuses it.
+
+    This is the Python EventLog, which follows records by identity.
+    """
     world = live_checkpoint_world
     _realize(world, "cache-event-1")
     saved = Checkpoint.capture(world)
@@ -147,12 +161,12 @@ def test_a_cache_seeded_with_a_restored_event_log_captures_what_a_full_capture_d
 
     def from_dict(cls, document, **kwargs):
         if "_restored_events" in kwargs:
-            parsed.append(len(document["event_log"]) - len(kwargs["_restored_events"]))
+            parsed.append(len(document["event_log"]) - _restored_before(kwargs))
         return original(cls, document, **kwargs)
 
     monkeypatch.setattr(WorldState, "from_dict", classmethod(from_dict))
     cache = CheckpointHistoryCache()
-    assert cache.seed_events(restored.event_log.records, documents)
+    assert cache.seed_events(restored.event_log, documents)
     _realize(restored, "cache-event-2")
     cached = Checkpoint.capture(restored, history_cache=cache)
     assert cached.to_json() == Checkpoint.capture(restored).to_json()
@@ -162,10 +176,53 @@ def test_a_cache_seeded_with_a_restored_event_log_captures_what_a_full_capture_d
     # A document that a record does not convert back to is never seeded.
     extra = [dict(documents[0], note="older field"), *documents[1:]]
     unseeded = CheckpointHistoryCache()
-    assert not unseeded.seed_events(restored.event_log.records[: len(extra)], extra)
-    assert not unseeded.seed_events(restored.event_log.records, documents)
+    assert not unseeded.seed_events(restored.event_log, extra)
+    # Nor are more documents than the log has records.
+    more = [*documents, *documents, *documents]
+    assert len(more) > len(restored.event_log)
+    assert not unseeded.seed_events(restored.event_log, more)
     cached = Checkpoint.capture(restored, history_cache=unseeded)
     assert cached.to_json() == Checkpoint.capture(restored).to_json()
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the Rust EventLog")
+def test_a_cache_seeded_with_saved_event_bytes_compares_only_the_new_records(
+    live_checkpoint_world, monkeypatch
+) -> None:
+    """A Rust EventLog restored from saved bytes is seeded by position: the first save
+    reuses its bytes, and its restore check compares only the records added since."""
+    world = live_checkpoint_world
+    _realize(world, "cache-event-1")
+    saved = Checkpoint.capture(world)
+    documents = SavedItems([canonical_bytes(item) for item in saved.world_state["event_log"]])
+    restored = WorldState.from_dict(
+        {**json.loads(canonical_bytes(saved.world_state)), "event_log": documents},
+        _saved_json=True,
+    )
+    assert restored.event_log.unread() == len(documents)
+    compared = []
+    same_state = WorldState.same_state
+
+    def counting_same_state(self, other, **kwargs):
+        compared.append(kwargs.get("known_equal_events"))
+        return same_state(self, other, **kwargs)
+
+    monkeypatch.setattr(WorldState, "same_state", counting_same_state)
+    cache = CheckpointHistoryCache()
+    assert cache.seed_events(restored.event_log, documents)
+    _realize(restored, "cache-event-2")
+    cached = Checkpoint.capture(restored, history_cache=cache)
+    assert compared == [len(documents)]
+    # The seeded records were neither encoded nor read again.
+    assert restored.event_log.unread() == len(documents)
+    assert isinstance(cached.world_state["event_log"], SavedItems)
+    assert cached.world_state["event_log"].raws[: len(documents)] == documents.raws
+    assert cached.to_json() == Checkpoint.capture(restored).to_json()
+
+    # Documents that are not saved bytes are never seeded into a Rust EventLog.
+    assert not CheckpointHistoryCache().seed_events(
+        restored.event_log, saved.world_state["event_log"]
+    )
 
 
 def test_a_restored_world_equal_to_the_captured_one_is_not_validated_again(
@@ -289,5 +346,5 @@ def test_a_restore_check_extends_the_last_checks_eventlog(
     # A cache seeded with a live world's records never extends that world's log.
     seeded = CheckpointHistoryCache()
     saved = Checkpoint.capture(world)
-    assert seeded.seed_events(world.event_log.records, saved.world_state["event_log"])
+    seeded.seed_events(world.event_log, saved.world_state["event_log"])
     assert seeded.restored_log() is None

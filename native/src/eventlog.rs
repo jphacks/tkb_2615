@@ -230,12 +230,21 @@ impl EventStore {
 
     /// Append records saved as canonical JSON bytes (event_log documents of a
     /// Checkpoint), in order: 0, or the code of the first refused one.
-    fn extend_saved(&mut self, items: &Bound<'_, PyAny>) -> PyResult<u8> {
+    fn extend_saved(&mut self, py: Python<'_>, items: &Bound<'_, PyAny>) -> PyResult<u8> {
+        let mut saved: Vec<Py<PyBytes>> = Vec::new();
         for item in items.try_iter()? {
-            let item = item?;
-            let bytes = item.downcast::<PyBytes>()?;
-            let fields = fields_of_bytes(bytes.as_bytes())?;
-            let refused = self.add(fields, None, Some(bytes.clone().unbind()));
+            saved.push(item?.downcast_into::<PyBytes>()?.unbind());
+        }
+        // Records are parsed and checked in parallel without the GIL (the bytes are
+        // immutable and held here), then added in order, as one by one.
+        let slices: Vec<&[u8]> = saved.iter().map(|bytes| bytes.as_bytes(py)).collect();
+        let parsed: Vec<Result<Fields, String>> = py.allow_threads(|| {
+            use rayon::prelude::*;
+            slices.par_iter().map(|bytes| fields_of_bytes(bytes)).collect()
+        });
+        for (fields, bytes) in parsed.into_iter().zip(saved) {
+            let fields = fields.map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let refused = self.add(fields, None, Some(bytes));
             if refused != 0 {
                 return Ok(refused);
             }
@@ -506,14 +515,22 @@ fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
     })
 }
 
-fn bad_document(what: &str) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("saved EventLog record: {what}"))
+fn bad_document(what: &str) -> String {
+    format!("saved EventLog record: {what}")
 }
 
-fn fields_of_bytes(bytes: &[u8]) -> PyResult<Fields> {
+/// The index fields of one saved record, after the checks EventLogRecord makes and a
+/// check that the bytes are its canonical JSON. Runs without the GIL.
+fn fields_of_bytes(bytes: &[u8]) -> Result<Fields, String> {
     use serde_json::Value;
     let document: Value =
         serde_json::from_slice(bytes).map_err(|error| bad_document(&error.to_string()))?;
+    check_saved_record(&document).map_err(|what| bad_document(what))?;
+    let mut canonical = Vec::with_capacity(bytes.len());
+    write_canonical(&mut canonical, &document).map_err(|what| bad_document(what))?;
+    if canonical != bytes {
+        return Err(bad_document("record is not canonical JSON"));
+    }
     let event = document.get("event").ok_or_else(|| bad_document("no event"))?;
     let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
     let payload = event.get("payload");
@@ -548,4 +565,184 @@ fn fields_of_bytes(bytes: &[u8]) -> PyResult<Fields> {
         facility_id: payload_text("facility_id"),
         provenance_objects,
     })
+}
+
+const RECORD_FIELDS: [&str; 4] = ["detail", "event", "realized_minute", "status"];
+const EVENT_FIELDS: [&str; 10] = [
+    "causation_id",
+    "due_minute",
+    "event_id",
+    "event_type",
+    "kind",
+    "payload",
+    "priority",
+    "provenance",
+    "sequence",
+    "source_id",
+];
+const EVENT_KINDS: [&str; 4] = ["exogenous", "completion", "endogenous", "intervention"];
+const EVENT_STATUSES: [&str; 3] = ["applied", "failed", "suppressed"];
+
+/// The field names a saved record and its event must have, for a test against
+/// the Python models.
+#[pyfunction]
+pub fn saved_record_fields() -> (Vec<&'static str>, Vec<&'static str>) {
+    (RECORD_FIELDS.to_vec(), EVENT_FIELDS.to_vec())
+}
+
+fn stable_id(value: &serde_json::Value) -> bool {
+    // models._STABLE_ID: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$
+    let Some(text) = value.as_str() else {
+        return false;
+    };
+    let bytes = text.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(byte))
+}
+
+fn exact_int(value: &serde_json::Value, minimum: Option<i64>) -> bool {
+    // A JSON number with a fraction or exponent reads back as a float in Python.
+    let integral = matches!(value, serde_json::Value::Number(number)
+        if !number.to_string().contains(['.', 'e', 'E']));
+    integral && value.as_i64().is_some_and(|number| minimum.is_none_or(|low| number >= low))
+}
+
+/// The checks EventLogRecord and ScheduledEvent.from_saved make of a saved record.
+fn check_saved_record(document: &serde_json::Value) -> Result<(), &'static str> {
+    use serde_json::Value;
+    let has_fields = |value: &Value, names: &[&str]| {
+        value
+            .as_object()
+            .is_some_and(|object| object.len() == names.len() && names.iter().all(|name| object.contains_key(*name)))
+    };
+    if !has_fields(document, &RECORD_FIELDS) {
+        return Err("record fields do not match EventLogRecord");
+    }
+    if !exact_int(&document["realized_minute"], Some(0)) {
+        return Err("realized_minute must be a non-negative integer");
+    }
+    if !document["status"].as_str().is_some_and(|status| EVENT_STATUSES.contains(&status)) {
+        return Err("unknown event status");
+    }
+    let event = &document["event"];
+    if !has_fields(event, &EVENT_FIELDS) {
+        return Err("event fields do not match ScheduledEvent");
+    }
+    if !stable_id(&event["event_id"]) || !stable_id(&event["event_type"]) {
+        return Err("event_id and event_type must be stable IDs");
+    }
+    for name in ["source_id", "causation_id"] {
+        if !event[name].is_null() && !stable_id(&event[name]) {
+            return Err("source_id and causation_id must be stable IDs");
+        }
+    }
+    if !event["kind"].as_str().is_some_and(|kind| EVENT_KINDS.contains(&kind)) {
+        return Err("unknown event kind");
+    }
+    if !exact_int(&event["due_minute"], Some(0)) || !exact_int(&event["sequence"], Some(0)) {
+        return Err("event due_minute and sequence must be non-negative integers");
+    }
+    if !exact_int(&event["priority"], None) {
+        return Err("event priority must be an integer");
+    }
+    if !event["payload"].is_object() || !event["provenance"].is_object() {
+        return Err("event payload and provenance must be objects");
+    }
+    Ok(())
+}
+
+/// json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) of
+/// a value read from JSON, numbers written as Python reads and writes them back.
+fn write_canonical(out: &mut Vec<u8>, value: &serde_json::Value) -> Result<(), &'static str> {
+    use serde_json::Value;
+    match value {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(flag) => out.extend_from_slice(if *flag { b"true" } else { b"false" }),
+        Value::Number(number) => {
+            let text = number.to_string();
+            if text.contains(['.', 'e', 'E']) {
+                let parsed: f64 = text.parse().map_err(|_| "invalid number")?;
+                if !parsed.is_finite() {
+                    return Err("number is not finite");
+                }
+                out.extend_from_slice(crate::python_float_repr(parsed).as_bytes());
+            } else if text == "-0" {
+                out.push(b'0');
+            } else {
+                out.extend_from_slice(text.as_bytes());
+            }
+        }
+        Value::String(text) => crate::write_json_string(out, text),
+        Value::Array(items) => {
+            out.push(b'[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical(out, item)?;
+            }
+            out.push(b']');
+        }
+        Value::Object(object) => {
+            // serde_json's map is ordered by key bytes, as Python orders str.
+            out.push(b'{');
+            for (index, (key, item)) in object.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                crate::write_json_string(out, key);
+                out.push(b':');
+                write_canonical(out, item)?;
+            }
+            out.push(b'}');
+        }
+    }
+    Ok(())
+}
+
+/// The bytes of each item of a JSON array, split where JSON does: at commas outside
+/// strings and nested values. raw must be one canonical JSON array.
+#[pyfunction]
+pub fn split_json_array<'py>(py: Python<'py>, raw: &[u8]) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+    let bad = || pyo3::exceptions::PyValueError::new_err("not a JSON array");
+    let length = raw.len();
+    if length < 2 || raw[0] != b'[' || raw[length - 1] != b']' {
+        return Err(bad());
+    }
+    let mut items = Vec::new();
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    let mut start = 1;
+    for (index, &byte) in raw.iter().enumerate().take(length - 1).skip(1) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => depth = depth.checked_sub(1).ok_or_else(bad)?,
+            b',' if depth == 0 => {
+                items.push(PyBytes::new(py, &raw[start..index]));
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if in_string || depth != 0 {
+        return Err(bad());
+    }
+    if start < length - 1 {
+        items.push(PyBytes::new(py, &raw[start..length - 1]));
+    }
+    Ok(items)
 }

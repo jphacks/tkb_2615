@@ -500,8 +500,7 @@ class TimelineStore:
             raise TimelineError("replay interval outside computed range")
         runtime, checkpoint = self._seek(branch_id, start)
         if history_cache is not None:
-            events = checkpoint.world_state["event_log"]
-            history_cache.seed_events(runtime.world.event_log.records[: len(events)], events)
+            history_cache.seed_events(runtime.world.event_log, checkpoint.world_state["event_log"])
         # Observe the exact saved boundary before controller initialization can
         # install any missing optional state. A one-frame read needs no controller.
         yield runtime.world
@@ -638,7 +637,7 @@ class TimelineStore:
         # Each save reuses the history this loop saved before; the first one reuses
         # the EventLog of the head it continues from.
         history_cache = CheckpointHistoryCache()
-        history_cache.seed_events(runtime.world.event_log.records, head.world_state["event_log"])
+        history_cache.seed_events(runtime.world.event_log, head.world_state["event_log"])
         indexer = None
         if (target_minute - head.simulation_minute) // checkpoint_interval >= (
             BACKGROUND_INDEX_MIN_SAVES
@@ -750,10 +749,7 @@ class TimelineStore:
         # The child's world was restored from this Checkpoint, so its first save
         # reuses the Checkpoint's EventLog.
         history_cache = CheckpointHistoryCache()
-        history_cache.seed_events(
-            child.world.event_log.records[: len(checkpoint.world_state["event_log"])],
-            checkpoint.world_state["event_log"],
-        )
+        history_cache.seed_events(child.world.event_log, checkpoint.world_state["event_log"])
         try:
             self.record(
                 child,
