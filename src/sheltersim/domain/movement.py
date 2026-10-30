@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Iterator
-from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import replace
@@ -15,6 +13,7 @@ from sheltersim import native
 from sheltersim.contracts.api import AgentPosition
 from sheltersim.contracts.extensions import FacilityGeometry, Point2D, point_in_polygon
 from sheltersim.contracts.spatial import SpatialConstraints
+from sheltersim.core.context import ContextScope
 from sheltersim.core.world import WorldState
 from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY
 from sheltersim.domain.models import Activity
@@ -1546,17 +1545,12 @@ def route_is_physically_clear(
     return True
 
 
-@contextmanager
-def room_route_scope(memo: dict[str, Any]) -> Iterator[None]:
+def room_route_scope(memo: dict[str, Any]) -> ContextScope:
     """Keep the routes plan_in_room_route found in ``memo`` for one caller.
 
     The caller clears ``memo`` when model_configs may have been changed in place.
     """
-    token = _ROOM_ROUTE_MEMO.set(memo)
-    try:
-        yield
-    finally:
-        _ROOM_ROUTE_MEMO.reset(token)
+    return ContextScope(_ROOM_ROUTE_MEMO, memo)
 
 
 def _remembered_room_routes(world: WorldState) -> dict[Any, Any] | None:

@@ -22,7 +22,8 @@ Each saving rests on one of these arguments:
 - A settled support request (resolved or unresolved) depends only on its own fields,
   which SupportRequestState reports writing, on the set of Agent IDs, and on the clock
   only through "not after the current minute". It is checked again when written or
-  when the Agent IDs change.
+  when the Agent IDs change. The scans of unsettled requests during a tick use the same
+  reports (WorldState.unsettled_support_requests).
 - The population presence and lifecycle states and the geometry overlay are skipped
   when their canonical JSON and everything else their rules read are unchanged.
 - The newest shared operations record is skipped while it and the rest of the state
@@ -33,15 +34,13 @@ Each saving rests on one of these arguments:
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from sheltersim import native
+from sheltersim.core.context import ContextScope
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sheltersim.core.world import WorldState
 
 _PRESENCE_KEY = "population_presence_v1"
@@ -160,23 +159,18 @@ class TickValidationMemo:
             self._configs = deepcopy(world.model_configs)
         self._agent_ids = frozenset(world.agents)
         self._zone_ids = frozenset(world.zones)
-        self._settle_requests()
+        self._settle_requests(world.support_requests)
         for watch, relationships in self._relationships_read:
             watch.accept(relationships)
         state = world.model_state.get(_OPERATIONS_KEY)
         if isinstance(state, dict) and isinstance(state.get("history"), list):
             self._remember_operations(state)
 
-    @contextmanager
-    def config_scope(self) -> Iterator[None]:
+    def config_scope(self) -> ContextScope:
         """Reuse parsed geometry configs between ticks while the configs are unchanged."""
         from sheltersim.domain.geometry_overlay import _CONFIG_SCOPE
 
-        token = _CONFIG_SCOPE.set(self.geometry_scope)
-        try:
-            yield
-        finally:
-            _CONFIG_SCOPE.reset(token)
+        return ContextScope(_CONFIG_SCOPE, self.geometry_scope)
 
     def relationships_to_check(self, watch: Any, relationships: dict[str, Any]) -> dict[str, Any]:
         """The relationships written or added since the last check, whose rules read only
@@ -207,16 +201,31 @@ class TickValidationMemo:
         self._checked_requests = list(checked.values())
         return self._checked_requests
 
-    def _settle_requests(self) -> None:
-        from sheltersim.domain.models import SupportRequestStatus
+    def unsettled_requests(self, requests: dict[str, Any]) -> list[Any] | None:
+        """The requests of the dict that may not be settled, in its order, or None if that is
+        not known and the caller has to read them all. For scans during a tick.
 
+        What was settled at the last check reports any write, so this needs only the
+        requests open then, the ones added since, and that no settled one was reopened.
+        The result may hold requests settled since; the caller reads their status.
+        """
+        added = self._requests.added_values(requests)
+        if added is None or any(not _is_settled(item) for item in self._written_requests):
+            return None
+        return self._open_requests + added
+
+    def _settle_requests(self, requests: dict[str, Any]) -> None:
+        reopened = any(not _is_settled(item) for item in self._written_requests)
         still_open = []
         for request in self._checked_requests:
-            if request.status in (SupportRequestStatus.RESOLVED, SupportRequestStatus.UNRESOLVED):
+            if _is_settled(request):
                 request.report_writes_to(self._written_requests)
             else:
                 request.report_writes_to(None)
                 still_open.append(request)
+        # A reopened request came last in the check; unsettled_requests keeps the dict's order.
+        if reopened:
+            still_open = [item for item in requests.values() if not _is_settled(item)]
         self._open_requests = still_open
         self._requests.extend(self._added_requests)
         self._added_requests = []
@@ -259,6 +268,11 @@ class TickValidationMemo:
         self._last_operation = history[-1] if history else None
         self._last_operation_json = saved_json(self._last_operation)
         self._operations_header_json = _operations_header_json(state)
+
+
+def _is_settled(request: Any) -> bool:
+    # The values of SupportRequestStatus.RESOLVED and UNRESOLVED; a StrEnum equals its value.
+    return request.status in ("resolved", "unresolved")
 
 
 def saved_json(value: Any) -> bytes | None:

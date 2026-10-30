@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from sheltersim import native
 from sheltersim.core.world import WorldState
+from sheltersim.domain.models import ordered_pair_key
 from sheltersim.events.models import ScheduledEvent
 
 SOCIAL_NETWORK_STATE_KEY = "social_network_v1"
@@ -376,7 +377,7 @@ def _state(world: WorldState) -> dict[str, Any]:
 
 
 def _relationship(state: dict[str, Any], recipient_id: str, sender_id: str) -> dict[str, Any]:
-    key = json.dumps([recipient_id, sender_id], separators=(",", ":"))
+    key = ordered_pair_key(recipient_id, sender_id)
     relationships = state["relationships"]
     if key not in relationships:
         if len(relationships) >= MAX_RELATIONSHIPS:
@@ -397,7 +398,7 @@ def _sync_body_trust(world: WorldState, recipient_id: str, source_id: str) -> No
     """Mirror the body policy's one computed directed trust value into the graph."""
     body = world.model_state.get("body_state_v1", {})
     body_relationships = body.get("relationships", {}) if isinstance(body, dict) else {}
-    key = json.dumps([recipient_id, source_id], separators=(",", ":"))
+    key = ordered_pair_key(recipient_id, source_id)
     body_record = body_relationships.get(key) if isinstance(body_relationships, dict) else None
     social = world.model_state.get(SOCIAL_NETWORK_STATE_KEY)
     social_record = (

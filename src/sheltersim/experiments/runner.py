@@ -847,10 +847,10 @@ class OfflineSimulationController:
             return
         threshold = self.social_policy.limits.complaint_wait_minutes
         # A complaint decision does not make a request pending, so only requests pending
-        # now can qualify below. Most requests of a long Run are settled.
+        # now can qualify below.
         due = [
-            (request_id, request)
-            for request_id, request in self.world.support_requests.items()
+            (request.id, request)
+            for request in self.world.unsettled_support_requests()
             if request.status is SupportRequestStatus.PENDING
             and request.requested_minute + threshold == minute
         ]
