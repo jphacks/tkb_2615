@@ -12,8 +12,6 @@ with that Python code at every tick and is skipped without the extension. CI on 
 branch builds and installs the extension on Linux, Windows and macOS, and on Linux
 runs the tests once more without it.
 
-The first prototypes were made on `experiment/rust-native`.
-
 ## Build and use without installing
 
 ```shell

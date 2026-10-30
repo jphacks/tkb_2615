@@ -1,4 +1,4 @@
-//! Experimental Rust kernels for ShelterSim (experiment/rust-native only).
+//! Rust kernels for ShelterSim (docs/rust-port.md).
 //!
 //! `canonical_json` writes the bytes of
 //! `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
