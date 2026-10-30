@@ -76,3 +76,47 @@ def test_each_relationship_key_is_judged_as_before_every_time(generated_scenario
     expected = _outcome_before(pair_key)
     # The second check of the same key uses the remembered result.
     assert [_outcome(world, pair_key) for _ in range(2)] == [expected, expected]
+
+
+def _record_accepted_before(record: object) -> bool:
+    """The record check before it was written inline."""
+    return (
+        isinstance(record, dict)
+        and set(record) == set(RECORD)
+        and not any(
+            not isinstance(record[key], int) or isinstance(record[key], bool) or record[key] < 0
+            for key in ("contact_count", "conversation_count", "cooperation_count")
+        )
+        and isinstance(record["shared_message_ids"], list)
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {},
+        {"contact_count": -1},
+        {"conversation_count": True},
+        {"cooperation_count": 1.0},
+        {"contact_count": 10**20},
+        {"shared_message_ids": ()},
+        {"extra": 1},
+        {"contact_count": None},
+    ],
+)
+def test_each_relationship_record_is_judged_as_before(generated_scenario, change) -> None:
+    world = WorldState.from_scenario(generated_scenario)
+    world.model_state[SOCIAL_NETWORK_STATE_KEY] = create_social_network_state()
+    record = {**RECORD, **change}
+    missing = dict(RECORD)
+    del missing["trust"]
+    for candidate in (record, missing, ["not", "a", "dict"]):
+        world.model_state[SOCIAL_NETWORK_STATE_KEY]["relationships"] = {
+            '["A001","A002"]': candidate
+        }
+        try:
+            validate_social_network_state(world)
+            accepted = True
+        except ValueError as error:
+            accepted = "relationship record is invalid" not in str(error)
+        assert accepted is _record_accepted_before(candidate), candidate
