@@ -54,6 +54,7 @@ from sheltersim.events.models import (
     EventSuppressed,
     ScheduledEvent,
 )
+from sheltersim.events.queue import EventsById
 
 if TYPE_CHECKING:
     from sheltersim.core.world import WorldState
@@ -2952,12 +2953,9 @@ def validate_effect_program_state(
             ):
                 raise ValueError("EffectProgram events require effect_program_v1 state")
             return
-        if any(
+        if world.event_log.with_provenance_object("effect_program_v1") or any(
             isinstance(event.provenance.get("effect_program_v1"), Mapping)
-            for event in (
-                *world.event_queue.pending(),
-                *(record.event for record in world.event_log.records),
-            )
+            for event in world.event_queue.pending()
         ):
             raise ValueError("EffectProgram events require effect_program_v1 state")
         return
@@ -3039,11 +3037,12 @@ def validate_effect_program_state(
             ):
                 raise ValueError("effect program event IDs must be unique stable IDs")
             scheduled_events[event_id] = program_id
+    # Events without an EffectProgram marker pass the loop below unread.
     all_events = [
         *world.event_queue.pending(),
-        *(record.event for record in world.event_log.records),
+        *(record.event for record in world.event_log.with_provenance_object("effect_program_v1")),
     ]
-    by_id = {event.event_id: event for event in all_events}
+    by_id = EventsById(world.event_log, world.event_queue.pending())
     for event_id, program_id in scheduled_events.items():
         if event_id not in by_id:
             raise ValueError("effect program references an unknown scheduled or realized event")

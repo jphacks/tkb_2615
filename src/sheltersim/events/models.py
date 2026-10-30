@@ -109,6 +109,10 @@ class ScheduledEvent:
         object.__setattr__(self, "payload", _freeze_json(self.payload))
         object.__setattr__(self, "provenance", _freeze_json(self.provenance))
 
+    def payload_dict(self) -> dict[str, Any]:
+        """A detached JSON-compatible copy of the payload, as to_dict() holds it."""
+        return _thaw_json(self.payload)
+
     def to_dict(self) -> dict[str, Any]:
         """Return a detached JSON-compatible representation."""
         return {
@@ -118,7 +122,7 @@ class ScheduledEvent:
             "priority": self.priority,
             "sequence": self.sequence,
             "event_type": self.event_type,
-            "payload": _thaw_json(self.payload),
+            "payload": self.payload_dict(),
             "source_id": self.source_id,
             "causation_id": self.causation_id,
             "provenance": _thaw_json(self.provenance),

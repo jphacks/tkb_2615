@@ -46,10 +46,10 @@ def test_tick_validation_defers_immutable_event_history_audit_to_run_boundary(
     original_validate = world.event_log.validate
     calls = 0
 
-    def count_history_validation() -> None:
+    def count_history_validation(**kwargs) -> None:
         nonlocal calls
         calls += 1
-        original_validate()
+        original_validate(**kwargs)
 
     monkeypatch.setattr(world.event_log, "validate", count_history_validation)
 
