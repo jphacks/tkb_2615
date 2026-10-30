@@ -749,6 +749,44 @@ class LifeStatePsychologyPolicy:
     def update(self, view: WorldView, minute: int) -> tuple[AgentStateDelta, ...]:
         return self.explain_update(view, minute).deltas
 
+    def _stress_feedback(
+        self,
+        agent_id: str,
+        debt: float,
+        uncertainty: float,
+        discontent: float,
+        hygiene_need: float,
+        sanitation_level: float,
+        family_separation_pressure: float,
+        reassurance: float,
+        positive: float,
+    ) -> float:
+        """The installed body formula's stress feedback, or the built-in one."""
+        config = self.body_config
+        if self.body_formula is None:
+            return (
+                debt / 1440.0 * config["sleep_debt_stress_rate"]
+                + uncertainty * config["negative_affect_stress_rate"]
+                + discontent * config["discontent_stress_rate"]
+                + hygiene_need * config["sanitation_stress_rate"]
+                + (1.0 - sanitation_level) * config["sanitation_stress_rate"]
+                + family_separation_pressure
+                - reassurance * config["negative_affect_stress_rate"]
+                - positive * config["discontent_relief_per_minute"]
+            )
+        return self.body_formula.stress_feedback(
+            sleep_debt_minutes=debt,
+            uncertainty=uncertainty,
+            discontent=discontent,
+            hygiene_need=hygiene_need,
+            sanitation_level=sanitation_level,
+            family_separation_pressure=family_separation_pressure,
+            reassurance=reassurance,
+            positive_affect=positive,
+            config=config,
+            agent_id=agent_id,
+        )
+
     def explain_update(self, view: WorldView, minute: int) -> PsychologyUpdateResult:
         """Return deterministic per-minute state deltas from the same observed view."""
         result = self.base.explain_update(view, minute)
@@ -860,54 +898,28 @@ class LifeStatePsychologyPolicy:
                     - reassurance * config["negative_affect_stress_rate"],
                 ),
             )
-            if self.body_formula is None:
-                feedback_stress = (
-                    debt / 1440.0 * config["sleep_debt_stress_rate"]
-                    + uncertainty * config["negative_affect_stress_rate"]
-                    + discontent * config["discontent_stress_rate"]
-                    + hygiene_need * config["sanitation_stress_rate"]
-                    + (1.0 - agent.sanitation_level) * config["sanitation_stress_rate"]
-                    + family_separation_pressure
-                    - reassurance * config["negative_affect_stress_rate"]
-                    - positive * config["discontent_relief_per_minute"]
-                )
-            else:
-                feedback_stress = self.body_formula.stress_feedback(
-                    sleep_debt_minutes=debt,
-                    uncertainty=uncertainty,
-                    discontent=discontent,
-                    hygiene_need=hygiene_need,
-                    sanitation_level=agent.sanitation_level,
-                    family_separation_pressure=family_separation_pressure,
-                    reassurance=reassurance,
-                    positive_affect=positive,
-                    config=config,
-                    agent_id=delta.agent_id,
-                )
-            if self.body_formula is None:
-                feedback_without_misinformation = (
-                    debt / 1440.0 * config["sleep_debt_stress_rate"]
-                    + uncertainty_without_misinformation * config["negative_affect_stress_rate"]
-                    + discontent * config["discontent_stress_rate"]
-                    + hygiene_need * config["sanitation_stress_rate"]
-                    + (1.0 - agent.sanitation_level) * config["sanitation_stress_rate"]
-                    + family_separation_pressure
-                    - reassurance * config["negative_affect_stress_rate"]
-                    - positive * config["discontent_relief_per_minute"]
-                )
-            else:
-                feedback_without_misinformation = self.body_formula.stress_feedback(
-                    sleep_debt_minutes=debt,
-                    uncertainty=uncertainty_without_misinformation,
-                    discontent=discontent,
-                    hygiene_need=hygiene_need,
-                    sanitation_level=agent.sanitation_level,
-                    family_separation_pressure=family_separation_pressure,
-                    reassurance=reassurance,
-                    positive_affect=positive,
-                    config=config,
-                    agent_id=delta.agent_id,
-                )
+            feedback_stress = self._stress_feedback(
+                delta.agent_id,
+                debt,
+                uncertainty,
+                discontent,
+                hygiene_need,
+                agent.sanitation_level,
+                family_separation_pressure,
+                reassurance,
+                positive,
+            )
+            feedback_without_misinformation = self._stress_feedback(
+                delta.agent_id,
+                debt,
+                uncertainty_without_misinformation,
+                discontent,
+                hygiene_need,
+                agent.sanitation_level,
+                family_separation_pressure,
+                reassurance,
+                positive,
+            )
             information_feedback_stress = feedback_stress - feedback_without_misinformation
             information_feedback_by_agent[delta.agent_id] = information_feedback_stress
             feedback_by_agent[delta.agent_id] = feedback_stress
@@ -1079,6 +1091,211 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
         return PsychologyUpdateResult(
             tuple(deltas), tuple(traces), policy_version=self.policy_version
         )
+
+    def deltas_without_traces(self, view: WorldView, minute: int) -> tuple[AgentStateDelta, ...]:
+        """explain_update(view, minute).deltas without building the per-agent traces.
+
+        The same expressions as the three stages (SimplePsychologyPolicy, then
+        LifeStatePsychologyPolicy, then this mean reversion) in one pass, for a
+        tick that records no psychology trace.
+        """
+        if minute != view.minute_index:
+            raise ValueError("psychology update minute must match the WorldView")
+        params = self.parameters
+        config = self.body_config
+        direct_rest_recovery = self.base.include_direct_rest_stress_recovery
+        deltas: list[AgentStateDelta] = []
+        for agent in view.agents.values():
+            # SimplePsychologyPolicy.explain_update
+            toilet_growth = params.toilet_growth_by_agent.get(agent.id, params.toilet_growth)
+            hunger_growth = params.hunger_growth_by_agent.get(agent.id, params.hunger_growth)
+            if agent.activity is Activity.SLEEPING:
+                fatigue_delta = -params.sleeping_fatigue_recovery * agent.rest_efficiency_multiplier
+                stress_recovery = params.sleeping_stress_recovery if direct_rest_recovery else 0.0
+            elif agent.activity is Activity.RESTING:
+                fatigue_delta = -params.resting_fatigue_recovery * agent.rest_efficiency_multiplier
+                stress_recovery = params.resting_stress_recovery if direct_rest_recovery else 0.0
+            else:
+                fatigue_delta = params.awake_fatigue_growth_by_agent.get(
+                    agent.id, params.awake_fatigue_growth
+                )
+                stress_recovery = 0.0
+            needs = agent.needs
+            highest_need_value = max(needs.toilet_urgency, needs.hunger, needs.fatigue)
+            if view.resource_service_enabled:
+                highest_need_value = max(highest_need_value, needs.hydration_need)
+            unmet_need_pressure = max(0.0, highest_need_value - params.need_pressure_threshold)
+            need_pressure_stress = (
+                params.stress_pressure * unmet_need_pressure * agent.stress_sensitivity
+            )
+            queue_wait_stress = params.queued_stress if agent.activity is Activity.QUEUED else 0.0
+            has_open_support_request = agent.support_request_status in ("pending", "assigned")
+            support_wait_stress = params.support_wait_stress if has_open_support_request else 0.0
+            environmental_stress = agent.environmental_stress_per_minute * agent.stress_sensitivity
+            simple_stress = _clamp(
+                agent.stress
+                + (
+                    need_pressure_stress
+                    + queue_wait_stress
+                    + support_wait_stress
+                    + environmental_stress
+                    - stress_recovery
+                )
+            )
+
+            # LifeStatePsychologyPolicy.explain_update
+            household_peers = view.group_members.get(agent.group_id or "", ())
+            family_separated = bool(
+                household_peers
+                and any(
+                    peer_id != agent.id and view.agents[peer_id].zone_id != agent.zone_id
+                    for peer_id in household_peers
+                )
+            )
+            family_separation_pressure = (
+                config["discontent_stress_rate"] if family_separated else 0.0
+            )
+            debt = sleep_debt_step(
+                agent.sleep_debt_minutes,
+                activity=agent.activity,
+                required_sleep_minutes=agent.required_sleep_minutes,
+                awake_rate=config["awake_sleep_debt_minutes_per_minute"],
+                rest_recovery_rate=config["rest_sleep_debt_recovery_per_minute"],
+                sleep_recovery_rate=config["sleep_sleep_debt_recovery_per_minute"],
+                sleep_efficiency=agent.rest_efficiency_multiplier,
+            )
+            reassurance = max(0.0, agent.reassurance - config["reassurance_decay_per_minute"])
+            uncertainty_without_misinformation = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.uncertainty
+                    + agent.information_query_pressure * config["uncertainty_drift_per_minute"]
+                    - config["uncertainty_decay_per_minute"]
+                    - reassurance * config["uncertainty_decay_per_minute"],
+                ),
+            )
+            uncertainty = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.uncertainty
+                    + (agent.information_query_pressure + agent.misinformation_belief_pressure)
+                    * config["uncertainty_drift_per_minute"]
+                    - config["uncertainty_decay_per_minute"]
+                    - reassurance * config["uncertainty_decay_per_minute"],
+                ),
+            )
+            queue_pressure = (
+                config["discontent_queue_rate"] if agent.activity is Activity.QUEUED else 0.0
+            )
+            need_pressure = max(
+                needs.toilet_urgency, needs.hunger, needs.fatigue, needs.hydration_need
+            )
+            support_relief = (
+                config["discontent_relief_per_minute"]
+                if agent.activity in (Activity.RESTING, Activity.SLEEPING)
+                and agent.support_request_status not in ("pending", "assigned")
+                else 0.0
+            )
+            stress_feedback_reference = (
+                agent.stress if self.use_tick_start_stress_for_feedback else simple_stress
+            )
+            discontent = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.discontent
+                    + stress_feedback_reference * config["discontent_stress_rate"]
+                    + queue_pressure
+                    + agent.privacy_discontent_per_minute
+                    + max(0.0, need_pressure - 0.5) * config["discontent_stress_rate"]
+                    - support_relief
+                    - reassurance * config["discontent_relief_per_minute"],
+                ),
+            )
+            positive = 0.5 + (agent.positive_affect - 0.5) * max(
+                0.0, 1.0 - config["positive_affect_decay_per_minute"]
+            )
+            hygiene_need = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.hygiene_need
+                    + config["hygiene_growth_per_minute"]
+                    + agent.ventilation_hygiene_growth_per_minute
+                    + (1.0 - agent.sanitation_level)
+                    * config["sanitation_hygiene_growth_per_minute"],
+                ),
+            )
+            negative = min(
+                1.0,
+                max(
+                    0.0,
+                    agent.negative_affect
+                    + stress_feedback_reference * config["negative_affect_stress_rate"]
+                    - reassurance * config["negative_affect_stress_rate"],
+                ),
+            )
+            feedback_stress, feedback_without_misinformation = (
+                self._stress_feedback(
+                    agent.id,
+                    debt,
+                    value,
+                    discontent,
+                    hygiene_need,
+                    agent.sanitation_level,
+                    family_separation_pressure,
+                    reassurance,
+                    positive,
+                )
+                for value in (uncertainty, uncertainty_without_misinformation)
+            )
+            information_feedback_stress = feedback_stress - feedback_without_misinformation
+
+            # The exact mean reversion of explain_update above.
+            kappa = params.natural_recovery_rate_by_agent.get(
+                agent.id, params.natural_recovery_rate_per_minute
+            )
+            baseline = params.baseline_distress_by_agent.get(agent.id, 0.0)
+            natural_delta, forcing_multiplier = _mean_reverting_terms(
+                agent.stress, baseline, kappa, 1.0
+            )
+            raw_delta = natural_delta + sum(
+                value * forcing_multiplier
+                for value in (
+                    need_pressure_stress,
+                    queue_wait_stress,
+                    support_wait_stress,
+                    environmental_stress,
+                    feedback_stress - information_feedback_stress,
+                    information_feedback_stress,
+                )
+            )
+            deltas.append(
+                AgentStateDelta(
+                    agent_id=agent.id,
+                    minute_index=minute,
+                    toilet_urgency=_clamp(needs.toilet_urgency + toilet_growth),
+                    hunger=_clamp(needs.hunger + hunger_growth),
+                    fatigue=_clamp(needs.fatigue + fatigue_delta),
+                    hydration_need=(
+                        _clamp(needs.hydration_need + params.hydration_growth)
+                        if view.resource_service_enabled
+                        else 0.0
+                    ),
+                    stress=_clamp(agent.stress + raw_delta),
+                    trust=agent.trust,
+                    sleep_debt_minutes=debt,
+                    uncertainty=uncertainty,
+                    reassurance=reassurance,
+                    discontent=discontent,
+                    positive_affect=positive,
+                    negative_affect=negative,
+                    hygiene_need=hygiene_need,
+                )
+            )
+        return tuple(deltas)
 
     def update_long_term_state(
         self,

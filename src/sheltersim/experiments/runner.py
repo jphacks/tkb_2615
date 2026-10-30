@@ -153,7 +153,7 @@ from sheltersim.policies.proximity import (
     DisabledProximityPolicy,
     DistanceSampledProximityPolicy,
 )
-from sheltersim.policies.psychology import apply_state_deltas
+from sheltersim.policies.psychology import PsychologyUpdateResult, apply_state_deltas
 from sheltersim.policies.registry import (
     create_behavior,
     create_information,
@@ -519,7 +519,12 @@ class OfflineSimulationController:
         elif phase is TickPhase.UPDATE_AGENT_STATE:
             self._update_movement(minute)
             view = WorldView.from_world(world, include_state_hash=False)
-            psychology_result = self.psychology.explain_update(view, minute)
+            deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
+            if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
+                # No psychology trace is recorded, so its per-agent parts are not built.
+                psychology_result = PsychologyUpdateResult(deltas_without_traces(view, minute), ())
+            else:
+                psychology_result = self.psychology.explain_update(view, minute)
             base_deltas = psychology_result.deltas
             if self.stress_policy.parameters.enabled:
                 result = self.stress_policy.update(
