@@ -7,7 +7,6 @@ tests/integration/test_care_lifecycle.py.
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -29,6 +28,7 @@ from sheltersim.domain.models import StaffState
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.domain.staff import StaffService
 from sheltersim.events.handlers import EventDispatcher, StaffSupportCompletionHandler
+from sheltersim.events.queue import EventLog
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.inspection.frames import person_projection, world_frame
 from sheltersim.region.population import PopulationConditionInput
@@ -634,7 +634,7 @@ def test_care_history_rows_are_kept_with_the_event_log_and_a_caller_can_not_chan
     kept["A001"][0]["kept"] = False
     kept["A001"].append({})
     assert care_history_by_agent(world) == {"A001": [{"kept": True}]}
-    # Another limit keeps its own rows; a copy of the log starts from nothing.
+    # Another limit keeps its own rows; another log starts from nothing.
     assert care_history_by_agent(world, limit=5) == {}
-    world.event_log = deepcopy(log)
+    world.event_log = EventLog()
     assert care_history_by_agent(world) == {}

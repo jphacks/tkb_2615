@@ -130,10 +130,10 @@ class _PythonEventLog:
     _by_minute: dict[int, list[EventLogRecord]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    # Each event type's records with their append positions, for validators that
-    # check a few types and need not read the whole log.
     # Results derived from the records so far, kept by readers for when the log has grown.
     derived: dict[Any, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
+    # Each event type's records with their append positions, for validators that
+    # check a few types and need not read the whole log.
     _by_type: dict[str, list[tuple[int, EventLogRecord]]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )

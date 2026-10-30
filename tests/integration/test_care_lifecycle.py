@@ -41,6 +41,6 @@ def test_full_day_shared_care_receipts_keep_each_transition_observation(
     for end in range(0, len(records) + 500, 500):
         for record in records[len(grown.event_log) : end]:
             grown.event_log.append(record)
-        full_pass = SimpleNamespace(event_log=copy.deepcopy(grown.event_log))
+        full_pass = SimpleNamespace(event_log=EventLog(records[: len(grown.event_log)]))
         assert care_history_by_agent(grown) == care_history_by_agent(full_pass)
     assert care_history_by_agent(grown)
