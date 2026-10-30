@@ -13,7 +13,8 @@ from dataclasses import asdict, dataclass, replace
 from dataclasses import field as dataclass_field
 from typing import Any, Mapping
 
-from sheltersim.core.rng import KeyedRandom
+from sheltersim import native
+from sheltersim.core.rng import CounterRNG, KeyedRandom
 from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import AgentStateDelta
 
@@ -377,6 +378,115 @@ class ExpressivenessChannelOpennessPolicy(StressPropagationPolicy):
     """
 
     policy_version = "expressiveness-channel-openness-v1"
+
+    def native_update(
+        self,
+        view: WorldView,
+        base_deltas: tuple[AgentStateDelta, ...],
+        rng: KeyedRandom,
+        *,
+        zone_neighbors: Mapping[str, tuple[str, ...]],
+        runtime_state: Mapping[str, Any] | None = None,
+    ) -> SocialPropagationResult | None:
+        """update() from the Rust kernel, or None when the kernel is unavailable or leaves
+        these inputs to update(), which then raises any error (feature/rust-port)."""
+        params = self.parameters
+        if (
+            not native.available()
+            or not params.enabled
+            or type(self) is not ExpressivenessChannelOpennessPolicy
+            or type(rng) is not CounterRNG
+        ):
+            return None
+        floats = [
+            params.stress_spread_per_minute,
+            params.max_pair_stress_increase,
+            params.max_agent_stress_increase_per_minute,
+            params.family_channel_strength,
+            params.same_zone_channel_strength,
+            params.nearby_zone_channel_strength,
+        ]
+        if not all(type(value) is float for value in floats):
+            return None
+        if runtime_state is None:
+            contacts, cooldowns = {}, {}
+        elif runtime_state.get("schema_version") == _STATE_SCHEMA_VERSION:
+            contacts = runtime_state.get("contacts")
+            cooldowns = runtime_state.get("agent_cooldown_until")
+        else:
+            return None
+        minute = view.minute_index
+        base_by_id = {delta.agent_id: delta for delta in base_deltas}
+        if (
+            len(base_deltas) != len(view.agents)
+            or base_by_id.keys() != view.agents.keys()
+            or any(delta.minute_index != minute for delta in base_deltas)
+        ):
+            return None
+        ids = sorted(view.agents)
+        expressiveness = params.source_expressiveness_by_agent.get
+        rows = []
+        for agent_id in ids:
+            agent = view.agents[agent_id]
+            if agent.id != agent_id:
+                return None
+            rows.append(
+                (
+                    agent.group_id,
+                    agent.zone_id,
+                    agent.stress,
+                    agent.stress_sensitivity,
+                    expressiveness(agent_id, 1.0),
+                    base_by_id[agent_id].stress,
+                )
+            )
+        result = native.social_channel_update(
+            str(rng.seed),
+            minute,
+            params.max_contacts_per_agent,
+            params.minimum_contact_minutes,
+            params.cooldown_minutes,
+            floats,
+            ids,
+            rows,
+            zone_neighbors,
+            contacts,
+            cooldowns,
+        )
+        if result is None:
+            return None
+        stresses, current_contacts, new_cooldowns, traces, contributing, total_shift = result
+        return SocialPropagationResult(
+            deltas=tuple(
+                base_by_id[agent_id].with_stress(stress)
+                for agent_id, stress in zip(ids, stresses, strict=True)
+            ),
+            runtime_state={
+                "schema_version": _STATE_SCHEMA_VERSION,
+                "contacts": current_contacts,
+                "agent_cooldown_until": new_cooldowns,
+            },
+            contacts=tuple(
+                SocialContactTrace(
+                    recipient_id=ids[recipient],
+                    source_id=ids[source],
+                    contact_basis=basis,
+                    consecutive_contact_minutes=duration,
+                    cooldown_remaining_minutes=cooldown_left,
+                    stress_difference=values[0],
+                    stress_contribution=values[1],
+                    influence_weight=values[2],
+                    aggregate_rate=values[3],
+                    pre_pair_cap_contribution=values[4],
+                    pair_cap_contribution=values[5],
+                    aggregate_scale=values[6],
+                )
+                for recipient, source, basis, duration, cooldown_left, values in traces
+            ),
+            contributing_contact_count=contributing,
+            total_stress_added=total_shift,
+            policy_version=self.policy_version,
+        )
 
     def update(
         self,

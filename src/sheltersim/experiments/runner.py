@@ -181,6 +181,7 @@ class OfflineSimulationController:
         llm_router: LLMRouter | None = None,
     ) -> None:
         self.world = world
+        self._person_contexts: dict[str, Any] = {}
         self.active_actions = active_action_index(world)
         initialize_simulator_extensions(world)
         validate_simulator_extensions(world)
@@ -518,7 +519,9 @@ class OfflineSimulationController:
             self._consider_social_contact_events(outcomes)
         elif phase is TickPhase.UPDATE_AGENT_STATE:
             self._update_movement(minute)
-            view = WorldView.from_world(world, include_state_hash=False)
+            view = WorldView.from_world(
+                world, include_state_hash=False, person_cache=self._person_contexts
+            )
             deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
             if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
                 # No psychology trace is recorded, so its per-agent parts are not built.
@@ -534,13 +537,28 @@ class OfflineSimulationController:
                 psychology_result = self.psychology.explain_update(view, minute)
             base_deltas = psychology_result.deltas
             if self.stress_policy.parameters.enabled:
-                result = self.stress_policy.update(
-                    view,
-                    base_deltas,
-                    rng,
-                    zone_neighbors=self.zone_neighbors,
-                    runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                # The Rust kernel computes the same result when it is installed, and is
+                # left out when a trace needs the Python contact records.
+                native_update = getattr(self.stress_policy, "native_update", None)
+                result = (
+                    native_update(
+                        view,
+                        base_deltas,
+                        rng,
+                        zone_neighbors=self.zone_neighbors,
+                        runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                    )
+                    if native_update is not None and self.artifacts.trace_level is TraceLevel.OFF
+                    else None
                 )
+                if result is None:
+                    result = self.stress_policy.update(
+                        view,
+                        base_deltas,
+                        rng,
+                        zone_neighbors=self.zone_neighbors,
+                        runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
+                    )
                 final_deltas = result.deltas
                 world.model_state[SOCIAL_RUNTIME_STATE_KEY] = result.runtime_state
                 for contact in result.contacts if "social_network_v1" in world.model_state else ():
@@ -610,7 +628,7 @@ class OfflineSimulationController:
                 )
             apply_state_deltas(world, final_deltas)
         elif phase is TickPhase.PROPOSE_ACTIONS:
-            view = WorldView.from_world(world)
+            view = WorldView.from_world(world, person_cache=self._person_contexts)
             for proposal in self.decisions.propose_due(view, rng):
                 self._apply_proposal(
                     proposal,
@@ -668,13 +686,29 @@ class OfflineSimulationController:
     def _sample_information_contacts(self, minute: int, rng: KeyedRandom) -> None:
         if self.information_policy is None:
             return
-        result = self.information_policy.update(
-            # Information policies read the people and the minute, never the audit hash.
-            WorldView.from_world(self.world, include_state_hash=False),
-            self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
-            rng,
-            zone_neighbors=self.zone_neighbors,
+        # While no message exists, the Rust kernel needs only the people's zones. No
+        # trace here: it records the contacts.
+        result = (
+            self.information_policy.native_update(
+                self.world.agents,
+                minute,
+                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
+                rng,
+                zone_neighbors=self.zone_neighbors,
+            )
+            if self.artifacts.trace_level is TraceLevel.OFF
+            else None
         )
+        if result is None:
+            result = self.information_policy.update(
+                # Information policies read the people and the minute, never the audit hash.
+                WorldView.from_world(
+                    self.world, include_state_hash=False, person_cache=self._person_contexts
+                ),
+                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
+                rng,
+                zone_neighbors=self.zone_neighbors,
+            )
         self.world.model_state[INFORMATION_SPREAD_STATE_KEY] = result.runtime_state
         for proposal in result.proposals:
             due_minute = minute + 1

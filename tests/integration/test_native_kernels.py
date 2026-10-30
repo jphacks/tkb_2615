@@ -208,3 +208,226 @@ def test_the_body_relationship_check_judges_every_record_as_python_does(
             patch.setattr(body_state.native, "body_relationships_problem", lambda *a: None)
             python = _outcome(validate_body_state, world)
         assert rust == python, case
+
+
+def _same_bits_deep(x: object, y: object) -> bool:
+    if isinstance(x, dict) and isinstance(y, dict):
+        return list(x) == list(y) and all(_same_bits_deep(x[key], y[key]) for key in x)
+    return _same_float_bits(x, y)
+
+
+def test_the_social_kernel_gives_the_python_result(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    """Deltas, stored contacts and cooldowns (in the same order), traces and totals."""
+    from sheltersim.policies.social import ExpressivenessChannelOpennessPolicy
+
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 360
+    scenario = ScenarioSpec.model_validate(document)
+    compared = []
+    contacts = []
+    kernel = ExpressivenessChannelOpennessPolicy.native_update
+
+    def checked(self, view, base_deltas, rng, *, zone_neighbors, runtime_state=None):
+        rust = kernel(
+            self,
+            view,
+            base_deltas,
+            rng,
+            zone_neighbors=zone_neighbors,
+            runtime_state=runtime_state,
+        )
+        python = self.update(
+            view,
+            base_deltas,
+            rng,
+            zone_neighbors=zone_neighbors,
+            runtime_state=runtime_state,
+        )
+        assert rust is not None
+        assert _same_bits_deep(rust.runtime_state, python.runtime_state)
+        assert len(rust.deltas) == len(python.deltas)
+        for a, b in zip(rust.deltas, python.deltas, strict=True):
+            for name in a.__dataclass_fields__:
+                assert _same_float_bits(getattr(a, name), getattr(b, name)), (a.agent_id, name)
+        assert len(rust.contacts) == len(python.contacts)
+        for a, b in zip(rust.contacts, python.contacts, strict=True):
+            for name in a.__dataclass_fields__:
+                assert _same_float_bits(getattr(a, name), getattr(b, name)), (a, name)
+        assert rust.contributing_contact_count == python.contributing_contact_count
+        assert _same_float_bits(rust.total_stress_added, python.total_stress_added)
+        assert rust.policy_version == python.policy_version
+        compared.append(view.minute_index)
+        contacts.append(len(rust.contacts))
+        return rust
+
+    monkeypatch.setattr(ExpressivenessChannelOpennessPolicy, "native_update", checked)
+    run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
+    assert compared == list(range(360))
+    assert sum(contacts) > 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        [-0.0],
+        [0.1] * 10,
+        [1e100, 1.0, -1e100, 1e-100],
+        [1.0, 1e-16, 1e-16],
+        [1.0, 1.1102230246251565e-16, 1.3877787807814457e-17],
+        [-1.0, -1.1102230246251565e-16, -1.3877787807814457e-17],
+        [1e308, 1e308, -1e308],
+    ],
+)
+def test_the_kernel_sums_floats_as_math_fsum_does(value) -> None:
+    import math
+
+    import sheltersim_native
+
+    try:
+        python = math.fsum(value)
+    except OverflowError:
+        with pytest.raises(sheltersim_native.Unsupported):
+            sheltersim_native.fsum(value)
+        return
+    assert _same_float_bits(sheltersim_native.fsum(value), python)
+
+
+def test_the_kernel_sum_matches_math_fsum_on_random_floats() -> None:
+    import math
+    import random
+
+    import sheltersim_native
+
+    draw = random.Random(2615)
+    for _ in range(20_000):
+        count = draw.randrange(0, 9)
+        values = [
+            draw.choice((-1.0, 1.0)) * draw.random() * 2.0 ** draw.randrange(-60, 3)
+            for _ in range(count)
+        ]
+        assert _same_float_bits(sheltersim_native.fsum(values), math.fsum(values)), values
+
+
+def test_the_social_kernel_leaves_unusual_inputs_to_python(generated_scenario) -> None:
+    from sheltersim.core.rng import CounterRNG
+    from sheltersim.core.world import WorldState
+    from sheltersim.policies.behavior import WorldView
+    from sheltersim.policies.psychology import AgentStateDelta
+    from sheltersim.policies.social import (
+        ExpressivenessChannelOpennessPolicy,
+        SocialPropagationParameters,
+    )
+
+    world = WorldState.from_scenario(generated_scenario)
+    view = WorldView.from_world(world, include_state_hash=False)
+    deltas = tuple(
+        AgentStateDelta(
+            agent_id=agent.id,
+            minute_index=view.minute_index,
+            toilet_urgency=0.0,
+            hunger=0.0,
+            fatigue=0.0,
+            stress=0.5,
+            trust=0.5,
+        )
+        for agent in view.agents.values()
+    )
+    policy = ExpressivenessChannelOpennessPolicy(SocialPropagationParameters(enabled=True))
+    neighbors = {zone: () for zone in world.zones}
+    rng = CounterRNG(1)
+
+    def native_result(**changes):
+        arguments = {
+            "zone_neighbors": neighbors,
+            "runtime_state": None,
+            **changes,
+        }
+        return policy.native_update(view, deltas, rng, **arguments)
+
+    assert native_result() is not None
+    good = {"schema_version": 1, "contacts": {}, "agent_cooldown_until": {}}
+    assert native_result(runtime_state=good) is not None
+    for broken in (
+        {**good, "schema_version": 9},
+        {**good, "contacts": []},
+        {**good, "contacts": {"x": {"last_seen_minute": True, "consecutive_minutes": 1}}},
+        {**good, "contacts": {"x": {"last_seen_minute": -1, "consecutive_minutes": 1}}},
+        {**good, "contacts": {"x": {"last_seen_minute": 1}}},
+        {**good, "agent_cooldown_until": {"x": -1}},
+        {**good, "agent_cooldown_until": {"x": 1.5}},
+    ):
+        assert native_result(runtime_state=broken) is None, broken
+    assert policy.native_update(view, deltas[:-1], rng, zone_neighbors=neighbors) is None
+    with_integer = ExpressivenessChannelOpennessPolicy(
+        SocialPropagationParameters(enabled=True, stress_spread_per_minute=0)
+    )
+    assert with_integer.native_update(view, deltas, rng, zone_neighbors=neighbors) is None
+
+
+def test_the_information_kernel_gives_the_python_state(
+    generated_scenario, tmp_path, monkeypatch
+) -> None:
+    """The stored state, in the same order, and no proposals, at every tick."""
+    from sheltersim.policies.behavior import WorldView
+    from sheltersim.policies.information import InformationSpreadPolicy
+
+    document = generated_scenario.model_dump(mode="json")
+    document["duration_minutes"] = 360
+    scenario = ScenarioSpec.model_validate(document)
+    compared = []
+    kernel = InformationSpreadPolicy.native_update
+    original_from_world = WorldView.from_world
+    worlds = []
+
+    def remember_world(world, **arguments):
+        worlds.append(world)
+        return original_from_world(world, **arguments)
+
+    def checked(self, people, minute, runtime_state, rng, *, zone_neighbors):
+        rust = kernel(self, people, minute, runtime_state, rng, zone_neighbors=zone_neighbors)
+        python = self.update(
+            original_from_world(worlds[-1], include_state_hash=False),
+            runtime_state,
+            rng,
+            zone_neighbors=zone_neighbors,
+        )
+        assert rust is not None
+        assert _same_bits_deep(rust.runtime_state, python.runtime_state)
+        assert rust.proposals == python.proposals == ()
+        assert rust.policy_version == python.policy_version
+        compared.append(minute)
+        return rust
+
+    monkeypatch.setattr(WorldView, "from_world", remember_world)
+    monkeypatch.setattr(InformationSpreadPolicy, "native_update", checked)
+    run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
+    assert compared == list(range(360))
+
+
+def test_the_information_kernel_leaves_any_message_to_python(generated_scenario) -> None:
+    from sheltersim.core.rng import CounterRNG
+    from sheltersim.core.world import WorldState
+    from sheltersim.domain.information import create_information_runtime_state
+    from sheltersim.domain.models import InformationSpreadConfig
+    from sheltersim.policies.information import InformationSpreadPolicy
+
+    world = WorldState.from_scenario(generated_scenario)
+    policy = InformationSpreadPolicy(InformationSpreadConfig(enabled=True))
+    rng = CounterRNG(1)
+    state = create_information_runtime_state(set(world.agents))
+    neighbors = {zone: () for zone in world.zones}
+
+    def result(changed):
+        return policy.native_update(world.agents, 0, changed, rng, zone_neighbors=neighbors)
+
+    assert result(state) is not None
+    assert result({**state, "messages": {"m": {}}}) is None
+    first = sorted(world.agents)[0]
+    assert result({**state, "beliefs": {**state["beliefs"], first: {"m": {}}}}) is None
+    assert result({**state, "support_requests": [{}]}) is None
+    assert result({**state, "schema_version": 1}) is None
+    assert result({**state, "contacts": []}) is None
+    assert result({**state, "query_pressure": {}}) is None

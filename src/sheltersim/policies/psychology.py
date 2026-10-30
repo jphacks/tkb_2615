@@ -33,6 +33,14 @@ class AgentStateDelta:
     negative_affect: float | None = None
     hygiene_need: float | None = None
 
+    def with_stress(self, stress: float) -> AgentStateDelta:
+        """A copy with another stress, already known to be a float within 0..1."""
+        copy = object.__new__(AgentStateDelta)
+        fields = dict(self.__dict__)
+        fields["stress"] = stress
+        object.__setattr__(copy, "__dict__", fields)
+        return copy
+
     def __post_init__(self) -> None:
         if not self.agent_id:
             raise ValueError("agent_id must be non-empty")
