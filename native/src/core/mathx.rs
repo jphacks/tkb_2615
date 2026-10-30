@@ -9,6 +9,7 @@
 //! A function returning `None` leaves the value to Python, which raises its error or decides
 //! a case that depends on `errno`; the caller raises `Unsupported`.
 
+use std::os::raw::c_long;
 use std::cmp::Ordering;
 use std::hint::black_box;
 
@@ -243,21 +244,35 @@ pub(crate) fn py_sum(values: &[f64]) -> f64 {
     total
 }
 
-/// `sum(values)` of ints and floats: ints add exactly until the first float, whose addition
-/// converts the total; later ints are added without compensation. `None` when the ints leave
-/// i64, which Python carries on with as big ints.
+/// Whether CPython's sum() fast paths read this int: PyLong_AsLongAndOverflow, so the range of
+/// C long, which is 32 bits on Windows.
+fn fits_c_long(value: i64) -> bool {
+    c_long::try_from(value).is_ok()
+}
+
+/// `sum(values)` of ints and floats, as CPython 3.12 computes it. Ints add exactly until the
+/// first float, whose addition converts the total; later floats are compensated and later
+/// ints added without compensation. An int outside C long, or a running int total leaving
+/// it, ends the fast paths: what is left is plain `+`. `None` when ints leave i64, which
+/// Python carries on with as big ints.
 pub(crate) fn sum_nums(values: &[Num]) -> Option<Num> {
     let mut exact: i64 = 0;
     let mut items = values.iter();
     let mut total = loop {
         match items.next() {
             None => return Some(Num::Int(exact)),
-            Some(Num::Int(value)) => exact = exact.checked_add(*value)?,
+            Some(Num::Int(value)) => {
+                let next = exact.checked_add(*value)?;
+                exact = next;
+                if !fits_c_long(*value) || !fits_c_long(next) {
+                    return plain_sum(Num::Int(exact), items.as_slice());
+                }
+            }
             Some(Num::Float(value)) => break exact as f64 + value,
         }
     };
     let mut compensation = 0.0;
-    for item in items {
+    while let Some(item) = items.next() {
         match *item {
             Num::Float(value) => {
                 let next = total + value;
@@ -268,13 +283,32 @@ pub(crate) fn sum_nums(values: &[Num]) -> Option<Num> {
                 }
                 total = next;
             }
-            Num::Int(value) => total += value as f64,
+            Num::Int(value) if fits_c_long(value) => total += value as f64,
+            Num::Int(value) => {
+                if compensation != 0.0 && compensation.is_finite() {
+                    total += compensation;
+                }
+                return plain_sum(Num::Float(total + value as f64), items.as_slice());
+            }
         }
     }
     if compensation != 0.0 && compensation.is_finite() {
         total += compensation;
     }
     Some(Num::Float(total))
+}
+
+/// The rest of sum() once its fast paths have ended: `total + item` for each item.
+fn plain_sum(mut total: Num, items: &[Num]) -> Option<Num> {
+    for item in items {
+        total = match (total, *item) {
+            (Num::Int(left), Num::Int(right)) => Num::Int(left.checked_add(right)?),
+            (Num::Int(left), Num::Float(right)) => Num::Float(left as f64 + right),
+            (Num::Float(left), Num::Int(right)) => Num::Float(left + right as f64),
+            (Num::Float(left), Num::Float(right)) => Num::Float(left + right),
+        };
+    }
+    Some(total)
 }
 
 /// math.fsum as CPython 3.12 computes it (Shewchuk's partials with its half-even correction
