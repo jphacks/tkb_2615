@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable
 
-from sheltersim.contracts.policies import selected_models
+from sheltersim.contracts.policies import selected_models, selected_models_scope
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import WorldState
@@ -37,6 +38,7 @@ from sheltersim.domain.distress_monitor import record_distress_monitor_tick
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.facility_queues import facility_has_independent_queues
 from sheltersim.domain.geometry_overlay import (
+    GEOMETRY_OVERLAY_KEY,
     geometry_config_scope,
     parsed_facility_geometry,
     release_sleep_bed,
@@ -182,6 +184,7 @@ class OfflineSimulationController:
     ) -> None:
         self.world = world
         self._person_contexts: dict[str, Any] = {}
+        self._closed_edges: dict[str, tuple[Any, set[str]]] = {}
         self.active_actions = active_action_index(world)
         initialize_simulator_extensions(world)
         validate_simulator_extensions(world)
@@ -413,7 +416,7 @@ class OfflineSimulationController:
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
         # No phase edits model_configs, so the facility geometry is parsed once per phase.
-        with geometry_config_scope():
+        with geometry_config_scope(), selected_models_scope():
             self._run_phase(phase, world, minute, rng)
 
     def _run_phase(
@@ -1885,6 +1888,33 @@ class OfflineSimulationController:
         finish_movement(world, agent.id)
         return False
 
+    def _physically_closed_edges(self, geometry_raw: Any, mobility: str) -> set[str]:
+        """The surveyed routes that a person of this mobility cannot pass.
+
+        They depend only on the geometry and constraint configs and the overlay's
+        partitions and moved facilities, and are computed again when any of these differ
+        from the copies kept with the answer. Every trip plan asks, for every route.
+        """
+        world = self.world
+        overlay = world.model_state.get(GEOMETRY_OVERLAY_KEY)
+        inputs = (
+            geometry_raw,
+            world.model_configs.get("spatial_constraints"),
+            overlay is None,
+            None if overlay is None else overlay.get("partitions"),
+            None if overlay is None else overlay.get("facility_points"),
+        )
+        known = self._closed_edges.get(mobility)
+        if known is not None and known[0] == inputs:
+            return known[1]
+        closed = {
+            route.edge_id
+            for route in parsed_facility_geometry(geometry_raw).routes
+            if not route_is_physically_clear(world, route.edge_id, mobility=mobility)
+        }
+        self._closed_edges[mobility] = (deepcopy(inputs), closed)
+        return closed
+
     def _route(
         self, origin_zone_id: str, destination_zone_id: str, agent_id: str
     ) -> ZoneRoute | None:
@@ -1893,14 +1923,7 @@ class OfflineSimulationController:
         space = self.space
         geometry_raw = self.world.model_configs.get("facility_geometry")
         if agent is not None and geometry_raw is not None:
-            geometry = parsed_facility_geometry(geometry_raw)
-            inaccessible = {
-                route.edge_id
-                for route in geometry.routes
-                if not route_is_physically_clear(
-                    self.world, route.edge_id, mobility=agent.profile.mobility
-                )
-            }
+            inaccessible = self._physically_closed_edges(geometry_raw, agent.profile.mobility)
             if inaccessible:
                 graph = ZoneGraph(
                     zones=self.space.graph.zones,

@@ -57,6 +57,35 @@ def test_the_psychology_kernel_gives_the_python_deltas(
     assert compared == list(range(360))
 
 
+def test_the_psychology_kernel_leaves_out_of_bounds_values_to_python(generated_scenario) -> None:
+    """AgentStateDelta's checks are skipped only for values known to be within bounds."""
+    from dataclasses import replace
+
+    from sheltersim.core.world import WorldState
+    from sheltersim.domain.body_state import create_body_state
+    from sheltersim.policies.behavior import WorldView
+    from sheltersim.policies.psychology import IntegratedDistressLifeStatePolicy
+    from sheltersim.policies.registry import create_psychology
+
+    world = WorldState.from_scenario(generated_scenario)
+    world.model_state.setdefault("body_state_v1", create_body_state(world))
+    policy = create_psychology(world.model_configs, resource_service_enabled=True)
+    assert isinstance(policy, IntegratedDistressLifeStatePolicy)
+    view = WorldView.from_world(world, include_state_hash=False)
+    assert policy.native_deltas(view, view.minute_index) is not None
+    first = next(iter(view.agents))
+
+    def changed(**fields):
+        agents = {**view.agents, first: replace(view.agents[first], **fields)}
+        return replace(view, agents=agents)
+
+    assert policy.native_deltas(changed(trust=1), view.minute_index) is None
+    broken = changed(trust=1.5)
+    assert policy.native_deltas(broken, view.minute_index) is None
+    with pytest.raises(ValueError):
+        policy.deltas_without_traces(broken, view.minute_index)
+
+
 def _outcome(validate, world) -> str:
     try:
         validate(world)

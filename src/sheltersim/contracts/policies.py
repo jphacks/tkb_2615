@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from importlib.resources import files
 from typing import Any, Literal
@@ -150,8 +153,41 @@ class PolicyModelDefinition(ExtensionModel):
         return self
 
 
+# Each person's social event and each proposal asks for the selection several times per
+# tick. Inside a scope (one tick phase, in which no model_configs changes), the selection
+# of a configs object is computed once and shared, so callers must not change it.
+_SELECTION_SCOPE: ContextVar[list[tuple[Any, dict[str, str]]] | None] = ContextVar(
+    "selected_models_scope", default=None
+)
+
+
+@contextmanager
+def selected_models_scope() -> Iterator[None]:
+    """Reuse the selection of each model_configs object while it cannot change."""
+    if _SELECTION_SCOPE.get() is not None:
+        yield
+        return
+    token = _SELECTION_SCOPE.set([])
+    try:
+        yield
+    finally:
+        _SELECTION_SCOPE.reset(token)
+
+
 def selected_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     """Opt-in selectors are separate from legacy coefficient schema versions."""
+    scope = _SELECTION_SCOPE.get()
+    if scope is None:
+        return _select_models(configs)
+    for known, selection in scope:
+        if known is configs:
+            return selection
+    selection = _select_models(configs)
+    scope.append((configs, selection))
+    return selection
+
+
+def _select_models(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     from sheltersim.contracts.bootstrap import ensure_builtin_contracts
 
     ensure_builtin_contracts()

@@ -244,7 +244,16 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
             if agent.len() != psychology::AGENT_FIELDS {
                 return Err(Unsupported::new_err("agent inputs have the wrong length"));
             }
-            Ok(psychology::step(&globals, agent))
+            let row = psychology::step(&globals, agent);
+            // Values outside AgentStateDelta's bounds are left to its Python checks.
+            let in_bounds = |value: f64| (0.0..=1.0).contains(&value);
+            if !row[..5].iter().copied().all(in_bounds)
+                || !(0.0..=1440.0).contains(&row[5])
+                || !row[6..].iter().copied().all(in_bounds)
+            {
+                return Err(Unsupported::new_err("a new value is out of bounds"));
+            }
+            Ok(row)
         })
         .collect()
 }

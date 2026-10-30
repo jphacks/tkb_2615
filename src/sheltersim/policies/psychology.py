@@ -33,13 +33,16 @@ class AgentStateDelta:
     negative_affect: float | None = None
     hygiene_need: float | None = None
 
+    @classmethod
+    def within_bounds(cls, fields: dict[str, Any]) -> AgentStateDelta:
+        """A delta of every field, already checked as __post_init__ does."""
+        delta = object.__new__(cls)
+        object.__setattr__(delta, "__dict__", fields)
+        return delta
+
     def with_stress(self, stress: float) -> AgentStateDelta:
         """A copy with another stress, already known to be a float within 0..1."""
-        copy = object.__new__(AgentStateDelta)
-        fields = dict(self.__dict__)
-        fields["stress"] = stress
-        object.__setattr__(copy, "__dict__", fields)
-        return copy
+        return AgentStateDelta.within_bounds({**self.__dict__, "stress": stress})
 
     def __post_init__(self) -> None:
         if not self.agent_id:
@@ -1194,23 +1197,30 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
         rows = native.psychology_integrated(globals_, inputs)
         if rows is None:
             return None
+        if minute < 0 or not all(
+            agent.id and type(agent.trust) is float and 0.0 <= agent.trust <= 1.0
+            for agent in agents
+        ):
+            return None
         return tuple(
-            AgentStateDelta(
-                agent_id=agent.id,
-                minute_index=minute,
-                toilet_urgency=row[0],
-                hunger=row[1],
-                fatigue=row[2],
-                hydration_need=row[3],
-                stress=row[4],
-                trust=agent.trust,
-                sleep_debt_minutes=row[5],
-                uncertainty=row[6],
-                reassurance=row[7],
-                discontent=row[8],
-                positive_affect=row[9],
-                negative_affect=row[10],
-                hygiene_need=row[11],
+            AgentStateDelta.within_bounds(
+                {
+                    "agent_id": agent.id,
+                    "minute_index": minute,
+                    "toilet_urgency": row[0],
+                    "hunger": row[1],
+                    "fatigue": row[2],
+                    "hydration_need": row[3],
+                    "stress": row[4],
+                    "trust": agent.trust,
+                    "sleep_debt_minutes": row[5],
+                    "uncertainty": row[6],
+                    "reassurance": row[7],
+                    "discontent": row[8],
+                    "positive_affect": row[9],
+                    "negative_affect": row[10],
+                    "hygiene_need": row[11],
+                }
             )
             for agent, row in zip(agents, rows, strict=True)
         )
@@ -1440,6 +1450,7 @@ class IntegratedDistressLifeStatePolicy(LifeStatePsychologyPolicy):
 
 def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -> None:
     """Apply a complete, current-tick update after validating every delta first."""
+    body_state = world.model_state.get("body_state_v1")
     seen: set[str] = set()
     prepared: list[tuple[str, AgentStateDelta]] = []
     for delta in deltas:
@@ -1475,7 +1486,6 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
                 "hygiene_need",
             )
         )
-        body_state = world.model_state.get("body_state_v1")
         if supplied_body and (
             not isinstance(body_state, dict) or delta.agent_id not in body_state.get("agents", {})
         ):
@@ -1491,7 +1501,6 @@ def apply_state_deltas(world: WorldState, deltas: tuple[AgentStateDelta, ...]) -
         agent.needs.hydration_need = delta.hydration_need
         agent.stress = delta.stress
         agent.trust = delta.trust
-        body_state = world.model_state.get("body_state_v1")
         body_values = {
             "sleep_debt_minutes": delta.sleep_debt_minutes,
             "uncertainty": delta.uncertainty,
