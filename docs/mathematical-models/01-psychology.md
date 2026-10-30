@@ -66,7 +66,7 @@ D_i(d+1)=\operatorname{clip}_{[0,1]}\{\mu_i+\phi_i(D_i(d)-\mu_i)+\theta_A(\bar A
 - `src/sheltersim/policies/psychology.py`: `MeanRevertingDistressPolicy`, `LifeStatePsychologyPolicy`, `IntegratedDistressLifeStatePolicy`, `mean_reverting_step`
 - `src/sheltersim/domain/psychological_state.py`: 日内積分、日境界更新、checkpoint検証
 - `src/sheltersim/domain/body_state.py`: 身体・不確実性・安心・感情状態と訂正eventの一回適用
-- `src/sheltersim/policies/behavior.py`: 情報beliefをsnapshotへ投影し、Trace用の情報event出典を保持
+- `src/sheltersim/policies/world_view.py`: 情報beliefをsnapshotへ投影し、Trace用の情報event出典を保持
 - `src/sheltersim/experiments/phases/update.py`: 心理・社会更新、Trace、日内積分を同じtickで順序制御
 - model version: `mean-reverting-distress-v1`, `life-state-feedback-v1`, `mean-reverting-life-state-v1`; 潜在状態schema: 1
 

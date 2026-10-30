@@ -7,7 +7,7 @@ from sheltersim.core.rng import KeyedRandom
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.social_network import PROXIMITY_CONTACT_SOURCE_ID
 from sheltersim.events.models import EventKind, ScheduledEvent
-from sheltersim.policies.behavior import WorldView
+from sheltersim.policies.world_view import WorldView
 
 
 class SamplePhase:

@@ -43,8 +43,9 @@ from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, Sch
 from sheltersim.llm.contracts import LLMStage, LLMTask
 from sheltersim.llm.runtime import LEGACY_SUPPORT_PRIORITY_POLICY_VERSION, support_priority_runtime
 from sheltersim.llm.schemas import SUPPORT_ADVICE_SCHEMA
-from sheltersim.policies.behavior import ActionKind, AgentView, WorldView
+from sheltersim.policies.behavior import ActionKind
 from sheltersim.policies.space import SpaceRouter, ZoneRoute
+from sheltersim.policies.world_view import AgentView, WorldView
 
 
 class ProposePhase:

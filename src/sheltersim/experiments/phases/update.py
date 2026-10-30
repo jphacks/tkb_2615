@@ -19,10 +19,10 @@ from sheltersim.domain.movement import MOVEMENT_STATE_KEY, advance_movement, fin
 from sheltersim.domain.psychological_state import PSYCHOLOGICAL_STATE_KEY
 from sheltersim.domain.social_network import record_observed_contact
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
-from sheltersim.policies.behavior import WorldView
 from sheltersim.policies.psychology import PsychologyUpdateResult, apply_state_deltas
 from sheltersim.policies.social import SOCIAL_RUNTIME_STATE_KEY
 from sheltersim.policies.space import ZoneRoute
+from sheltersim.policies.world_view import WorldView
 
 
 class UpdatePhase:

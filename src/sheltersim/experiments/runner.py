@@ -83,11 +83,7 @@ from sheltersim.llm.runtime import (
     SupportPriorityLimits,
     support_priority_policy_version,
 )
-from sheltersim.policies.behavior import (
-    BehaviorDecisionRunner,
-    WorldView,
-    behavior_policy_definition,
-)
+from sheltersim.policies.behavior import BehaviorDecisionRunner, behavior_policy_definition
 from sheltersim.policies.proximity import DisabledProximityPolicy, DistanceSampledProximityPolicy
 from sheltersim.policies.registry import (
     create_behavior,
@@ -97,6 +93,7 @@ from sheltersim.policies.registry import (
     create_social,
 )
 from sheltersim.policies.space import SpaceRouter
+from sheltersim.policies.world_view import WorldView
 
 if TYPE_CHECKING:
     from pathlib import Path
