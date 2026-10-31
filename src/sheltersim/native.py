@@ -191,17 +191,33 @@ def world_agents_valid(
     )
 
 
-def index_row(row: dict[str, Any]) -> tuple[str, str, list, list, list, list] | None:
-    """(canonical JSON, its SHA-256, identities, event references, keys, strings to check) of a
-    row of plain lists, str-keyed dicts and JSON scalars (storage/history_index.py), or None
-    for any other row or without the kernel. Identities and references may repeat."""
+def index_row(row: dict[str, Any]) -> tuple[str, str, list, list, str, list, str | None] | None:
+    """(canonical JSON, its SHA-256, identities, event references, sorted keys joined by NUL,
+    strings to check, the text its tokens are read from or None) of a row of plain lists,
+    str-keyed dicts and JSON scalars (storage/history_index.py), or None for any other row or
+    without the kernel. Identities and references may repeat."""
     return None if _native is None else _native.index_row(row)
+
+
+def dumps_length(value: Any) -> int | None:
+    """len(json.dumps(value, ensure_ascii=False).encode()), or None to leave it to json."""
+    if _native is None:
+        return None
+    try:
+        return _native.dumps_length(value)
+    except _native.Unsupported:
+        return None
 
 
 def record_json(record: Any, *types: type) -> bytes | None:
     """The canonical JSON of record.to_dict() for a record of the types EventLogRecord and
     ScheduledEvent with only frozen plain values, or None for any other or without the kernel."""
     return None if _native is None else _native.record_json(record, *types)
+
+
+def history_pins() -> Any:
+    """What tells cheaply that a history's entries were not changed, or None (history.rs)."""
+    return None if _native is None else _native.HistoryPins()
 
 
 def same_saved_records(records: list[Any], raws: list[bytes], *types: type) -> bool | None:

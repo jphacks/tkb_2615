@@ -276,9 +276,50 @@ fn plain_scalar(value: &Bound<'_, PyAny>) -> bool {
         || value.is_exact_instance_of::<PyFloat>()
 }
 
+// The row fields whose words `HistoryIndex` indexes as tokens (`_TOKEN_FIELDS` of history_index.py).
+const TOKEN_FIELDS: [&str; 7] = ["event_type", "action", "kind", "status", "trigger", "topic_id", "task_kind"];
+
+/// `" ".join(str(row.get(name, "")) for name in TOKEN_FIELDS)`, or None if a field is a container,
+/// whose text depends on a key order not yet sorted.
+fn token_text(row: &Bound<'_, PyDict>) -> PyResult<Option<String>> {
+    let mut text = String::with_capacity(48);
+    for (index, name) in TOKEN_FIELDS.iter().enumerate() {
+        if index > 0 {
+            text.push(' ');
+        }
+        let Some(value) = row.get_item(name)? else {
+            continue;
+        };
+        if let Ok(value) = value.downcast_exact::<PyString>() {
+            text.push_str(value.to_str()?);
+        } else if is_container(&value) {
+            return Ok(None);
+        } else {
+            text.push_str(value.str()?.to_str()?);
+        }
+    }
+    Ok(Some(text))
+}
+
+fn is_container(value: &Bound<'_, PyAny>) -> bool {
+    value.is_instance_of::<PyDict>() || value.is_instance_of::<PyList>()
+}
+
+fn hex(digest: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        text.push(DIGITS[usize::from(byte >> 4)] as char);
+        text.push(DIGITS[usize::from(byte & 15)] as char);
+    }
+    text
+}
+
 /// What `HistoryIndex` stores of one row of plain lists, str-keyed dicts and JSON scalars:
-/// its canonical JSON, the SHA-256 of that, its identities and event references, and the
-/// keys and strings the privacy check reads. None for any other row.
+/// its canonical JSON, the SHA-256 of that, its identities and event references, and what the
+/// privacy check reads: its sorted keys joined by NUL, the same text for rows of the same shape,
+/// and the strings that could match. Last, the text its tokens are read from, or None. None for
+/// any other row.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 pub fn index_row<'py>(
@@ -290,8 +331,9 @@ pub fn index_row<'py>(
         String,
         Vec<Bound<'py, PyString>>,
         Vec<Bound<'py, PyString>>,
+        String,
         Vec<String>,
-        Vec<String>,
+        Option<String>,
     )>,
 > {
     let mut identities = Vec::new();
@@ -304,16 +346,43 @@ pub fn index_row<'py>(
     };
     let (keys, strings) =
         candidates(&raw).map_err(pyo3::exceptions::PyValueError::new_err)?;
-    let hash = Sha256::digest(&raw).iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut keys: Vec<String> = keys.into_iter().collect();
+    if keys.iter().any(|key| key.contains('\0')) {
+        return Ok(None);
+    }
+    keys.sort_unstable();
+    let hash = hex(&Sha256::digest(&raw));
     let text = std::str::from_utf8(&raw).map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     Ok(Some((
         PyString::new(py, text),
         hash,
         identities,
         references,
-        keys.into_iter().collect(),
+        keys.join("\0"),
         strings.into_iter().collect(),
+        token_text(row)?,
     )))
+}
+
+/// `len(json.dumps(value, ensure_ascii=False).encode())` of a plain JSON value: its canonical JSON
+/// and one more byte for each separator, which only json.dumps' default separators have a space in.
+/// Unsupported for anything canonical JSON leaves to json.
+#[pyfunction]
+pub fn dumps_length(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    let raw = crate::encode(value)?;
+    let mut length = raw.len();
+    let mut in_text = false;
+    let mut index = 0;
+    while index < raw.len() {
+        match raw[index] {
+            b'\\' if in_text => index += 1,
+            b'"' => in_text = !in_text,
+            b',' | b':' if !in_text => length += 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(length)
 }
 
 /// Write value, a frozen record value, as canonical JSON; false for anything but exact

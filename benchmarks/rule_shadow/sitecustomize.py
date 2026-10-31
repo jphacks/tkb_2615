@@ -133,3 +133,6 @@ def _install(output: str) -> None:
 if OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     _install(OUTPUT)
+    import capture_shadow
+
+    capture_shadow.install(OUTPUT)

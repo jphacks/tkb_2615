@@ -37,6 +37,7 @@ from typing import Any
 from sheltersim import native
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.save_validation import SaveValidationMemo
+from sheltersim.core.state_mirror import owned_row_bytes
 from sheltersim.core.saved_items import SavedItems, json_default
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
@@ -112,12 +113,24 @@ class CanonicalEncoder:
         self._containers: dict[int, dict[str, Any]] = {}
         self._encoded: dict[int, tuple[Any, bytes]] = {}
         self._tree_nodes: dict[int, tuple[Any, str]] = {}
+        # The spliced lists whose items may change in place (entity rows), by id.
+        self._rewritten: set[int] = set()
 
     def splice(self, value: list[Any], items: list[bytes], *containers: dict[str, Any]) -> None:
         """Encode value from items; containers are the objects on the path to it."""
         self._lists[id(value)] = (value, items)
         for container in containers:
             self._containers[id(container)] = container
+
+    def splice_rows(self, value: Any, items: list[bytes]) -> None:
+        """Encode value from items, which are not append-only: an equal first and last item
+        do not mean an equal chunk, so chunk_key() says nothing about them."""
+        self.splice(value, items)
+        self._rewritten.add(id(value))
+
+    def append_only(self, value: Any) -> bool:
+        """Whether chunks of this spliced list are known by their first and last items."""
+        return id(value) not in self._rewritten
 
     def contain(self, *containers: dict[str, Any]) -> None:
         """Encode containers key by key, as objects on the path to a spliced value."""
@@ -166,7 +179,15 @@ class CanonicalEncoder:
 
     def _leaf(self, value: Any) -> bytes:
         if not isinstance(value, (dict, list)):
-            return canonical_bytes(value)
+            items = self.list_items(value)
+            if items is None:
+                return canonical_bytes(value)
+            entry = self._encoded.get(id(value))
+            if entry is not None and entry[0] is value:
+                return entry[1]
+            raw = b"[" + b",".join(items) + b"]"
+            self._encoded[id(value)] = (value, raw)
+            return raw
         entry = self._encoded.get(id(value))
         if entry is not None and entry[0] is value:
             return entry[1]
@@ -183,7 +204,9 @@ class CanonicalEncoder:
         items = self.list_items(value)
         if items is not None:
             if joined:
-                yield b"[" + b",".join(items) + b"]"
+                yield self._leaf(value) if id(value) in self._rewritten else (
+                    b"[" + b",".join(items) + b"]"
+                )
             else:
                 yield b"["
                 for start in range(0, len(items), _HASH_BATCH):
@@ -266,9 +289,11 @@ class CanonicalEncoder:
     def _tree_list(self, value: Sequence[Any]) -> str:
         items = value.raws if isinstance(value, SavedItems) else self.list_items(value)
         count = len(value)
+        # The full chunks a history had at its last save, which only grows or drops from the front.
+        known = [] if items is None else self._known_chunks(items)
         chunks = [
             (start, min(TREE_CHUNK_ITEMS, count - start))
-            for start in range(0, count, TREE_CHUNK_ITEMS)
+            for start in range(len(known) * TREE_CHUNK_ITEMS, count, TREE_CHUNK_ITEMS)
         ]
         if items is None:
             keys = [
@@ -287,7 +312,38 @@ class CanonicalEncoder:
                 for index, (start, size), key in zip(missing, wanted, hashes, strict=True):
                     keys[index] = key
                     self.remember_chunk(items, start, size, key)
+            keys = known + keys
+            self._keep_known_chunks(items, keys)
         return hashlib.sha256(_TREE_LIST + canonical_bytes([count, keys])).hexdigest()
+
+    def leading_chunks(self, value: Any, items: list[bytes], chunk_records: int) -> list[str]:
+        """The keys _known_chunks() knows of a list the archive splits in the same chunks."""
+        if chunk_records != TREE_CHUNK_ITEMS or not self.append_only(value):
+            return []
+        return self._known_chunks(items)
+
+    def _known_chunks(self, items: list[bytes]) -> list[str]:
+        """The keys of the leading full chunks of items that are chunks of the same list before.
+
+        As for chunk_key(), the same first and last item objects mean the same chunk.
+        """
+        if not items:
+            return []
+        kept = self.chunk_keys.get(("leading", id(items[0])))
+        if kept is None or kept[0] is not items[0]:
+            return []
+        keys = kept[2]
+        last = len(keys) * TREE_CHUNK_ITEMS - 1
+        return list(keys) if last < len(items) and items[last] is kept[1] else []
+
+    def _keep_known_chunks(self, items: list[bytes], keys: list[str]) -> None:
+        full = len(items) // TREE_CHUNK_ITEMS
+        if full:
+            self.chunk_keys[("leading", id(items[0]))] = (
+                items[0],
+                items[full * TREE_CHUNK_ITEMS - 1],
+                keys[:full],
+            )
 
 
 class _SealedItems:
@@ -308,6 +364,10 @@ class _SealedItems:
         self.known_equal = 0
         # The result of compare() for the update() of the same list that follows it.
         self._compared: tuple[Sequence[Any], int, int] | None = None
+        # With the kernels, what an unchanged plain-dict item is known by, without reading its
+        # values. Anything it can't say is compared with the documents as before.
+        self._pins = native.history_pins() if still_equal else None
+        self._pins_stale = False
 
     def compare(self, current: Sequence[Any]) -> int:
         """How many leading items of current are unchanged; update(current) reuses this."""
@@ -325,10 +385,19 @@ class _SealedItems:
         if (
             kept <= len(current)
             and all(map(operator.is_, self.items[start:], current[:kept]))
-            and (not self._still_equal or _still_documents(current, self.documents, start, kept))
+            and (not self._still_equal or self._same_as_documents(current, start, kept))
         ):
             return start, kept
         return len(self.items), 0
+
+    def _same_as_documents(self, current: Sequence[Any], start: int, count: int) -> bool:
+        pins = self._pins
+        if pins is not None and pins.unchanged(current, start, count):
+            return True
+        same = _still_documents(current, self.documents, start, count)
+        # Equal in another order, say: from now on known by what it holds now.
+        self._pins_stale = same
+        return same
 
     def update(self, current: Sequence[Any]) -> None:
         """Reuse the cached items still in current and convert the others."""
@@ -337,16 +406,34 @@ class _SealedItems:
             start, kept = compared[1:]
         else:
             start, kept = self._unchanged(current)
-        documents = self.documents[start:]
-        raws = self.raws[start:]
+        # These lists are this cache's own: what it hands out is a copy (documents()). Each copy
+        # of a list touches every item, scattered over memory.
+        documents, raws = self.documents, self.raws
+        del documents[:start], documents[kept:], raws[:start], raws[kept:]
         for item in current[kept:]:
+            # What the kernel encoded reads back as the same bytes (see _encoded_document).
+            raw = native.canonical_json(item) if self._convert is _world_json else None
+            if raw is not None:
+                documents.append(json.loads(raw))
+                raws.append(raw)
+                continue
             document = self._convert(item)
             documents.append(document)
             raws.append(canonical_bytes(document))
-        self.restored = self.restored[start : start + kept]
+        del self.restored[:start], self.restored[kept:]
         self.restored_equal = max(0, min(self.restored_equal - start, kept))
         self.known_equal = kept if self._still_equal else 0
-        self.items, self.documents, self.raws = list(current), documents, raws
+        self.items = list(current)
+        pins = self._pins
+        if pins is not None:
+            if not kept or self._pins_stale:
+                pins.clear()
+                kept = 0
+            else:
+                pins.drop_front(start)
+            self._pins_stale = False
+            if isinstance(current, list):
+                pins.extend(current, documents, kept)
 
     def _position(self, item: Any) -> int:
         # Only the items dropped since the last save are skipped.
@@ -369,29 +456,6 @@ def _world_json(value: Any) -> Any:
     # the kernel leaves to json (a frozen record's payload) takes the json path.
     encoded = native.canonical_json(value)
     return json.loads(WorldState._canonical_text(value) if encoded is None else encoded)
-
-
-def _encoded_document(data: dict[str, Any], shape: dict[str, Any], encoder: Any) -> dict[str, Any]:
-    """_world_json(data), remembering the JSON of each field the hash tree hashes as one.
-
-    Each field is encoded once, for its document, its hash and its archive chunks. What
-    the kernel encoded reads back as the same bytes: its keys are str, in sorted order.
-    """
-    document = {}
-    for key in sorted(data):
-        value = data[key]
-        inner = shape.get(key)
-        if inner is not None and isinstance(value, dict) and all(map(_is_str, value)):
-            document[key] = _encoded_document(value, inner, encoder)
-            continue
-        encoded = native.canonical_json(value)
-        if encoded is None:
-            document[key] = json.loads(WorldState._canonical_text(value))
-            continue
-        document[key] = json.loads(encoded)
-        if isinstance(document[key], (dict, list)):
-            encoder.remember(document[key], encoded)
-    return document
 
 
 def _is_str(value: Any) -> bool:
@@ -464,6 +528,16 @@ class CheckpointHistoryCache:
         self._validation: SaveValidationMemo | None = None
         # The model signatures of the last configs, by their canonical JSON.
         self._signatures: tuple[bytes, dict[str, str]] | None = None
+        # The canonical JSON and document of each field of the last documents(), by its path.
+        # The same bytes read back as the same document, which nothing changes, so a field that
+        # did not change is not parsed again.
+        self._fields: dict[tuple[str, ...], tuple[bytes, Any]] = {}
+        # What the last documents() took from Rust rows: each entity list's item bytes,
+        # and the names of the owned namespaces and world fields.
+        self._row_items: dict[str, list[bytes]] = {}
+        self._owned_rows: frozenset[str] = frozenset()
+        # The entities the last restore check showed equal, by field, then by id(raw).
+        self._restored_rows: dict[str, dict[int, tuple[bytes, Any, str]]] = {}
 
     def model_signatures(self, configs: dict[str, Any]) -> dict[str, str]:
         """contracts.policies.model_signatures(configs); the same configs compute it once.
@@ -497,6 +571,7 @@ class CheckpointHistoryCache:
     def forget_validation(self) -> None:
         """Drop what passed validations proved, after a failed capture."""
         self._validation = None
+        self._restored_rows = {}
 
     def documents(
         self, world: WorldState, metrics: MetricsRecorder | None
@@ -508,9 +583,21 @@ class CheckpointHistoryCache:
         ]
         for cache in self._model_histories.values():
             cache.known_equal = 0
-        data = world._canonical_data(include_event_log=False)
+        entity_rows, namespace_rows, field_rows = owned_row_bytes(world)
+        self._row_items = entity_rows
+        # A namespace on the hash tree's path has fields hashed apart: it stays on the Python path.
+        namespace_rows = {
+            name: raw for name, raw in namespace_rows.items() if name not in _WORLD_TREE["model_state"]
+        }
+        self._owned_rows = frozenset(namespace_rows) | frozenset(field_rows)
+        data = world._canonical_data(include_event_log=False, without_entities=bool(entity_rows))
         data["model_state"] = _with_empty(world.model_state, histories)
-        world_document = _encoded_document(data, _WORLD_TREE, encoder)
+        world_document = self._encoded_document(
+            data, _WORLD_TREE, encoder, (), {(): field_rows, ("model_state",): namespace_rows}
+        )
+        for name, raws in entity_rows.items():
+            world_document[name] = SavedItems(raws)
+            encoder.splice_rows(world_document[name], raws)
         log = world.event_log
         if keeps_saved_bytes(log):
             raws = self._log_raws(log)
@@ -543,6 +630,48 @@ class CheckpointHistoryCache:
             if resource_snapshots is not None:
                 encoder.splice(resource_snapshots, list(self._resource_snapshots.raws))
         return world_document, metric_document, encoder
+
+    def _document_field(
+        self, path: tuple[str, ...], raw: bytes, document: dict[str, Any], key: str, encoder: Any
+    ) -> None:
+        kept = self._fields.get(path)
+        if kept is not None and kept[0] == raw:
+            value = kept[1]
+        else:
+            value = json.loads(raw)
+            self._fields[path] = (raw, value)
+        document[key] = value
+        if isinstance(value, (dict, list)):
+            encoder.remember(value, raw)
+
+    def _encoded_document(
+        self,
+        data: dict[str, Any],
+        shape: dict[str, Any],
+        encoder: Any,
+        path: tuple[str, ...],
+        rows: dict[tuple[str, ...], dict[str, bytes]],
+    ) -> dict[str, Any]:
+        """_world_json(data), remembering the JSON of each field the hash tree hashes as one.
+
+        Each field is encoded once, for its document, its hash and its archive chunks. What
+        the kernel encoded reads back as the same bytes: its keys are str, in sorted order.
+        rows holds the bytes of fields a Rust row wrote, by path, and those are not encoded.
+        """
+        document: dict[str, Any] = {}
+        written = rows.get(path, {})
+        for key in sorted(data):
+            value = data[key]
+            inner = shape.get(key)
+            if inner is not None and isinstance(value, dict) and all(map(_is_str, value)):
+                document[key] = self._encoded_document(value, inner, encoder, (*path, key), rows)
+                continue
+            encoded = written.get(key) or native.canonical_json(value)
+            if encoded is None:
+                document[key] = json.loads(WorldState._canonical_text(value))
+                continue
+            self._document_field((*path, key), encoded, document, key, encoder)
+        return document
 
     def _log_raws(self, log: EventLog) -> list[bytes]:
         # A Rust EventLog that only grew returns the same bytes objects; a replaced
@@ -606,6 +735,40 @@ class CheckpointHistoryCache:
             for path, cache in self._model_histories.items()
             if cache.known_equal
         }
+
+    def restored_row_objects(self) -> dict[str, dict[int, tuple[bytes, Any, str]]] | None:
+        """What a restore check takes as restored, by entity field; None without any rows."""
+        return self._restored_rows if self._row_items else None
+
+    def known_equal_rows(self) -> dict[str, set[str]]:
+        """The IDs of the entities of the last documents() whose rows the last check showed equal."""
+        known = {}
+        for name, raws in self._row_items.items():
+            kept = self._restored_rows.get(name, {})
+            known[name] = {
+                entry[2] for entry in map(kept.get, map(id, raws)) if entry is not None
+            }
+        return known
+
+    def known_equal_owned(self) -> frozenset[str]:
+        """The namespaces and world fields whose documents the last documents() read from rows.
+
+        A typed row holds exact types only, so its bytes read back as what the tree holds.
+        """
+        return self._owned_rows
+
+    def remember_restored_rows(self, restored: WorldState, *, equal: bool) -> None:
+        """Keep the entities of a restore check for the rows that do not change until the next."""
+        self._restored_rows = {}
+        if not equal:
+            return
+        for name, raws in self._row_items.items():
+            rows = getattr(restored, name)
+            if len(rows) == len(raws):
+                self._restored_rows[name] = {
+                    id(raw): (raw, row, key)
+                    for raw, (key, row) in zip(raws, rows.items(), strict=True)
+                }
 
     def restored_metrics(self) -> tuple[list[Any], list[dict[str, int]]]:
         """What the last restore check made of the leading samples of the last documents()."""

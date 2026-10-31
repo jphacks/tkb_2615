@@ -150,11 +150,14 @@ class Checkpoint:
             shared=encoder.spliced_lists(),
             validate_world=False,
             installed_signatures=signatures,
+            known_rows=history_cache.restored_row_objects(),
         )
         equal = restored.same_state(
             world,
             known_equal_events=history_cache.restored_events_equal(),
             known_equal_histories=history_cache.known_equal_histories(),
+            known_equal_rows=history_cache.known_equal_rows(),
+            known_equal_owned=history_cache.known_equal_owned(),
         )
         if not equal:
             try:
@@ -162,6 +165,7 @@ class Checkpoint:
             except StateInvariantError as exc:
                 raise CheckpointError(f"checkpoint payload is invalid: {exc}") from exc
         history_cache.remember_restored(restored.event_log, equal=equal)
+        history_cache.remember_restored_rows(restored, equal=equal)
         history_cache.remember_restored_metrics(restored_metrics)
         object.__setattr__(checkpoint, "_encoder", encoder)
         # The restored world shares the history lists of the captured documents.
@@ -361,6 +365,7 @@ class Checkpoint:
         restored_log: Any = None,
         restored_samples: Any = ([], []),
         installed_signatures: dict[str, str] | None = None,
+        known_rows: Any = None,
     ) -> tuple[WorldState, MetricsRecorder]:
         if self.schema_version not in self.SUPPORTED_SCHEMA_VERSIONS:
             raise CheckpointError(f"unsupported checkpoint schema version: {self.schema_version}")
@@ -410,6 +415,7 @@ class Checkpoint:
                     _saved_json=True,
                     _borrow=True,
                     _restored_log=restored_log,
+                    _known_rows=known_rows,
                 )
                 metrics = MetricsRecorder.from_dict(
                     deepcopy(self.metrics_state, {id(item): item for item in shared}),

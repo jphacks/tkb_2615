@@ -106,9 +106,16 @@ def cursor_decode(value: str | None, scope: str, anchor: str) -> tuple[int, str]
         raise StorageError("stale_or_foreign_cursor: restart this query") from exc
 
 
+# Rows repeat the same few token texts and shapes of keys; read each once.
+@functools.lru_cache(maxsize=4096)
 def _terms(text: str) -> list[str]:
     # Literal tokens, not SQL/FTS expressions. Japanese contiguous terms stay intact.
     return sorted(set(re.findall(r"[\w:-]{1,80}", text.casefold())))[:16]
+
+
+@functools.lru_cache(maxsize=4096)
+def _any_private_field(keys: str) -> bool:
+    return any(map(_private_field, keys.split("\0")))
 
 
 # The row fields whose words are indexed as tokens.
@@ -317,12 +324,8 @@ class _RecordBatch:
         branch = self.branch
         # A plain row with nothing the privacy check changes is read in one pass in Rust.
         read = native.index_row(row)
-        if read is not None and (
-            read[5]
-            or any(map(_private_field, read[4]))
-            # The token text of a container depends on its key order, here not yet sorted.
-            or any(isinstance(row.get(name), (dict, list)) for name in _TOKEN_FIELDS)
-        ):
+        # The token text of a container depends on its key order, here not yet sorted.
+        if read is not None and (read[5] or read[6] is None or _any_private_field(read[4])):
             read = None
         if read is None:
             row, encoded = safe_row(row)
@@ -380,8 +383,10 @@ class _RecordBatch:
         self.added[kind] = self.added.get(kind, 0) + 1
         self.entities.extend((branch, kind, key, item, minute) for item in set(identities))
         # Index bounded metadata, never long answers, raw prompts or arbitrary prose.
-        words = _terms(" ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS))
-        words = sorted(set(words) | {"@event:" + event for event in references})
+        words = _terms(
+            read[6] if read is not None else " ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS)
+        )
+        words = sorted({*words, *("@event:" + event for event in references)})
         self.tokens.extend((branch, kind, token, minute, key) for token in words)
         if len(self.records) >= self._FLUSH_RECORDS:
             self.flush()
@@ -626,7 +631,8 @@ class HistoryIndex:
             offset = counts.get("events", 0)
             if offset > len(events):
                 raise StorageError("history_event_prefix_shortened")
-            for record in events[offset:]:
+            keys = getattr(checkpoint, "event_keys", None)
+            for index, record in enumerate(events[offset:]):
                 event = record["event"]
                 row = {
                     **event,
@@ -635,7 +641,8 @@ class HistoryIndex:
                     "detail": record.get("detail"),
                     "time_semantics": "recorded_event_minute",
                 }
-                records.put("events", row, key=digest(record))
+                # The sent bytes are the record's canonical JSON, which digest() would write again.
+                records.put("events", row, key=keys[index] if keys else digest(record))
                 if record["status"] == "applied":
                     event_type = event.get("event_type")
                     payload = event.get("payload", {})

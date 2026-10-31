@@ -767,6 +767,46 @@ def _attach_fields(world: Any, core: Any) -> None:
             world.__dict__[name] = mirror.replace_root(current)
 
 
+def owned_row_bytes(world: Any) -> tuple[dict[str, list[bytes]], dict[str, bytes], dict[str, bytes]]:
+    """The canonical JSON the Rust rows of a validated world write, without reading its objects.
+
+    Returns the items of each entity field, each owned namespace and each owned world field. What
+    has no bytes here has no row that holds it (tainted, a field assigned whole, a value canonical
+    JSON refuses), and the caller encodes the Python objects as always. A row needs nothing but
+    state_row! (or a Row with write_json) and its line in OWNED_NAMESPACES or OWNED_FIELDS.
+    """
+    core = world.__dict__.get("_core")
+    if core is None:
+        return {}, {}, {}
+    try:
+        entities = core.entities().rows_json(world.schema_version)
+    except native.Unsupported:
+        entities = {}
+    namespaces = {}
+    for name in OWNED_NAMESPACES:
+        mirror = core.mirror(name)
+        try:
+            raw = None if mirror is None else mirror.row_json()
+        except native.Unsupported:
+            raw = None
+        if raw is not None:
+            namespaces[name] = raw
+    owned_fields = {}
+    for name in OWNED_FIELDS:
+        mirror = core.mirror(name)
+        try:
+            raw = (
+                mirror.row_json()
+                if mirror is not None and mirror.holds(world.__dict__[name])
+                else None
+            )
+        except native.Unsupported:
+            raw = None
+        if raw is not None:
+            owned_fields[name] = raw
+    return dict(entities), namespaces, owned_fields
+
+
 def start_core(world: Any) -> None:
     """Give a new world its core, and own what is listed. Only with the kernels on."""
     core = native.world_core()
