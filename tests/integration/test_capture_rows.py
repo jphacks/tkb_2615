@@ -214,6 +214,24 @@ def test_a_tainted_store_or_namespace_saves_the_same_checkpoint(
 
 
 @needs_kernels
+def test_an_entity_map_stored_past_the_world_is_not_taken_from_its_old_rows(
+    finished_document,
+) -> None:
+    """Found by benchmarks/tracked_mirror_gate.py, whose session replaces WorldState.__setattr__."""
+
+    def assign(world: WorldState) -> None:
+        kept = dict(list(world.support_requests.items())[1:])
+        object.__setattr__(world, "support_requests", kept)
+
+    with_map = _capture_twice(finished_document, assign)[1]
+    assert isinstance(with_map.world_state["support_requests"], list)
+    assert len(with_map.world_state["support_requests"]) == (
+        len(finished_document["support_requests"]) - 1
+    )
+    assert isinstance(with_map.world_state["agents"], list)
+
+
+@needs_kernels
 def test_metric_state_assigned_whole_is_not_taken_from_its_old_row(finished_document) -> None:
     def assign(world: WorldState) -> None:
         world.metric_state = {**world.metric_state, "assigned": 1.0}
