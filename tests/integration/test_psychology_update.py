@@ -459,6 +459,21 @@ def test_a_tracked_body_namespace_is_left_to_python(generated_scenario: Any) -> 
         _rules().apply_deltas(None, world, deltas)
 
 
+def test_the_tracked_session_keeps_the_rows_of_a_whole_assignment(generated_scenario: Any) -> None:
+    from support.tracked_mirror import Session
+
+    with Session(tracked=True):
+        world = WorldState.from_scenario(generated_scenario)
+        agent = next(iter(world.agents.values()))
+        request = SupportRequestState("R", agent.id, 0, 10)
+        world.support_requests = {"R": request}
+        store = world._core.entities()
+        assert store.keys("support_requests") == ["R"]
+        world.support_requests = {}
+        assert store.keys("support_requests") == []
+        assert store.verify(world) is None
+
+
 # ---- Whole ticks ---------------------------------------------------------------------------------
 
 

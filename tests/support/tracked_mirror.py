@@ -836,6 +836,10 @@ class Session:
         def world_setattr(world: Any, name: str, value: Any) -> None:
             if name in TRACKED_FIELDS and isinstance(value, (dict, list)):
                 value = session.track(value, name)
+            elif "_core" in world.__dict__ and name in state_mirror.ENTITY_FIELDS:
+                # As WorldState.__setattr__ does: the rows of the entities stay Rust's here, and
+                # the kernels that read them must see a whole assignment.
+                value = state_mirror.entities_assigned(world, name, value)
             object.__setattr__(world, name, value)
 
         TickEngine.__init__ = engine_init  # type: ignore[method-assign]

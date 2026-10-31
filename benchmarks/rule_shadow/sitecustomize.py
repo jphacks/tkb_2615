@@ -1,4 +1,4 @@
-"""Compare the Rust long-term psychology step with its Python rules at every call, in any process.
+"""Compare the Rust psychology steps with their Python rules at every call, in any process.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -13,7 +13,8 @@ write the bytes of the tree. Each process writes what it saw to DIR at exit, so 
 processes of a Project count too. The kernel's result is what goes on, so the hashes of such a run
 must still pass. Without SHELTERSIM_RULE_SHADOW this file does nothing.
 
-This is the pattern for the next kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
+psychology_update.py does the same for the other two steps. This is the pattern for the next
+kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
 """
 
 from __future__ import annotations
