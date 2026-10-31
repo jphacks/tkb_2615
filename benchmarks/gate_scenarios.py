@@ -375,7 +375,8 @@ def _generated_project(directory: Path) -> Outcome:
         },
     )
     api.submit("p", "r", "main", 720)
-    api.wait_idle(timeout=600)
+    # Only ends a stuck run; the reversed-order variants on a busy machine take long.
+    api.wait_idle(timeout=7200)
     api.close()
     outcome.add("main", *timeline_hashes(store, "main"))
     library, metrics = run_library(scenario, directory / "library")

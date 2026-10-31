@@ -156,7 +156,24 @@ python benchmarks/gate_all_paths.py --output 出力先 --coverage
 - `--coverage`：tick側のコード（`core`、`domain`、`events`、`policies`、`experiments/runner.py`、`experiments/phases/`）のどの行に届いたかを、ファイルごとに`coverage-native.md`（Rustのkernelあり）と`coverage-both.md`（なしの回も合わせたもの）に書きます。
 - `policies`のモデルや、EffectProgramの操作を足したら、ここにもScenarioを足します。`tests/integration/test_all_paths_gate.py`は、モデルの一覧がここに入っていないと失敗します。
 - 介入が拒否された結果と、有効な入力でRunが止まる結果（`known_stops`のScenario）も、期待値に入れます。直したら期待値が変わるので気づけます。止まるものは、見つけたときにIssueにします。
+- `--reversed-order`：`world.agents`と`model_state`のすべてのdictの順序を、各段階の終わりに逆にする回（`reversed_order`）と、段階の途中でも逆にする回（`reversed_within_phase`）を動かして、1回目と比べます。結果が変わったScenarioは、dictの順序に頼る処理があるということです。途中で逆にする場所は`benchmarks/tick_probe.py`の`WITHIN_PHASE`にあり、処理を移したら一緒に直します。
 - 全件を動かすテストには`long_simulation`の印を付けます。通常のpytestは、1つの小さなScenarioだけを動かします。
+
+### 最初に違った場所を探す（`benchmarks/first_difference.py`）
+
+ハッシュが変わったときは、原因をこの道具で絞ります。移植のレーンは、Rustの規則をPythonの規則と比べるのに使います。手順と計測は[lanes/p0-digest.md](rust-port/lanes/p0-digest.md)に書きます。
+
+~~~shell
+python benchmarks/first_difference.py --both Scenario名 --output 出力先
+python benchmarks/first_difference.py --record Scenario名 --output A --draws
+python benchmarks/first_difference.py A B
+~~~
+
+- 段階ごとに、`model_state`の名前空間、人、作業、イベントの列、イベント記録などの部分ごとのdigestを書きます。比べると、最初に違った分、段階、部分を示し、そこまでもう一度実行して、違う値をJSONのパスと浮動小数点の16進で示します。
+- `--both`は`SHELTERSIM_NATIVE=1`と`=0`で動かして比べます。
+- `--draws`は、乱数の抽選ごとに鍵と値、比べた相手の値を記録して比べます。確率がわずかに違っても比較の結果が変わらなければ世界もハッシュも変わらないので、確率の式を移すときはこれを使います。Rustの中の抽選は記録されないので、Rustの確率の式は、レーンの文書の手順で`tests/integration/test_native_kernels.py`にビット単位の比較を足して確かめます。
+- これらのフックはベンチマークの側にあり、`src/`には何も足しません。`--draws`や`--reverse`は、`--expect`と同じ最終のハッシュになるはずです。ならなければ不具合として調べます。
+- digestは、辞書の順序を区別しません（キーでそろえた正規のJSONです）。順序に頼る処理は`--reversed-order`で確かめます。追記だけの履歴の古い項目の書き換えは、一定の間隔（`--full-every-minutes`）でしか見えません。
 
 ## 振る舞いの比較
 
