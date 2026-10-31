@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any
 
@@ -121,8 +121,12 @@ class WorldState:
 
     def __setattr__(self, name: str, value: Any) -> None:
         # A whole model_state assigned to a world with owned namespaces (core/state_mirror.py).
-        if name == "model_state" and "_core" in self.__dict__:
-            value = state_mirror.model_state_assigned(self, value)
+        if "_core" in self.__dict__:
+            if name == "model_state":
+                value = state_mirror.model_state_assigned(self, value)
+            elif name in state_mirror.ENTITY_FIELDS:
+                # A whole map of entities, such as world.support_requests = {...}.
+                value = state_mirror.entities_assigned(self, name, value)
         object.__setattr__(self, name, value)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> WorldState:
@@ -1518,17 +1522,18 @@ class WorldState:
                 for agent in sorted(self.agents.values(), key=lambda item: item.profile.id)
             ],
             "zones": [
-                asdict(zone) for zone in sorted(self.zones.values(), key=lambda item: item.id)
+                zone.to_dict() for zone in sorted(self.zones.values(), key=lambda item: item.id)
             ],
             "zone_edges": [
-                asdict(edge) for edge in sorted(self.zone_edges.values(), key=lambda item: item.id)
+                edge.to_dict()
+                for edge in sorted(self.zone_edges.values(), key=lambda item: item.id)
             ],
             "facilities": [
                 self._facility_data(facility)
                 for facility in sorted(self.facilities.values(), key=lambda item: item.id)
             ],
             "staff": [
-                asdict(person) for person in sorted(self.staff.values(), key=lambda item: item.id)
+                person.to_dict() for person in sorted(self.staff.values(), key=lambda item: item.id)
             ],
             "support_requests": [
                 self._support_request_data(request)
@@ -1536,7 +1541,7 @@ class WorldState:
             ],
             "resources": self.resources,
             "active_tasks": [
-                asdict(task)
+                task.to_dict()
                 for task in sorted(self.active_tasks.values(), key=lambda item: item.id)
             ],
             "event_queue": [event.to_dict() for event in self.event_queue.pending()],

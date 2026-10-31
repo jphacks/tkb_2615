@@ -296,6 +296,19 @@ def scan_bypasses(file: str, source: str) -> list[str]:
     return rows
 
 
+def scan_attribute_bypasses(file: str, source: str) -> list[str]:
+    """Attribute writes past `__setattr__`. An entity's write would not reach its Rust row."""
+    return [
+        f"{file}:{node.lineno} {ast.unparse(node.func)}"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "object"
+        and node.func.attr in {"__setattr__", "__delattr__"}
+    ]
+
+
 def _relative(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
@@ -371,6 +384,20 @@ def test_the_lint_accepts_reading_the_name_again() -> None:
 def test_the_lint_accepts_writing_before_the_insert_and_local_containers() -> None:
     assert _names_found("def f(s):\n    r = {}\n    r['b'] = 1\n    s['a'] = r\n") == []
     assert _names_found("def f():\n    l = {}\n    r = {}\n    l['a'] = r\n    r['b'] = 1\n") == []
+
+
+def test_only_the_classes_that_own_a_setattr_write_past_it() -> None:
+    # Frozen records and the classes that define __setattr__; no entity is written from elsewhere.
+    allowed = {"domain/models.py", "events/models.py", "core/world.py"}
+    rows = [
+        row
+        for path in _files()
+        if _relative(path) not in allowed
+        for row in scan_attribute_bypasses(_relative(path), path.read_text(encoding="utf-8"))
+    ]
+
+    assert rows == []
+    assert scan_attribute_bypasses("x.py", "object.__setattr__(a, 'b', 1)\n") != []
 
 
 def test_the_chain_lint_finds_the_form_that_drifted() -> None:
