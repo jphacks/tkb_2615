@@ -91,6 +91,7 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
 
     native.movement_positions_valid = counted_positions_valid
     forwards: dict[int, int] = {}
+    whole_writes: dict[int, int] = {}
     journeys: dict[int, set[str]] = {}
 
     def compare(world: Any, where: str) -> None:
@@ -99,6 +100,7 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
             return
         mirror = core.mirror(KEY)
         seen[f"movement_compares_{where}"] += 1
+        seen["movement_worlds_seen"] += id(mirror) not in forwards
         tainted = mirror.tainted
         if tainted is not None:
             reasons[f"movement_v1 tainted: {tainted}"] += 1
@@ -110,7 +112,8 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
         stats = mirror.stats()
         seen["movement_forwards"] += stats["forwards"] - forwards.get(id(mirror), 0)
         forwards[id(mirror)] = stats["forwards"]
-        seen["movement_whole_writes_at_compare"] += stats["whole_writes"] > 0
+        seen["movement_whole_writes"] += stats["whole_writes"] - whole_writes.get(id(mirror), 0)
+        whole_writes[id(mirror)] = stats["whole_writes"]
         known = journeys.setdefault(id(world), set())
         current = {journey["event_id"] for journey in tree["journeys"].values()}
         seen["movement_journeys_new"] += len(current - known)
