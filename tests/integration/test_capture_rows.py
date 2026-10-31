@@ -399,6 +399,24 @@ def test_a_new_owned_row_is_captured_by_its_declaration_alone(
 
 
 @needs_kernels
+def test_each_owned_namespace_and_field_of_a_world_comes_from_its_row(finished_document) -> None:
+    """social_propagation_v1 needed only its state_row! and its line in OWNED_NAMESPACES."""
+    world = _world(finished_document)
+    assert "social_propagation_v1" in world.model_state
+    cache = CheckpointHistoryCache()
+    saved = Checkpoint.capture(world, history_cache=cache)
+    assert cache._owned_rows == {
+        name
+        for name in (*state_mirror.OWNED_NAMESPACES, *state_mirror.OWNED_FIELDS)
+        if name in world.model_state or name in state_mirror.OWNED_FIELDS
+    }
+    assert "social_propagation_v1" in cache._owned_rows
+    raw = world._core.mirror("social_propagation_v1").row_json()
+    assert raw == canonical_bytes(world.model_state["social_propagation_v1"])
+    assert saved.world_state["model_state"]["social_propagation_v1"] == json.loads(raw)
+
+
+@needs_kernels
 def test_a_namespace_with_histories_hashed_apart_stays_on_the_python_path(
     finished_document, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -124,16 +124,6 @@ def information_contacts_without_messages(*arguments: Any) -> tuple | None:
         return None
 
 
-def social_channel_update(*arguments: Any) -> tuple | None:
-    """One tick of ExpressivenessChannelOpennessPolicy.update, or None."""
-    if _native is None:
-        return None
-    try:
-        return _native.social_channel_update(*arguments)
-    except (_native.Unsupported, TypeError):
-        return None
-
-
 def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
     """True only if every social_network_v1 relationship passes the Python rules."""
     return _native is not None and _native.social_relationships_valid(

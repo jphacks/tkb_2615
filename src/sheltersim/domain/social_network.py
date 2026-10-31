@@ -228,6 +228,14 @@ def record_observed_contact(
     state["interaction_count"] += 1
 
 
+def record_observed_contacts(world: WorldState, pairs: list[tuple[str, str]], minute: int) -> None:
+    """record_observed_contact of each (recipient, source), for the Rust social kernel."""
+    for recipient_id, source_id in pairs:
+        record_observed_contact(
+            world, recipient_id=recipient_id, source_id=source_id, minute=minute
+        )
+
+
 def record_interaction(
     world: WorldState,
     *,

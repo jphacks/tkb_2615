@@ -66,6 +66,20 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 | `tracked_mirror_gate.py` | 220行のうち、最初の回は6行で問題（`population`、`arrivals`。上の「落ちる先」の不具合）。修正後にその2つのシナリオの8行を動かして問題0件。残りの53シナリオは修正前の commit の回で問題0件で、全体を修正後にもう一度は動かしていません |
 | 索引の行の kernel（`index_row`、1行あたり） | 18.3 → 13.1 µs（行動の行）、46.6 → 35.1 µs（会話の行） |
 
+## 索引の rowid なしの表
+
+`entities` と `tokens` を読み書きする SQL はすべて `storage/history_index.py` にあります（`src/` のほかの `sqlite3.connect` は `storage/streams.py` の1か所で、別のファイルです）。rowid の順序に頼るものはありませんでした。
+
+| 場所 | SQL | 順序に頼らない理由 |
+|---|---|---|
+| `search`（人、世帯、職員、区域、会話の ID） | `EXISTS(SELECT 1 FROM entities e WHERE ...)` | 有無だけ。外の `ORDER BY minute,kind,key` が順序を決めます |
+| `search`（`event_id`、`text`、`causal`） | `EXISTS(SELECT 1 FROM tokens t WHERE ...)` | 同じ |
+| `conversation_tail` | `entities e JOIN records r ... WHERE e.entity=? ORDER BY e.key DESC LIMIT ?` | `ORDER BY` があり、1つの会話の中で key は重なりません（主キーが branch, kind, key, entity） |
+| `flush` | `INSERT`、`INSERT OR IGNORE` | 読みません |
+| `ingest` の作り直し | `DELETE ... WHERE branch=?` | 読みません |
+
+`tests/integration/test_history_index_formats.py` は、同じ Run を新しい形、古い形（同じコードで書いたもの）、古い形で rowid を key と逆順にしたものの3つにして、全部の問い合わせの答えを、ページと cursor ごと JSON の文字列で比べます。古いファイルへの書き込みと作り直しも確かめます。
+
 ## 確かめていないこと
 
 - **Windows と macOS では動かしていません。** `HistoryPins` と `rows_json` が使う C API（`PyDict_Next`、`PyList_GetItem`、`Py_NewRef` 相当）はどれも stable ABI です。
