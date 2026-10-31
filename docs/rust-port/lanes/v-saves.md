@@ -36,7 +36,7 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 
 ## 計測
 
-2026-10-31、WSL2、16コア。ほかのレーンが同時に動いていました（load average 約 30〜150）。7日分の生成 Run（project の経路）を、基準（レーンの開始点 `dd6a294`）と `daca212` で同時に動かした1回の組です。そのあとの修正は `IdMap` の確かめだけで、その commit でも7日分のハッシュ、ゲート、両モードのテストを確かめました。`rule_shadow`、`--reversed-order`、`tick_budget.py` は `daca212` の結果です。別の組（修正前の版）でも比はほぼ同じでした。
+2026-10-31、WSL2、16コア。ほかのレーンが同時に動いていました（load average 約 30〜150）。7日分の生成 Run（project の経路）を、基準（レーンの開始点 `dd6a294`）と `daca212` で同時に動かした1回の組です。そのあとの修正は `IdMap` の確かめと、心理の規則を Rust に移したレーンの取り込みです。下の表の確認は、**基準との byte 比較、道具の確認、`tick_budget.py`、索引の kernel の4つが `daca212` の結果で、ほかは取り込み後の `cf08426` の結果です。** 別の組（修正前の版）でも比はほぼ同じでした。
 
 | 7日分（スレッドの CPU 秒） | 基準 | 今 | 比 |
 |---|---:|---:|---:|
@@ -56,14 +56,14 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 | 7日分のハッシュ | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。基準と同じ |
 | 保存の byte 列（基準と比べた7日分） | 338個の Checkpoint の hash がすべて同じ。`history.sqlite` 以外の 1,020 個のファイルは名前と大きさが同じで、pack と frame の全 byte の SHA-256 も同じ |
 | 索引の内容 | `records` 852,674行、`entities` 4,923,026行、`tokens` 3,242,150行、ほかの表も、全列で並べて比べて同じ。ファイルは rowid のぶん違います |
-| `rule_shadow`（7日分） | 保存 336回、実体 554,258項目（183 MB）と名前空間 672回（15 MB）の byte 列が Python の経路と差0件。落ちた回数0。復元の確認 336回で、等しいと分かっていた行 499,568、復元した行 54,690。省かない比較と結果の違い0件 |
-| `rule_shadow`（ゲート） | 履歴キャッシュのある保存 217回、実体 18,380項目（8.5 MB）と名前空間 434回（3.4 MB）で差0件。落ちた回数0。ゲートでは保存の回数が少ないので、taint や NaN の経路は `test_capture_rows.py` が通します |
+| `rule_shadow`（7日分） | 保存 336回、実体 554,258項目（183 MB）と名前空間 1,344回（28 MB）の byte 列が Python の経路と差0件。落ちた回数0。復元の確認 336回で、等しいと分かっていた行 499,568、復元した行 54,690。省かない比較と結果の違い0件。ハッシュは基準と同じ。この回で `rules/psychology.rs` の人の更新は 10,080 tick のすべてで Rust が動きました（`apply_kernel_ran` 10,080）。規則の値の比較でも差0件です |
+| `rule_shadow`（ゲート） | 履歴キャッシュのある保存 217回、実体 18,380項目（8.5 MB）と名前空間 868回（8.4 MB）で差0件。落ちた回数0。ゲートでは保存の回数が少ないので、taint や NaN の経路は `test_capture_rows.py` が通します |
 | 道具の確認（`rule_shadow`） | 小数の書き出しを 1.01 倍したコピー：差を報告し、Run も途中で止まりました。行の印を立てないコピー（古い byte 列を返す）：実体4種の差と「復元の確認の結果が省かない比較と違う」を毎回報告 |
 | `tick_budget.py`（9600分から480 tick、3回、同時） | 基準との比 0.984（0.956、0.999、0.984）。A/A 1.009（1.056、0.967、1.009）。状態は3つとも一致 |
 | `gate_all_paths.py --expect` | 55個すべて一致、問題0件（素の回、`rule_shadow` の回とも） |
 | `gate_all_paths.py --expect --reversed-order` | 55個すべて一致、問題0件 |
-| 両モードの全テスト | Rust あり 2,318件通過・6件 skip。`SHELTERSIM_NATIVE=0` 1,781件通過・543件 skip |
-| `tracked_mirror_gate.py` | 220行のうち、最初の回は6行で問題（`population`、`arrivals`。上の「落ちる先」の不具合）。修正後にその2つのシナリオの8行を動かして問題0件。残りの53シナリオは修正前の commit の回で問題0件で、全体を修正後にもう一度は動かしていません |
+| 両モードの全テスト | Rust あり 2,473件通過・6件 skip。`SHELTERSIM_NATIVE=0` 1,787件通過・692件 skip |
+| `tracked_mirror_gate.py` | `cf08426` で全体を動かして 55シナリオ 220行、問題0件。4つの回のハッシュもすべて同じ。最初の版では6行で問題が出ました（`population`、`arrivals`。上の「落ちる先」の不具合） |
 | 索引の行の kernel（`index_row`、1行あたり） | 18.3 → 13.1 µs（行動の行）、46.6 → 35.1 µs（会話の行） |
 
 ## 索引の rowid なしの表
@@ -84,7 +84,7 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 
 - **Windows と macOS では動かしていません。** `HistoryPins` と `rows_json` が使う C API（`PyDict_Next`、`PyList_GetItem`、`Py_NewRef` 相当）はどれも stable ABI です。
 - ゲートの行の網羅率（`--coverage`）は測っていません。保存の経路に届いた回数は上の表のとおりです。
-- `rows_json` と `Table::changed` は、今の Rust の規則（`add_agent_stress` と心理）では実体を書く規則がほぼありません。実体を書く規則が増えたあとの7日分の比較は、そのレーンの `rule_shadow` で確かめます。
+- `Table::changed` と Rust の規則の組み合わせは、7日分の `rule_shadow` で差0件でした（上の表）。ただし、同じ人の行を Python の経路が同じ保存の間に書くと、そちらの印で古い byte 列が隠れます。`rules/psychology.rs` の書き込みだけを外して差が出ることは試していません。「行の印を立てないコピー」の確認は `slot_mut` 全体を対象にしたもので、`daca212`（取り込み前）の結果です。この経路が印を立てるのは、`get_mut` を通るというコードの読みによります。
 
 ## 残っているもの
 
