@@ -1,6 +1,6 @@
 # P4：`WorldCore` と、名前空間を Rust に移す手順
 
-`world.__dict__["_core"]`（`WorldCore`）と、本番の追跡する入れ物（`core/state_mirror.py`）を入れました。**この作業では、どの名前空間も Rust に移していません。** 動作もハッシュも変わりません。以後の作業は、この文書の手順で名前空間を移し、`core/world.py` を編集しません。
+`world.__dict__["_core"]`（`WorldCore`）と、本番の追跡する入れ物（`core/state_mirror.py`）を入れました。**この作業では、どの名前空間も Rust に移していません。** 動作もハッシュも変わりません。以後の作業は、この文書の手順で名前空間を移し、`core/world.py` を編集しません。最初に移した名前空間とマクロの使い方は [p5-template-namespace.md](p5-template-namespace.md) にあります。次の作業はそちらから始めてください。
 
 ## できたもの
 

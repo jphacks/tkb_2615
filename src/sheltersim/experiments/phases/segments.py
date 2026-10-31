@@ -17,7 +17,9 @@ from typing import Any
 from sheltersim import native
 
 # Name of a step's method -> (the module of native/src/rules/, the name of its kernel).
-SEGMENTS: dict[str, tuple[str, str]] = {}
+SEGMENTS: dict[str, tuple[str, str]] = {
+    "_update_long_term_psychology": ("psychology", "update_long_term"),
+}
 
 
 def install_segments(

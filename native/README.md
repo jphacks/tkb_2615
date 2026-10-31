@@ -40,10 +40,15 @@ Checkpoint document) and times them.
   for the existing calls; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
   `NamespaceMirror` per owned namespace, which holds its `Row` and is the sink of its tracked tree
-  (`sheltersim/core/state_mirror.py`). `src/state/sample_namespace.rs` is the template of an owned
-  namespace; `docs/rust-port/lanes/p4-world-core.md` is the how-to. Rows hold no Python handles.
+  (`sheltersim/core/state_mirror.py`). `src/state/sample_namespace.rs` is the small test-only
+  namespace; `docs/rust-port/lanes/p4-world-core.md` explains the mechanism. Rows hold no Python handles.
   A `Row`'s `apply` runs no Python code and no `PyRefMut` is held across a callback. Read the
   world's core again after any callback (`core_of`), since a copy-and-swap may have moved it.
+- `src/core/row.rs`: typed rows. `state_row!` writes `from_py`, `to_py`, `write_json`, the handling
+  of forwarded writes and mirrored setters from a record's list of fields, and any `Field` is a
+  `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
+  `src/rules/psychology.rs` are the production template: Rust owns those two, and its rule writes
+  them value by value. Start a namespace from `docs/rust-port/lanes/p5-template-namespace.md`.
 - `src/state/entities.rs`: `EntityStore`, the typed rows of a world's agents, facilities, staff,
   support requests and active tasks, from `WorldCore::entities`. The objects stay the dataclasses
   of `domain/models.py`, each mirroring its row; `IdMap`, `__setattr__` and `TrackedList` forward

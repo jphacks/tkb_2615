@@ -26,7 +26,12 @@ from support.tracked_mirror import Drift, Session, patch_worker_processes
 def pytest_ignore_collect(collection_path: Path) -> bool | None:
     # These make their own Sessions, and one patch at a time is what the module supports. The
     # others test the production sink, and expect a plain model_state until they own a namespace.
-    own_sinks = {"test_tracked_mirror.py", "test_state_mirror.py", "test_world_core.py"}
+    own_sinks = {
+        "test_tracked_mirror.py",
+        "test_state_mirror.py",
+        "test_world_core.py",
+        "test_psychology_row.py",
+    }
     return True if collection_path.name in own_sinks else None
 
 
