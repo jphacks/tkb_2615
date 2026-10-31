@@ -57,6 +57,7 @@ addopts = "-ra --import-mode=importlib --dist worksteal"
 pythonpath = ["tests"]
 markers = [
     "live_api: paid live API tests in tests/live requiring an explicit dev-environment gate",
+    "python_rules: run with the Python rules instead of the Rust kernels; needed to patch a ported function (tests/support/python_rules.py)",
     "long_simulation: seven-day simulations and tests taking 30 seconds or more each; run in the long CI lane",
 ]
 

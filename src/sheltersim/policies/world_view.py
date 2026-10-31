@@ -85,6 +85,13 @@ def _fields_of_person(context: PersonContext | None) -> dict[str, Any]:
 _NO_PERSON_FIELDS = _fields_of_person(None)
 
 
+def _person_entry(identity: str, raw: Any, cache: dict[str, tuple[Any, ...]]) -> tuple[Any, ...]:
+    """Parse a new or changed context; rules/world_view.rs keeps the fields it reads with it."""
+    context = PersonContext.model_validate(raw)
+    cache[identity] = (deepcopy(raw), context, _fields_of_person(context))
+    return cache[identity]
+
+
 def _person_fields(
     contexts: dict[str, PersonContext], cache: dict[str, tuple[Any, ...]] | None
 ) -> dict[str, dict[str, Any]]:
@@ -243,6 +250,11 @@ def _zone_environment(
     return view
 
 
+def _misinformation_applies(world: WorldState) -> bool:
+    """Whether the selected psychology reads beliefs in false claims, as from_world asks."""
+    return selected_models(world.model_configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
+
+
 def _view_state_hash(
     world: WorldState,
     agents: Mapping[str, AgentView],
@@ -368,9 +380,17 @@ def _view_state_hash(
     return state_hash
 
 
+# What a view made by rules/world_view.rs makes when a Python reader first asks for it.
+_MADE_FROM_RUST = frozenset({"agents", "facilities", "zone_members", "group_members"})
+
+
 @dataclass(frozen=True)
 class WorldView:
-    """Read-only, detached snapshot passed across policy boundaries."""
+    """Read-only, detached snapshot passed across policy boundaries.
+
+    With the Rust kernels the phases make it in rules/world_view.rs, which reads a snapshot's
+    values itself. Only rules still in Python then pay for the Python objects, in __getattr__.
+    """
 
     minute_index: int
     agents: Mapping[str, AgentView]
@@ -402,6 +422,19 @@ class WorldView:
             "group_members",
             MappingProxyType({key: tuple(value) for key, value in sorted(groups.items())}),
         )
+
+    def __getattr__(self, name: str) -> Any:
+        # Runs only for an attribute the instance doesn't have.
+        fields = self.__dict__
+        rust = fields.get("_rust_view")
+        if rust is None or name not in _MADE_FROM_RUST:
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+        agents, facilities, zone_members, group_members = rust.python_fields()
+        fields["agents"] = MappingProxyType(agents)
+        fields["facilities"] = MappingProxyType(facilities)
+        fields["zone_members"] = MappingProxyType(zone_members)
+        fields["group_members"] = MappingProxyType(group_members)
+        return fields[name]
 
     def immediate_needs(self) -> dict[str, float]:
         """The largest of each person's stress and needs; proposals read it many times."""
@@ -721,6 +754,7 @@ class WorldView:
         refreshed = object.__new__(cls)
         fields = prior.__dict__.copy()
         fields.pop("_immediate_needs", None)
+        fields.pop("_rust_view", None)
         fields["agents"] = MappingProxyType(agents)
         fields["state_hash"] = _view_state_hash(
             world,

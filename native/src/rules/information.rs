@@ -25,9 +25,9 @@ use crate::contacts::{
 use crate::core::mathx::{expm1, py_max, py_min};
 use crate::core::rng::{start_draw_log, take_draw_log, Key, KeyedDraws};
 use crate::core::row::{map_set, Field};
-use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
-use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
+use crate::core::world_core::{mirror_of, NamespaceMirror};
+use crate::rules::world_view::{group_of, presence_people_of};
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::information::{belief_rank, ContactRow, InformationRow, NAME, SCHEMA_VERSION};
@@ -206,22 +206,7 @@ fn inputs<'py>(
         .getattr(intern!(py, "zone_neighbors"))?
         .extract()
         .map_err(|_| Unsupported::new_err("the zone neighbors are not str tuples"))?;
-    let presence = world
-        .getattr(intern!(py, "model_state"))?
-        .call_method1(intern!(py, "get"), (intern!(py, "population_presence_v1"),))?;
-    let presence_people = match as_readable_dict(&presence) {
-        Some(state) => state.get_item(intern!(py, "people"))?,
-        None if presence.is_none() => None,
-        None if presence.is_instance_of::<PyDict>() => {
-            return unsupported("the presence state is another mapping");
-        }
-        None => None,
-    };
-    if let Some(people) = &presence_people {
-        if as_readable_dict(people).is_none() {
-            return unsupported("the presence state's people are not a dict");
-        }
-    }
+    let presence_people = presence_people_of(&world.getattr(intern!(py, "model_state"))?)?;
     Ok(Some(Inputs { world, model, settings, minute, seed: seed.to_string(), neighbors, presence_people }))
 }
 
@@ -339,37 +324,6 @@ fn sharing_factor(settings: &Settings, model: Model, share: f64, stress: f64) ->
     py_min(1.0, share * distress_multiplier)
 }
 
-/// The view's `group_id`: the household of the presence record, or the profile's.
-fn group_of(
-    people: Option<&Bound<'_, PyAny>>,
-    id: &str,
-    profile_group: &Option<Arc<str>>,
-) -> PyResult<Option<Arc<str>>> {
-    let Some(people) = people else {
-        return Ok(profile_group.clone());
-    };
-    let py = people.py();
-    let Some(record) = raw_dict_get(people, PyString::new(py, id).as_any())? else {
-        return Ok(profile_group.clone());
-    };
-    let Some(record) = as_readable_dict(&record) else {
-        if record.is_instance_of::<PyDict>() {
-            return unsupported("a presence record is another mapping");
-        }
-        return Ok(profile_group.clone());
-    };
-    let Some(household) = record.get_item(intern!(py, "household_id"))? else {
-        return Ok(profile_group.clone());
-    };
-    if household.is_none() {
-        return Ok(None);
-    }
-    let Ok(household) = household.downcast_exact::<PyString>() else {
-        return unsupported("a household ID is not a str");
-    };
-    Ok(Some(Arc::from(household.to_str().map_err(|_| Unsupported::new_err("not UTF-8"))?)))
-}
-
 /// `EvidenceAwareInformationPolicy.update` before the contacts: sharing fades, and some people
 /// forget. Returns each belief as the contacts see it, by position in the row, and what changes.
 fn forget<'a>(
@@ -450,7 +404,11 @@ fn plan(
         };
         pressure.push(py_max(0.0, *value - settings.pressure_decay));
         let group = if any_belief || recording {
-            group_of(inputs.presence_people.as_ref(), id, &agent.profile.group_id)?
+            group_of(
+                inputs.presence_people.as_ref(),
+                &PyString::new(inputs.world.py(), id),
+                &agent.profile.group_id,
+            )?
         } else {
             None
         };

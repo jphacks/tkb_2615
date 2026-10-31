@@ -1,8 +1,9 @@
 """Compare the Rust steps with their Python rules at every call, in any process.
 
 This file has the long-term psychology step, psychology_update.py the other psychology steps,
-social_propagation_shadow.py the social one and information_shadow.py the information one, whose
-results are in DIR/information.
+social_propagation_shadow.py the social one, movement_shadow.py the state of movement_v1,
+information_shadow.py the information one, whose results are in DIR/information, and
+world_view_shadow.py the views, in DIR/world_view.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -19,11 +20,14 @@ must still pass. Without SHELTERSIM_RULE_SHADOW this file does nothing.
 
 psychology_update.py does the same for the other two steps. This is the pattern for the next
 kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
+A new shadow is a file shadow_<name>.py with prepare(output) beside this one (see shadow_kit.py).
+Each runs first, so it can replace a kernel before the module that looks it up is imported.
 """
 
 from __future__ import annotations
 
 import atexit
+import importlib
 import json
 import os
 from collections import Counter
@@ -133,6 +137,10 @@ def _install(output: str) -> None:
 
     social_propagation_shadow.install(seen, reasons, differences)
 
+    import movement_shadow
+
+    movement_shadow.install(seen, reasons, differences)
+
     def report() -> None:
         if seen or reasons or differences:
             target = Path(output) / f"{os.getpid()}.json"
@@ -144,6 +152,9 @@ def _install(output: str) -> None:
 
 if OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
+    for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):
+        if shadow.stem != "shadow_kit":
+            importlib.import_module(shadow.stem).prepare(OUTPUT)
     _install(OUTPUT)
     from information_shadow import install as _install_information
 
@@ -154,3 +165,6 @@ if OUTPUT:
     import events_shadow
 
     events_shadow.install(OUTPUT)
+    from world_view_shadow import install as _install_world_view
+
+    _install_world_view(OUTPUT)
