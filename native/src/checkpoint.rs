@@ -467,6 +467,15 @@ pub fn record_json<'py>(
     record_type: &Bound<'py, PyAny>,
     event_type: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    Ok(encode_record(record, record_type, event_type)?.map(|raw| PyBytes::new(py, &raw)))
+}
+
+/// `record_json`, as bytes that need no Python object.
+pub(crate) fn encode_record<'py>(
+    record: &Bound<'py, PyAny>,
+    record_type: &Bound<'py, PyAny>,
+    event_type: &Bound<'py, PyAny>,
+) -> PyResult<Option<Vec<u8>>> {
     if !record.get_type().is(record_type) {
         return Ok(None);
     }
@@ -506,7 +515,7 @@ pub fn record_json<'py>(
         return Ok(None);
     }
     encoder.out.push(b'}');
-    Ok(Some(PyBytes::new(py, &encoder.out)))
+    Ok(Some(encoder.out))
 }
 
 // The fields of a saved event in sorted order.

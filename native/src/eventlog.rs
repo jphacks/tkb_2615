@@ -1,28 +1,47 @@
 //! The realized EventLog held in Rust (docs/rust-port.md, stage B1).
 //!
-//! Each record is a Python EventLogRecord object, its canonical JSON bytes, or both.
-//! A record appended by the simulation starts as the object; its bytes are made
-//! by the store's encoder when asked for. A record read back from a saved
-//! Checkpoint starts as the bytes; its object is made by the store's factory when
-//! Python reads it. The indexes the EventLog keeps (ID, sequence, minute, event
-//! type, provenance object keys, care requests, completed support kinds, applied
-//! facility events) live here, so lookups and audits need no record objects.
+//! Each record is its canonical JSON bytes, a Python EventLogRecord object, or both.
+//! A record appended from Python has its object and, written in the same step from the
+//! object's frozen fields, its bytes. A record a Rust rule appends (`append_row`) and a
+//! record read back from a saved Checkpoint start as the bytes; the object is made by the
+//! store's factory when Python reads it. The indexes the EventLog keeps (ID, sequence,
+//! minute, event type, provenance object keys, care requests, completed support kinds,
+//! applied facility events) live here, so lookups and audits need no record objects.
+//!
+//! The bytes are what restoring the record reads, so a store whose every record has bytes
+//! written here or checked here (`all_encoded`) is its own restored log: a save's restore
+//! check neither parses those bytes nor compares them with the objects
+//! (`core/checkpoint_cache.py`). A record with a value the writer refuses, such as a str
+//! subclass in a payload, has only its object; the Python encoder makes its bytes when
+//! asked, and the restore check then runs as it always did.
 //!
 //! Appending checks duplicate IDs and sequences and returns a code; the Python
 //! EventLog raises the same DuplicateEventError as before.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 
+use crate::core::value::V;
+use crate::state::events::{EventRow, EventStatus};
+
+/// What the indexes and a Rust rule read of one record. Holds no Python handle.
 struct Entry {
-    record: Option<Py<PyAny>>,
-    bytes: Option<Py<PyBytes>>,
+    /// The bytes until Python asks for them; then they are in `Handles::bytes`.
+    written: Option<Box<[u8]>>,
     event_type: u32,
     applied: bool,
     minute: i64,
+}
+
+/// The Python objects of one entry, at the same position in `EventStore::handles`.
+#[derive(Default)]
+struct Handles {
+    record: Option<Py<PyAny>>,
+    bytes: Option<Py<PyBytes>>,
 }
 
 /// What the indexes read from one record.
@@ -55,6 +74,9 @@ const ACTION_LIFECYCLE_EVENT_TYPE: &str = "agent_action_lifecycle";
 #[pyclass(module = "sheltersim_native")]
 pub struct EventStore {
     entries: Vec<Entry>,
+    handles: Vec<Handles>,
+    // Records with bytes only the Python encoder can make.
+    unencoded: usize,
     type_names: Vec<String>,
     type_ids: HashMap<String, u32>,
     by_id: HashMap<String, usize>,
@@ -76,6 +98,8 @@ pub struct EventStore {
     // record -> canonical bytes, and canonical bytes -> record (set from Python).
     encoder: Option<Py<PyAny>>,
     factory: Option<Py<PyAny>>,
+    // The exact types whose records `checkpoint::encode_record` may write.
+    types: Option<(Py<PyAny>, Py<PyAny>)>,
 }
 
 fn mapping_get<'py>(
@@ -97,6 +121,8 @@ impl EventStore {
     fn empty() -> Self {
         Self {
             entries: Vec::new(),
+            handles: Vec::new(),
+            unencoded: 0,
             type_names: Vec::new(),
             type_ids: HashMap::new(),
             by_id: HashMap::new(),
@@ -115,44 +141,44 @@ impl EventStore {
             audit_bounds: (None, None),
             encoder: None,
             factory: None,
+            types: None,
         }
     }
 
     fn record_at(&mut self, py: Python<'_>, index: usize) -> PyResult<Py<PyAny>> {
-        if let Some(record) = &self.entries[index].record {
+        if let Some(record) = &self.handles[index].record {
             return Ok(record.clone_ref(py));
         }
-        let bytes = self.entries[index].bytes.as_ref().unwrap().clone_ref(py);
+        let bytes = self.bytes_at(py, index)?;
         let factory = self
             .factory
             .as_ref()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no record factory"))?;
         let record = factory.call1(py, (bytes,))?;
-        self.entries[index].record = Some(record.clone_ref(py));
+        self.handles[index].record = Some(record.clone_ref(py));
         Ok(record)
     }
 
     fn bytes_at(&mut self, py: Python<'_>, index: usize) -> PyResult<Py<PyBytes>> {
-        if let Some(bytes) = &self.entries[index].bytes {
+        if let Some(bytes) = &self.handles[index].bytes {
             return Ok(bytes.clone_ref(py));
         }
-        let record = self.entries[index].record.as_ref().unwrap().clone_ref(py);
-        let encoder = self
-            .encoder
-            .as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no record encoder"))?;
-        let bytes: Py<PyBytes> = encoder.call1(py, (record,))?.extract(py)?;
-        self.entries[index].bytes = Some(bytes.clone_ref(py));
+        let bytes: Py<PyBytes> = if let Some(written) = self.entries[index].written.take() {
+            PyBytes::new(py, &written).unbind()
+        } else {
+            let record = self.handles[index].record.as_ref().unwrap().clone_ref(py);
+            let encoder = self
+                .encoder
+                .as_ref()
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no record encoder"))?;
+            encoder.call1(py, (record,))?.extract(py)?
+        };
+        self.handles[index].bytes = Some(bytes.clone_ref(py));
         Ok(bytes)
     }
 
     /// 0, or 1 for a realized ID, 2 for a realized sequence.
-    fn add(
-        &mut self,
-        fields: Fields,
-        record: Option<Py<PyAny>>,
-        bytes: Option<Py<PyBytes>>,
-    ) -> u8 {
+    fn add(&mut self, fields: Fields, handles: Handles, written: Option<Box<[u8]>>) -> u8 {
         if self.by_id.contains_key(&fields.event_id) {
             return 1;
         }
@@ -216,13 +242,16 @@ impl EventStore {
             self.by_provenance.entry(key).or_default().push(index);
         }
         let type_id = self.type_id(&fields.event_type);
+        if written.is_none() && handles.bytes.is_none() {
+            self.unencoded += 1;
+        }
         self.entries.push(Entry {
-            record,
-            bytes,
+            written,
             event_type: type_id,
             applied: fields.applied,
             minute: fields.minute,
         });
+        self.handles.push(handles);
         self.by_id.insert(fields.event_id, index);
         self.sequences.insert(fields.sequence);
         self.max_sequence = self.max_sequence.max(fields.sequence);
@@ -257,16 +286,48 @@ impl EventStore {
         Self::empty()
     }
 
-    /// The encoder (record -> canonical JSON bytes) and factory (bytes -> record).
-    fn set_codecs(&mut self, encoder: Py<PyAny>, factory: Py<PyAny>) {
+    /// The encoder (record -> canonical JSON bytes), the factory (bytes -> record), and the
+    /// only types of record and event whose bytes are written on appending.
+    #[pyo3(signature = (encoder, factory, record_type=None, event_type=None))]
+    fn set_codecs(
+        &mut self,
+        encoder: Py<PyAny>,
+        factory: Py<PyAny>,
+        record_type: Option<Py<PyAny>>,
+        event_type: Option<Py<PyAny>>,
+    ) {
         self.encoder = Some(encoder);
         self.factory = Some(factory);
+        self.types = record_type.zip(event_type);
     }
 
     /// Append one EventLogRecord: 0, or 1 for a realized ID, 2 for a realized sequence.
-    fn append(&mut self, record: &Bound<'_, PyAny>) -> PyResult<u8> {
+    fn append(&mut self, py: Python<'_>, record: &Bound<'_, PyAny>) -> PyResult<u8> {
         let fields = fields_of_record(record)?;
-        Ok(self.add(fields, Some(record.clone().unbind()), None))
+        if self.by_id.contains_key(&fields.event_id) {
+            return Ok(1);
+        }
+        if self.sequences.contains(&fields.sequence) {
+            return Ok(2);
+        }
+        let written = match &self.types {
+            // Anything this can not write waits for the Python encoder, which raises its own
+            // error at the save, as it always did.
+            Some((record_type, event_type)) => {
+                crate::checkpoint::encode_record(record, record_type.bind(py), event_type.bind(py))
+                    .unwrap_or(None)
+                    .map(Vec::into_boxed_slice)
+            }
+            None => None,
+        };
+        let handles = Handles { record: Some(record.clone().unbind()), bytes: None };
+        Ok(self.add(fields, handles, written))
+    }
+
+    /// Whether every record has bytes written or checked here, so restoring this log gives
+    /// the log itself.
+    fn all_encoded(&self) -> bool {
+        self.unencoded == 0
     }
 
     /// Append records saved as canonical JSON bytes (event_log documents of a
@@ -285,7 +346,7 @@ impl EventStore {
         });
         for (fields, bytes) in parsed.into_iter().zip(saved) {
             let fields = fields.map_err(pyo3::exceptions::PyValueError::new_err)?;
-            let refused = self.add(fields, None, Some(bytes));
+            let refused = self.add(fields, Handles { record: None, bytes: Some(bytes) }, None);
             if refused != 0 {
                 return Ok(refused);
             }
@@ -301,7 +362,7 @@ impl EventStore {
 
     /// How many records have no object yet (read back and not read since).
     fn unread(&self) -> usize {
-        self.entries.iter().filter(|entry| entry.record.is_none()).count()
+        self.handles.iter().filter(|handles| handles.record.is_none()).count()
     }
 
     fn __len__(&self) -> usize {
@@ -543,13 +604,21 @@ impl EventStore {
                 .entries
                 .iter()
                 .map(|entry| Entry {
-                    record: entry.record.as_ref().map(|record| record.clone_ref(py)),
-                    bytes: entry.bytes.as_ref().map(|bytes| bytes.clone_ref(py)),
+                    written: entry.written.clone(),
                     event_type: entry.event_type,
                     applied: entry.applied,
                     minute: entry.minute,
                 })
                 .collect(),
+            handles: self
+                .handles
+                .iter()
+                .map(|handles| Handles {
+                    record: handles.record.as_ref().map(|record| record.clone_ref(py)),
+                    bytes: handles.bytes.as_ref().map(|bytes| bytes.clone_ref(py)),
+                })
+                .collect(),
+            unencoded: self.unencoded,
             type_names: self.type_names.clone(),
             type_ids: self.type_ids.clone(),
             by_id: self.by_id.clone(),
@@ -568,6 +637,10 @@ impl EventStore {
             audit_bounds: self.audit_bounds,
             encoder: self.encoder.as_ref().map(|encoder| encoder.clone_ref(py)),
             factory: self.factory.as_ref().map(|factory| factory.clone_ref(py)),
+            types: self
+                .types
+                .as_ref()
+                .map(|(record, event)| (record.clone_ref(py), event.clone_ref(py))),
         }
     }
 
@@ -578,6 +651,121 @@ impl EventStore {
         sizes.set_item("ids", self.by_id.len())?;
         sizes.set_item("sequences", self.sequences.len())?;
         Ok(sizes)
+    }
+}
+
+/// What a Rust rule does with the log: no Python record is made or read.
+impl EventStore {
+    /// `EventLog.append` of an outcome of `event`: 0, or 1 for a realized ID, 2 for a
+    /// realized sequence, with nothing changed. `crate::state::events::EventWriter::record`
+    /// raises the errors `EventLog.append` raises.
+    pub(crate) fn append_row(
+        &mut self,
+        event: &EventRow,
+        realized_minute: i64,
+        status: EventStatus,
+        detail: Option<&str>,
+    ) -> PyResult<u8> {
+        if self.by_id.contains_key(&*event.event_id) {
+            return Ok(1);
+        }
+        if self.sequences.contains(&event.sequence) {
+            return Ok(2);
+        }
+        let written = event.record_json(realized_minute, status, detail)?;
+        Ok(self.add(event.index_fields(realized_minute, status), Handles::default(), Some(written)))
+    }
+
+    pub(crate) fn has_event_id(&self, event_id: &str) -> bool {
+        self.by_id.contains_key(event_id)
+    }
+
+    pub(crate) fn has_sequence(&self, sequence: i64) -> bool {
+        self.sequences.contains(&sequence)
+    }
+
+    /// The position of a realized event, for `saved_document`.
+    pub(crate) fn position_of(&self, event_id: &str) -> Option<usize> {
+        self.by_id.get(event_id).copied()
+    }
+
+    /// The positions of a type's records in append order; empty for a type with none.
+    pub(crate) fn positions_of_type(&self, event_type: &str) -> &[usize] {
+        self.type_ids
+            .get(event_type)
+            .and_then(|id| self.by_type.get(id))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The saved document of the record at a position: `(event, realized_minute, status, detail)`,
+    /// read from its bytes. None for a record whose bytes only Python can make.
+    pub(crate) fn saved_document(
+        &self,
+        py: Python<'_>,
+        index: usize,
+    ) -> Option<(EventRow, i64, EventStatus, Option<Arc<str>>)> {
+        let bytes = match (&self.entries.get(index)?.written, &self.handles[index].bytes) {
+            (Some(written), _) => &**written,
+            (None, Some(bytes)) => bytes.as_bytes(py),
+            (None, None) => return None,
+        };
+        EventRow::from_saved_record(bytes)
+    }
+}
+
+pub(crate) struct NewFields<'a> {
+    pub(crate) event_id: &'a str,
+    pub(crate) sequence: i64,
+    pub(crate) event_type: &'a str,
+    pub(crate) minute: i64,
+    pub(crate) applied: bool,
+    pub(crate) payload: Option<&'a V>,
+    pub(crate) provenance: Option<&'a V>,
+}
+
+fn fields_of_row(new: NewFields<'_>) -> Fields {
+    let text = |key: &str| match new.payload {
+        Some(V::Map(payload)) => match payload.get(key) {
+            Some(V::Str(value)) => Some(String::from(&**value)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let provenance_objects = match new.provenance {
+        Some(V::Map(provenance)) => provenance
+            .iter()
+            .filter(|(_, value)| matches!(value, V::Map(_)))
+            .map(|(key, _)| String::from(&**key))
+            .collect(),
+        _ => Vec::new(),
+    };
+    Fields {
+        event_id: new.event_id.to_owned(),
+        sequence: new.sequence,
+        event_type: new.event_type.to_owned(),
+        minute: new.minute,
+        applied: new.applied,
+        request_id: text("request_id"),
+        agent_id: text("agent_id"),
+        support_kind: text("support_kind"),
+        payload_status_completed: text("status").as_deref() == Some("completed"),
+        facility_id: text("facility_id"),
+        provenance_objects,
+        transition: text("transition"),
+    }
+}
+
+impl EventRow {
+    fn index_fields(&self, minute: i64, status: EventStatus) -> Fields {
+        fields_of_row(NewFields {
+            event_id: &self.event_id,
+            sequence: self.sequence,
+            event_type: &self.event_type,
+            minute,
+            applied: status == EventStatus::Applied,
+            payload: Some(&self.payload),
+            provenance: Some(&self.provenance),
+        })
     }
 }
 
@@ -605,27 +793,41 @@ fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
         }
     }
     let event_type: String = event.getattr(intern!(py, "event_type"))?.extract()?;
-    Ok(Fields {
+    let mut fields = Fields {
         event_id: event.getattr(intern!(py, "event_id"))?.extract()?,
         sequence: event.getattr(intern!(py, "sequence"))?.extract()?,
         minute: record.getattr(intern!(py, "realized_minute"))?.extract()?,
         applied: status == "applied",
-        request_id: as_str(&mapping_get(&payload, intern!(py, "request_id"))?),
-        agent_id: as_str(&mapping_get(&payload, intern!(py, "agent_id"))?),
-        support_kind: as_str(&mapping_get(&payload, intern!(py, "support_kind"))?),
-        payload_status_completed: mapping_get(&payload, intern!(py, "status"))?
-            .map(|value| value.eq("completed"))
-            .transpose()?
-            .unwrap_or(false),
-        facility_id: as_str(&mapping_get(&payload, intern!(py, "facility_id"))?),
+        request_id: None,
+        agent_id: None,
+        support_kind: None,
+        payload_status_completed: false,
+        facility_id: None,
         provenance_objects,
-        transition: if event_type == ACTION_LIFECYCLE_EVENT_TYPE {
-            as_str(&mapping_get(&payload, intern!(py, "transition"))?)
-        } else {
-            None
-        },
+        transition: None,
         event_type,
-    })
+    };
+    // `add` reads the payload of these types only.
+    match fields.event_type.as_str() {
+        "care_support_transition" => {
+            fields.request_id = as_str(&mapping_get(&payload, intern!(py, "request_id"))?);
+            fields.agent_id = as_str(&mapping_get(&payload, intern!(py, "agent_id"))?);
+            fields.support_kind = as_str(&mapping_get(&payload, intern!(py, "support_kind"))?);
+            fields.payload_status_completed = mapping_get(&payload, intern!(py, "status"))?
+                .map(|value| value.eq("completed"))
+                .transpose()?
+                .unwrap_or(false);
+        }
+        "facility_outage" | "facility_recovery" => {
+            fields.facility_id = as_str(&mapping_get(&payload, intern!(py, "facility_id"))?);
+        }
+        ACTION_LIFECYCLE_EVENT_TYPE => {
+            fields.agent_id = as_str(&mapping_get(&payload, intern!(py, "agent_id"))?);
+            fields.transition = as_str(&mapping_get(&payload, intern!(py, "transition"))?);
+        }
+        _ => {}
+    }
+    Ok(fields)
 }
 
 fn bad_document(what: &str) -> String {

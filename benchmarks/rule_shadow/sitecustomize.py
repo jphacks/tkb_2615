@@ -151,3 +151,6 @@ if OUTPUT:
     import capture_shadow
 
     capture_shadow.install(OUTPUT)
+    import events_shadow
+
+    events_shadow.install(OUTPUT)
