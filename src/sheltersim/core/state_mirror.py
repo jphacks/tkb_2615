@@ -730,17 +730,40 @@ def rust_validated(world: Any, name: str) -> bool:
 
     Called where that validation runs, so the errors of the others keep their order. A false says
     nothing about the state. A kernel reads its row through with_row, which raises Unsupported for
-    a tainted namespace, so that one is always false.
+    a tainted namespace, so that one is always false. A world that holds something else than the
+    rows follow is false too: see _rows_are_what_the_world_holds.
     """
     if not _RUST_VALIDATORS:
         return False
     kernel = _RUST_VALIDATORS.get(name)
-    if kernel is None:
+    if kernel is None or not _rows_are_what_the_world_holds(world, name):
         return False
     try:
         return kernel(world) is True
     except native.Unsupported:
         return False
+
+
+def _rows_are_what_the_world_holds(world: Any, name: str) -> bool:
+    """Whether a kernel would read what the Python rules read, as far as identity shows that.
+
+    Storing past NamespaceTable and IdMap (world.__dict__["model_state"] = ...,
+    dict.__setitem__(world.model_state, name, ...), world.__dict__["staff"] = ...,
+    dict.pop(world.staff, key)) leaves a row that nothing writes any more, which would pass for
+    the state. The Python rules read what is really there. dict.__setitem__ on a node of the tree
+    is not seen here: see docs/rust-port/lanes/t-tick-validation.md.
+    """
+    state = world.__dict__
+    core = state.get("_core")
+    table = state.get("model_state")
+    if core is None or not isinstance(table, NamespaceTable) or not core.entities().follows(state):
+        return False
+    mirror = table._mirrors.get(name)
+    if mirror is None:
+        # Not owned: the kernel says Unsupported itself.
+        return True
+    value = dict.get(table, name, _MISSING)
+    return value is _DETACHED or mirror.holds(value)
 
 
 def _attach_owned(world: Any, core: Any) -> None:

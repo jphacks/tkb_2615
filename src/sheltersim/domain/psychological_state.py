@@ -159,7 +159,7 @@ def validate_psychological_state(state: Any) -> None:
         "daily_observed_minutes",
         "completed_days",
     }
-    for agent_id, record in () if native.psychological_agents_valid(agents) else agents.items():
+    for agent_id, record in agents.items():
         if (
             not isinstance(agent_id, str)
             or not agent_id
