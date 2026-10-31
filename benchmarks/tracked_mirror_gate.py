@@ -92,6 +92,11 @@ def run_one(name: str, gate_dir: Path, output: Path, check_every: int, census_ev
     os.environ["XDG_STATE_HOME"] = str(state / "xdg")
     os.environ["SHELTERSIM_LLM_CACHE_PATH"] = str(state / "llm-tape.json")
     runner = scenarios(gate_dir)[name]
+    # A scenario's wait bounds a plain run; the comparisons here make a run several times longer.
+    from sheltersim.web.projects import ProjectAPI
+
+    wait_idle = ProjectAPI.wait_idle
+    ProjectAPI.wait_idle = lambda api, timeout=None: wait_idle(api)  # type: ignore[method-assign]
     result: dict[str, Any] = {"scenario": name, "native": os.environ.get("SHELTERSIM_NATIVE", "1")}
 
     def execute(mode: str, session: Session, workers: dict[str, Any] | None) -> dict[str, Any]:
