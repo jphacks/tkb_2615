@@ -523,3 +523,21 @@ def test_a_rule_cannot_record_a_minute_the_record_refuses() -> None:
     with pytest.raises(ValueError, match="realized_minute must be a non-negative integer"):
         native.state("events").record_row(world, event, -1, "applied")
     assert len(world.event_log) == 0
+
+
+def test_a_rule_does_not_start_from_a_counter_it_could_overflow() -> None:
+    world = _world()
+    world.id_counters["event"] = 2**62
+    assert native.state("events").allocate_sequence(world) == 2**62
+    with pytest.raises(native.Unsupported):
+        native.state("events").allocate_sequence(world)
+    assert world.id_counters["event"] == 2**62 + 1
+
+
+def test_a_sequence_whose_counter_would_not_fit_is_left_to_python() -> None:
+    world = _world()
+    event = _event("last", 2**63 - 1)
+    with pytest.raises(native.Unsupported):
+        native.state("events").schedule_row(world, event)
+    assert len(world.event_queue) == 0
+    assert "event" not in world.id_counters or world.id_counters["event"] == 0

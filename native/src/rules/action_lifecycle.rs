@@ -405,6 +405,12 @@ fn receipt(
 }
 
 /// Allocate each receipt's sequence and append it: `allocate_event_sequence` and `EventLog.append`.
+///
+/// Nothing a world holds can fail here, so receipts are never half written because of data: `receipt`
+/// has refused a repeated ID or sequence, a minute out of range and a value that is not finite, and
+/// `EventWriter::of` a counter a rule could overflow. What is left is running out of memory, and a
+/// bug. Either raises with the earlier receipts of this call appended and the open actions as they
+/// were, and that stops the Run, as any exception in a tick does.
 fn commit(writer: &EventWriter<'_>, receipts: Vec<Receipt>) -> PyResult<()> {
     for receipt in receipts {
         let sequence = writer.allocate_sequence()?;

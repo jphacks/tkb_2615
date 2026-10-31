@@ -21,6 +21,7 @@ use crate::state::agent_dynamics::{
 };
 use crate::state::entities::{entities_of, AgentRow, Entities, EntityStore};
 use crate::state::events::is_stable_id;
+use crate::Unsupported;
 
 /// `ORIENTATION_FACILITY_KINDS`.
 const ORIENTATION_KINDS: [&str; 6] =
@@ -47,7 +48,11 @@ pub(crate) fn remember_decision(world: &Bound<'_, PyAny>, decision: &Decision<'_
         let Some(record) = row.agents.get_mut(decision.agent_id) else {
             return Ok(());
         };
-        let node = tree.child(intern!(py, "agents"))?.child_str(decision.agent_id)?;
+        // Before any write: a row that has a record its tree lacks was written past the tree.
+        let node = tree
+            .child(intern!(py, "agents"))
+            .and_then(|agents| agents.child_str(decision.agent_id))
+            .map_err(|_| Unsupported::new_err("the tree does not have the row's record"))?;
         record.set_last_action(&node, Some(Arc::from(decision.action)))?;
         record.set_last_target_id(&node, decision.target_id.map(Arc::from))?;
         record.set_last_decision_minute(&node, Some(decision.minute))?;
@@ -248,6 +253,7 @@ fn add_agent(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>) -> PyResult<
         Ok(new_memory(rows, agent, policy != POLICY_V1, awareness.as_ref()))
     })?;
     let value = Field::to_py(&record, py)?;
+    NamespaceMirror::write_through(&mirror, &["agents"], id, &value)?;
     NamespaceMirror::with_row::<AgentDynamicsRow, _>(&mirror, |row| {
         match row.agents.get_mut(id) {
             Some(slot) => *slot = record,
@@ -256,14 +262,14 @@ fn add_agent(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>) -> PyResult<
             }
         }
         Ok(())
-    })?;
-    NamespaceMirror::write_through(&mirror, &["agents"], id, &value)
+    })
 }
 
 // ---- What an agent learns -------------------------------------------------------------------------
 
-/// Store one record's new list, in the row and in the tree. `known` is new: a tree keeps what it
-/// is given, so nothing else holds it.
+/// Store one record's new list, in the tree and then in the row: a tree that lacks the record, written
+/// past its containers, says Unsupported with the row as it was. `known` is new, so nothing else holds
+/// it.
 fn write_known(
     mirror: &Bound<'_, NamespaceMirror>,
     agent_id: &str,
@@ -271,14 +277,14 @@ fn write_known(
 ) -> PyResult<()> {
     let py = mirror.py();
     let value = PyList::new(py, known.iter().map(|id| &**id))?;
+    NamespaceMirror::write_through(mirror, &["agents", agent_id], "known_facility_ids", value.as_any())?;
     NamespaceMirror::with_row::<AgentDynamicsRow, _>(mirror, |row| {
         match row.agents.get_mut(agent_id) {
             Some(record) => record.known_facility_ids = known,
             None => return unsupported("the row changed under the plan"),
         }
         Ok(())
-    })?;
-    NamespaceMirror::write_through(mirror, &["agents", agent_id], "known_facility_ids", value.as_any())
+    })
 }
 
 /// `learn_facility`. A list that would come out the same is not written.

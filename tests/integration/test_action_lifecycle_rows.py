@@ -880,6 +880,49 @@ def test_another_object_of_an_event_is_left_to_the_python_rule(world) -> None:
     assert event.event_id == copied.event_id
 
 
+@needs_kernels
+def test_a_counter_a_rule_could_overflow_is_left_to_the_python_rule(world) -> None:
+    store = _store(world)
+    agent_id = _agent_id(world)
+    record_action_proposal(
+        world,
+        _proposal(agent_id, ActionKind.WAIT, 0),
+        target_id=None,
+        committed=True,
+        active_actions=store,
+    )
+    world.id_counters["event"] = 2**62 + 1
+    _refused(world, store, _proposal(agent_id, ActionKind.REST, 1))
+    record_action_proposal(
+        world,
+        _proposal(agent_id, ActionKind.REST, 1),
+        target_id=None,
+        committed=True,
+        active_actions=store,
+    )
+    assert world.id_counters["event"] == 2**62 + 3
+    assert world.event_log.find(f"action-lifecycle-{2**62 + 2}") is not None
+
+
+@needs_kernels
+def test_a_record_taken_past_the_tree_leaves_the_writers_to_python_with_the_row_as_it_was(
+    world,
+) -> None:
+    agent_id = _agent_id(world)
+    facility = sorted(world.facilities)[0]
+    mirror = world._core.mirror(KEY)
+    agents = world.model_state[KEY]["agents"]
+    agents[agent_id]["known_facility_ids"] = []
+    dict.pop(agents, agent_id)
+    before = mirror.row_json()
+    rules = native.rules("agent_dynamics")
+    with pytest.raises(native.Unsupported):
+        rules.record_proposal(world, _proposal(agent_id, ActionKind.WAIT, 1), target_id=None)
+    with pytest.raises(native.Unsupported):
+        rules.learn_facility(world, agent_id, facility)
+    assert mirror.row_json() == before
+
+
 # ---- A Run: the kernels really run, and saved identities are kept ----
 
 
