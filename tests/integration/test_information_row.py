@@ -110,6 +110,22 @@ def _controller(world: WorldState, policy: Any, neighbors: dict[str, tuple[str, 
     )
 
 
+def _proposal_of(event: Any, minute: int) -> tuple[Any, ...]:
+    """What the rule's proposal said, from the event the kernel scheduled for it."""
+    return (
+        minute,
+        event.payload["message_id"],
+        event.payload["sender_agent_id"],
+        event.payload["recipient_agent_id"],
+        event.payload["belief"],
+        event.payload["contact_basis"],
+        event.payload["contact_minutes"],
+        event.provenance["transmission_probability"],
+        event.source_id,
+        event.causation_id,
+    )
+
+
 def _view_of(world: WorldState) -> Any:
     """What the rule reads of a view, for IDs and zones WorldView.from_world can't take."""
     return SimpleNamespace(
@@ -181,8 +197,14 @@ def _assert_same_as_python(
         forget = -math.expm1(-policy.config.forgetting_rate_per_minute)
         assert planned["forget_probability"].hex() == forget.hex()
 
+    pending = {event.event_id for event in world.event_queue.pending()}
     _kernels().sample_contacts(controller, minute, rng)
-    assert json.dumps(controller.calls) == json.dumps(
+    assert controller.calls == []
+    scheduled = sorted(
+        (event for event in world.event_queue.pending() if event.event_id not in pending),
+        key=lambda event: event.sequence,
+    )
+    assert json.dumps([_proposal_of(event, minute) for event in scheduled]) == json.dumps(
         [
             (
                 minute,

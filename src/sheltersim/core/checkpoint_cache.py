@@ -30,7 +30,6 @@ import hashlib
 import json
 import operator
 from collections.abc import Callable, Iterator, Sequence
-from copy import deepcopy
 from dataclasses import asdict, fields
 from typing import Any
 
@@ -526,6 +525,8 @@ class CheckpointHistoryCache:
         # while the log only grows), and how many leading restored records are known
         # to equal the captured ones.
         self._event_raws: list[bytes] | None = None
+        # The world's own EventLog, while it is what restoring its records gives.
+        self._live_log: EventLog | None = None
         self._raws_equal = 0
         self._validation: SaveValidationMemo | None = None
         # The model signatures of the last configs, by their canonical JSON.
@@ -606,10 +607,12 @@ class CheckpointHistoryCache:
         if keeps_saved_bytes(log):
             raws = self._log_raws(log)
             self._event_raws = raws
+            self._live_log = log if log.all_encoded() else None
             world_document["event_log"] = SavedItems(raws)
             encoder.splice(world_document["event_log"], raws, world_document)
         else:
             self._event_raws = None
+            self._live_log = None
             self._events.update(log.records)
             world_document["event_log"] = list(self._events.documents)
             encoder.splice(world_document["event_log"], list(self._events.raws), world_document)
@@ -705,12 +708,11 @@ class CheckpointHistoryCache:
         if keeps_saved_bytes(log):
             if not isinstance(documents, SavedItems) or len(log) < len(documents):
                 return False
-            # The log was built from these bytes, so its leading records are the ones
-            # a restore check builds from them, and a copy of a log of only those
-            # records is what the first restore check would build and then extend.
+            # The log was built from these bytes, so its leading records are the ones a
+            # restore check builds from them.
             self._event_raws = log.items_bytes(0, len(documents))
             self._raws_equal = len(documents)
-            self._log = deepcopy(log) if len(log) == len(documents) else None
+            self._log = None
             return True
         records = log.records[: len(documents)]
         if len(records) != len(documents) or any(
@@ -783,6 +785,8 @@ class CheckpointHistoryCache:
 
     def restored_events_equal(self) -> int:
         """How many leading restored records are known to equal the captured records."""
+        if self._live_log is not None:
+            return len(self._event_raws)
         if self._event_raws is not None:
             return self._raws_equal
         return self._events.restored_equal
@@ -792,7 +796,14 @@ class CheckpointHistoryCache:
 
         That restored world was discarded, so the next restore check may append the
         new records to its EventLog instead of indexing every record again.
+
+        A log that wrote each of its records' bytes is what restoring them gives: reading
+        those bytes gives the frozen values they were written from, by the writer's exact
+        types (native/src/checkpoint.rs, tried at every save by benchmarks/rule_shadow). The
+        restore check then reads the live log, and only reads it. No restored log is built.
         """
+        if self._live_log is not None:
+            return self._live_log
         log = self._log
         if log is None:
             return None
@@ -816,6 +827,11 @@ class CheckpointHistoryCache:
 
         equal says whether the check showed its records equal to the captured records.
         """
+        if log is self._live_log:
+            # The live log is not kept as a restored one. Its records are all known equal, if a
+            # later capture has to build a restored log after all.
+            self._raws_equal, self._log = len(log), None
+            return
         if self._event_raws is not None:
             if len(log) != len(self._event_raws):
                 raise ValueError("restored EventLog does not match the captured documents")
