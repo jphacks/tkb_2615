@@ -139,6 +139,14 @@ each OS, because both call the same libm.
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
   Python rules write one record at a time through the forwarded writes, and M4 moves them.
 
+- `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
+  relationships typed, the history as the canonical bytes of each item. `rules.body_state.
+  record_social_event(world, event, minute)` is `domain/body_state.py`'s rule with the operators of
+  `policies/affect.py` and `policies/relationships.py`; `rules.psychology.apply_deltas` writes the
+  row. `state.body_state.rows_valid(world)` accepts the header, records and relationships, reading
+  only the relationships written since it last said yes. The config and history rules read what
+  the row doesn't hold and stay in Python (`docs/rust-port/lanes/m3-body-state.md`).
+
 - `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
   `_sample_information_contacts` for the three information policies (contact sampling, durations,
   forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
@@ -154,8 +162,7 @@ each OS, because both call the same libm.
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
 
-- `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
-  `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
+- `social_relationships_valid`, `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
   acceptance of the large loops of validation, read where Python keeps the state. The
   namespaces Rust owns have their `validate` in `state/` instead, which reads the row
   (`docs/rust-port/lanes/t-tick-validation.md`). Each
