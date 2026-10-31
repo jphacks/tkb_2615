@@ -6,6 +6,7 @@ runs every scenario under other process settings and compares them with the firs
 
     python benchmarks/gate_all_paths.py --output DIR --expect fixtures/gate-all-paths.json
     python benchmarks/gate_all_paths.py --output DIR --determinism
+    python benchmarks/gate_all_paths.py --output DIR --reversed-order
     python benchmarks/gate_all_paths.py --output DIR --coverage
     python benchmarks/gate_all_paths.py --output DIR --write-expected fixtures/gate-all-paths.json
 
@@ -59,10 +60,19 @@ VARIANTS = (
     ),
     Variant("python_kernels", {"PYTHONHASHSEED": "4", "SHELTERSIM_NATIVE": "0"}),
 )
+# With the base run's hash seed, so that only the order of the dicts differs from it.
+ORDER_VARIABLE = "SHELTERSIM_GATE_REVERSE"
+ORDER_VARIANTS = (
+    Variant("reversed_order", {"PYTHONHASHSEED": "1", ORDER_VARIABLE: "phase"}),
+    Variant("reversed_within_phase", {"PYTHONHASHSEED": "1", ORDER_VARIABLE: "within_phase"}),
+)
 
 
-def run_one(name: str, output: Path) -> None:
-    """In a scenario's own process: run it and write result.json. Fails closed on network."""
+def run_one(name: str, output: Path, chosen: Any = None) -> None:
+    """In a scenario's own process: run it and write result.json. Fails closed on network.
+
+    ``chosen`` is a GateScenario to run instead of the one by that name.
+    """
     import socket
 
     os.environ["SHELTERSIM_LLM_MODE"] = "offline"
@@ -81,7 +91,12 @@ def run_one(name: str, output: Path) -> None:
 
     from sheltersim import native
 
-    scenario = all_scenarios()[name]
+    scenario = chosen or all_scenarios()[name]
+    order = os.environ.get(ORDER_VARIABLE)
+    if order:
+        from tick_probe import ReversedOrder, install
+
+        install([ReversedOrder(within_phase=order == "within_phase")])
     started = time.perf_counter()
     outcome = scenario.run(output / "work")
     mismatched = [
@@ -262,6 +277,11 @@ def main() -> int:
     parser.add_argument("--write-expected", type=Path, help="write the results as that fixture")
     parser.add_argument("--determinism", action="store_true", help="also run the other variants")
     parser.add_argument(
+        "--reversed-order",
+        action="store_true",
+        help="also reverse model_state's dicts and world.agents at each phase's end, and in phases",
+    )
+    parser.add_argument(
         "--no-python-kernels",
         action="store_true",
         help="skip the comparison with the Python kernels (Rust and Python agree on Linux only)",
@@ -311,15 +331,17 @@ def main() -> int:
             else:
                 problems.extend(_differences(f"expected {name}", expected[name], results[name]))
 
-    if args.determinism or args.coverage:
+    if args.determinism or args.coverage or args.reversed_order:
         table: dict[str, dict[str, Any]] = {name: {} for name in names}
         reads_saves = _reads_saves(names)
         variants = [
             variant
             for variant in VARIANTS
-            if (args.determinism or variant.name == "python_kernels")
+            if (args.determinism or (args.coverage and variant.name == "python_kernels"))
             and not (args.no_python_kernels and variant.name == "python_kernels")
         ]
+        if args.reversed_order:
+            variants += ORDER_VARIANTS
         for variant in variants:
             chosen = [n for n in names if reads_saves[n] or not variant.only_with_saves]
             other = _run_all(chosen, args.output, variant, args.jobs, coverage_dir)
