@@ -197,8 +197,7 @@ pub(crate) struct ViewData {
     pub(crate) autonomy_enabled: bool,
     pub(crate) has_population_context: bool,
     /// Read from a Python view: only what the update kernels read is filled, and a zone is one
-    /// person's. See `from_python_view`.
-    #[allow(dead_code)]
+    /// person's. See `from_python_view`. rules/behavior.rs reads more, and refuses it.
     pub(crate) partial: bool,
     /// In ID order.
     pub(crate) zones: Vec<Arc<ViewZone>>,
