@@ -98,10 +98,13 @@ python -m coverage report --sort=cover
 | `support/plans.py` | 取り込む図面：合成の避難所の図面（画像・GeoJSON）と、手で描いたそのトレース | `shelter_trace`、`upload_plan` |
 | `support/public_data.py` | 地域の調べが呼ぶ公開サービス（国土地理院の住所検索・指定緊急避難場所、e-Stat、気象庁の予報、設定した地域の公開データ）の偽物。存在しない自治体（合成県合成市）の合成の記録を返し、`fail()`で接続の失敗を起こせる。ネットワークには出ない | `public_data`、`researching_project_api`、`research_request` |
 | `support/world.py` | WorldState・イベント・検証の部品 | `make_event`、`record_handler`、`stress_delta`、`count_validations`、`live_checkpoint_world` |
+| `support/python_rules.py` | `python_rules`の印：そのテストではRustのkernelを切り、Pythonの規則を動かす | `_python_rules`（自動） |
 
 `support/paths.py`（`fixtures/`のファイルのパス）と`support/isolation.py`（隔離の処理）は、fixtureを持たない部品です。テストで使う`fixtures/`のファイルが増えたら、`support/paths.py`に定数を足します。
 
 `support/tracked_mirror.py`も、fixtureを持たない部品です。Rust移植の「`model_state`への書き込みを転送する入れ物」（`core/state_mirror.py`）に、Rustの代わりにPythonの影の文書を相手として渡し、世界のすべての文書を載せて、転送の漏れを探します。`src/`からは使いません。全テストをこの入れ物の上で動かすときは、`PYTHONPATH`に`tests`を足して`pytest -p support.tracked_mirror_plugin`を実行します。素の実行と各段階で比べるときは、`benchmarks/tracked_mirror_gate.py`を使います。使い方と結果は[rust-port/lanes/p1-tracked-mirror.md](rust-port/lanes/p1-tracked-mirror.md)にあります。
+
+Rustのkernelが置き換えたPythonの関数をpatchするテストには、`@pytest.mark.python_rules`を付けます。kernelはその関数を呼ばないので、印がないとpatchは何にも届きません。`tests/unit/repo/test_python_rules_lint.py`は、`support/python_rules.py`の名前を印なしでpatchしていると失敗します。規則を移すレーンは、kernelが呼ばなくなった関数の名前をここに足します。コントローラーの手順そのもの（`OfflineSimulationController._psychology_update`など）をpatchするのは、kernelごと置き換えるので印は要りません。
 
 `tests/unit/repo/test_tracked_write_lint.py`は、tick側のコードで、入れ物に入れた値を元の名前のまま書き換える書き方（`record = relationships[key] = {...}`のあとの`record["trust"] = x`）を見つけると失敗します。入れたあとは`record = relationships[key]`で読み直します。
 

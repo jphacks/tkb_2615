@@ -10,8 +10,9 @@
 //! dicts have the keys in the order Python's new dicts have them, without replacing the namespace.
 //! Every float operation keeps the order of the Python expression.
 //!
-//! Stress, zones and sensitivities come from the entity rows. The group comes from the view: a
-//! person's household in `population_presence_v1` overrides `profile.group_id` there.
+//! Stress, zones and sensitivities come from the entity rows. The group comes from the snapshot of
+//! `rules/world_view.rs`: a person's household in `population_presence_v1` overrides
+//! `profile.group_id` there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use crate::core::row::{Field, IdMap};
 use crate::core::rng::{start_draw_log, take_draw_log, KeyedDraws};
 use crate::core::tracked::{as_readable_dict, as_readable_list};
 use crate::core::world_core::{mirror_of, NamespaceMirror};
+use crate::rules::world_view::view_of;
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::social_propagation::{ContactRecord, SocialRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
@@ -414,7 +416,7 @@ fn neighbors_of(zone_neighbors: &Bound<'_, PyAny>, zones: &[&str]) -> PyResult<H
 struct Input<'py> {
     delta: Bound<'py, PyAny>,
     id: Bound<'py, PyString>,
-    group: Option<Bound<'py, PyString>>,
+    group: Option<Arc<str>>,
     base: f64,
     expressiveness: f64,
 }
@@ -458,8 +460,9 @@ fn update_social_propagation<'py>(
     };
 
     // Who is here, with what only Python holds.
-    let view_agents = view.getattr(intern!(py, "agents"))?;
-    if view_agents.len()? != deltas.len() {
+    let rust_view = view_of(view)?;
+    let view_data = rust_view.get().data();
+    if view_data.agents.len() != deltas.len() {
         return unsupported("the view and the deltas have different people");
     }
     let expressiveness = parameters.getattr(intern!(py, "source_expressiveness_by_agent"))?;
@@ -481,21 +484,10 @@ fn update_social_propagation<'py>(
         if exact_int(&delta.getattr(intern!(py, "minute_index"))?)? != minute_value {
             return unsupported("a delta is at another minute");
         }
-        let Ok(agent) = view_agents.get_item(&id) else {
+        let Some(agent) = view_data.index_of(id.to_str()?) else {
             return unsupported("the view and the deltas have different people");
         };
-        let group = agent.getattr(intern!(py, "group_id"))?;
-        let group = if group.is_none() {
-            None
-        } else {
-            let Ok(group) = group.downcast_into_exact::<PyString>() else {
-                return unsupported("a group is not a str");
-            };
-            if group.to_str().is_err() {
-                return unsupported("a group is not UTF-8");
-            }
-            Some(group)
-        };
+        let group = view_data.agents[agent].group_id.clone();
         let source_value = if settings.policy == Policy::Channel && !expressiveness.is_empty() {
             match expressiveness.get_item(&id)? {
                 Some(value) => exact_float(&value)?,
@@ -550,10 +542,7 @@ fn update_social_propagation<'py>(
     for (input, (zone, stress, sensitivity)) in inputs.iter().zip(&rows) {
         people.push(Person {
             id: input.id.to_str()?,
-            group: match &input.group {
-                Some(group) => Some(group.to_str()?),
-                None => None,
-            },
+            group: input.group.as_deref(),
             zone,
             stress: *stress,
             sensitivity: *sensitivity,

@@ -1,8 +1,8 @@
 """Compare the Rust steps with their Python rules at every call, in any process.
 
 This file has the long-term psychology step, psychology_update.py the other psychology steps,
-social_propagation_shadow.py the social one and information_shadow.py the information one, whose
-results are in DIR/information.
+social_propagation_shadow.py the social one, information_shadow.py the information one, whose
+results are in DIR/information, and world_view_shadow.py the views, in DIR/world_view.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -154,3 +154,6 @@ if OUTPUT:
     from information_shadow import install as _install_information
 
     _install_information(OUTPUT)
+    from world_view_shadow import install as _install_world_view
+
+    _install_world_view(OUTPUT)
