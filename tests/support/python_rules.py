@@ -25,6 +25,14 @@ PORTED_NAMES = frozenset(
         "active_environmental_stress",
         "infrastructure_event_context_ids",
         "population_context_people",
+        # policies/behavior.py, experiments/phases/propose.py: rules/behavior.rs
+        "propose_due",
+        "_candidate",
+        "_demand_trigger",
+        "_decision_interval_minutes",
+        "_sleep_debt_utility",
+        "_target_for_action",
+        "_agent_view_snapshot",
         # policies/psychology.py, domain/distress_monitor.py, domain/psychological_state.py:
         # rules/psychology.rs
         "deltas_without_traces",
@@ -47,6 +55,8 @@ PORTED_METHODS = frozenset(
     {
         ("WorldView", "from_world"),
         ("WorldView", "after_state_update"),
+        ("UtilityBehaviorPolicy", "propose"),
+        ("PriorityRuleBehaviorPolicy", "propose"),
         ("StressPropagationPolicy", "update"),
         ("ExpressivenessChannelOpennessPolicy", "update"),
         ("DeGrootContactPolicy", "update"),

@@ -126,6 +126,19 @@ pub(crate) fn py_max(first: f64, second: f64) -> f64 {
     }
 }
 
+/// `math.isclose(first, second)` with its default tolerances: a relative one of 1e-09 and no
+/// absolute one.
+pub(crate) fn py_is_close(first: f64, second: f64) -> bool {
+    if first == second {
+        return true;
+    }
+    if first.is_infinite() || second.is_infinite() {
+        return false;
+    }
+    let difference = (second - first).abs();
+    difference <= (1e-09 * second).abs() || difference <= (1e-09 * first).abs()
+}
+
 /// `min(first, second)` of floats, with the same ties as `py_max`.
 #[inline]
 pub(crate) fn py_min(first: f64, second: f64) -> f64 {
