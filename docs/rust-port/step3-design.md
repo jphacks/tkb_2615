@@ -40,7 +40,7 @@
 
 ### エンティティ
 
-- AgentState、NeedState、FacilityState、StaffState、SupportRequestState、ActiveTask は PyO3 の窓口にします（Rust の行につながっている状態と、切り離された状態があります）。
+- AgentState、NeedState、FacilityState、StaffState、SupportRequestState、ActiveTask は dataclass のまま、`__dict__` を Rust の行の写しにして、書き込みだけを転送します。最初の案は PyO3 の窓口でしたが、P6 の試作で読みが約2倍になり、エラーの文や `__eq__`、`pickle` を二重に持つ必要があるので、やめました（[lanes/p6-entity-windows.md](lanes/p6-entity-windows.md)）。
 - コンテナは `IdMap(dict)` にします。読みは継承し、書きだけを横取りします。`world.agents` の書き込みは5か所だけです。
 - enum と ID はキャッシュした単一のオブジェクトを返すので、`is Activity.IDLE` が成り立ちます。
 - `WorldState.__setattr__` が、`world.support_requests = ...` のようなフィールド全体の代入を捕まえます。
@@ -122,7 +122,7 @@
   - 確率の式ごとのパリティの fuzz を持ちます。
 - **P4：** `core/state_mirror.py`、何も持たない `WorldCore`、追跡の型を受け入れる厳密型の kernel、検証を省く登録表（レーンが `core/world.py` を編集しなくて済むように）。
 - **P5：** 雛形になる名前空間を最後まで通します。`psychological_distress_v1` と `metric_state`。`state_row!` マクロが `from_py`、`to_py`、`write_json`、ミラーの setter、転送書き込みの処理を生成します。**心理の置き換え（`runner.py:661`）は残しません。**
-- **P6：** すべてのエンティティの窓口と `IdMap` を1つの PR で（`domain/models.py`、`core/world.py`）。
+- **P6：** すべてのエンティティの行と写し、`IdMap` を1つの PR で（`domain/models.py`、`core/world.py`）。
 
 引用した runner の行は、`experiments/phases/` に移っています。`update.py` の `_social_propagation` と `_update_long_term_psychology`、`sample.py` の `_sample_information_contacts`、`arbitrate.py` の `_consider_due_complaints`、`dispatch.py` の `_consider_social_contact_events`、`propose.py` の `_apply_proposal` と `_prioritize_support_request` です。
 

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any, ClassVar
+
+from sheltersim import native
 
 
 class Activity(StrEnum):
@@ -420,6 +423,9 @@ class InformationSpreadConfig:
         }
 
 
+_ROW_SLOTS = ("_store", "_slot", "__dict__", "__weakref__")
+
+
 @dataclass(frozen=True)
 class InitialNeedProfile:
     """Generated or manually supplied normalized starting need levels."""
@@ -437,14 +443,29 @@ class InitialNeedProfile:
 class NeedState:
     """Mutable normalized need levels used by simulation policies."""
 
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 1
+
     toilet_urgency: float = 0.0
     hunger: float = 0.0
     fatigue: float = 0.0
     hydration_need: float = 0.0
 
+    def to_dict(self) -> dict[str, Any]:
+        return _field_values(self)
+
     def validate(self) -> None:
         """Reject values outside the declared 0..1 simulation scale."""
         _validate_need_levels(self)
+
+
+def _field_values(item: Any) -> dict[str, Any]:
+    """dataclasses.asdict of an object holding only atoms and containers of those.
+
+    deepcopy makes a plain list of a TrackedList, where asdict would make another TrackedList.
+    """
+    return {entry.name: copy.deepcopy(getattr(item, entry.name)) for entry in fields(item)}
 
 
 @functools.lru_cache(maxsize=65_536)
@@ -500,6 +521,10 @@ class AgentProfile:
 @dataclass
 class AgentState:
     """Mutable simulation state for one Agent."""
+
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 0
 
     profile: AgentProfile
     zone_id: str
@@ -561,6 +586,9 @@ class ZoneState:
     display_x: float | None = None
     display_y: float | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return _field_values(self)
+
 
 @dataclass
 class ZoneEdgeState:
@@ -572,10 +600,17 @@ class ZoneEdgeState:
     travel_minutes: int
     closed: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        return _field_values(self)
+
 
 @dataclass
 class FacilityState:
     """Facility capacity and current reservations."""
+
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 2
 
     id: str
     kind: str
@@ -592,6 +627,10 @@ class FacilityState:
 class StaffState:
     """Staff assignment and pending work identifiers."""
 
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 3
+
     id: str
     zone_id: str
     skills: tuple[str, ...]
@@ -599,10 +638,17 @@ class StaffState:
     busy_until: int = 0
     active_task_id: str | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return _field_values(self)
+
 
 @dataclass
 class SupportRequestState:
     """Persisted request, assignment and outcome for staff assistance."""
+
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 4
 
     id: str
     agent_id: str
@@ -640,6 +686,10 @@ class SupportRequestState:
 class ActiveTask:
     """A task already in progress, such as travel or service."""
 
+    # Not fields: see _install_rows. __dict__ holds exactly the fields, as without them.
+    __slots__ = _ROW_SLOTS
+    _kind: ClassVar[int] = 5
+
     id: str
     kind: str
     agent_id: str | None
@@ -647,3 +697,73 @@ class ActiveTask:
     start_minute: int
     due_minute: int
     staff_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return _field_values(self)
+
+
+# ---- The Rust rows of the entities (native/src/state/entities.rs) -----------------------------
+
+_ROW_CLASSES = (AgentState, NeedState, FacilityState, StaffState, SupportRequestState, ActiveTask)
+
+
+def _forward_write(self: Any, name: str, value: Any) -> None:
+    store = self._store
+    if store is None:
+        object.__setattr__(self, name, value)
+    else:
+        store.write(self, self._kind, self._slot, name, value)
+
+
+def _forward_request_write(self: Any, name: str, value: Any) -> None:
+    store = self._store
+    if store is None:
+        object.__setattr__(self, name, value)
+    else:
+        store.write(self, 4, self._slot, name, value)
+    listener = self._write_listener
+    if listener is not None:
+        listener.append(self)
+
+
+def _forward_delete(self: Any, name: str) -> None:
+    object.__delattr__(self, name)
+    store = self._store
+    if store is not None:
+        store.taint_now(f"{type(self).__name__}.{name} was deleted")
+
+
+def _new_detached(cls: Any, *_arguments: Any, **_keywords: Any) -> Any:
+    self = object.__new__(cls)
+    object.__setattr__(self, "_store", None)
+    return self
+
+
+def _state_without_links(self: Any) -> dict[str, Any]:
+    # A copy or a pickle of an attached object is a plain object, out of any world.
+    return self.__dict__.copy()
+
+
+def _install_rows() -> None:
+    """With the kernels on, entities forward their writes; with them off they stay as written."""
+    for kind in _ROW_CLASSES:
+        kind.__new__ = staticmethod(_new_detached)  # type: ignore[method-assign]
+        kind.__setattr__ = _forward_write  # type: ignore[assignment]
+        kind.__delattr__ = _forward_delete  # type: ignore[assignment]
+        kind.__getstate__ = _state_without_links  # type: ignore[method-assign]
+    SupportRequestState.__setattr__ = _forward_request_write  # type: ignore[assignment]
+    native.state("entities").install(
+        AgentState,
+        NeedState,
+        FacilityState,
+        StaffState,
+        SupportRequestState,
+        ActiveTask,
+        list(Activity),
+        list(Mobility),
+        list(SupportRequestStatus),
+    )
+
+
+if native.available():
+    _install_rows()

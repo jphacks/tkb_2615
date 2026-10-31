@@ -8,8 +8,10 @@ also tells the tree's sink, which keeps the row equal to the tree. A plain conta
 when it is inserted, so a write through a name it had before the insert reaches neither. See
 docs/rust-port/lanes/p4-world-core.md for what a lane does.
 
-Nothing is owned yet, and then `world.model_state` stays a plain dict and nothing here runs in a
-tick. With SHELTERSIM_NATIVE=0 a world has no core at all.
+Nothing is owned yet, and then `world.model_state` stays a plain dict. The maps of entities are
+IdMap, which keep the Rust rows of the entities equal to the objects
+(docs/rust-port/lanes/p6-entity-windows.md). With SHELTERSIM_NATIVE=0 a world has no core at all,
+and these maps and containers are plain dicts and lists.
 
 A sink is sheltersim_native.NamespaceMirror, or a test's object with the same methods
 (tests/support/tracked_mirror.py). A node's _sink is None out of any tree: it then behaves as the
@@ -566,6 +568,131 @@ def detach(world: Any, name: str) -> bool:
     return True
 
 
+# ---- The entities of a world (native/src/state/entities.rs) --------------------------------------
+
+
+class IdMap(dict):
+    """world.agents and the other maps of entities. Reads are the inherited C code.
+
+    An entity stored here is attached: its row is in the world's EntityStore and its own writes go
+    there (domain/models.py). An entity that leaves works on as a plain object, and a map that
+    leaves its world (`_store` None) is a plain dict of plain objects.
+    """
+
+    __slots__ = ("_store", "_table", "__weakref__")
+
+    def __new__(cls, *_arguments: Any, **_keywords: Any) -> IdMap:
+        self = super().__new__(cls)
+        self._store = None
+        self._table = 0
+        return self
+
+    def __init__(self, *arguments: Any, **keywords: Any) -> None:
+        if self._store is None:
+            dict.__init__(self, *arguments, **keywords)
+        else:
+            self.update(*arguments, **keywords)
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        store = self._store
+        if store is None:
+            dict.__setitem__(self, key, value)
+        else:
+            store.map_set(self, self._table, key, value)
+
+    def __delitem__(self, key: Any) -> None:
+        store = self._store
+        if store is None:
+            dict.__delitem__(self, key)
+            return
+        # pop raises the same KeyError(key) as del.
+        store.map_removed(self._table, key, dict.pop(self, key))
+
+    def pop(self, key: Any, *default: Any) -> Any:
+        store = self._store
+        if store is None:
+            return dict.pop(self, key, *default)
+        value = dict.pop(self, key, _MISSING)
+        if value is _MISSING:
+            return dict.pop(self, key, *default)
+        store.map_removed(self._table, key, value)
+        return value
+
+    def popitem(self) -> tuple[Any, Any]:
+        key, value = dict.popitem(self)
+        store = self._store
+        if store is not None:
+            store.map_removed(self._table, key, value)
+        return key, value
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        if key not in self:
+            self[key] = default
+        return dict.__getitem__(self, key)
+
+    def update(self, *arguments: Any, **keywords: Any) -> None:
+        if self._store is None:
+            dict.update(self, *arguments, **keywords)
+            return
+        for key, value in dict(*arguments, **keywords).items():
+            self[key] = value
+
+    def clear(self) -> None:
+        store = self._store
+        if store is None:
+            dict.clear(self)
+            return
+        items = list(dict.items(self))
+        dict.clear(self)
+        for key, value in items:
+            store.map_removed(self._table, key, value)
+
+    def __ior__(self, other: Any) -> IdMap:
+        self.update(other)
+        return self
+
+    def copy(self) -> dict[Any, Any]:
+        return dict(self)
+
+    def __copy__(self) -> dict[Any, Any]:
+        return dict(self)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
+        memo[id(self)] = result
+        for key, value in dict.items(self):
+            result[copy.deepcopy(key, memo)] = copy.deepcopy(value, memo)
+        return result
+
+    def __reduce_ex__(self, _protocol: Any) -> tuple[Any, ...]:
+        return (dict, (dict(self),))
+
+
+# world.<name> -> the table of the EntityStore: the numbers of native/src/state/entities.rs.
+ENTITY_FIELDS = {
+    "agents": 0,
+    "facilities": 2,
+    "staff": 3,
+    "support_requests": 4,
+    "active_tasks": 5,
+}
+
+
+def _attach_entities(world: Any, core: Any) -> None:
+    store = core.entities()
+    state = world.__dict__
+    for name, table in ENTITY_FIELDS.items():
+        state[name] = store.assign(table, None, state[name])
+
+
+def entities_assigned(world: Any, name: str, value: Any) -> Any:
+    """What world.<name> stores when a caller assigns a whole map of entities to a world."""
+    current = world.__dict__.get(name)
+    if value is current:
+        return value
+    return world.__dict__["_core"].entities().assign(ENTITY_FIELDS[name], current, value)
+
+
 # ---- What is owned, and what Rust does instead of Python ----------------------------------------
 
 # name of a namespace -> (the module of native/src/state/, the name of its row type). A lane adds
@@ -627,6 +754,7 @@ def start_core(world: Any) -> None:
     """Give a new world its core, and own what is listed. Only with the kernels on."""
     core = native.world_core()
     world.__dict__["_core"] = core
+    _attach_entities(world, core)
     if OWNED_NAMESPACES:
         _attach_owned(world, core)
 
@@ -666,3 +794,4 @@ def deepcopy_world(world: Any, memo: dict[int, Any]) -> Any:
 
 
 native.install_tracked_types(TrackedDict, TrackedList, NamespaceTable)
+native.install_id_map_type(IdMap)
