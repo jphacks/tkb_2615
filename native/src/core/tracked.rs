@@ -20,6 +20,7 @@ use pyo3::types::{PyDict, PyList, PyType};
 static TRACKED_DICT: AtomicPtr<ffi::PyTypeObject> = AtomicPtr::new(null_mut());
 static NAMESPACE_TABLE: AtomicPtr<ffi::PyTypeObject> = AtomicPtr::new(null_mut());
 static TRACKED_LIST: AtomicPtr<ffi::PyTypeObject> = AtomicPtr::new(null_mut());
+static ID_MAP: AtomicPtr<ffi::PyTypeObject> = AtomicPtr::new(null_mut());
 
 /// Remember the exact classes. Each stays alive for the life of the process.
 #[pyfunction]
@@ -46,6 +47,20 @@ pub fn install_tracked_types(
     Ok(())
 }
 
+/// Remember the exact class of a world's maps of entities, which also reads as a plain dict.
+#[pyfunction]
+pub fn install_id_map_type(id_map: &Bound<'_, PyType>) -> PyResult<()> {
+    if !id_map.is_subclass_of::<PyDict>()? {
+        return Err(pyo3::exceptions::PyTypeError::new_err("not a dict subclass"));
+    }
+    ID_MAP.store(id_map.clone().unbind().into_ptr().cast(), Ordering::Release);
+    Ok(())
+}
+
+pub(crate) fn id_map_type() -> *mut ffi::PyTypeObject {
+    ID_MAP.load(Ordering::Acquire)
+}
+
 pub(crate) fn tracked_dict_type() -> *mut ffi::PyTypeObject {
     TRACKED_DICT.load(Ordering::Acquire)
 }
@@ -60,6 +75,7 @@ pub(crate) fn is_readable_dict_type(kind: *mut ffi::PyTypeObject) -> bool {
     kind == addr_of_mut!(ffi::PyDict_Type)
         || kind == TRACKED_DICT.load(Ordering::Relaxed)
         || kind == NAMESPACE_TABLE.load(Ordering::Relaxed)
+        || kind == ID_MAP.load(Ordering::Relaxed)
 }
 
 /// A plain list, or a list of a class whose reads are the inherited C code.

@@ -349,6 +349,56 @@ def _store_with_run(root: Path) -> ProjectStore:
     return store
 
 
+def test_a_transaction_on_windows_keeps_waiting_for_a_long_held_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """msvcrt gives up after about 10 seconds with EDEADLK; another process may hold on longer."""
+    import errno
+    import types
+
+    import sheltersim.storage.projects as projects_module
+
+    calls = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        calls.append(mode)
+        if len(calls) < 3:
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+
+    monkeypatch.setattr(projects_module, "fcntl", None)
+    monkeypatch.setattr(
+        projects_module,
+        "msvcrt",
+        types.SimpleNamespace(LK_LOCK=1, LK_NBLCK=2, LK_UNLCK=0, locking=locking),
+        raising=False,
+    )
+    with ProjectStore(tmp_path).transaction():
+        assert calls == [1, 1, 1]
+    assert calls == [1, 1, 1, 0]
+
+
+def test_a_transaction_on_windows_reports_other_lock_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import sheltersim.storage.projects as projects_module
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        raise PermissionError(13, "locked")
+
+    monkeypatch.setattr(projects_module, "fcntl", None)
+    monkeypatch.setattr(
+        projects_module,
+        "msvcrt",
+        types.SimpleNamespace(LK_LOCK=1, LK_NBLCK=2, LK_UNLCK=0, locking=locking),
+        raising=False,
+    )
+    with pytest.raises(PermissionError):
+        with ProjectStore(tmp_path).transaction():
+            pass
+
+
 @needs_ofd_locks
 def test_run_writer_lease_works_without_fcntl_or_nofollow(
     tmp_path: Path, windows_like: None

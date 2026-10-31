@@ -296,6 +296,24 @@ def scan_bypasses(file: str, source: str) -> list[str]:
     return rows
 
 
+def scan_attribute_bypasses(file: str, source: str) -> list[str]:
+    """Attribute writes past another object's `__setattr__`: an entity's would miss its Rust row.
+
+    A frozen record writing to itself (`self`) is its own business.
+    """
+    return [
+        f"{file}:{node.lineno} {ast.unparse(node.func)}"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "object"
+        and node.func.attr in {"__setattr__", "__delattr__"}
+        and node.args
+        and not (isinstance(node.args[0], ast.Name) and node.args[0].id == "self")
+    ]
+
+
 def _relative(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
@@ -371,6 +389,27 @@ def test_the_lint_accepts_reading_the_name_again() -> None:
 def test_the_lint_accepts_writing_before_the_insert_and_local_containers() -> None:
     assert _names_found("def f(s):\n    r = {}\n    r['b'] = 1\n    s['a'] = r\n") == []
     assert _names_found("def f():\n    l = {}\n    r = {}\n    l['a'] = r\n    r['b'] = 1\n") == []
+
+
+def test_only_the_classes_that_own_a_setattr_write_past_it() -> None:
+    # domain/models.py is where entities forward; the others build their own frozen records.
+    allowed = {
+        "domain/models.py",
+        "events/models.py",
+        "core/checkpoint.py",
+        "policies/world_view.py",
+        "policies/behavior.py",
+        "policies/psychology.py",
+    }
+    rows = [
+        row
+        for path in _files()
+        if _relative(path) not in allowed
+        for row in scan_attribute_bypasses(_relative(path), path.read_text(encoding="utf-8"))
+    ]
+
+    assert rows == []
+    assert scan_attribute_bypasses("x.py", "object.__setattr__(a, 'b', 1)\n") != []
 
 
 def test_the_chain_lint_finds_the_form_that_drifted() -> None:

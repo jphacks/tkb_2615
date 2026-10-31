@@ -56,6 +56,12 @@ def install_tracked_types(*classes: type) -> None:
         _native.install_tracked_types(*classes)
 
 
+def install_id_map_type(id_map: type) -> None:
+    """Tell the kernels that a world's maps of entities read as plain dicts (core/tracked.rs)."""
+    if _native is not None:
+        _native.install_id_map_type(id_map)
+
+
 def canonical_json(value: Any) -> bytes | None:
     """json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     allow_nan=False).encode(), or None when the kernel leaves value to json."""

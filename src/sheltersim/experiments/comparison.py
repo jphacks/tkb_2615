@@ -100,7 +100,7 @@ def compare_branches(
             "zone_id": item.zone_id,
             "activity": item.activity.value,
             "target_id": item.target_id,
-            "needs": asdict(item.needs),
+            "needs": item.needs.to_dict(),
             "stress": item.stress,
             "trust": item.trust,
             "next_decision_at": item.next_decision_at,

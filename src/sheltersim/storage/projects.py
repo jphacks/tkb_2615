@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import functools
 import gc
 import hashlib
@@ -233,7 +234,14 @@ class ProjectStore:
                     lock.write(b"\0")
                     lock.flush()
                 lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                # LK_LOCK gives up after 10 tries, a second apart; wait as flock does.
+                while True:
+                    try:
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError as exc:
+                        if exc.errno != errno.EDEADLK:
+                            raise
             try:
                 yield
             finally:

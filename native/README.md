@@ -49,9 +49,15 @@ Checkpoint document) and times them.
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
   `src/rules/psychology.rs` are the production template: Rust owns those two, and its rule writes
   them value by value. Start a namespace from `docs/rust-port/lanes/p5-template-namespace.md`.
+- `src/state/entities.rs`: `EntityStore`, the typed rows of a world's agents, facilities, staff,
+  support requests and active tasks, from `WorldCore::entities`. The objects stay the dataclasses
+  of `domain/models.py`, each mirroring its row; `IdMap`, `__setattr__` and `TrackedList` forward
+  every write. A rule reads with `with_rows` (a tainted store says `Unsupported`) and writes with
+  `write_field` (`docs/rust-port/lanes/p6-entity-windows.md`).
 - `src/core/tracked.rs`: the only dict and list subclasses a kernel may read through the C API.
   Use `as_readable_dict` and `as_readable_list`, not `downcast` or `downcast_exact`, to accept
-  state: a mirrored namespace is made of those classes, and any other subclass may override reads.
+  state: a mirrored namespace and a world's `IdMap` are made of those classes, and any other
+  subclass may override reads.
 - Crates lanes need are already in `Cargo.toml` (`indexmap`, `smallvec`, `rustc-hash`, `itoa`),
   so `Cargo.lock` stays quiet. `HashMap` and `FxHashMap` are for lookups only: anything iterated
   into an output goes through `IndexMap`, or is sorted.

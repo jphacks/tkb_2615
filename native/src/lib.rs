@@ -293,6 +293,7 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
 fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("Unsupported", module.py().get_type::<Unsupported>())?;
     module.add_function(wrap_pyfunction!(core::tracked::install_tracked_types, module)?)?;
+    module.add_function(wrap_pyfunction!(core::tracked::install_id_map_type, module)?)?;
     module.add_class::<core::world_core::WorldCore>()?;
     module.add_class::<core::world_core::NamespaceMirror>()?;
     module.add_class::<core::world_core::RowType>()?;

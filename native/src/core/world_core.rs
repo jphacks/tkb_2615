@@ -420,6 +420,11 @@ fn new_container<'py>(py: Python<'py>, list: bool) -> PyResult<Bound<'py, PyAny>
     }
 }
 
+/// A new empty `TrackedList`, out of any tree.
+pub(crate) fn new_tracked_list(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    new_container(py, true)
+}
+
 fn exact_str_key<'py>(key: &Bound<'py, PyAny>) -> NodeKey {
     match key.downcast_exact::<PyString>() {
         Ok(text) => NodeKey::Key(text.clone().unbind()),
@@ -435,7 +440,7 @@ fn is_atom(value: &Bound<'_, PyAny>) -> bool {
         || value.is_exact_instance_of::<pyo3::types::PyBool>()
 }
 
-fn raw_dict_set(dict: &Bound<'_, PyAny>, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn raw_dict_set(dict: &Bound<'_, PyAny>, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
     // SAFETY: all are live objects; PyDict_SetItem takes its own references, and the type is a
     // dict subclass whose override this call means not to run.
     if unsafe { ffi::PyDict_SetItem(dict.as_ptr(), key.as_ptr(), value.as_ptr()) } != 0 {
@@ -444,7 +449,7 @@ fn raw_dict_set(dict: &Bound<'_, PyAny>, key: &Bound<'_, PyAny>, value: &Bound<'
     Ok(())
 }
 
-fn raw_list_append(list: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn raw_list_append(list: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
     // SAFETY: as above.
     if unsafe { ffi::PyList_Append(list.as_ptr(), value.as_ptr()) } != 0 {
         return Err(PyErr::fetch(list.py()));
@@ -453,7 +458,7 @@ fn raw_list_append(list: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResul
 }
 
 /// A strong reference to a dict's value, or None; a failed hash is an error.
-fn raw_dict_get<'py>(
+pub(crate) fn raw_dict_get<'py>(
     dict: &Bound<'py, PyAny>,
     key: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -1030,13 +1035,24 @@ impl NamespaceMirror {
 #[pyclass(module = "sheltersim_native")]
 pub struct WorldCore {
     namespaces: IndexMap<Arc<str>, Py<NamespaceMirror>>,
+    entities: Option<Py<crate::state::entities::EntityStore>>,
 }
 
 #[pymethods]
 impl WorldCore {
     #[new]
     fn new() -> Self {
-        Self { namespaces: IndexMap::new() }
+        Self { namespaces: IndexMap::new(), entities: None }
+    }
+
+    /// The rows of the world's entities (state/entities.rs).
+    pub(crate) fn entities(&mut self, py: Python<'_>) -> PyResult<Py<crate::state::entities::EntityStore>> {
+        if let Some(store) = &self.entities {
+            return Ok(store.clone_ref(py));
+        }
+        let store = Py::new(py, crate::state::entities::EntityStore::default())?;
+        self.entities = Some(store.clone_ref(py));
+        Ok(store)
     }
 
     /// Say the namespace is owned, with a row of this type, and return its mirror. It has no
@@ -1078,11 +1094,13 @@ impl WorldCore {
         for mirror in self.namespaces.values() {
             visit.call(mirror)?;
         }
+        visit.call(&self.entities)?;
         Ok(())
     }
 
     fn __clear__(&mut self) {
         self.namespaces.clear();
+        self.entities = None;
     }
 }
 
