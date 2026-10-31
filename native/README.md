@@ -48,6 +48,11 @@ Checkpoint document) and times them.
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
   `src/rules/psychology.rs` are the production template: Rust owns those two, and its rule writes
   them value by value. Start a namespace from `docs/rust-port/lanes/p5-template-namespace.md`.
+  `row.rs` also has `Maybe<T>` (a key a record may not have), `str_enum!`, `set_all`,
+  `namespace_is_absent` and the `exact_*` readers of a kernel's inputs. A rule other modules call as
+  a function uses `core/kernels.py`'s `kernel_first`; `src/state/staff_dynamics.rs` and
+  `src/rules/staff_dynamics.rs` are the example of a whole module
+  (`docs/rust-port/lanes/s-staff-dynamics.md`).
 - `src/state/entities.rs`: `EntityStore`, the typed rows of a world's agents, facilities, staff,
   support requests and active tasks, from `WorldCore::entities`. The objects stay the dataclasses
   of `domain/models.py`, each mirroring its row; `IdMap`, `__setattr__` and `TrackedList` forward
