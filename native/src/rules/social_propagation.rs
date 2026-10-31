@@ -597,18 +597,23 @@ fn update_social_propagation<'py>(
     }
     let final_deltas = PyTuple::new(py, final_deltas)?;
 
-    // The row and the tree.
-    if let Some(cooldowns) = cooldowns {
-        NamespaceMirror::with_row_tree::<SocialRow, _>(&mirror, |row, tree| {
+    // The row and the tree. The namespace's dict gets the order of the Python rule's new one too.
+    NamespaceMirror::with_row_tree::<SocialRow, _>(&mirror, |row, tree| {
+        tree.order_keys([
+            intern!(py, "schema_version"),
+            intern!(py, "contacts"),
+            intern!(py, "agent_cooldown_until"),
+        ])?;
+        if let Some(cooldowns) = cooldowns {
             let node = tree.child(intern!(py, "agent_cooldown_until"))?;
             node.clear()?;
             for (id, due) in &cooldowns {
                 node.set_str(id, due)?;
             }
             row.agent_cooldown_until = cooldowns;
-            Ok(())
-        })?;
-    }
+        }
+        Ok(())
+    })?;
     // Python's dicts share the minute's one int, and so do these.
     let minute_object = minute.clone();
     NamespaceMirror::refill_record_map(

@@ -205,9 +205,7 @@ def test_a_restored_namespace_gets_the_order_of_the_python_rule(generated_scenar
     old_record = next(iter(world.model_state[KEY]["contacts"].values()))
     python = _python_result(world, controller, moved, shifted, rng)
     _run_kernel(world, controller, moved, shifted, rng)
-    assert json.dumps(world.model_state[KEY]["contacts"]) == json.dumps(
-        python.runtime_state["contacts"]
-    )
+    assert json.dumps(world.model_state[KEY]) == json.dumps(python.runtime_state)
     assert _mirror(world).stats()["live_nodes"] == 3 + len(python.runtime_state["contacts"])
     old_record["consecutive_minutes"] = 5  # Out of the tree, so it reaches nothing.
     assert _mirror(world).verify()

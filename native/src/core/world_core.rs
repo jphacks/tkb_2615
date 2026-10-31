@@ -375,6 +375,29 @@ impl<'py> Tree<'py> {
         Ok(())
     }
 
+    /// Put a dict's keys, which are exactly these, in this order with these key objects, unless
+    /// the first is the first of them already. After a restore the order is that of the JSON.
+    pub(crate) fn order_keys<const N: usize>(&self, keys: [&Bound<'py, PyString>; N]) -> PyResult<()> {
+        let Some(node) = &self.node else {
+            return Ok(());
+        };
+        if first_key_is(node, keys[0]) {
+            return Ok(());
+        }
+        let mut values = Vec::with_capacity(N);
+        for key in keys {
+            values.push(
+                raw_dict_get(node, key.as_any())?
+                    .ok_or_else(|| PyRuntimeError::new_err("the tree does not have the row's key"))?,
+            );
+        }
+        raw_dict_clear(node);
+        for (key, value) in keys.iter().zip(&values) {
+            raw_dict_set(node, key.as_any(), value)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_str<T: Scalar>(&self, key: &str, value: &T) -> PyResult<()> {
         match &self.node {
             Some(node) => raw_dict_set(node, PyString::new(self.py, key).as_any(), &value.to_py(self.py)?),
