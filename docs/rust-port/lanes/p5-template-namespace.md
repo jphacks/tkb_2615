@@ -161,6 +161,9 @@ python benchmarks/rule_shadow/summary.py 出力先
 | 道具の確認：kernel の重みを 1% 変えたコピー | `rule_shadow` が日の終わり2回を違いとして報告。ゲートも `long_generated` で失敗 |
 | `first_difference.py --both`（ゲート全体） | 55個すべて、220,892 段階で digest が同じ |
 | `first_difference.py --both --draws`（`generated:1500:100`、5分ごと） | 301段階で digest が同じ。両側にある抽選 14,349件で、値にも比較相手にも違いなし。Rust の中の抽選は比べられません |
+| `gate_all_paths.py --expect --reversed-order`（段階の終わりと段階の途中） | 55個すべて、どの回も一致 |
+| `tracked_mirror_gate.py`（55シナリオ × 4回） | 220行、問題0件。段階の比較は合計 662,130 回。追跡する回は Python の規則、比べる相手の素の回は Rust の規則です |
+| `pytest -p support.tracked_mirror_plugin` | `test_first_difference.py` の4件だけ失敗（順序の逆転のテストが plugin の木を想定していません）。P4 の commit でも同じファイルの6件が失敗するので、この作業で増えたものではありません |
 | `gate_all_paths.py --coverage` の行の網羅（kernel ありとなしの合計） | `domain/psychological_state.py` 87%、`domain/distress_monitor.py` 78%。kernel ありだけでは 25%、19% で、Python の規則がほとんど動かなくなったことを示します |
 
 ## 残っている作業（レーン A）
