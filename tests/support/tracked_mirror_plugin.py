@@ -31,10 +31,12 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_state_mirror.py",
         "test_world_core.py",
         "test_psychology_row.py",
+        "test_capture_rows.py",
         "test_staff_dynamics_row.py",
         "test_psychology_update.py",
         "test_information_row.py",
         "test_social_propagation_row.py",
+        "test_movement_row.py",
         "test_world_view_row.py",
         "test_behavior_row.py",
     }

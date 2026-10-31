@@ -1,9 +1,10 @@
 """Compare the Rust steps with their Python rules at every call, in any process.
 
 This file has the long-term psychology step, psychology_update.py the other psychology steps,
-social_propagation_shadow.py the social one, information_shadow.py the information one, whose
-results are in DIR/information, world_view_shadow.py the views, in DIR/world_view, and
-behavior_shadow.py the proposals, in DIR/behavior.
+social_propagation_shadow.py the social one, movement_shadow.py the state of movement_v1,
+information_shadow.py the information one, whose results are in DIR/information,
+world_view_shadow.py the views, in DIR/world_view, and behavior_shadow.py the proposals, in
+DIR/behavior.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -137,6 +138,10 @@ def _install(output: str) -> None:
 
     social_propagation_shadow.install(seen, reasons, differences)
 
+    import movement_shadow
+
+    movement_shadow.install(seen, reasons, differences)
+
     def report() -> None:
         if seen or reasons or differences:
             target = Path(output) / f"{os.getpid()}.json"
@@ -152,6 +157,9 @@ if OUTPUT:
         if shadow.stem != "shadow_kit":
             importlib.import_module(shadow.stem).prepare(OUTPUT)
     _install(OUTPUT)
+    import capture_shadow
+
+    capture_shadow.install(OUTPUT)
     from information_shadow import install as _install_information
 
     _install_information(OUTPUT)

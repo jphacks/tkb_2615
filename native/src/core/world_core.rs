@@ -1079,6 +1079,11 @@ impl NamespaceMirror {
         }
     }
 
+    /// Whether value is the tree of this mirror. A field of the world assigned whole is not.
+    fn holds(&self, value: &Bound<'_, PyAny>) -> bool {
+        self.root_is(value)
+    }
+
     /// The canonical JSON of the row, or None without one.
     fn row_json<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let Some(row) = self.row.as_ref() else {

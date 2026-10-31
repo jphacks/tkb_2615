@@ -6,6 +6,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from sheltersim import native
 from sheltersim.contracts.api import BranchReference
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
@@ -59,9 +60,12 @@ class _IndexedMetricSink(_MetricSink):
     def record_decision(self, proposal: Any, *, observed_state: Any = None) -> None:
         agent = self.world.agents.get(proposal.agent_id)
         observed = dict(observed_state) if observed_state is not None else None
-        omitted = (
-            observed is not None and len(json.dumps(observed, ensure_ascii=False).encode()) > 16384
-        )
+        omitted = False
+        if observed is not None:
+            size = native.dumps_length(observed)
+            if size is None:
+                size = len(json.dumps(observed, ensure_ascii=False).encode())
+            omitted = size > 16384
         candidates = [
             {
                 "action": c.action.value,

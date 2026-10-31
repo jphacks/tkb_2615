@@ -1505,18 +1505,36 @@ class WorldState:
         self.validate()
         return self._canonical_text(self._canonical_data())
 
-    def _canonical_data(self, *, include_event_log: bool = True) -> dict[str, Any]:
+    def _canonical_data(
+        self, *, include_event_log: bool = True, without_entities: bool = False
+    ) -> dict[str, Any]:
         """The canonical_json() document before encoding; it shares live model state.
 
         Without the EventLog its "event_log" is empty, for a caller that adds
-        records it already converted.
+        records it already converted. without_entities leaves out what a caller holding
+        the rows' bytes takes from them (EntityStore.rows_json).
         """
+        if without_entities:
+            return {
+                **self._canonical_scalars(),
+                "zones": [
+                    zone.to_dict() for zone in sorted(self.zones.values(), key=lambda item: item.id)
+                ],
+                "zone_edges": [
+                    edge.to_dict()
+                    for edge in sorted(self.zone_edges.values(), key=lambda item: item.id)
+                ],
+                "resources": self.resources,
+                "event_queue": [event.to_dict() for event in self.event_queue.pending()],
+                "event_log": [],
+                "rng_state": self.rng_state,
+                "id_counters": self.id_counters,
+                "metric_state": self.metric_state,
+                "model_configs": self.model_configs,
+                "model_state": self.model_state,
+            }
         return {
-            "schema_version": self.schema_version,
-            "scenario_id": self.scenario_id,
-            "seed": self.seed,
-            "duration_minutes": self.duration_minutes,
-            "minute_index": self.minute_index,
+            **self._canonical_scalars(),
             "agents": [
                 self._agent_data(agent)
                 for agent in sorted(self.agents.values(), key=lambda item: item.profile.id)
@@ -1555,6 +1573,15 @@ class WorldState:
             "model_state": self.model_state,
         }
 
+    def _canonical_scalars(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "scenario_id": self.scenario_id,
+            "seed": self.seed,
+            "duration_minutes": self.duration_minutes,
+            "minute_index": self.minute_index,
+        }
+
     @classmethod
     def _canonical_text(cls, data: Any) -> str:
         return json.dumps(
@@ -1589,6 +1616,7 @@ class WorldState:
         _saved_json: bool = False,
         _borrow: bool = False,
         _restored_log: EventLog | None = None,
+        _known_rows: Mapping[str, Mapping[int, tuple[bytes, Any, str]]] | None = None,
     ) -> WorldState:
         """Restore the exact current schema; older or unknown schemas fail closed.
 
@@ -1607,6 +1635,11 @@ class WorldState:
 
         An event_log read back as item bytes (SavedItems) builds the EventLog from
         them; each record is made when read (EventLog.from_saved).
+
+        With _known_rows, for a restore check that only reads the world and discards it, an
+        entity list held as SavedItems takes the objects of the bytes objects an earlier
+        check restored and showed equal, by id(raw). Those objects are shared, so the new
+        world is bare: no core and no rows (_bare_world).
         """
         if not isinstance(document, dict):
             raise StateInvariantError("WorldState document must be an object")
@@ -1638,11 +1671,11 @@ class WorldState:
         if not isinstance(version, int) or isinstance(version, bool) or version not in (5, 6):
             raise StateInvariantError(f"unsupported world-state schema version: {version!r}")
         try:
-            agents: dict[str, AgentState] = {}
             need_fields = {"toilet_urgency", "hunger", "fatigue"}
             if version == 6:
                 need_fields.add("hydration_need")
-            for item in document["agents"]:
+
+            def agent_from(item: dict[str, Any]) -> AgentState:
                 if set(item) != {
                     "profile",
                     "zone_id",
@@ -1705,7 +1738,13 @@ class WorldState:
                     support_request_id=item["support_request_id"],
                     support_cooldown_until=item["support_cooldown_until"],
                 )
-                agents[agent.id] = agent
+                return agent
+
+            def rows_of(name: str, build: Any, *, by_id: bool = True) -> dict[str, Any]:
+                known = (_known_rows or {}).get(name)
+                return _restored_rows(document[name], known, build, by_id)
+
+            agents = rows_of("agents", agent_from, by_id=False)
             zones = {item["id"]: ZoneState(**item) for item in document["zones"]}
             zone_edges = {item["id"]: ZoneEdgeState(**item) for item in document["zone_edges"]}
             facility_fields = {
@@ -1719,24 +1758,27 @@ class WorldState:
             }
             if version == 6:
                 facility_fields.update({"resource_active_agent_ids", "resource_queue_agent_ids"})
-            for item in document["facilities"]:
-                if not isinstance(item, dict) or set(item) != facility_fields:
-                    raise StateInvariantError(f"facility fields do not match WorldState v{version}")
-            facilities = {item["id"]: FacilityState(**item) for item in document["facilities"]}
-            staff = {
-                item["id"]: StaffState(
+            # A row wrote these with exactly its fields.
+            if not isinstance(document["facilities"], SavedItems):
+                for item in document["facilities"]:
+                    if not isinstance(item, dict) or set(item) != facility_fields:
+                        raise StateInvariantError(
+                            f"facility fields do not match WorldState v{version}"
+                        )
+
+            def staff_from(item: dict[str, Any]) -> StaffState:
+                return StaffState(
                     **{
                         **item,
                         "skills": tuple(item["skills"]),
                         "work_queue": list(item["work_queue"]),
                     }
                 )
-                for item in document["staff"]
-            }
-            support_requests = {
-                item["id"]: SupportRequestState(**item) for item in document["support_requests"]
-            }
-            active_tasks = {item["id"]: ActiveTask(**item) for item in document["active_tasks"]}
+
+            facilities = rows_of("facilities", lambda item: FacilityState(**item))
+            staff = rows_of("staff", staff_from)
+            support_requests = rows_of("support_requests", lambda item: SupportRequestState(**item))
+            active_tasks = rows_of("active_tasks", lambda item: ActiveTask(**item))
 
             def copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
                 return value if _borrow else deepcopy(value, memo)
@@ -1766,7 +1808,8 @@ class WorldState:
                         log.append(record)
                 else:
                     log = EventLog([*_restored_events, *new_records])
-            world = cls(
+            make = cls if _known_rows is None else cls._bare_world
+            world = make(
                 scenario_id=document["scenario_id"],
                 seed=document["seed"],
                 duration_minutes=document["duration_minutes"],
@@ -1796,24 +1839,41 @@ class WorldState:
                 raise
             raise StateInvariantError(f"invalid WorldState document: {exc}") from exc
 
+    @classmethod
+    def _bare_world(cls, **state: Any) -> WorldState:
+        """A world of exactly these objects, with no core: plain containers, nothing attached.
+
+        For a restore check, which only reads it. It holds entities earlier bare worlds held.
+        """
+        world = object.__new__(cls)
+        world.__dict__.update(state)
+        return world
+
     def same_state(
         self,
         other: WorldState,
         *,
         known_equal_events: int = 0,
         known_equal_histories: Mapping[tuple[str, str], int] | None = None,
+        known_equal_rows: Mapping[str, set[str]] | None = None,
     ) -> bool:
         """Whether two worlds hold equal state, so they pass the same validation.
 
         The first known_equal_events EventLog records of both worlds are already known
         to be equal and are not compared, and likewise the first entries of each
         model_state list in known_equal_histories, by its (name, field). Pending events
-        compare in queue order.
+        compare in queue order. known_equal_rows names, by entity field, the entities known
+        to be equal.
         """
+        known_rows = known_equal_rows or {}
         for item in fields(self):
             if item.name in {"event_queue", "event_log"}:
                 continue
-            if item.name == "model_state" and known_equal_histories:
+            known = known_rows.get(item.name)
+            if known is not None:
+                if not _same_rows(getattr(self, item.name), getattr(other, item.name), known):
+                    return False
+            elif item.name == "model_state" and known_equal_histories:
                 if not _same_model_state(
                     self.model_state, other.model_state, known_equal_histories
                 ):
@@ -1927,6 +1987,41 @@ class WorldState:
         if isinstance(value, set):
             return sorted(value)
         raise TypeError(f"value of type {type(value).__name__} is not JSON serializable")
+
+
+def _restored_rows(
+    saved: Any, known: Mapping[int, tuple[bytes, Any, str]] | None, build: Any, by_id: bool
+) -> dict[str, Any]:
+    """The entities of a saved list by their IDs; known holds those restored before, by id(raw).
+
+    by_id says a broken document fails on its "id" before anything else of an item is read.
+    """
+    if known is None or not isinstance(saved, SavedItems):
+        if by_id:
+            return {item["id"]: build(item) for item in saved}
+        rows = {}
+        for item in saved:
+            row = build(item)
+            rows[row.id] = row
+        return rows
+    rows = {}
+    # The kept bytes are alive, so the same address is the same bytes object.
+    for raw, kept in zip(saved.raws, map(known.get, map(id, saved.raws)), strict=True):
+        if kept is not None:
+            rows[kept[2]] = kept[1]
+        else:
+            row = build(json.loads(raw))
+            rows[row.id] = row
+    return rows
+
+
+def _same_rows(mine: dict[str, Any], theirs: dict[str, Any], known: set[str]) -> bool:
+    """mine == theirs, except for the entities known to be equal."""
+    if not isinstance(mine, dict) or not isinstance(theirs, dict):
+        return mine == theirs
+    if mine.keys() != theirs.keys():
+        return False
+    return all(row == theirs[key] for key, row in mine.items() if key not in known)
 
 
 def _same_model_state(

@@ -145,6 +145,9 @@ each OS, because both call the same libm.
   Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
   draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
+- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
+  Python rules write one record at a time through the forwarded writes, and M4 moves them.
+
 - `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
   `_sample_information_contacts` for the three information policies (contact sampling, durations,
   forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
@@ -215,8 +218,19 @@ each OS, because both call the same libm.
 
 - `index_row(row)` (`src/checkpoint.rs`): one pass over a history index row of plain values,
   giving its canonical JSON, the hash, its identities and event references
-  (`_identities`, `_event_references` in `storage/history_index.py`) and the keys and strings
-  for the privacy check. None for any other row, which Python reads as before.
+  (`_identities`, `_event_references` in `storage/history_index.py`), the sorted keys joined by NUL
+  and the strings for the privacy check, and the text its tokens are read from. None for any other
+  row, which Python reads as before.
+- `dumps_length(value)` (`src/checkpoint.rs`): `len(json.dumps(value, ensure_ascii=False).encode())`
+  of a plain JSON value, for the size limit of a decision's observed state.
+- `EntityStore.rows_json(version)` (`src/state/entities.rs`): each entity row's canonical JSON, by
+  field, in the order of `WorldState._canonical_data`. A row nothing reached for writing keeps its
+  bytes object, so the same object means the same row (`Table::changed`, set by every way to a row
+  for writing). `NamespaceMirror.row_json()` is the same for an owned namespace. A capture takes both
+  (`state_mirror.owned_row_bytes`), so a new row needs only `state_row!` and its registry line.
+- `HistoryPins` (`src/history.rs`): references to everything inside a history's entries, from when
+  they were shown equal to their documents. `unchanged` reads only the containers, and false says
+  nothing, so the caller compares with `same_json_items`.
 
 - `same_json_items(current, documents, start, count)` (stage B3, `src/history.rs`): whether
   each of `current[:count]` is exactly `documents[start + i]`, with the types: 1, 1.0 and
