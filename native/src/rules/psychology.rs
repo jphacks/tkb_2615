@@ -2,8 +2,8 @@
 //! long-term distress (`update_psychological_state` in `domain/psychological_state.py`).
 //!
 //! A kernel changes nothing until it knows the Python rules would pass: first `plan_*` computes
-//! everything from the rows, and any value the Python rules would look at twice, or turn down,
-//! gives Unsupported, so the Python step runs and raises its own text. Then the plan is written to
+//! everything from the rows, and any value the Python rules would turn down, or that this kernel
+//! does not handle, gives Unsupported, so the Python step runs and raises its own text. Then the plan is written to
 //! the row and the tree, value by value, without replacing anything: the namespace is never
 //! forwarded whole. Every float operation keeps the order of the Python expression.
 
@@ -346,8 +346,8 @@ fn update_long_term<'py>(
         return unsupported("the minute is not an int");
     };
     let minute: i64 = minute.extract().map_err(|_| Unsupported::new_err("the minute is too large"))?;
-    if minute < 0 {
-        return unsupported("the minute is negative");
+    if minute < 0 || minute == i64::MAX {
+        return unsupported("the minute is negative or too large");
     }
     let settings = policy.getattr(intern!(py, "parameters"))?;
     let parameters = LongTermParameters {
