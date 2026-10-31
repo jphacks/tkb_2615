@@ -452,9 +452,9 @@ def reverse_order(world: WorldState) -> None:
 # event too. Name the new place when a rule moves; ReversedOrder fails if one is missing.
 WITHIN_PHASE = (
     ("sheltersim.events.handlers", "EventDispatcher", "dispatch_due"),
-    ("sheltersim.experiments.runner", "OfflineSimulationController", "_apply_proposal"),
-    ("sheltersim.policies.behavior", "WorldView", "from_world"),
-    ("sheltersim.policies.behavior", "WorldView", "after_state_update"),
+    ("sheltersim.experiments.phases.propose", "ProposePhase", "_apply_proposal"),
+    ("sheltersim.policies.world_view", "WorldView", "from_world"),
+    ("sheltersim.policies.world_view", "WorldView", "after_state_update"),
     ("sheltersim.domain.facilities", "ToiletServiceManager", "arbitrate"),
     ("sheltersim.domain.resource_service", "ResourceServiceManager", "arbitrate"),
     ("sheltersim.domain.staff", "StaffService", "assign_pending"),

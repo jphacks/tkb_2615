@@ -322,7 +322,7 @@ def test_the_order_changes_inside_phases_at_each_named_place(
 
     assert {
         "EventDispatcher.dispatch_due",
-        "OfflineSimulationController._apply_proposal",
+        "ProposePhase._apply_proposal",
         "WorldView.from_world",
         "ToiletServiceManager.arbitrate",
         "StaffService.assign_pending",
