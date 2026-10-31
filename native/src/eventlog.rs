@@ -684,11 +684,6 @@ impl EventStore {
         self.sequences.contains(&sequence)
     }
 
-    /// The position of a realized event, for `saved_document`.
-    pub(crate) fn position_of(&self, event_id: &str) -> Option<usize> {
-        self.by_id.get(event_id).copied()
-    }
-
     /// The positions of a type's records in append order; empty for a type with none.
     pub(crate) fn positions_of_type(&self, event_type: &str) -> &[usize] {
         self.type_ids

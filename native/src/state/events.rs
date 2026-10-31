@@ -613,14 +613,6 @@ impl QueueStore {
         };
         self.ordered[..end].iter().map(|(_, serial)| self.slots[serial].event_id.clone()).collect()
     }
-
-    pub(crate) fn has_id(&self, event_id: &str) -> bool {
-        self.by_id.contains_key(event_id)
-    }
-
-    pub(crate) fn has_sequence(&self, sequence: i64) -> bool {
-        self.sequences.contains(&sequence)
-    }
 }
 
 #[pymethods]
