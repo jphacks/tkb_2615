@@ -133,3 +133,6 @@ def _install(output: str) -> None:
 if OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     _install(OUTPUT)
+    from information_shadow import install as _install_information
+
+    _install_information(OUTPUT)

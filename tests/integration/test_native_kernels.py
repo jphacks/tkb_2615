@@ -748,72 +748,6 @@ def test_the_social_kernel_leaves_unusual_inputs_to_python(generated_scenario) -
     assert with_integer.native_update(view, deltas, rng, zone_neighbors=neighbors) is None
 
 
-def test_the_information_kernel_gives_the_python_state(
-    generated_scenario, tmp_path, monkeypatch
-) -> None:
-    """The stored state, in the same order, and no proposals, at every tick."""
-    from sheltersim.policies.behavior import WorldView
-    from sheltersim.policies.information import InformationSpreadPolicy
-
-    document = generated_scenario.model_dump(mode="json")
-    document["duration_minutes"] = 360
-    scenario = ScenarioSpec.model_validate(document)
-    compared = []
-    kernel = InformationSpreadPolicy.native_update
-    original_from_world = WorldView.from_world
-    worlds = []
-
-    def remember_world(world, **arguments):
-        worlds.append(world)
-        return original_from_world(world, **arguments)
-
-    def checked(self, people, minute, runtime_state, rng, *, zone_neighbors):
-        rust = kernel(self, people, minute, runtime_state, rng, zone_neighbors=zone_neighbors)
-        python = self.update(
-            original_from_world(worlds[-1], include_state_hash=False),
-            runtime_state,
-            rng,
-            zone_neighbors=zone_neighbors,
-        )
-        assert rust is not None
-        assert _same_bits_deep(rust.runtime_state, python.runtime_state)
-        assert rust.proposals == python.proposals == ()
-        assert rust.policy_version == python.policy_version
-        compared.append(minute)
-        return rust
-
-    monkeypatch.setattr(WorldView, "from_world", remember_world)
-    monkeypatch.setattr(InformationSpreadPolicy, "native_update", checked)
-    run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
-    assert compared == list(range(360))
-
-
-def test_the_information_kernel_leaves_any_message_to_python(generated_scenario) -> None:
-    from sheltersim.core.rng import CounterRNG
-    from sheltersim.core.world import WorldState
-    from sheltersim.domain.information import create_information_runtime_state
-    from sheltersim.domain.models import InformationSpreadConfig
-    from sheltersim.policies.information import InformationSpreadPolicy
-
-    world = WorldState.from_scenario(generated_scenario)
-    policy = InformationSpreadPolicy(InformationSpreadConfig(enabled=True))
-    rng = CounterRNG(1)
-    state = create_information_runtime_state(set(world.agents))
-    neighbors = {zone: () for zone in world.zones}
-
-    def result(changed):
-        return policy.native_update(world.agents, 0, changed, rng, zone_neighbors=neighbors)
-
-    assert result(state) is not None
-    assert result({**state, "messages": {"m": {}}}) is None
-    first = sorted(world.agents)[0]
-    assert result({**state, "beliefs": {**state["beliefs"], first: {"m": {}}}}) is None
-    assert result({**state, "support_requests": [{}]}) is None
-    assert result({**state, "schema_version": 1}) is None
-    assert result({**state, "contacts": []}) is None
-    assert result({**state, "query_pressure": {}}) is None
-
-
 def _same_social_result(rust, python) -> None:
     assert _same_bits_deep(rust.runtime_state, python.runtime_state)
     assert len(rust.deltas) == len(python.deltas)
@@ -836,10 +770,7 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
 
     from sheltersim.core.rng import CounterRNG
     from sheltersim.core.world import WorldState
-    from sheltersim.domain.information import create_information_runtime_state
-    from sheltersim.domain.models import InformationSpreadConfig
     from sheltersim.policies.behavior import WorldView
-    from sheltersim.policies.information import InformationSpreadPolicy
     from sheltersim.policies.psychology import AgentStateDelta
     from sheltersim.policies.social import (
         ExpressivenessChannelOpennessPolicy,
@@ -942,22 +873,6 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
             assert rust is not None, trial
             _same_social_result(rust, python)
             matched += 1
-
-        information = InformationSpreadPolicy(
-            InformationSpreadConfig(
-                enabled=True,
-                max_contacts_per_agent=draw.randrange(0, 5),
-                query_pressure_decay_per_minute=draw.choice((0.0, 0.25, draw.random() / 4)),
-            )
-        )
-        state = create_information_runtime_state(set(ids))
-        state["contacts"] = contacts
-        state["query_pressure"] = {agent_id: unit() for agent_id in ids}
-        state["counters"]["contact_attempts"] = draw.randrange(0, 100)
-        rust_state = information.native_update(agents, minute, state, rng, zone_neighbors=neighbors)
-        assert rust_state is not None, trial
-        python_state = information.update(view, state, rng, zone_neighbors=neighbors)
-        assert _same_bits_deep(rust_state.runtime_state, python_state.runtime_state), trial
     assert matched > 100 and raised > 0
 
 

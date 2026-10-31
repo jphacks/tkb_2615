@@ -115,14 +115,18 @@ each OS, because both call the same libm.
   `max`/`min` ties and float order are those of Python. Contacts whose weights sum to
   zero make the Python code raise, so they are left to it.
 
-- `information_contacts_without_messages(...)`: one tick of
-  `InformationSpreadPolicy.update` while no message, belief or support-request record
-  exists: decayed query pressure, sampled contacts and their records. It needs only
-  people's IDs and zones, so the runner builds no `WorldView` for it. Any message
-  sends the tick to Python.
+- `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
+  `_sample_information_contacts` for the three information policies (contact sampling, durations,
+  forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
+  (`src/state/information.rs`) and reads agents from the entity rows; the household of the view is
+  read from `population_presence_v1`, which Python holds. The tree gets single values and the
+  refilled contacts, never the whole namespace, and the events go through the Python method
+  `_schedule_information_contact`. A trace, another RNG, a policy's subclass and whatever the Python
+  rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
+  same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 
-  Both raise `Unsupported` for any value of another type or any state Python would
-  reject, and neither runs when a trace needs the Python contact records.
+  `social_channel_update` raises `Unsupported` for any value of another type or any state Python
+  would reject, and does not run when a trace needs the Python contact records.
   Seven days, run beside the previous commit: `update_agent_state` 76.4 s -> 26.1 s,
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
