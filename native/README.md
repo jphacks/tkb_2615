@@ -108,11 +108,15 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
-- `social_channel_update(...)`: one tick of `ExpressivenessChannelOpennessPolicy.update`
-  (contact sampling, durations, cooldowns, the bounded stress synchrony and its traces),
-  through `native_update`. `CounterRNG` draws, `math.fsum` (`fsum`, exposed for tests),
-  `max`/`min` ties and float order are those of Python. Contacts whose weights sum to
-  zero make the Python code raise, so they are left to it.
+- `rules.social_propagation.update_social_propagation(controller, world, view, deltas, minute, rng)`:
+  the update phase's step `_social_propagation` for the three social policies (contact sampling,
+  durations, cooldowns, each stress operator). Rust owns `social_propagation_v1`
+  (`src/state/social_propagation.rs`) and reads agents from the entity rows. Each tick refills the
+  contacts in the order of Python's new dict, reusing the nodes of the records
+  (`NamespaceMirror::refill_record_map`). `CounterRNG` draws, `math.fsum`, `sum`, `max`/`min` ties
+  and float order are those of Python. A trace, another RNG, a policy's subclass, and what the
+  Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
+  draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
 - `information_contacts_without_messages(...)`: one tick of
   `InformationSpreadPolicy.update` while no message, belief or support-request record

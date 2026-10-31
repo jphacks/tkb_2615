@@ -581,48 +581,6 @@ def _same_bits_deep(x: object, y: object) -> bool:
     return _same_float_bits(x, y)
 
 
-def test_the_social_kernel_gives_the_python_result(
-    generated_scenario, tmp_path, monkeypatch
-) -> None:
-    """Deltas, stored contacts and cooldowns (in the same order), traces and totals."""
-    from sheltersim.policies.social import ExpressivenessChannelOpennessPolicy
-
-    document = generated_scenario.model_dump(mode="json")
-    document["duration_minutes"] = 360
-    scenario = ScenarioSpec.model_validate(document)
-    compared = []
-    contacts = []
-    kernel = ExpressivenessChannelOpennessPolicy.native_update
-
-    def checked(self, view, base_deltas, rng, *, zone_neighbors, runtime_state=None):
-        rust = kernel(
-            self,
-            view,
-            base_deltas,
-            rng,
-            zone_neighbors=zone_neighbors,
-            runtime_state=runtime_state,
-        )
-        python = self.update(
-            view,
-            base_deltas,
-            rng,
-            zone_neighbors=zone_neighbors,
-            runtime_state=runtime_state,
-        )
-        assert rust is not None
-        _same_social_result(rust, python)
-        assert rust.policy_version == python.policy_version
-        compared.append(view.minute_index)
-        contacts.append(len(rust.contacts))
-        return rust
-
-    monkeypatch.setattr(ExpressivenessChannelOpennessPolicy, "native_update", checked)
-    run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
-    assert compared == list(range(360))
-    assert sum(contacts) > 0
-
-
 @pytest.mark.parametrize(
     "value",
     [
@@ -664,62 +622,6 @@ def test_the_kernel_sum_matches_math_fsum_on_random_floats() -> None:
             for _ in range(count)
         ]
         assert _same_float_bits(sheltersim_native.fsum(values), math.fsum(values)), values
-
-
-def test_the_social_kernel_leaves_unusual_inputs_to_python(generated_scenario) -> None:
-    from sheltersim.core.rng import CounterRNG
-    from sheltersim.core.world import WorldState
-    from sheltersim.policies.behavior import WorldView
-    from sheltersim.policies.psychology import AgentStateDelta
-    from sheltersim.policies.social import (
-        ExpressivenessChannelOpennessPolicy,
-        SocialPropagationParameters,
-    )
-
-    world = WorldState.from_scenario(generated_scenario)
-    view = WorldView.from_world(world, include_state_hash=False)
-    deltas = tuple(
-        AgentStateDelta(
-            agent_id=agent.id,
-            minute_index=view.minute_index,
-            toilet_urgency=0.0,
-            hunger=0.0,
-            fatigue=0.0,
-            stress=0.5,
-            trust=0.5,
-        )
-        for agent in view.agents.values()
-    )
-    policy = ExpressivenessChannelOpennessPolicy(SocialPropagationParameters(enabled=True))
-    neighbors = {zone: () for zone in world.zones}
-    rng = CounterRNG(1)
-
-    def native_result(**changes):
-        arguments = {
-            "zone_neighbors": neighbors,
-            "runtime_state": None,
-            **changes,
-        }
-        return policy.native_update(view, deltas, rng, **arguments)
-
-    assert native_result() is not None
-    good = {"schema_version": 1, "contacts": {}, "agent_cooldown_until": {}}
-    assert native_result(runtime_state=good) is not None
-    for broken in (
-        {**good, "schema_version": 9},
-        {**good, "contacts": []},
-        {**good, "contacts": {"x": {"last_seen_minute": True, "consecutive_minutes": 1}}},
-        {**good, "contacts": {"x": {"last_seen_minute": -1, "consecutive_minutes": 1}}},
-        {**good, "contacts": {"x": {"last_seen_minute": 1}}},
-        {**good, "agent_cooldown_until": {"x": -1}},
-        {**good, "agent_cooldown_until": {"x": 1.5}},
-    ):
-        assert native_result(runtime_state=broken) is None, broken
-    assert policy.native_update(view, deltas[:-1], rng, zone_neighbors=neighbors) is None
-    with_integer = ExpressivenessChannelOpennessPolicy(
-        SocialPropagationParameters(enabled=True, stress_spread_per_minute=0)
-    )
-    assert with_integer.native_update(view, deltas, rng, zone_neighbors=neighbors) is None
 
 
 def test_the_information_kernel_gives_the_python_state(
@@ -788,23 +690,9 @@ def test_the_information_kernel_leaves_any_message_to_python(generated_scenario)
     assert result({**state, "query_pressure": {}}) is None
 
 
-def _same_social_result(rust, python) -> None:
-    assert _same_bits_deep(rust.runtime_state, python.runtime_state)
-    assert len(rust.deltas) == len(python.deltas)
-    for a, b in zip(rust.deltas, python.deltas, strict=True):
-        for name in a.__dataclass_fields__:
-            assert _same_float_bits(getattr(a, name), getattr(b, name)), (a.agent_id, name)
-    assert len(rust.contacts) == len(python.contacts)
-    for a, b in zip(rust.contacts, python.contacts, strict=True):
-        for name in a.__dataclass_fields__:
-            assert _same_float_bits(getattr(a, name), getattr(b, name)), (a, name)
-    assert rust.contributing_contact_count == python.contributing_contact_count
-    assert _same_float_bits(rust.total_stress_added, python.total_stress_added)
-
-
-def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -> None:
-    """IDs that JSON escapes, a zone next to itself, empty channels, zero sensitivity,
-    exact caps and every cooldown and contact history a Run may not reach by itself."""
+def test_the_information_contact_kernel_matches_python_on_random_inputs(generated_scenario) -> None:
+    """IDs that JSON escapes, a zone next to itself and every contact history a Run may not reach
+    by itself. tests/integration/test_social_propagation_row.py does this for the social model."""
     import random
     from dataclasses import replace
 
@@ -814,11 +702,6 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
     from sheltersim.domain.models import InformationSpreadConfig
     from sheltersim.policies.behavior import WorldView
     from sheltersim.policies.information import InformationSpreadPolicy
-    from sheltersim.policies.psychology import AgentStateDelta
-    from sheltersim.policies.social import (
-        ExpressivenessChannelOpennessPolicy,
-        SocialPropagationParameters,
-    )
 
     draw = random.Random(2615)
     template = next(
@@ -835,7 +718,6 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
     def unit() -> float:
         return draw.choice(stresses) if draw.random() < 0.3 else draw.random()
 
-    raised = matched = 0
     for trial in range(400):
         minute = draw.randrange(0, 50)
         ids = draw.sample(names, draw.randrange(1, len(names) + 1))
@@ -865,58 +747,7 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
             }
             for a, b in pairs
         }
-        deltas = tuple(
-            AgentStateDelta(
-                agent_id=agent_id,
-                minute_index=minute,
-                toilet_urgency=0.0,
-                hunger=0.0,
-                fatigue=0.0,
-                stress=unit(),
-                trust=0.5,
-            )
-            for agent_id in ids
-        )
         rng = CounterRNG(draw.randrange(0, 2**70))
-        parameters = SocialPropagationParameters(
-            enabled=True,
-            max_contacts_per_agent=draw.randrange(0, 5),
-            minimum_contact_minutes=draw.randrange(1, 6),
-            stress_spread_per_minute=draw.choice((0.0, 0.25, draw.random() / 4)),
-            max_pair_stress_increase=draw.choice((0.0, 0.05, 1e-6, draw.random() / 4)),
-            max_agent_stress_increase_per_minute=draw.choice((0.0, 0.05, draw.random() / 4)),
-            cooldown_minutes=draw.randrange(1, 40),
-            source_expressiveness_by_agent={
-                name: draw.choice((0.0, 1.0, draw.random()))
-                for name in names
-                if draw.random() < 0.5
-            },
-            family_channel_strength=draw.choice((0.0, 1.0, draw.random())),
-            same_zone_channel_strength=draw.choice((0.0, 1.0, draw.random())),
-            nearby_zone_channel_strength=draw.choice((0.0, 1.0, draw.random())),
-            source_id="ASM-BOSSE-AFFECT-CONTAGION-V1",
-        )
-        runtime_state = {
-            "schema_version": 1,
-            "contacts": contacts,
-            "agent_cooldown_until": {
-                name: draw.randrange(0, 60) for name in names if draw.random() < 0.4
-            },
-        }
-        social = ExpressivenessChannelOpennessPolicy(parameters)
-        arguments = {"zone_neighbors": neighbors, "runtime_state": runtime_state}
-        rust = social.native_update(view, deltas, rng, **arguments)
-        try:
-            python = social.update(view, deltas, rng, **arguments)
-        except ValueError:
-            # Contacts of no weight stop the Python model; the kernel leaves them to it.
-            assert rust is None, trial
-            raised += 1
-        else:
-            assert rust is not None, trial
-            _same_social_result(rust, python)
-            matched += 1
-
         information = InformationSpreadPolicy(
             InformationSpreadConfig(
                 enabled=True,
@@ -932,7 +763,6 @@ def test_the_contact_kernels_match_python_on_random_inputs(generated_scenario) -
         assert rust_state is not None, trial
         python_state = information.update(view, state, rng, zone_neighbors=neighbors)
         assert _same_bits_deep(rust_state.runtime_state, python_state.runtime_state), trial
-    assert matched > 100 and raised > 0
 
 
 def _event_arguments(**changes) -> list:

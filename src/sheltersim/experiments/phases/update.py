@@ -59,28 +59,15 @@ class UpdatePhase:
         self, world: WorldState, view: WorldView, base_deltas: Any, minute: int, rng: KeyedRandom
     ) -> Any:
         if self.stress_policy.parameters.enabled:
-            # The Rust kernel computes the same result when it is installed, and is
-            # left out when a trace needs the Python contact records.
-            native_update = getattr(self.stress_policy, "native_update", None)
-            result = (
-                native_update(
-                    view,
-                    base_deltas,
-                    rng,
-                    zone_neighbors=self.zone_neighbors,
-                    runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
-                )
-                if native_update is not None and self.artifacts.trace_level is TraceLevel.OFF
-                else None
+            # With the Rust kernels this step is rules/social_propagation.rs (segments.py), and
+            # runs here for what the kernel leaves to these rules, such as a trace.
+            result = self.stress_policy.update(
+                view,
+                base_deltas,
+                rng,
+                zone_neighbors=self.zone_neighbors,
+                runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
             )
-            if result is None:
-                result = self.stress_policy.update(
-                    view,
-                    base_deltas,
-                    rng,
-                    zone_neighbors=self.zone_neighbors,
-                    runtime_state=world.model_state.get(SOCIAL_RUNTIME_STATE_KEY),
-                )
             final_deltas = result.deltas
             world.model_state[SOCIAL_RUNTIME_STATE_KEY] = result.runtime_state
             for contact in result.contacts if "social_network_v1" in world.model_state else ():
