@@ -698,6 +698,7 @@ def entities_assigned(world: Any, name: str, value: Any) -> Any:
 # its line here and nothing to core/world.py. Empty, a world's model_state stays a plain dict.
 OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "psychological_distress_v1": ("psychological_distress", "ROW"),
+    "staff_dynamics_v1": ("staff_dynamics", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field

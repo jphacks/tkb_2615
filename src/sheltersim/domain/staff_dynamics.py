@@ -1,4 +1,9 @@
-"""Versioned staff shift and fatigue memory built on existing staff tasks."""
+"""Versioned staff shift and fatigue memory built on existing staff tasks.
+
+Rust owns the namespace and each rule below runs in native/src/rules/staff_dynamics.rs when the
+kernels are installed. The Python rule stays as the comparison base and for any value a kernel does
+not decide, which is also where every error text comes from.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,9 @@ import math
 import re
 from typing import Any
 
+from sheltersim import native
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.operational import staff_is_available
 
@@ -27,6 +35,7 @@ _CONFIG_FIELDS = {
 }
 
 
+@kernel_first("staff_dynamics", "canonical_config")
 def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
     """Validate the bounded, replaceable shift/rest assumptions."""
     if raw is None:
@@ -132,6 +141,7 @@ def canonical_staff_dynamics_config(raw: Any) -> dict[str, Any]:
     return config
 
 
+@kernel_first("staff_dynamics", "validate_override")
 def validate_staff_shift_windows_override(
     value: Any,
     *,
@@ -176,6 +186,7 @@ def validate_staff_shift_windows_override(
     return normalized
 
 
+@kernel_first("staff_dynamics", "create_state")
 def create_staff_dynamics_state(world: WorldState) -> dict[str, Any]:
     """Create an independent runtime namespace for each configured staff member."""
     config = canonical_staff_dynamics_config(world.model_configs.get("staff_dynamics"))
@@ -274,6 +285,7 @@ def validate_staff_dynamics_state(world: WorldState) -> None:
             raise ValueError(f"staff_dynamics_v1 activity for {staff_id!r} is invalid")
 
 
+@kernel_first("staff_dynamics", "update")
 def update_staff_dynamics(world: WorldState, minute: int) -> None:
     """Account for work and automatic recovery without cancelling assigned tasks."""
     state = world.model_state.get(STAFF_DYNAMICS_STATE_KEY)
@@ -317,6 +329,7 @@ def update_staff_dynamics(world: WorldState, minute: int) -> None:
             record["last_activity"] = "off_duty"
 
 
+@kernel_first("staff_dynamics", "is_available")
 def staff_dynamics_is_available(world: WorldState, staff_id: str, minute: int) -> bool:
     """Exclude staff members who are off shift or in a required recovery break."""
     state = world.model_state.get(STAFF_DYNAMICS_STATE_KEY)
@@ -334,6 +347,7 @@ def staff_dynamics_is_available(world: WorldState, staff_id: str, minute: int) -
     )
 
 
+@kernel_first("staff_dynamics", "on_shift")
 def staff_dynamics_on_shift(world: WorldState, staff_id: str, minute: int) -> bool:
     """Report shift/rest eligibility without treating an active assignment as a block."""
     state = world.model_state.get(STAFF_DYNAMICS_STATE_KEY)
@@ -356,6 +370,7 @@ def _on_shift(state: dict[str, Any], staff_id: str, minute: int) -> bool:
     return any(row["start_minute"] <= week_minute < row["end_minute"] for row in rows)
 
 
+@kernel_first("staff_dynamics", "add_staff")
 def add_staff(world: WorldState, staff_id: str) -> None:
     """Initialize the runtime record after a typed event adds a staff member."""
     state = world.model_state.get(STAFF_DYNAMICS_STATE_KEY)
@@ -368,3 +383,7 @@ def add_staff(world: WorldState, staff_id: str) -> None:
             "rest_until_minute": 0,
             "last_activity": "off_duty",
         }
+
+
+if native.available():
+    register_rust_validator(STAFF_DYNAMICS_STATE_KEY, native.state("staff_dynamics").validate)

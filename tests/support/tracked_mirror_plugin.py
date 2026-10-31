@@ -31,6 +31,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_state_mirror.py",
         "test_world_core.py",
         "test_psychology_row.py",
+        "test_staff_dynamics_row.py",
     }
     return True if collection_path.name in own_sinks else None
 
