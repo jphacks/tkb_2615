@@ -31,6 +31,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::PyTraverseError;
 use smallvec::SmallVec;
 
+use super::row::Scalar;
 use super::tracked::{tracked_dict_type, tracked_list_type};
 use super::value::V;
 use crate::{encode, Encoder, Unsupported, MAX_DEPTH};
@@ -133,57 +134,66 @@ fn value_at<'v>(root: &'v mut V, path: &[Part<'_>]) -> Result<&'v mut V, Misfit>
     Ok(target)
 }
 
+/// A forwarded write to a value: `ValueRow`'s, and the free-form part of a typed row's.
+pub(crate) fn apply_to_value(
+    root: &mut V,
+    path: &[Part<'_>],
+    write: &Write<'_, '_>,
+) -> Result<(), Misfit> {
+    let target = value_at(root, path)?;
+    match (target, write) {
+        (V::Map(map), Write::Set { key: Part::Key(key), value }) => {
+            let value = V::from_py(value)?;
+            match map.get_mut(*key) {
+                Some(slot) => *slot = value,
+                None => {
+                    map.insert(Arc::from(*key), value);
+                }
+            }
+        }
+        (V::Map(map), Write::Delete { key: Part::Key(key) }) => {
+            map.shift_remove(*key)
+                .ok_or_else(|| Misfit::new(format!("no key {key:?}")))?;
+        }
+        (V::Map(map), Write::Clear) => map.clear(),
+        (V::List(items), Write::Set { key: Part::Index(index), value }) => {
+            *items
+                .get_mut(*index)
+                .ok_or_else(|| Misfit::new(format!("no index {index}")))? = V::from_py(value)?;
+        }
+        (V::List(items), Write::Delete { key: Part::Index(index) }) if *index < items.len() => {
+            items.remove(*index);
+        }
+        (V::List(items), Write::DeleteRange { start, stop })
+            if start <= stop && *stop <= items.len() =>
+        {
+            items.drain(*start..*stop);
+        }
+        (V::List(items), Write::Clear) => items.clear(),
+        (V::List(items), Write::Append { value }) => items.push(V::from_py(value)?),
+        (V::List(items), Write::Extend { values }) => {
+            for value in values.iter() {
+                items.push(V::from_py(&value)?);
+            }
+        }
+        (V::List(items), Write::Insert { index, value }) if *index <= items.len() => {
+            items.insert(*index, V::from_py(value)?);
+        }
+        (V::List(items), Write::Reverse) => items.reverse(),
+        (V::List(items), Write::ReplaceAll { items: new_items }) => {
+            *items = new_items
+                .iter()
+                .map(|value| V::from_py(&value))
+                .collect::<PyResult<Vec<V>>>()?;
+        }
+        _ => return Err(Misfit::new("the write does not fit the value at its path")),
+    }
+    Ok(())
+}
+
 impl Row for ValueRow {
     fn apply(&mut self, path: &[Part<'_>], write: &Write<'_, '_>) -> Result<(), Misfit> {
-        let target = value_at(&mut self.0, path)?;
-        match (target, write) {
-            (V::Map(map), Write::Set { key: Part::Key(key), value }) => {
-                let value = V::from_py(value)?;
-                match map.get_mut(*key) {
-                    Some(slot) => *slot = value,
-                    None => {
-                        map.insert(Arc::from(*key), value);
-                    }
-                }
-            }
-            (V::Map(map), Write::Delete { key: Part::Key(key) }) => {
-                map.shift_remove(*key)
-                    .ok_or_else(|| Misfit::new(format!("no key {key:?}")))?;
-            }
-            (V::Map(map), Write::Clear) => map.clear(),
-            (V::List(items), Write::Set { key: Part::Index(index), value }) => {
-                *items
-                    .get_mut(*index)
-                    .ok_or_else(|| Misfit::new(format!("no index {index}")))? = V::from_py(value)?;
-            }
-            (V::List(items), Write::Delete { key: Part::Index(index) }) if *index < items.len() => {
-                items.remove(*index);
-            }
-            (V::List(items), Write::DeleteRange { start, stop })
-                if start <= stop && *stop <= items.len() =>
-            {
-                items.drain(*start..*stop);
-            }
-            (V::List(items), Write::Clear) => items.clear(),
-            (V::List(items), Write::Append { value }) => items.push(V::from_py(value)?),
-            (V::List(items), Write::Extend { values }) => {
-                for value in values.iter() {
-                    items.push(V::from_py(&value)?);
-                }
-            }
-            (V::List(items), Write::Insert { index, value }) if *index <= items.len() => {
-                items.insert(*index, V::from_py(value)?);
-            }
-            (V::List(items), Write::Reverse) => items.reverse(),
-            (V::List(items), Write::ReplaceAll { items: new_items }) => {
-                *items = new_items
-                    .iter()
-                    .map(|value| V::from_py(&value))
-                    .collect::<PyResult<Vec<V>>>()?;
-            }
-            _ => return Err(Misfit::new("the write does not fit the value at its path")),
-        }
-        Ok(())
+        apply_to_value(&mut self.0, path, write)
     }
 
     fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -318,6 +328,51 @@ fn node_slot_name() -> *mut ffi::PyObject {
     *NAME.get_or_init(|| unsafe {
         ffi::PyUnicode_InternFromString(c"_node".as_ptr()) as usize
     }) as *mut ffi::PyObject
+}
+
+/// A dict of a namespace's tree, for a rule's writes: `with_row_tree` gives the root, `child` goes
+/// down, and the setters `state_row!` writes store scalars here. The C API is used, so no override
+/// runs and nothing is forwarded. A detached namespace has no tree, and these do nothing.
+pub(crate) struct Tree<'py> {
+    py: Python<'py>,
+    node: Option<Bound<'py, PyAny>>,
+}
+
+impl<'py> Tree<'py> {
+    pub(crate) fn py(&self) -> Python<'py> {
+        self.py
+    }
+
+    pub(crate) fn child(&self, key: &Bound<'py, PyString>) -> PyResult<Tree<'py>> {
+        let node = match &self.node {
+            Some(node) => Some(
+                raw_dict_get(node, key.as_any())?
+                    .ok_or_else(|| PyRuntimeError::new_err("the tree does not have the row's key"))?,
+            ),
+            None => None,
+        };
+        Ok(Tree { py: self.py, node })
+    }
+
+    pub(crate) fn child_str(&self, key: &str) -> PyResult<Tree<'py>> {
+        self.child(&PyString::new(self.py, key))
+    }
+
+    /// d[key] = value. The row's type says the old value and the new one are not containers, so
+    /// the table of nodes stays right and no Python code runs: this is allowed inside `with_row`.
+    pub(crate) fn set<T: Scalar>(&self, key: &Bound<'py, PyString>, value: &T) -> PyResult<()> {
+        match &self.node {
+            Some(node) => raw_dict_set(node, key.as_any(), &value.to_py(self.py)?),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn set_str<T: Scalar>(&self, key: &str, value: &T) -> PyResult<()> {
+        match &self.node {
+            Some(node) => raw_dict_set(node, PyString::new(self.py, key).as_any(), &value.to_py(self.py)?),
+            None => Ok(()),
+        }
+    }
 }
 
 /// The state of one owned namespace in one world, and the sink of its tracked nodes.
@@ -659,6 +714,30 @@ impl NamespaceMirror {
             .downcast_mut::<T>()
             .ok_or_else(|| Unsupported::new_err("the namespace has another row"))?;
         f(row)
+    }
+
+    /// with_row, with the root of the tree for mirrored setters. See `Tree::set`.
+    pub(crate) fn with_row_tree<'py, T: Row, R>(
+        slf: &Bound<'py, Self>,
+        f: impl FnOnce(&mut T, &Tree<'py>) -> PyResult<R>,
+    ) -> PyResult<R> {
+        let py = slf.py();
+        let mut this = slf.try_borrow_mut()?;
+        let tree = Tree { py, node: this.root.as_ref().map(|root| root.bind(py).clone()) };
+        let row = this
+            .row
+            .as_mut()
+            .ok_or_else(|| Unsupported::new_err("the namespace has no row"))?;
+        let row = row
+            .as_any_mut()
+            .downcast_mut::<T>()
+            .ok_or_else(|| Unsupported::new_err("the namespace has another row"))?;
+        f(row, &tree)
+    }
+
+    /// Whether value is the root of this mirror's tree.
+    pub(crate) fn root_is(&self, value: &Bound<'_, PyAny>) -> bool {
+        self.root.as_ref().is_some_and(|root| root.as_ptr() == value.as_ptr())
     }
 }
 
@@ -1023,4 +1102,19 @@ pub(crate) fn mirror_of<'py>(world: &Bound<'py, PyAny>, name: &str) -> PyResult<
     found
         .map(|mirror| mirror.into_bound(world.py()))
         .ok_or_else(|| Unsupported::new_err("the namespace is not owned"))
+}
+
+/// The mirror of an owned world field such as `metric_state`, or Unsupported if it is not owned or
+/// the field holds something else now. `WorldState.__setattr__` catches a whole assignment to
+/// `model_state` only; a field assigned whole simply stops being Rust's, and the Python rules run.
+pub(crate) fn field_mirror_of<'py>(
+    world: &Bound<'py, PyAny>,
+    name: &Bound<'py, PyString>,
+) -> PyResult<Bound<'py, NamespaceMirror>> {
+    let mirror = mirror_of(world, name.to_str()?)?;
+    let current = world.getattr(name)?;
+    if !mirror.try_borrow()?.root_is(&current) {
+        return Err(Unsupported::new_err("the field holds another dict"));
+    }
+    Ok(mirror)
 }
