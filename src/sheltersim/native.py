@@ -111,8 +111,6 @@ def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: 
     )
 
 
-
-
 def agent_dynamics_valid(agents: Any, facilities: Any) -> bool:
     """True only if every agent_dynamics_v1 record passes the Python rules."""
     return _native is not None and _native.agent_dynamics_valid(agents, facilities)

@@ -263,9 +263,6 @@ pub(crate) fn topics_valid(topics: Object) -> bool {
     }
 }
 
-    })
-}
-
 /// Every record of agent_dynamics_v1 "agents" passes validate_agent_dynamics_state's
 /// rules for these facilities.
 #[pyfunction]

@@ -655,12 +655,25 @@ fn selected_models<'py>(py: Python<'py>, configs: &Bound<'py, PyAny>) -> PyResul
     Ok(selection)
 }
 
+/// `create_affect` without a selection: the config's, by the function that also refuses a bad one.
+fn affect_of_the_config<'py>(configs: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = configs.py();
+    let raw = exact_dict(configs)?.get_item(intern!(py, "body_dynamics"))?;
+    let config = py
+        .import(intern!(py, "sheltersim.domain.body_state"))?
+        .getattr(intern!(py, "canonical_body_config"))?
+        .call1((raw,))
+        .map_err(|_| crate::Unsupported::new_err("the body config raises"))?;
+    Ok(config.get_item(intern!(py, "affect_policy"))?)
+}
+
 /// The operators the rule creates. An ID this kernel doesn't know is left to Python's factory.
 fn models_of<'py>(selection: &Bound<'py, PyAny>, configs: &Bound<'py, PyAny>) -> PyResult<Models> {
     let py = selection.py();
     let selection = exact_dict(selection)?;
-    let Some(affect) = selection.get_item(intern!(py, "affect"))? else {
-        return unsupported("no affect model is selected");
+    let affect = match selection.get_item(intern!(py, "affect"))? {
+        Some(affect) => affect,
+        None => affect_of_the_config(configs)?,
     };
     let affect = match exact_str(&affect)? {
         LINEAR_AFFECT => Affect::Linear,
@@ -668,7 +681,8 @@ fn models_of<'py>(selection: &Bound<'py, PyAny>, configs: &Bound<'py, PyAny>) ->
         _ => return unsupported("an affect model this kernel doesn't know"),
     };
     let Some(relationship) = selection.get_item(intern!(py, "relationship"))? else {
-        return unsupported("no relationship model is selected");
+        // `create_relationship_policy` without a selection.
+        return Ok(Models { affect, trust: TrustPolicy::DurationOnly });
     };
     let trust = match exact_str(&relationship)? {
         DURATION_TRUST => TrustPolicy::DurationOnly,

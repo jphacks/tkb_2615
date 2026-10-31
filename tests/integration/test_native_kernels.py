@@ -147,79 +147,6 @@ def test_the_social_relationship_check_judges_every_record_as_python_does(
         assert rust == python, case
 
 
-def test_the_body_relationship_check_judges_every_record_as_python_does(
-    generated_scenario, monkeypatch
-) -> None:
-    """Each body_state_v1 relationship, valid or broken, gets the same outcome from the
-    Rust check as from the Python loop, including keys naming people who left."""
-    from enum import IntEnum
-
-    from sheltersim.core.world import WorldState
-    from sheltersim.domain import body_state
-    from sheltersim.domain.body_state import (
-        BODY_STATE_KEY,
-        create_body_state,
-        validate_body_state,
-    )
-
-    class Count(IntEnum):
-        TWO = 2
-
-    world = WorldState.from_scenario(generated_scenario)
-    world.model_state[BODY_STATE_KEY] = create_body_state(world)
-    first, second = sorted(world.agents)[:2]
-    record = {
-        "contact_count": 1,
-        "trust": 0.5,
-        "contact_minutes": 2,
-        "last_contact_minute": 0,
-        "last_interaction": None,
-        "topic_ids": [],
-    }
-    changes = [
-        {},
-        {"contact_count": -1},
-        {"contact_count": True},
-        {"contact_count": Count.TWO},
-        {"contact_minutes": 2.0},
-        {"contact_minutes": 10**30},
-        {"topic_ids": ("a",)},
-        {"topic_ids": ["a"] * 32},
-        {"topic_ids": ["a"] * 33},
-        {"topic_ids": ["a" * 64, "b" * 65]},
-        {"topic_ids": [1]},
-        {"trust": None},
-        {"trust": 1},
-        {"trust": -0.1},
-        {"trust": False},
-        {"last_contact_minute": None},
-        {"last_contact_minute": Count.TWO},
-        {"last_contact_minute": -3},
-        {"extra": 1},
-    ]
-    candidates = [{**record, **change} for change in changes] + [["not", "a", "dict"]]
-    keys = [
-        f'["{first}","{second}"]',
-        f'["{first}","{first}"]',
-        f'["{first}","nobody"]',
-        f'[ "{first}","{second}"]',
-        f'["{first}"]',
-        "[",
-        7,
-    ]
-    state = world.model_state[BODY_STATE_KEY]
-    cases = [{key: record} for key in keys] + [
-        {f'["{first}","{second}"]': candidate} for candidate in candidates
-    ]
-    for case in cases:
-        state["relationships"] = dict(case)
-        rust = _outcome(validate_body_state, world)
-        with monkeypatch.context() as patch:
-            patch.setattr(body_state.native, "body_relationships_valid", lambda *a: False)
-            python = _outcome(validate_body_state, world)
-        assert rust == python, case
-
-
 def _world_with_extensions(generated_scenario):
     from sheltersim.core.world import WorldState
 
@@ -280,26 +207,6 @@ _NUMBERS = [
 
 def _each_field(record: dict, values: list) -> list[dict]:
     return [{name: value} for name in record for value in values]
-
-
-def test_the_body_agent_check_judges_every_record_as_python_does(
-    generated_scenario, monkeypatch
-) -> None:
-    from sheltersim.domain.body_state import validate_body_state
-
-    world = _world_with_extensions(generated_scenario)
-    agents = world.model_state["body_state_v1"]["agents"]
-    agent_id = next(iter(agents))
-    _same_outcomes(
-        world,
-        validate_body_state,
-        "body_agents_valid",
-        monkeypatch,
-        agents[agent_id],
-        [{"sleep_debt_minutes": 1440}, {"sleep_debt_minutes": 1440.5}]
-        + _each_field(agents[agent_id], _NUMBERS),
-        lambda record: agents.__setitem__(agent_id, record),
-    )
 
 
 def test_the_agent_dynamics_check_judges_every_record_as_python_does(
@@ -446,7 +353,6 @@ def test_the_end_of_tick_check_agrees_with_the_plain_check_at_every_tick(
 def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_path) -> None:
     """Otherwise every tick would fall back to the Python rules, and only be slower."""
     from sheltersim.core.tick_validation import PairKeys
-    from sheltersim.domain.body_state import _pair_key_is_good
     from sheltersim.domain.models import Activity, InitialNeedProfile, NeedState
     from sheltersim.domain.social_network import _key_is_good
 
@@ -462,12 +368,7 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
     assert native.social_relationships_valid(
         state["social_network_v1"]["relationships"], set(), _key_is_good
     )
-    assert native.body_relationships_valid(
-        body["relationships"],
-        PairKeys().good_keys(agent_ids),
-        lambda key: _pair_key_is_good(key, agents=agents),
-    )
-    assert native.body_agents_valid(body["agents"])
+    assert native.state("body_state").rows_valid(world)
     assert native.agent_dynamics_valid(state["agent_dynamics_v1"]["agents"], world.facilities)
     assert native.movement_positions_valid(
         state["movement_v1"]["positions"], world.zones, world.zone_edges

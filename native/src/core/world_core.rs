@@ -765,13 +765,20 @@ impl NamespaceMirror {
         let Some(list) = Self::list_at(slf, path)? else {
             return Ok(());
         };
-        let items = list_values(&list);
-        // SAFETY: list is a live list, a null value deletes the slice, and the references in
-        // `items` keep the old items alive until they leave the table below.
-        if unsafe { ffi::PyList_SetSlice(list.as_ptr(), 0, count as ffi::Py_ssize_t, null_mut()) } != 0 {
+        let list_pointer = list.as_ptr();
+        // SAFETY: list is a live list, the indexes are within it when the row has this many, and
+        // each item gets its own reference before it leaves the list.
+        let old: Vec<Bound<'_, PyAny>> = unsafe {
+            let size = ffi::PyList_Size(list_pointer) as usize;
+            (0..count.min(size))
+                .map(|index| Bound::from_borrowed_ptr(py, ffi::PyList_GetItem(list_pointer, index as ffi::Py_ssize_t)))
+                .collect()
+        };
+        // SAFETY: a null value deletes the slice.
+        if unsafe { ffi::PyList_SetSlice(list_pointer, 0, old.len() as ffi::Py_ssize_t, null_mut()) } != 0 {
             return Err(PyErr::fetch(py));
         }
-        for item in items.iter().take(count) {
+        for item in &old {
             Self::release_value(slf, item, py.None().bind(py))?;
         }
         Ok(())
