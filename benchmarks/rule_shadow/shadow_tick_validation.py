@@ -5,9 +5,9 @@ alone now skips a Python rule. At each rust_validated of those namespaces this r
 tree too: a yes the rule turns down is a difference, and so is a row that differs from its tree. A
 no the rule passes is counted with its reason: it only costs time.
 
-A yes says little on a state with nothing wrong, so every PROBE_EVERY-th yes also breaks a copy of
-the world: a value 1% beyond the rule's bound, written through the tree, and the tree stored past
-the table. The kernel must say no to both.
+A yes says little on a state with nothing wrong, so every PROBE_EVERY-th yes also breaks a restored
+copy of the world: a value 1% beyond the rule's bound, written through the tree, and the tree stored
+past the table. The kernel must say no to both.
 """
 
 from __future__ import annotations
@@ -33,7 +33,9 @@ def _plain(value: Any) -> Any:
 
 def _beyond_the_bound(world: Any, name: str) -> bool:
     """Write a value 1% out of range through the tree. False if the state has nothing to break."""
-    state = world.model_state[name]
+    state = world.model_state.get(name)
+    if state is None:
+        return False
     if name == PSYCHOLOGY:
         holder, key = next(iter(state["agents"].values()), None), "long_term_distress"
     elif name == INFORMATION:
@@ -89,8 +91,19 @@ def prepare(output: str) -> None:
             return f"tainted: {mirror.tainted}"
         return "the kernel said no"
 
+    probing = [False]
+
+    def restored(document: dict[str, Any]) -> Any:
+        return world_module.WorldState.from_dict(copy.deepcopy(document))
+
     def probe(world: Any, name: str) -> None:
-        broken = copy.deepcopy(world)
+        try:
+            document = world.to_dict()
+            broken = restored(document)
+        except (ValueError, TypeError, KeyError):
+            # A world in the middle of being put together has no document yet.
+            recorder.seen[f"{name}.probe_no_document"] += 1
+            return
         if not rust_validated(broken, name):
             recorder.seen[f"{name}.probe_copy_refused"] += 1
             return
@@ -100,7 +113,7 @@ def prepare(output: str) -> None:
         recorder.seen[f"{name}.probes"] += 1
         if rust_validated(broken, name):
             recorder.differ(f"{name}: the kernel took a value 1% beyond the bound")
-        swapped = copy.deepcopy(world)
+        swapped = restored(document)
         swapped.__dict__["model_state"] = {
             key: _plain(value) for key, value in swapped.model_state.items()
         }
@@ -111,7 +124,7 @@ def prepare(output: str) -> None:
     def shadow(world: Any, name: str) -> bool:
         accepted = rust_validated(world, name)
         rule = rules.get(name)
-        if rule is None:
+        if rule is None or probing[0]:
             return accepted
         recorder.seen[f"{name}.calls"] += 1
         try:
@@ -130,9 +143,13 @@ def prepare(output: str) -> None:
         mirror = world.__dict__["_core"].mirror(name)
         if not mirror.verify():
             recorder.differ(f"{name}: the row differs from the tree at minute {world.minute_index}")
-        recorder.seen[f"{name}.values_compared"] += values_in(world.model_state[name])
+        recorder.seen[f"{name}.values_compared"] += values_in(world.model_state.get(name, {}))
         if recorder.seen[f"{name}.accepted"] % PROBE_EVERY == 1:
-            probe(world, name)
+            probing[0] = True
+            try:
+                probe(world, name)
+            finally:
+                probing[0] = False
         return accepted
 
     for module in (world_module, simulator_state, runtime):
