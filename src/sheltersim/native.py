@@ -116,11 +116,6 @@ def body_agents_valid(agents: Any) -> bool:
     return _native is not None and _native.body_agents_valid(agents)
 
 
-def psychological_agents_valid(agents: Any) -> bool:
-    """True only if every psychological_distress_v1 Agent record passes the Python rules."""
-    return _native is not None and _native.psychological_agents_valid(agents)
-
-
 def agent_dynamics_valid(agents: Any, facilities: Any) -> bool:
     """True only if every agent_dynamics_v1 record passes the Python rules."""
     return _native is not None and _native.agent_dynamics_valid(agents, facilities)
@@ -129,20 +124,6 @@ def agent_dynamics_valid(agents: Any, facilities: Any) -> bool:
 def movement_positions_valid(positions: Any, zones: Any, edges: Any) -> bool:
     """True only if every movement_v1 position passes the Python rules."""
     return _native is not None and _native.movement_positions_valid(positions, zones, edges)
-
-
-def information_contacts_valid(
-    contacts: Any, good_keys: set[str], key_ok: Any, duration_minutes: int
-) -> bool:
-    """True only if every information-spread contact passes the Python rules."""
-    return _native is not None and _native.information_contacts_valid(
-        contacts, good_keys, key_ok, duration_minutes
-    )
-
-
-def unit_values_valid(values: Any) -> bool:
-    """True only if every value of the dict is a finite number within 0..1."""
-    return _native is not None and _native.unit_values_valid(values)
 
 
 def world_agents_valid(

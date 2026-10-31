@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -24,9 +25,11 @@ use crate::contacts::{
 use crate::core::mathx::{expm1, py_max, py_min};
 use crate::core::rng::{start_draw_log, take_draw_log, Key, KeyedDraws};
 use crate::core::row::{map_set, Field};
+use crate::core::value::V;
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::rules::world_view::{group_of, presence_people_of};
 use crate::state::entities::{entities_of, EntityStore};
+use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::information::{belief_rank, ContactRow, InformationRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
 
@@ -656,37 +659,81 @@ fn sample_contacts<'py>(
         return Ok(());
     };
     let mirror = mirror_of(&inputs.world, NAME)?;
+    let writer = EventWriter::of(&inputs.world)?;
     let draws = KeyedDraws::new(&inputs.seed);
     let plan = with_plan(&inputs, &mirror, &draws, false)?;
     write(&mirror, &plan)?;
     let schedule = intern!(py, "_schedule_information_contact");
     for proposal in &plan.proposals {
-        controller
-            .call_method1(
-                schedule,
-                (
-                    inputs.minute,
-                    &*proposal.message,
-                    &*plan.ids[proposal.sender],
-                    &*plan.ids[proposal.recipient],
-                    &*proposal.belief,
-                    proposal.basis,
-                    proposal.minutes,
-                    proposal.probability,
-                    &*proposal.source,
-                    &*proposal.causation,
-                ),
-            )
-            // The state is written, so nothing may take this for the kernel's refusal.
-            .map_err(|error| {
-                if error.is_instance_of::<Unsupported>(py) {
-                    PyRuntimeError::new_err(error.to_string())
-                } else {
-                    error
-                }
-            })?;
+        // `_schedule_information_contact`, which stays for what a row refuses: it raises its own
+        // error. The state is written, so nothing may take that for the kernel's refusal.
+        let due_minute = inputs.minute + 1;
+        if due_minute >= writer.duration() {
+            continue;
+        }
+        let sequence = writer.next_sequence()?;
+        match contact_event(proposal, &plan, inputs.model, due_minute, sequence) {
+            Some(row) => {
+                writer.allocate_sequence()?;
+                writer.schedule(row)?;
+            }
+            None => {
+                controller
+                    .call_method1(
+                        schedule,
+                        (
+                            inputs.minute,
+                            &*proposal.message,
+                            &*plan.ids[proposal.sender],
+                            &*plan.ids[proposal.recipient],
+                            &*proposal.belief,
+                            proposal.basis,
+                            proposal.minutes,
+                            proposal.probability,
+                            &*proposal.source,
+                            &*proposal.causation,
+                        ),
+                    )
+                    .map_err(|error| {
+                        if error.is_instance_of::<Unsupported>(py) {
+                            PyRuntimeError::new_err(error.to_string())
+                        } else {
+                            error
+                        }
+                    })?;
+            }
+        }
     }
     Ok(())
+}
+
+/// The event of `_schedule_information_contact`, with the keys in its order.
+fn contact_event(proposal: &Proposal, plan: &Plan, model: Model, due_minute: i64, sequence: i64) -> Option<EventRow> {
+    let text = |value: &str| V::Str(Arc::from(value));
+    let mut payload = IndexMap::with_capacity(6);
+    payload.insert(Arc::from("message_id"), V::Str(proposal.message.clone()));
+    payload.insert(Arc::from("sender_agent_id"), V::Str(plan.ids[proposal.sender].clone()));
+    payload.insert(Arc::from("recipient_agent_id"), V::Str(plan.ids[proposal.recipient].clone()));
+    payload.insert(Arc::from("belief"), V::Str(proposal.belief.clone()));
+    payload.insert(Arc::from("contact_basis"), text(proposal.basis));
+    payload.insert(Arc::from("contact_minutes"), V::Int(proposal.minutes));
+    let mut provenance = IndexMap::with_capacity(4);
+    provenance.insert(Arc::from("source_type"), text("assumption"));
+    provenance.insert(Arc::from("source_id"), text("ASM-INFORMATION-SPREAD-V1"));
+    provenance.insert(Arc::from("policy_version"), text(model.version()));
+    provenance.insert(Arc::from("transmission_probability"), V::Float(proposal.probability));
+    EventRow::new(
+        Arc::from(format!("information-contact-{sequence}")),
+        EventKind::Endogenous,
+        due_minute,
+        40,
+        sequence,
+        Arc::from("information_contact_update"),
+        payload,
+        Some(proposal.source.clone()),
+        Some(proposal.causation.clone()),
+        provenance,
+    )
 }
 
 // ---- For the bit comparisons of benchmarks/rule_shadow and tests/integration ---------------------

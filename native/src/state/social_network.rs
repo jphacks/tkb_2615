@@ -13,9 +13,10 @@
 
 use std::sync::Arc;
 
+use pyo3::intern;
 use pyo3::prelude::*;
 
-use crate::core::row::{load_row, state_row, Field, IdMap};
+use crate::core::row::{load_row, namespace_is_absent, state_row, Field, IdMap};
 use crate::core::world_core::{mirror_of, Misfit, NamespaceMirror, Part, RowType, Write};
 use crate::Encoder;
 
@@ -171,6 +172,9 @@ impl SocialNetworkRow {
 /// The namespace's validator: accepts, or leaves it to the Python rules and their error text.
 #[pyfunction]
 fn validate(world: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if namespace_is_absent(world, intern!(world.py(), NAME))? {
+        return Ok(true);
+    }
     let mirror = mirror_of(world, NAME)?;
     NamespaceMirror::with_row::<SocialNetworkRow, _>(&mirror, |row| Ok(row.is_valid()))
 }

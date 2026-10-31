@@ -467,6 +467,15 @@ pub fn record_json<'py>(
     record_type: &Bound<'py, PyAny>,
     event_type: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    Ok(encode_record(record, record_type, event_type)?.map(|raw| PyBytes::new(py, &raw)))
+}
+
+/// `record_json`, as bytes that need no Python object.
+pub(crate) fn encode_record(
+    record: &Bound<'_, PyAny>,
+    record_type: &Bound<'_, PyAny>,
+    event_type: &Bound<'_, PyAny>,
+) -> PyResult<Option<Vec<u8>>> {
     if !record.get_type().is(record_type) {
         return Ok(None);
     }
@@ -476,37 +485,41 @@ pub fn record_json<'py>(
     }
     let mut encoder = Encoder { out: Vec::with_capacity(1024) };
     // Both objects' keys in sorted order.
-    let field = |encoder: &mut Encoder, name: &str, value: &Bound<'py, PyAny>, first: bool| -> PyResult<bool> {
-        if !first {
-            encoder.out.push(b',');
-        }
-        crate::write_json_string(&mut encoder.out, name);
-        encoder.out.push(b':');
-        write_frozen(encoder, value, MAX_SAME_DEPTH)
-    };
     encoder.out.push(b'{');
-    if !field(&mut encoder, "detail", &record.getattr("detail")?, true)? {
+    if !write_field(&mut encoder, "detail", &record.getattr("detail")?)? {
         return Ok(None);
     }
     encoder.out.extend_from_slice(b",\"event\":{");
     for (index, name) in EVENT_ORDER.iter().enumerate() {
+        if index > 0 {
+            encoder.out.push(b',');
+        }
         let value = if *name == "kind" {
             event.getattr("kind")?.getattr("value")?
         } else {
             event.getattr(*name)?
         };
-        if !field(&mut encoder, name, &value, index == 0)? {
+        if !write_field(&mut encoder, name, &value)? {
             return Ok(None);
         }
     }
-    encoder.out.push(b'}');
-    if !field(&mut encoder, "realized_minute", &record.getattr("realized_minute")?, false)?
-        || !field(&mut encoder, "status", &record.getattr("status")?.getattr("value")?, false)?
-    {
+    encoder.out.extend_from_slice(b"},");
+    if !write_field(&mut encoder, "realized_minute", &record.getattr("realized_minute")?)? {
+        return Ok(None);
+    }
+    encoder.out.push(b',');
+    if !write_field(&mut encoder, "status", &record.getattr("status")?.getattr("value")?)? {
         return Ok(None);
     }
     encoder.out.push(b'}');
-    Ok(Some(PyBytes::new(py, &encoder.out)))
+    Ok(Some(encoder.out))
+}
+
+/// `"name":value`, or false when `write_frozen` refuses the value.
+fn write_field(encoder: &mut Encoder, name: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::write_json_string(&mut encoder.out, name);
+    encoder.out.push(b':');
+    write_frozen(encoder, value, MAX_SAME_DEPTH)
 }
 
 // The fields of a saved event in sorted order.

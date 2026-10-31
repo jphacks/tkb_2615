@@ -156,12 +156,15 @@ if OUTPUT:
         if shadow.stem != "shadow_kit":
             importlib.import_module(shadow.stem).prepare(OUTPUT)
     _install(OUTPUT)
-    import capture_shadow
-
-    capture_shadow.install(OUTPUT)
     from information_shadow import install as _install_information
 
     _install_information(OUTPUT)
+    import capture_shadow
+
+    capture_shadow.install(OUTPUT)
+    import events_shadow
+
+    events_shadow.install(OUTPUT)
     from world_view_shadow import install as _install_world_view
 
     _install_world_view(OUTPUT)
