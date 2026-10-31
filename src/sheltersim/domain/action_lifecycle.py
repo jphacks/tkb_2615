@@ -76,7 +76,7 @@ def _kernel_first(name: str) -> Callable[[Rule], Rule]:
 
 
 def active_action_store(world: WorldState) -> Any:
-    """What a controller keeps of the open actions: rows in Rust, or the dict without the kernels."""
+    """What a controller keeps of the open actions: Rust rows, or a dict without the kernels."""
     index = active_action_index(world)
     if not native.available():
         return index

@@ -302,47 +302,6 @@ def test_the_body_agent_check_judges_every_record_as_python_does(
     )
 
 
-def test_the_psychology_check_judges_every_record_as_python_does(
-    generated_scenario, monkeypatch
-) -> None:
-    from sheltersim.domain.psychological_state import validate_psychological_state
-
-    world = _world_with_extensions(generated_scenario)
-    state = world.model_state["psychological_distress_v1"]
-    agent_id = next(iter(state["agents"]))
-    record = {
-        **state["agents"][agent_id],
-        "daily_acute_sum": 1.5,
-        "daily_observed_minutes": 3,
-        "daily_high_distress_minutes": 2,
-        "completed_days": 1,
-    }
-    _same_outcomes(
-        state,
-        validate_psychological_state,
-        "psychological_agents_valid",
-        monkeypatch,
-        record,
-        [
-            {"daily_observed_minutes": 1439},
-            {"daily_observed_minutes": 1440},
-            {"daily_high_distress_minutes": 3},
-            {"daily_high_distress_minutes": 4},
-            {"daily_acute_sum": 3},
-            {"daily_acute_sum": 3.0000000001},
-            {"daily_acute_sum": 3.1},
-        ]
-        + _each_field(record, _NUMBERS),
-        lambda value: state["agents"].__setitem__(agent_id, value),
-    )
-    for key in ("", 7):
-        state["agents"] = {key: record}
-        rust = _outcome(validate_psychological_state, state)
-        with monkeypatch.context() as patch:
-            patch.setattr(native, "psychological_agents_valid", lambda *a: False)
-            assert rust == _outcome(validate_psychological_state, state)
-
-
 def test_the_position_check_judges_every_record_as_python_does(
     generated_scenario, monkeypatch
 ) -> None:
@@ -386,54 +345,6 @@ def test_the_position_check_judges_every_record_as_python_does(
         ],
         lambda record: positions.__setitem__(agent_id, record),
     )
-
-
-def test_the_information_checks_judge_every_record_as_python_does(
-    generated_scenario, monkeypatch
-) -> None:
-    from sheltersim.domain.information import validate_information_runtime_state
-
-    world = _world_with_extensions(generated_scenario)
-    state = world.model_state["information_spread_v1"]
-    first, second = sorted(world.agents)[:2]
-    key = f'["{first}","{second}"]'
-
-    def validate(_world) -> None:
-        validate_information_runtime_state(
-            state,
-            agent_ids=set(world.agents),
-            zone_ids=set(world.zones),
-            duration_minutes=world.duration_minutes,
-        )
-
-    record = {"last_seen_minute": 3, "consecutive_minutes": 2}
-    _same_outcomes(
-        world,
-        validate,
-        "information_contacts_valid",
-        monkeypatch,
-        record,
-        [{"consecutive_minutes": value} for value in (0, 1, 4, 5, True, 1.0, 10**30)]
-        + [
-            {"last_seen_minute": value}
-            for value in (-1, 0, world.duration_minutes - 1, world.duration_minutes, 10**30, True)
-        ],
-        lambda value: state["contacts"].__setitem__(key, value),
-    )
-    for bad_key in ("[", f'["{first}","{first}"]', f'["{first}", "{second}"]', '["a","b"]', 7):
-        state["contacts"] = {bad_key: record}
-        rust = _outcome(validate, world)
-        with monkeypatch.context() as patch:
-            patch.setattr(native, "information_contacts_valid", lambda *a: False)
-            assert rust == _outcome(validate, world), bad_key
-    state["contacts"] = {}
-    agent_id = next(iter(state["query_pressure"]))
-    for value in _NUMBERS:
-        state["query_pressure"][agent_id] = value
-        rust = _outcome(validate, world)
-        with monkeypatch.context() as patch:
-            patch.setattr(native, "unit_values_valid", lambda *a: False)
-            assert rust == _outcome(validate, world), value
 
 
 def test_the_agent_check_judges_every_agent_as_python_does(generated_scenario, monkeypatch) -> None:
@@ -508,7 +419,6 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
     """Otherwise every tick would fall back to the Python rules, and only be slower."""
     from sheltersim.core.tick_validation import PairKeys
     from sheltersim.domain.body_state import _pair_key_is_good
-    from sheltersim.domain.information import _contact_key_is_good
     from sheltersim.domain.models import Activity, InitialNeedProfile, NeedState
     from sheltersim.domain.social_network import _key_is_good
 
@@ -530,18 +440,9 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
         lambda key: _pair_key_is_good(key, agents=agents),
     )
     assert native.body_agents_valid(body["agents"])
-    assert native.psychological_agents_valid(state["psychological_distress_v1"]["agents"])
     assert native.movement_positions_valid(
         state["movement_v1"]["positions"], world.zones, world.zone_edges
     )
-    information = state["information_spread_v1"]
-    assert native.information_contacts_valid(
-        information["contacts"],
-        PairKeys().good_keys(agent_ids),
-        lambda key: _contact_key_is_good(key, agent_ids=agent_ids),
-        world.duration_minutes,
-    )
-    assert native.unit_values_valid(information["query_pressure"])
 
 
 @pytest.mark.parametrize(

@@ -155,9 +155,10 @@ each OS, because both call the same libm.
   (docs/rust-port.md).
 
 - `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
-  `psychological_agents_valid`, `agent_dynamics_valid`, `movement_positions_valid`,
-  `information_contacts_valid`, `unit_values_valid`, `world_agents_valid`: fast
-  acceptance of the large loops of validation, read where Python keeps the state. Each
+  `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
+  acceptance of the large loops of validation, read where Python keeps the state. The
+  namespaces Rust owns have their `validate` in `state/` instead, which reads the row
+  (`docs/rust-port/lanes/t-tick-validation.md`). Each
   returns true only if every entry passes the Python rules; on false the caller runs
   those rules, which accept the value or raise their own error, so results and error
   messages come from one place. Key checks stay Python functions, remembered per key

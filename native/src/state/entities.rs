@@ -1260,6 +1260,28 @@ impl EntityStore {
         Ok(slf.try_borrow()?.taint.is_none())
     }
 
+    /// Whether `state`, a world's `__dict__`, holds the maps these rows follow, with as many entries
+    /// as they have. Something stored past `WorldState.__setattr__` and `IdMap` shows here, unless it
+    /// keeps the length, which the Python rules that read the maps then see.
+    fn follows(slf: &Bound<'_, Self>, state: &Bound<'_, PyDict>) -> PyResult<bool> {
+        let py = slf.py();
+        for (name, kind) in FIELDS {
+            let Some(map) = raw_dict_get(state, PyString::intern(py, name).as_any())? else {
+                return Ok(false);
+            };
+            let Ok(map) = map.downcast::<PyDict>() else {
+                return Ok(false);
+            };
+            if map.get_type().as_ptr() != id_map_type().cast()
+                || !map.getattr(intern!(py, "_store"))?.is(slf)
+                || map.len() != slf.try_borrow()?.table_len(kind)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// The first difference between the rows and the objects of the world, or None: the check
     /// behind the tests and the soak. A tainted store has no rows to differ.
     fn verify(slf: &Bound<'_, Self>, world: &Bound<'_, PyAny>) -> PyResult<Option<String>> {

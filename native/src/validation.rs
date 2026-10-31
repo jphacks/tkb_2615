@@ -323,45 +323,6 @@ pub fn body_agents_valid(agents: &Bound<'_, PyDict>) -> PyResult<bool> {
     })
 }
 
-/// Every record of psychological_distress_v1 "agents" passes
-/// validate_psychological_state's rules.
-#[pyfunction]
-pub fn psychological_agents_valid(agents: &Bound<'_, PyDict>) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        agents.py(),
-        [
-            "baseline_distress",
-            "long_term_distress",
-            "daily_acute_sum",
-            "daily_high_distress_minutes",
-            "daily_observed_minutes",
-            "completed_days",
-        ],
-    );
-    all_items(agents.as_ptr(), |key, record| {
-        // SAFETY: the length is read after checking the type.
-        if !is_exact_str(key) || unsafe { ffi::PyUnicode_GetLength(key) } == 0 {
-            return Ok(false);
-        }
-        let Some([baseline, long_term, total, high, observed, days]) = reader.read(record) else {
-            return Ok(false);
-        };
-        if !is_unit(baseline) || !is_unit(long_term) || !is_count(days) {
-            return Ok(false);
-        }
-        let (Some(observed), Some(high), Some(total)) =
-            (exact_int(observed), exact_int(high), exact_number(total))
-        else {
-            return Ok(false);
-        };
-        Ok((0..1440).contains(&observed)
-            && (0..=observed).contains(&high)
-            && total.is_finite()
-            && total >= 0.0
-            && total <= observed as f64 + 1e-9)
-    })
-}
-
 /// Every record of movement_v1 "positions" passes validate_movement_runtime_state's
 /// rules for these zones and edges.
 #[pyfunction]
@@ -405,39 +366,6 @@ fn is_position_kind(kind: Object) -> bool {
                 // SAFETY: kind is an exact str and name is NUL-terminated ASCII.
                 unsafe { ffi::PyUnicode_CompareWithASCIIString(kind, name.as_ptr()) == 0 }
             })
-}
-
-/// Every record of information-spread "contacts" passes the rules of
-/// validate_information_runtime_state; good_keys is as for body relationships.
-#[pyfunction]
-pub fn information_contacts_valid(
-    contacts: &Bound<'_, PyDict>,
-    good_keys: &Bound<'_, PySet>,
-    key_ok: &Bound<'_, PyAny>,
-    duration_minutes: i64,
-) -> PyResult<bool> {
-    let mut reader = RecordReader::new(contacts.py(), ["last_seen_minute", "consecutive_minutes"]);
-    all_items(contacts.as_ptr(), |key, record| {
-        if !known_or_good_key(good_keys, key_ok, key)? {
-            return Ok(false);
-        }
-        let Some([last_seen, consecutive]) = reader.read(record) else {
-            return Ok(false);
-        };
-        let (Some(last_seen), Some(consecutive)) = (exact_int(last_seen), exact_int(consecutive))
-        else {
-            return Ok(false);
-        };
-        Ok((0..duration_minutes).contains(&last_seen)
-            && consecutive >= 1
-            && consecutive <= last_seen.saturating_add(1))
-    })
-}
-
-/// Every value of the dict is a finite number within 0..1.
-#[pyfunction]
-pub fn unit_values_valid(values: &Bound<'_, PyDict>) -> PyResult<bool> {
-    all_items(values.as_ptr(), |_, value| Ok(is_unit(value)))
 }
 
 /// Every AgentState passes the per-Agent rules of WorldState.validate, for a world of
