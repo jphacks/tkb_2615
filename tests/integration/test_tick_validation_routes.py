@@ -1,12 +1,12 @@
 """A state broken by any way of writing stops the tick with the Python rule's error.
 
 The per-tick check takes the word of a Rust row for psychological_distress_v1,
-information_spread_v1, staff_dynamics_v1 and agent_dynamics_v1, and the Python rules of those namespaces no longer
-have Rust checks of their own in front of them. So each way of writing has to end in one of three
-places: a row that cannot hold the value, a kernel that says no, or a row the kernels do not trust
-any more; and then the Python rule speaks. docs/rust-port/lanes/t-tick-validation.md lists what
-proves what. Without the kernels the rules always run, so all of this holds in both modes, apart
-from the writes past a TrackedDict at the end.
+information_spread_v1, staff_dynamics_v1 and agent_dynamics_v1, and the Python rules of those
+namespaces no longer have Rust checks of their own in front of them. So each way of writing has to
+end in one of three places: a row that cannot hold the value, a kernel that says no, or a row the
+kernels do not trust any more; and then the Python rule speaks.
+docs/rust-port/lanes/t-tick-validation.md lists what proves what. Without the kernels the rules
+always run, so all of this holds in both modes, apart from the writes past a TrackedDict at the end.
 """
 
 from __future__ import annotations
