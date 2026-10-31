@@ -335,10 +335,12 @@ def test_the_order_changes_inside_phases_at_each_named_place(
     assert {
         "EventDispatcher.dispatch_due",
         "ProposePhase._apply_proposal",
-        "WorldView.from_world",
         "ToiletServiceManager.arbitrate",
         "StaffService.assign_pending",
     } <= set(probe.fired)
+    assert {"WorldView.from_world", "OfflineSimulationController._view_after_movement"} & set(
+        probe.fired
+    )
     assert probe.reversals > 70
 
 

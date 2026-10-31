@@ -728,6 +728,7 @@ def test_the_event_kernel_leaves_frozen_values_and_subclasses_to_python() -> Non
     assert event.to_dict()["payload"] == {"a": {"a": [1, 2]}, "b": "x"}
 
 
+@pytest.mark.python_rules
 def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
     generated_scenario, tmp_path, monkeypatch
 ) -> None:
