@@ -80,7 +80,7 @@ impl EventStatus {
 }
 
 /// `models._STABLE_ID`.
-fn is_stable_id(value: &str) -> bool {
+pub(crate) fn is_stable_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 64
@@ -922,7 +922,7 @@ impl<'py> EventWriter<'py> {
         self.counters.set_item(intern!(py, "event"), next)
     }
 
-    /// `EventLog.append` of an outcome, with its errors. Python makes the record when it reads it.
+    /// `EventLogRecord(...)` and `EventLog.append` of an outcome, with their errors. Python makes the record when it reads it.
     pub(crate) fn record(
         &self,
         event: &EventRow,
@@ -931,6 +931,10 @@ impl<'py> EventWriter<'py> {
         detail: Option<&str>,
     ) -> PyResult<()> {
         let py = self.counters.py();
+        // EventLogRecord refuses this before EventLog.append sees it, and the log could not restore it.
+        if realized_minute < 0 {
+            return Err(PyValueError::new_err("realized_minute must be a non-negative integer"));
+        }
         match self.log.borrow_mut().append_row(event, realized_minute, status, detail)? {
             1 => Err(duplicate_error(py, format!("event '{}' already realized", event.event_id))),
             2 => Err(duplicate_error(py, format!("event sequence {} already realized", event.sequence))),

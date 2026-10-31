@@ -288,7 +288,6 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::psychological_agents_valid, module)?)?;
-    module.add_function(wrap_pyfunction!(validation::agent_dynamics_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::movement_positions_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::information_contacts_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::unit_values_valid, module)?)?;

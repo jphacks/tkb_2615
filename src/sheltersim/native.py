@@ -128,11 +128,6 @@ def psychological_agents_valid(agents: Any) -> bool:
     return _native is not None and _native.psychological_agents_valid(agents)
 
 
-def agent_dynamics_valid(agents: Any, facilities: Any) -> bool:
-    """True only if every agent_dynamics_v1 record passes the Python rules."""
-    return _native is not None and _native.agent_dynamics_valid(agents, facilities)
-
-
 def movement_positions_valid(positions: Any, zones: Any, edges: Any) -> bool:
     """True only if every movement_v1 position passes the Python rules."""
     return _native is not None and _native.movement_positions_valid(positions, zones, edges)

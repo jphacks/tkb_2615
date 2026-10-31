@@ -515,3 +515,11 @@ def test_random_values_written_on_appending_restore_to_the_record() -> None:
         assert state.saved_row_copy(raw) == event
     assert log.all_encoded()
     assert _NativeEventLog.from_saved(log.items_bytes(0, 2000)).records_from(0) == records
+
+
+def test_a_rule_cannot_record_a_minute_the_record_refuses() -> None:
+    world = _world()
+    event = _event("minus", 0)
+    with pytest.raises(ValueError, match="realized_minute must be a non-negative integer"):
+        native.state("events").record_row(world, event, -1, "applied")
+    assert len(world.event_log) == 0

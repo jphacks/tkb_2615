@@ -115,9 +115,7 @@ class MetricSnapshot:
         wait_count = world.metric_state.get("toilet_wait_count", 0.0)
         wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
         wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
-        source_events = sorted(
-            record.event.event_id for record in world.event_log.at_minute(sample_minute)
-        )
+        source_events = sorted(world.event_log.event_ids_at_minute(sample_minute))
         source_ids = {
             "toilet_queue_agents": queued_ids,
             "toilet_active_agents": active_ids,
