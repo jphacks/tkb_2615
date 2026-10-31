@@ -22,6 +22,8 @@ pytest_plugins = [
     "support.world",
     "support.plans",
     "support.public_data",
+    # The python_rules mark, which turns the Rust kernels off for a test.
+    "support.python_rules",
 ]
 
 

@@ -464,6 +464,10 @@ WITHIN_PHASE = (
     ("sheltersim.experiments.phases.propose", "ProposePhase", "_apply_proposal"),
     ("sheltersim.policies.world_view", "WorldView", "from_world"),
     ("sheltersim.policies.world_view", "WorldView", "after_state_update"),
+    # With the Rust kernels these make the views, and the two above don't run. Only then do they
+    # exist on this class (phases/segments.py).
+    ("sheltersim.experiments.runner", "OfflineSimulationController", "_view_after_movement"),
+    ("sheltersim.experiments.runner", "OfflineSimulationController", "_view_for_proposals"),
     ("sheltersim.domain.facilities", "ToiletServiceManager", "arbitrate"),
     ("sheltersim.domain.resource_service", "ResourceServiceManager", "arbitrate"),
     ("sheltersim.domain.staff", "StaffService", "assign_pending"),
@@ -489,7 +493,9 @@ class ReversedOrder:
 
     def _wrap(self, module: str, owner: str, method: str) -> None:
         holder = getattr(__import__(module, fromlist=[owner]), owner)
-        raw = holder.__dict__[method]
+        raw = holder.__dict__.get(method)
+        if raw is None:
+            return
         is_class_method = isinstance(raw, classmethod)
         original = raw.__func__ if is_class_method else raw
         label = f"{owner}.{method}"

@@ -48,6 +48,11 @@ Checkpoint document) and times them.
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
   `src/rules/psychology.rs` are the production template: Rust owns those two, and its rule writes
   them value by value. Start a namespace from `docs/rust-port/lanes/p5-template-namespace.md`.
+  `row.rs` also has `Maybe<T>` (a key a record may not have), `str_enum!`, `set_all`,
+  `namespace_is_absent` and the `exact_*` readers of a kernel's inputs. A rule other modules call as
+  a function uses `core/kernels.py`'s `kernel_first`; `src/state/staff_dynamics.rs` and
+  `src/rules/staff_dynamics.rs` are the example of a whole module
+  (`docs/rust-port/lanes/s-staff-dynamics.md`).
 - `src/state/entities.rs`: `EntityStore`, the typed rows of a world's agents, facilities, staff,
   support requests and active tasks, from `WorldCore::entities`. The objects stay the dataclasses
   of `domain/models.py`, each mirroring its row; `IdMap`, `__setattr__` and `TrackedList` forward
@@ -101,11 +106,25 @@ each OS, because both call the same libm.
 - `rules/psychology.rs`: each person's minute (`update_psychology`, all the built-in psychology
   models, for a tick with no trace), the distress monitor and long-term distress
   (`update_long_term`) and writing the new values (`apply_deltas`). They replace steps of the
-  update phase (`experiments/phases/segments.py`), read the entity rows, and read from the
-  `WorldView` only what no row holds yet. Every float operation keeps the Python order; `max`/`min`
+  update phase (`experiments/phases/segments.py`), read the entity rows, and read the zone's
+  conditions, the body record, the group and what a person heard from `rules/world_view.rs`. Every float operation keeps the Python order; `max`/`min`
   return the first argument on a tie and `sum` is CPython 3.12's compensated sum, so the results
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
+
+- `rules/world_view.rs`: `view_after_movement(controller, world)` and
+  `view_for_proposals(controller, world, minute)` replace the two steps of the phases that make a
+  `WorldView`. A snapshot of plain Rust values (`ViewData`) is built from the entity rows, the rows of
+  `information_spread_v1` and `psychological_distress_v1`, and a read of the namespaces Python still
+  owns. It is what `WorldView.from_world` and `after_state_update` provide, with the same audit hash
+  (`state_hash`, which writes the canonical document from the snapshot). The returned `WorldView`
+  makes `agents`, `facilities`, `zone_members` and `group_members` when a Python reader first asks
+  (`RustView.python_fields`, through `WorldView.__getattr__`). A person's context and a zone's
+  conditions are still computed in Python, only when they change, and kept with the object the
+  Python cache holds. A value a typed field can't hold, or anything Python would raise on, says
+  `Unsupported`, and `from_world` runs. `view_of(view)` gives a kernel the snapshot; for a view Python
+  made it reads the fields the update kernels read and sets `partial`. Nothing refuses a partial
+  view for a rule: a rule that reads other fields must check `partial` and say `Unsupported`.
 
 - `rules.social_propagation.update_social_propagation(controller, world, view, deltas, minute, rng)`:
   the update phase's step `_social_propagation` for the three social policies (contact sampling,
@@ -190,8 +209,19 @@ each OS, because both call the same libm.
 
 - `index_row(row)` (`src/checkpoint.rs`): one pass over a history index row of plain values,
   giving its canonical JSON, the hash, its identities and event references
-  (`_identities`, `_event_references` in `storage/history_index.py`) and the keys and strings
-  for the privacy check. None for any other row, which Python reads as before.
+  (`_identities`, `_event_references` in `storage/history_index.py`), the sorted keys joined by NUL
+  and the strings for the privacy check, and the text its tokens are read from. None for any other
+  row, which Python reads as before.
+- `dumps_length(value)` (`src/checkpoint.rs`): `len(json.dumps(value, ensure_ascii=False).encode())`
+  of a plain JSON value, for the size limit of a decision's observed state.
+- `EntityStore.rows_json(version)` (`src/state/entities.rs`): each entity row's canonical JSON, by
+  field, in the order of `WorldState._canonical_data`. A row nothing reached for writing keeps its
+  bytes object, so the same object means the same row (`Table::changed`, set by every way to a row
+  for writing). `NamespaceMirror.row_json()` is the same for an owned namespace. A capture takes both
+  (`state_mirror.owned_row_bytes`), so a new row needs only `state_row!` and its registry line.
+- `HistoryPins` (`src/history.rs`): references to everything inside a history's entries, from when
+  they were shown equal to their documents. `unchanged` reads only the containers, and false says
+  nothing, so the caller compares with `same_json_items`.
 
 - `same_json_items(current, documents, start, count)` (stage B3, `src/history.rs`): whether
   each of `current[:count]` is exactly `documents[start + i]`, with the types: 1, 1.0 and
