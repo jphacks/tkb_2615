@@ -20,11 +20,14 @@ must still pass. Without SHELTERSIM_RULE_SHADOW this file does nothing.
 
 psychology_update.py does the same for the other two steps. This is the pattern for the next
 kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
+A new shadow is a file shadow_<name>.py with prepare(output) beside this one (see shadow_kit.py).
+Each runs first, so it can replace a kernel before the module that looks it up is imported.
 """
 
 from __future__ import annotations
 
 import atexit
+import importlib
 import json
 import os
 from collections import Counter
@@ -145,6 +148,9 @@ def _install(output: str) -> None:
 
 if OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
+    for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):
+        if shadow.stem != "shadow_kit":
+            importlib.import_module(shadow.stem).prepare(OUTPUT)
     _install(OUTPUT)
     from information_shadow import install as _install_information
 
