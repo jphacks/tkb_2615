@@ -39,6 +39,8 @@ def _text(value: Any) -> str:
 
 
 def _install(output: str) -> None:
+    import psychology_update
+
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.domain.distress_monitor import record_distress_monitor_tick
@@ -120,6 +122,7 @@ def _install(output: str) -> None:
     rust_validate = native.state("psychological_distress").validate
     state_mirror.register_rust_validator(PSYCHOLOGICAL_STATE_KEY, validator)
     OfflineSimulationController._update_long_term_psychology = step  # type: ignore[method-assign]
+    psychology_update.install(seen, reasons, differences)
 
     def report() -> None:
         if seen or reasons or differences:

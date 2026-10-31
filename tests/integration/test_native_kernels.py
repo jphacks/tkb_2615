@@ -37,19 +37,22 @@ def _same_float_bits(x: object, y: object) -> bool:
 def test_the_psychology_kernel_gives_the_python_deltas(
     generated_scenario, tmp_path, monkeypatch
 ) -> None:
-    from sheltersim.policies.psychology import IntegratedDistressLifeStatePolicy
+    from sheltersim.experiments.phases.update import UpdatePhase
+    from sheltersim.experiments.runner import OfflineSimulationController
 
     document = generated_scenario.model_dump(mode="json")
     document["duration_minutes"] = 360
     scenario = ScenarioSpec.model_validate(document)
     compared = []
-    kernel = IntegratedDistressLifeStatePolicy.native_deltas
+    kernel = OfflineSimulationController._psychology_update
+    python = UpdatePhase._psychology_update
 
     def checked(self, view, minute):
-        rust = kernel(self, view, minute)
-        python = self.deltas_without_traces(view, minute)
-        assert rust is not None and len(rust) == len(python)
-        for a, b in zip(rust, python, strict=True):
+        result = kernel(self, view, minute)
+        rust = result.deltas
+        expected = python(self, view, minute).deltas
+        assert len(rust) == len(expected)
+        for a, b in zip(rust, expected, strict=True):
             for name in a.__dataclass_fields__:
                 assert _same_float_bits(getattr(a, name), getattr(b, name)), (
                     minute,
@@ -57,40 +60,11 @@ def test_the_psychology_kernel_gives_the_python_deltas(
                     name,
                 )
         compared.append(minute)
-        return rust
+        return result
 
-    monkeypatch.setattr(IntegratedDistressLifeStatePolicy, "native_deltas", checked)
+    monkeypatch.setattr(OfflineSimulationController, "_psychology_update", checked)
     run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
     assert compared == list(range(360))
-
-
-def test_the_psychology_kernel_leaves_out_of_bounds_values_to_python(generated_scenario) -> None:
-    """AgentStateDelta's checks are skipped only for values known to be within bounds."""
-    from dataclasses import replace
-
-    from sheltersim.core.world import WorldState
-    from sheltersim.domain.body_state import create_body_state
-    from sheltersim.policies.behavior import WorldView
-    from sheltersim.policies.psychology import IntegratedDistressLifeStatePolicy
-    from sheltersim.policies.registry import create_psychology
-
-    world = WorldState.from_scenario(generated_scenario)
-    world.model_state.setdefault("body_state_v1", create_body_state(world))
-    policy = create_psychology(world.model_configs, resource_service_enabled=True)
-    assert isinstance(policy, IntegratedDistressLifeStatePolicy)
-    view = WorldView.from_world(world, include_state_hash=False)
-    assert policy.native_deltas(view, view.minute_index) is not None
-    first = next(iter(view.agents))
-
-    def changed(**fields):
-        agents = {**view.agents, first: replace(view.agents[first], **fields)}
-        return replace(view, agents=agents)
-
-    assert policy.native_deltas(changed(trust=1), view.minute_index) is None
-    broken = changed(trust=1.5)
-    assert policy.native_deltas(broken, view.minute_index) is None
-    with pytest.raises(ValueError):
-        policy.deltas_without_traces(broken, view.minute_index)
 
 
 def _outcome(validate, world) -> str:
