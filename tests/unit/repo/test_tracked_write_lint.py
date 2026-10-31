@@ -244,7 +244,8 @@ def _files() -> list[Path]:
     for part in TICK_SIDE:
         path = ROOT / part
         found.extend(sorted(path.rglob("*.py")) if path.is_dir() else [path])
-    return found
+    # The tracked containers themselves, whose job is to call the base class's methods.
+    return [path for path in found if path != ROOT / "core" / "state_mirror.py"]
 
 
 def scan_source(file: str, source: str) -> list[Finding]:

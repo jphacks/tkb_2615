@@ -11,9 +11,11 @@ from typing import Any
 
 from sheltersim import native
 from sheltersim.contracts.policies import selected_models
+from sheltersim.core import state_mirror
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.save_validation import SaveValidationMemo
 from sheltersim.core.saved_items import SavedItems
+from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.tick_validation import TickValidationMemo
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_STATE_KEY,
@@ -112,6 +114,19 @@ class WorldState:
     model_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
     model_state: dict[str, Any] = field(default_factory=dict)
     schema_version: int = 5
+
+    def __post_init__(self) -> None:
+        if native.available():
+            state_mirror.start_core(self)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A whole model_state assigned to a world with owned namespaces (core/state_mirror.py).
+        if name == "model_state" and "_core" in self.__dict__:
+            value = state_mirror.model_state_assigned(self, value)
+        object.__setattr__(self, name, value)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> WorldState:
+        return state_mirror.deepcopy_world(self, memo)
 
     @classmethod
     def from_scenario(cls, scenario: ScenarioSpec) -> WorldState:
@@ -347,163 +362,175 @@ class WorldState:
                     _tick_memo.resource_config = resource_config
             if RESOURCE_LEDGER_KEY not in self.model_state:
                 raise StateInvariantError("WorldState v6 requires a resource ledger")
-            service_state = self.model_state.get("resource_service_v1")
-            if (
-                not isinstance(service_state, dict)
-                or set(service_state)
-                != {
-                    "schema_version",
-                    "cancelled_task_ids",
-                    "active_reservation_ids",
-                    "request_history",
-                    "queue_stall_history",
-                    "stall_state",
-                }
-                or service_state.get("schema_version") != 1
-                or not isinstance(service_state.get("cancelled_task_ids"), list)
-                or any(
-                    not isinstance(value, str) or not value
-                    for value in service_state["cancelled_task_ids"]
-                )
-                or len(service_state["cancelled_task_ids"])
-                != len(set(service_state["cancelled_task_ids"]))
-                or not isinstance(service_state.get("active_reservation_ids"), list)
-                or any(
-                    not isinstance(value, str) or not value
-                    for value in service_state["active_reservation_ids"]
-                )
-                or len(service_state["active_reservation_ids"])
-                != len(set(service_state["active_reservation_ids"]))
-                or not isinstance(service_state.get("request_history"), list)
-                or not isinstance(service_state.get("queue_stall_history"), list)
-                or not isinstance(service_state.get("stall_state"), dict)
-            ):
-                raise StateInvariantError("resource_service_v1 state is invalid")
-            valid_actions = {"fetch_water", "collect_meal"}
-            valid_outcomes = {"queued", "travel_scheduled", "rejected"}
-            valid_request_reasons = {
-                "arrived_at_facility",
-                "route_available",
-                "in_room_route_available",
-                "room_route_blocked",
-                "no_facility",
-                "no_route",
-                "request_rejected",
-                "travel_rejected",
-                "service_disabled",
-            }
-            request_history = service_state["request_history"]
-            stall_history = service_state["queue_stall_history"]
-            # People away on a temporary exit or transfer keep their place in the
-            # population lifecycle archive; their past service records stay valid (#79).
-            lifecycle = self.model_state.get("population_lifecycle_v1")
-            retained_ids = (
-                set(lifecycle.get("people", {}))
-                if isinstance(lifecycle, dict) and isinstance(lifecycle.get("people"), dict)
-                else set()
-            )
-            known_agent_ids = set(self.agents) | retained_ids
-            if not validate_event_history:
-                request_history = records_since_previous_tick(request_history, self.minute_index)
-                stall_history = records_since_previous_tick(stall_history, self.minute_index)
-            elif _history_memo is not None:
-                inputs = (
-                    known_agent_ids,
-                    set(self.zones),
-                    {key: facility.kind for key, facility in self.facilities.items()},
-                )
-                request_history = _history_memo.unread(
-                    ("resource_service_v1", "request_history"), request_history, inputs
-                )
-                stall_history = _history_memo.unread(
-                    ("resource_service_v1", "queue_stall_history"), stall_history, inputs
-                )
-            for record in request_history:
+            if not rust_validated(self, "resource_service_v1"):
+                service_state = self.model_state.get("resource_service_v1")
                 if (
-                    not isinstance(record, dict)
-                    or set(record)
+                    not isinstance(service_state, dict)
+                    or set(service_state)
                     != {
-                        "minute",
-                        "agent_id",
-                        "action",
-                        "outcome",
-                        "reason",
-                        "facility_id",
-                        "origin_zone_id",
-                        "detail",
+                        "schema_version",
+                        "cancelled_task_ids",
+                        "active_reservation_ids",
+                        "request_history",
+                        "queue_stall_history",
+                        "stall_state",
                     }
-                    or not isinstance(record["minute"], int)
-                    or isinstance(record["minute"], bool)
-                    or not 0 <= record["minute"] <= self.minute_index
-                    or record["agent_id"] not in known_agent_ids
-                    or record["action"] not in valid_actions
-                    or record["outcome"] not in valid_outcomes
-                    or record["reason"] not in valid_request_reasons
-                    or record["origin_zone_id"] not in self.zones
-                    or (
-                        record["facility_id"] is not None
-                        and record["facility_id"] not in self.facilities
+                    or service_state.get("schema_version") != 1
+                    or not isinstance(service_state.get("cancelled_task_ids"), list)
+                    or any(
+                        not isinstance(value, str) or not value
+                        for value in service_state["cancelled_task_ids"]
                     )
-                    or (record["detail"] is not None and not isinstance(record["detail"], str))
+                    or len(service_state["cancelled_task_ids"])
+                    != len(set(service_state["cancelled_task_ids"]))
+                    or not isinstance(service_state.get("active_reservation_ids"), list)
+                    or any(
+                        not isinstance(value, str) or not value
+                        for value in service_state["active_reservation_ids"]
+                    )
+                    or len(service_state["active_reservation_ids"])
+                    != len(set(service_state["active_reservation_ids"]))
+                    or not isinstance(service_state.get("request_history"), list)
+                    or not isinstance(service_state.get("queue_stall_history"), list)
+                    or not isinstance(service_state.get("stall_state"), dict)
                 ):
-                    raise StateInvariantError("resource service request history is invalid")
-                expected_kind = (
-                    "water_station" if record["action"] == "fetch_water" else "meal_distribution"
+                    raise StateInvariantError("resource_service_v1 state is invalid")
+                valid_actions = {"fetch_water", "collect_meal"}
+                valid_outcomes = {"queued", "travel_scheduled", "rejected"}
+                valid_request_reasons = {
+                    "arrived_at_facility",
+                    "route_available",
+                    "in_room_route_available",
+                    "room_route_blocked",
+                    "no_facility",
+                    "no_route",
+                    "request_rejected",
+                    "travel_rejected",
+                    "service_disabled",
+                }
+                request_history = service_state["request_history"]
+                stall_history = service_state["queue_stall_history"]
+                # People away on a temporary exit or transfer keep their place in the
+                # population lifecycle archive; their past service records stay valid (#79).
+                lifecycle = self.model_state.get("population_lifecycle_v1")
+                retained_ids = (
+                    set(lifecycle.get("people", {}))
+                    if isinstance(lifecycle, dict) and isinstance(lifecycle.get("people"), dict)
+                    else set()
                 )
-                facility_id = record["facility_id"]
-                if facility_id is not None and self.facilities[facility_id].kind != expected_kind:
-                    raise StateInvariantError("resource service request history has wrong facility")
-                if (record["outcome"], record["reason"]) not in {
-                    ("queued", "arrived_at_facility"),
-                    ("travel_scheduled", "route_available"),
-                    # Agents already in the facility's zone walk an in-room route instead.
-                    ("travel_scheduled", "in_room_route_available"),
-                    ("rejected", "room_route_blocked"),
-                    ("rejected", "no_facility"),
-                    ("rejected", "no_route"),
-                    ("rejected", "request_rejected"),
-                    ("rejected", "travel_rejected"),
-                    ("rejected", "service_disabled"),
-                }:
-                    raise StateInvariantError("resource service request outcome is inconsistent")
-            known_reasons = {"capacity", "staff", "stock", "run_end", "water_outage"}
-            previous_stall_minute = -1
-            for record in stall_history:
-                if (
-                    not isinstance(record, dict)
-                    or set(record) != {"minute", "facility_id", "agent_id", "reason"}
-                    or not isinstance(record["minute"], int)
-                    or isinstance(record["minute"], bool)
-                    or record["minute"] < 0
-                    or record["minute"] < previous_stall_minute
-                    or record["minute"] > self.minute_index
-                    or not isinstance(record["facility_id"], str)
-                    or record["facility_id"] not in self.facilities
-                    or not isinstance(record["agent_id"], str)
-                    or record["agent_id"] not in known_agent_ids
-                    or record["reason"] not in known_reasons
-                ):
-                    raise StateInvariantError("resource queue stall history is invalid")
-                previous_stall_minute = record["minute"]
-            for facility_id, record in service_state["stall_state"].items():
-                if (
-                    facility_id not in self.facilities
-                    or not isinstance(record, dict)
-                    or set(record) != {"agent_id", "reason"}
-                    or record["agent_id"] not in self.agents
-                    or record["reason"] not in known_reasons
-                ):
-                    raise StateInvariantError("resource queue stall state is invalid")
-                from sheltersim.domain.facility_queues import queue_head_agent_ids
-
-                # A facility with independent queues has one head per queue (#118).
-                if self.facilities[facility_id].kind not in (
-                    "water_station",
-                    "meal_distribution",
-                ) or record["agent_id"] not in queue_head_agent_ids(self, facility_id):
-                    raise StateInvariantError(
-                        "resource queue stall must describe the current facility queue head"
+                known_agent_ids = set(self.agents) | retained_ids
+                if not validate_event_history:
+                    request_history = records_since_previous_tick(
+                        request_history, self.minute_index
                     )
+                    stall_history = records_since_previous_tick(stall_history, self.minute_index)
+                elif _history_memo is not None:
+                    inputs = (
+                        known_agent_ids,
+                        set(self.zones),
+                        {key: facility.kind for key, facility in self.facilities.items()},
+                    )
+                    request_history = _history_memo.unread(
+                        ("resource_service_v1", "request_history"), request_history, inputs
+                    )
+                    stall_history = _history_memo.unread(
+                        ("resource_service_v1", "queue_stall_history"), stall_history, inputs
+                    )
+                for record in request_history:
+                    if (
+                        not isinstance(record, dict)
+                        or set(record)
+                        != {
+                            "minute",
+                            "agent_id",
+                            "action",
+                            "outcome",
+                            "reason",
+                            "facility_id",
+                            "origin_zone_id",
+                            "detail",
+                        }
+                        or not isinstance(record["minute"], int)
+                        or isinstance(record["minute"], bool)
+                        or not 0 <= record["minute"] <= self.minute_index
+                        or record["agent_id"] not in known_agent_ids
+                        or record["action"] not in valid_actions
+                        or record["outcome"] not in valid_outcomes
+                        or record["reason"] not in valid_request_reasons
+                        or record["origin_zone_id"] not in self.zones
+                        or (
+                            record["facility_id"] is not None
+                            and record["facility_id"] not in self.facilities
+                        )
+                        or (record["detail"] is not None and not isinstance(record["detail"], str))
+                    ):
+                        raise StateInvariantError("resource service request history is invalid")
+                    expected_kind = (
+                        "water_station"
+                        if record["action"] == "fetch_water"
+                        else "meal_distribution"
+                    )
+                    facility_id = record["facility_id"]
+                    if (
+                        facility_id is not None
+                        and self.facilities[facility_id].kind != expected_kind
+                    ):
+                        raise StateInvariantError(
+                            "resource service request history has wrong facility"
+                        )
+                    if (record["outcome"], record["reason"]) not in {
+                        ("queued", "arrived_at_facility"),
+                        ("travel_scheduled", "route_available"),
+                        # Agents already in the facility's zone walk an in-room route instead.
+                        ("travel_scheduled", "in_room_route_available"),
+                        ("rejected", "room_route_blocked"),
+                        ("rejected", "no_facility"),
+                        ("rejected", "no_route"),
+                        ("rejected", "request_rejected"),
+                        ("rejected", "travel_rejected"),
+                        ("rejected", "service_disabled"),
+                    }:
+                        raise StateInvariantError(
+                            "resource service request outcome is inconsistent"
+                        )
+                known_reasons = {"capacity", "staff", "stock", "run_end", "water_outage"}
+                previous_stall_minute = -1
+                for record in stall_history:
+                    if (
+                        not isinstance(record, dict)
+                        or set(record) != {"minute", "facility_id", "agent_id", "reason"}
+                        or not isinstance(record["minute"], int)
+                        or isinstance(record["minute"], bool)
+                        or record["minute"] < 0
+                        or record["minute"] < previous_stall_minute
+                        or record["minute"] > self.minute_index
+                        or not isinstance(record["facility_id"], str)
+                        or record["facility_id"] not in self.facilities
+                        or not isinstance(record["agent_id"], str)
+                        or record["agent_id"] not in known_agent_ids
+                        or record["reason"] not in known_reasons
+                    ):
+                        raise StateInvariantError("resource queue stall history is invalid")
+                    previous_stall_minute = record["minute"]
+                for facility_id, record in service_state["stall_state"].items():
+                    if (
+                        facility_id not in self.facilities
+                        or not isinstance(record, dict)
+                        or set(record) != {"agent_id", "reason"}
+                        or record["agent_id"] not in self.agents
+                        or record["reason"] not in known_reasons
+                    ):
+                        raise StateInvariantError("resource queue stall state is invalid")
+                    from sheltersim.domain.facility_queues import queue_head_agent_ids
+
+                    # A facility with independent queues has one head per queue (#118).
+                    if self.facilities[facility_id].kind not in (
+                        "water_station",
+                        "meal_distribution",
+                    ) or record["agent_id"] not in queue_head_agent_ids(self, facility_id):
+                        raise StateInvariantError(
+                            "resource queue stall must describe the current facility queue head"
+                        )
         elif "resource_service_v1" in self.model_state:
             raise StateInvariantError("resource_service state requires WorldState v6")
         if configs_unchanged:
@@ -524,12 +551,13 @@ class WorldState:
                 _tick_memo.information_config = information_config
         if information_config.enabled:
             try:
-                validate_information_runtime_state(
-                    self.model_state.get(INFORMATION_SPREAD_STATE_KEY),
-                    agent_ids=set(self.agents),
-                    zone_ids=set(self.zones),
-                    duration_minutes=self.duration_minutes,
-                )
+                if not rust_validated(self, INFORMATION_SPREAD_STATE_KEY):
+                    validate_information_runtime_state(
+                        self.model_state.get(INFORMATION_SPREAD_STATE_KEY),
+                        agent_ids=set(self.agents),
+                        zone_ids=set(self.zones),
+                        duration_minutes=self.duration_minutes,
+                    )
             except ValueError as exc:
                 raise StateInvariantError(f"invalid information-spread state: {exc}") from exc
         elif INFORMATION_SPREAD_STATE_KEY in self.model_state:
@@ -538,37 +566,45 @@ class WorldState:
             )
         if psychology_model in MEAN_REVERTING_PSYCHOLOGY_POLICIES:
             try:
-                validate_psychological_state(self.model_state.get(PSYCHOLOGICAL_STATE_KEY))
+                if not rust_validated(self, PSYCHOLOGICAL_STATE_KEY):
+                    validate_psychological_state(self.model_state.get(PSYCHOLOGICAL_STATE_KEY))
             except ValueError as exc:
                 raise StateInvariantError(f"invalid psychological distress state: {exc}") from exc
         elif PSYCHOLOGICAL_STATE_KEY in self.model_state:
             raise StateInvariantError("psychological distress state requires its registered model")
         try:
-            validate_operational_events_state(
-                self,
-                in_flight_event=_in_flight_event,
-                validate_event_history=validate_event_history,
-            )
+            if not rust_validated(self, OPERATIONAL_EVENTS_KEY):
+                validate_operational_events_state(
+                    self,
+                    in_flight_event=_in_flight_event,
+                    validate_event_history=validate_event_history,
+                )
         except ValueError as exc:
             raise StateInvariantError(f"invalid operational events state: {exc}") from exc
         try:
-            validate_infrastructure_runtime_state(
-                self,
-                in_flight_event=_in_flight_event,
-                validate_event_history=validate_event_history,
-            )
+            if not rust_validated(self, INFRASTRUCTURE_STATE_KEY):
+                validate_infrastructure_runtime_state(
+                    self,
+                    in_flight_event=_in_flight_event,
+                    validate_event_history=validate_event_history,
+                )
         except ValueError as exc:
             raise StateInvariantError(f"invalid infrastructure state: {exc}") from exc
         try:
-            validate_zone_environment_runtime_state(
-                self, validate_event_history=validate_event_history
-            )
+            if not rust_validated(self, ZONE_ENVIRONMENT_STATE_KEY):
+                validate_zone_environment_runtime_state(
+                    self, validate_event_history=validate_event_history
+                )
         except ValueError as exc:
             raise StateInvariantError(f"invalid zone environment state: {exc}") from exc
         try:
-            from sheltersim.events.effects import validate_effect_program_state
+            from sheltersim.events.effects import (
+                EFFECT_PROGRAM_STATE_KEY,
+                validate_effect_program_state,
+            )
 
-            validate_effect_program_state(self, validate_event_history=validate_event_history)
+            if not rust_validated(self, EFFECT_PROGRAM_STATE_KEY):
+                validate_effect_program_state(self, validate_event_history=validate_event_history)
         except ValueError as exc:
             raise StateInvariantError(f"invalid EffectProgram state: {exc}") from exc
         if self.duration_minutes <= 0 or not 0 <= self.minute_index <= self.duration_minutes:
@@ -1333,7 +1369,9 @@ class WorldState:
             for value in self.resources.values()
         ):
             raise StateInvariantError("resource inventory must contain non-negative integers")
-        if RESOURCE_LEDGER_KEY in self.model_state:
+        if RESOURCE_LEDGER_KEY in self.model_state and not rust_validated(
+            self, RESOURCE_LEDGER_KEY
+        ):
             try:
                 population_state = self.model_state.get("population_dynamics_v1", {})
                 archived_agent_ids: set[str] = set()

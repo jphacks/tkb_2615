@@ -25,6 +25,7 @@ from support.tracked_mirror import (
     TrackedDict,
     TrackedList,
     check_shadow,
+    mirror_of,
     plain_copy,
     reverse_tree,
     strict_difference,
@@ -48,10 +49,10 @@ def _same_as_plain(change: Callable[[dict[str, Any]], Any]) -> None:
     expected = change(plain)
     actual = change(tracked)
     assert strict_difference(tracked, plain) is None
-    assert strict_difference(tracked._m_mirror.shadow, plain) is None
+    assert strict_difference(mirror_of(tracked).shadow, plain) is None
     check_shadow(tracked)
     assert actual == expected
-    assert tracked._m_mirror.writes > 0
+    assert mirror_of(tracked).writes > 0
 
 
 DICT_CHANGES: dict[str, Callable[[dict[str, Any]], Any]] = {
@@ -185,7 +186,7 @@ def test_a_random_stream_of_writes_keeps_tracked_plain_and_shadow_equal() -> Non
                 target[local.randrange(len(target))] = fresh
         assert strict_difference(tracked, plain) is None
     check_shadow(tracked)
-    assert strict_difference(tracked._m_mirror.shadow, plain) is None
+    assert strict_difference(mirror_of(tracked).shadow, plain) is None
 
 
 def test_copies_are_plain_and_detached() -> None:
@@ -304,7 +305,7 @@ def test_a_constructed_container_reads_like_a_plain_one_until_inserted() -> None
     assert isinstance(built["a"], TrackedDict) and isinstance(built["c"], TrackedList)
     built["a"]["b"] = 2
     check_shadow(tracked)
-    assert tracked._m_mirror.shadow["z"]["a"]["b"] == 2
+    assert mirror_of(tracked).shadow["z"]["a"]["b"] == 2
 
 
 @pytest.mark.parametrize(
@@ -420,7 +421,7 @@ def test_a_reversing_dict_reads_backwards_and_stays_equal() -> None:
         assert "a" in tracked.keys() and tracked.keys() & {"a"} == {"a"}
         assert tracked == {"a": 1, "b": 2, "c": {"d": 1, "e": 2}}
         assert tracked.popitem()[0] == "c"
-        assert tracked._m_mirror.difference(sort=True) is None
+        assert mirror_of(tracked).difference(sort=True) is None
 
 
 def test_reversing_a_tree_changes_only_the_order_of_dicts() -> None:

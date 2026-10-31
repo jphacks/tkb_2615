@@ -3,15 +3,17 @@
 //! `canonical_json` writes the bytes of
 //! `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
 //! allow_nan=False).encode()` for plain JSON values: dict with str keys, list,
-//! tuple, str, int, float, bool and None. Anything else, and NaN or infinity,
+//! tuple, str, int, float, bool and None, and the tracked containers (`core/tracked.rs`). Anything else, and NaN or infinity,
 //! raises `Unsupported`, so the Python caller falls back to the json module and
 //! keeps its exact results and errors.
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyString, PyTuple};
 use sha2::{Digest, Sha256};
+
+use crate::core::tracked::{as_readable_dict, as_readable_list};
 
 mod checkpoint;
 mod contacts;
@@ -58,7 +60,7 @@ impl Encoder {
             }
         } else if let Ok(number) = value.downcast::<PyFloat>() {
             self.float(number.value())?;
-        } else if let Ok(object) = value.downcast::<PyDict>() {
+        } else if let Some(object) = as_readable_dict(value) {
             let mut entries: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
                 Vec::with_capacity(object.len());
             for (key, item) in object.iter() {
@@ -83,7 +85,7 @@ impl Encoder {
                 self.value(item, depth + 1)?;
             }
             self.out.push(b'}');
-        } else if let Ok(array) = value.downcast::<PyList>() {
+        } else if let Some(array) = as_readable_list(value) {
             self.out.push(b'[');
             for (index, item) in array.iter().enumerate() {
                 if index > 0 {
@@ -290,6 +292,10 @@ fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<V
 #[pymodule]
 fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("Unsupported", module.py().get_type::<Unsupported>())?;
+    module.add_function(wrap_pyfunction!(core::tracked::install_tracked_types, module)?)?;
+    module.add_class::<core::world_core::WorldCore>()?;
+    module.add_class::<core::world_core::NamespaceMirror>()?;
+    module.add_class::<core::world_core::RowType>()?;
     register_lanes(module)?;
     module.add_function(wrap_pyfunction!(canonical_json, module)?)?;
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;

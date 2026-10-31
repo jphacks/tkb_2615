@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
 use pyo3::IntoPyObjectExt;
 
+use crate::core::tracked::{as_readable_dict, as_readable_list};
 use crate::{write_json_string, Encoder, Unsupported, MAX_DEPTH};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,8 +33,8 @@ const _: fn() = || {
 
 impl V {
     /// Exact scalar types only: a str or int subclass, a tuple or a key that is not a str raises
-    /// `Unsupported`, because it would not come back the same. A dict or list subclass is its
-    /// items, which lets tracked containers through.
+    /// `Unsupported`, because it would not come back the same. So does a dict or list subclass
+    /// other than the tracked containers (`core/tracked.rs`), which are their items.
     pub(crate) fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         Self::read(value, 0)
     }
@@ -60,7 +61,7 @@ impl V {
                 Err(_) => V::Big(number.repr()?.to_str()?.into()),
             });
         }
-        if let Ok(object) = value.downcast::<PyDict>() {
+        if let Some(object) = as_readable_dict(value) {
             let mut map = IndexMap::with_capacity(object.len());
             for (key, item) in object.iter() {
                 let key = key
@@ -70,7 +71,7 @@ impl V {
             }
             return Ok(V::Map(map));
         }
-        if let Ok(array) = value.downcast::<PyList>() {
+        if let Some(array) = as_readable_list(value) {
             let mut items = Vec::with_capacity(array.len());
             for item in array.iter() {
                 items.push(Self::read(&item, depth + 1)?);

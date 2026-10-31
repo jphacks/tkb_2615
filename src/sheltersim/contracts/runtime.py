@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 
 from sheltersim.contracts.extensions import ExtensionModel, Finite, Identifier
 from sheltersim.contracts.workspace import StateDescriptor
+from sheltersim.core.state_mirror import rust_validated
 
 if TYPE_CHECKING:
     from sheltersim.core.rng import KeyedRandom
@@ -215,7 +216,8 @@ def validate_declared_states(world: Any, *, tick_memo: Any = None) -> None:
         ):
             continue
         try:
-            _CONTRACTS[namespace][1](world, state)
+            if not rust_validated(world, namespace):
+                _CONTRACTS[namespace][1](world, state)
         except (TypeError, KeyError, ValueError) as exc:
             raise ValueError("declared model-state validation failed") from exc
 

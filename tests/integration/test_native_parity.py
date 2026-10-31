@@ -18,6 +18,7 @@ import pytest
 
 from sheltersim import native
 from sheltersim.core.rng import CounterRNG
+from sheltersim.core.state_mirror import TrackedDict, TrackedList
 from sheltersim.domain.models import Activity
 
 CASES = int(os.environ.get("SHELTERSIM_PARITY_CASES", "20000"))
@@ -349,11 +350,11 @@ def test_values_write_the_canonical_bytes_and_come_back_the_same(parity) -> None
         assert _same_value(parity.value_round_trip(value), value)
 
 
-class _Tracked(dict):
+class _Subclass(dict):
     pass
 
 
-class _TrackedList(list):
+class _SubclassList(list):
     pass
 
 
@@ -375,8 +376,14 @@ def test_nan_and_infinity_are_left_to_json(parity) -> None:
             parity.value_json(value)
 
 
+@pytest.mark.parametrize("value", [_Subclass(a=1), _SubclassList([1]), {"a": [_Subclass()]}])
+def test_values_in_other_container_subclasses_are_unsupported(parity, value) -> None:
+    with pytest.raises(native.Unsupported):
+        parity.value_json(value)
+
+
 def test_values_read_through_tracked_containers(parity) -> None:
-    value = _Tracked(b=_TrackedList([1, 2.0]), a=None)
+    value = TrackedDict(b=TrackedList([1, 2.0]), a=None)
     assert parity.value_json(value) == b'{"a":null,"b":[1,2.0]}'
     back = parity.value_round_trip(value)
     assert type(back) is dict and type(back["b"]) is list and list(back) == ["b", "a"]

@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 
 use crate::contacts::{
-    contact_entry, exact_float, exact_int, key_head, nearby_buckets, pair_key, previous_contacts,
+    contact_entry, exact_dict, exact_float, exact_int, key_head, nearby_buckets, pair_key, previous_contacts,
     quoted_ids, select_contacts, texts, zone_members, Basis, Bucket,
 };
 use crate::core::mathx::{py_fsum, py_max, py_min};
@@ -91,7 +91,7 @@ pub fn social_channel_update<'py>(
     let previous = previous_contacts(previous)?;
     let mut cooldown_before: HashMap<String, i64> =
         HashMap::with_capacity(previous_cooldowns.len());
-    for (key, value) in previous_cooldowns.iter() {
+    for (key, value) in exact_dict(previous_cooldowns.as_any())?.iter() {
         let key = key
             .downcast_exact::<PyString>()
             .map_err(|_| Unsupported::new_err("cooldown key is not a str"))?
