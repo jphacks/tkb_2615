@@ -101,4 +101,23 @@ let total = EntityStore::with_rows(&store, |rows| {
 | `IdMap` の `m.get(k)` / 素の dict | 27 / 5 ns |
 | 実体の追加と削除 | 412 ns（組で） |
 
-計測の結果の表は、確認が終わったあとに、この下に足します。
+## 結果
+
+2026-10-31、WSL2、16コア。ほかの作業が同時に動いていました（load average 15〜87）。
+
+| 確認 | 結果 |
+|---|---|
+| tick の予算（`tick_budget.py`、9600分から480 tick、5回、同時実行、スレッドの CPU 時間） | 基準との比 **1.033**（1.033、1.017、1.048、1.046、1.017）。A/A は 0.992（0.987、1.009、1.079、0.984、0.992）。世界の `state_digest` は3つとも一致 |
+| `gate_all_paths.py --expect` | 55シナリオ、問題0件。`SHELTERSIM_NATIVE=0` でも同じ |
+| 7日の生成 Run（project の経路） | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。期待どおり |
+| soak：ゲートの全 tick のあとに `verify` と `tainted` | 31,530 tick すべてで確認。ずれ0件、taint 0件 |
+
+soak は、`TickEngine.step` を包む `sitecustomize.py` を `PYTHONPATH` の先頭に置いて動かしました（本体には入れていません）。taint が0件なので、**ゲートの範囲では、今の規則が書く値はすべて行に合います。** 規則が行を読まないので `Unsupported` は `with_rows` のテスト以外で起きません。
+
+## 確かめていないこと
+
+- **Windows と macOS では動かしていません。** 使った C API（`PyObject_GenericSetAttr`、`PyDict_Next`、`PyDict_GetItemWithError`、`PyList_Append`）はどれも stable ABI で、wheel は abi3-py312 で作れています。
+- window の実際の tick の費用は測っていません。計算だけです。
+- メモリの増加（行のぶん）は測っていません。
+- soak は tick の終わりだけを比べます。tick の途中で行を読む規則を入れるときは、その時点でのずれはここでは見えません。別名の問題（`ids = []; facility.queue_agent_ids = ids; ids.append(x)`）は、行のずれではなく Python の結果の違いになるので、`verify` では見えません。見えるのはゲートのハッシュです。この形は P1 の lint の対象外で、ゲートで違いは出ませんでした。
+- ゲートが通らない書き込みの経路は確かめていません。`vars(agent)[...] = ...` は行に届きません（src にはありません。`object.__setattr__` は `test_tracked_write_lint.py` が見ます）。

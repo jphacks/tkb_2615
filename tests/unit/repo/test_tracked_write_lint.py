@@ -297,7 +297,10 @@ def scan_bypasses(file: str, source: str) -> list[str]:
 
 
 def scan_attribute_bypasses(file: str, source: str) -> list[str]:
-    """Attribute writes past `__setattr__`. An entity's write would not reach its Rust row."""
+    """Attribute writes past another object's `__setattr__`: an entity's would miss its Rust row.
+
+    A frozen record writing to itself (`self`) is its own business.
+    """
     return [
         f"{file}:{node.lineno} {ast.unparse(node.func)}"
         for node in ast.walk(ast.parse(source))
@@ -306,6 +309,8 @@ def scan_attribute_bypasses(file: str, source: str) -> list[str]:
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "object"
         and node.func.attr in {"__setattr__", "__delattr__"}
+        and node.args
+        and not (isinstance(node.args[0], ast.Name) and node.args[0].id == "self")
     ]
 
 
@@ -387,8 +392,15 @@ def test_the_lint_accepts_writing_before_the_insert_and_local_containers() -> No
 
 
 def test_only_the_classes_that_own_a_setattr_write_past_it() -> None:
-    # Frozen records and the classes that define __setattr__; no entity is written from elsewhere.
-    allowed = {"domain/models.py", "events/models.py", "core/world.py"}
+    # domain/models.py is where entities forward; the others build their own frozen records.
+    allowed = {
+        "domain/models.py",
+        "events/models.py",
+        "core/checkpoint.py",
+        "policies/world_view.py",
+        "policies/behavior.py",
+        "policies/psychology.py",
+    }
     rows = [
         row
         for path in _files()
