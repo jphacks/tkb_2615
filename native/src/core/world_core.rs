@@ -730,6 +730,53 @@ impl NamespaceMirror {
         Self::store(slf, &node, key.as_any(), value)
     }
 
+    /// The list at this path of the tree, from the root through dicts, or None for a detached
+    /// namespace. `path` leads to a list.
+    fn list_at<'py>(slf: &Bound<'py, Self>, path: &[&str]) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = slf.py();
+        let Some(mut node) = slf.try_borrow()?.root.as_ref().map(|root| root.bind(py).clone()) else {
+            return Ok(None);
+        };
+        for part in path {
+            let part = PyString::new(py, part);
+            node = raw_dict_get(&node, part.as_any())?
+                .ok_or_else(|| Unsupported::new_err("the tree has no such path"))?;
+        }
+        Ok(Some(node))
+    }
+
+    /// items.append(value) in the tree from Rust, after the row took it. See `write_through`.
+    pub(crate) fn append_through<'py>(
+        slf: &Bound<'py, Self>,
+        path: &[&str],
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let Some(list) = Self::list_at(slf, path)? else {
+            return Ok(());
+        };
+        let id: u32 = list.getattr(intern!(slf.py(), "_node"))?.extract()?;
+        let stored = Self::adopt_value(slf, id, NodeKey::ListItem, value, 0)?;
+        raw_list_append(&list, &stored)
+    }
+
+    /// del items[:count] in the tree from Rust, after the row dropped them. See `write_through`.
+    pub(crate) fn drop_oldest_through(slf: &Bound<'_, Self>, path: &[&str], count: usize) -> PyResult<()> {
+        let py = slf.py();
+        let Some(list) = Self::list_at(slf, path)? else {
+            return Ok(());
+        };
+        let items = list_values(&list);
+        // SAFETY: list is a live list, a null value deletes the slice, and the references in
+        // `items` keep the old items alive until they leave the table below.
+        if unsafe { ffi::PyList_SetSlice(list.as_ptr(), 0, count as ffi::Py_ssize_t, null_mut()) } != 0 {
+            return Err(PyErr::fetch(py));
+        }
+        for item in items.iter().take(count) {
+            Self::release_value(slf, item, py.None().bind(py))?;
+        }
+        Ok(())
+    }
+
     /// d[key] = value in the tree, keeping the table right, without touching the row.
     fn store<'py>(
         slf: &Bound<'py, Self>,

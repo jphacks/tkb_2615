@@ -82,7 +82,6 @@ class TickValidationMemo:
         self._checked_requests: list[Any] = []
         # Relationship records written since the last check.
         self.social_watch = native.record_watch()
-        self.body_watch = native.record_watch("topic_ids")
         self._relationships_read: list[tuple[Any, Any]] = []
         # used_reservation_ids: the IDs that passed, as a list and as a set.
         self._used_ids: list[Any] = []
@@ -103,9 +102,6 @@ class TickValidationMemo:
         if not self.configs_unchanged:
             self.geometry_scope.clear()
         self.agents_unchanged = world.agents.keys() == self._agent_ids
-        if not self.agents_unchanged and self.body_watch is not None:
-            # A body relationship key's rule reads the Agent IDs.
-            self.body_watch.reset()
         self._relationships_read = []
         zones_unchanged = world.zones.keys() == self._zone_ids
         model_state = world.model_state

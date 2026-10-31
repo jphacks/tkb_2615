@@ -111,18 +111,6 @@ def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: 
     )
 
 
-def body_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
-    """True only if every body_state_v1 relationship passes the Python rules."""
-    return _native is not None and _native.body_relationships_valid(
-        relationships, good_keys, key_ok
-    )
-
-
-def body_agents_valid(agents: Any) -> bool:
-    """True only if every body_state_v1 Agent record passes the Python rules."""
-    return _native is not None and _native.body_agents_valid(agents)
-
-
 def psychological_agents_valid(agents: Any) -> bool:
     """True only if every psychological_distress_v1 Agent record passes the Python rules."""
     return _native is not None and _native.psychological_agents_valid(agents)

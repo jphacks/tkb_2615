@@ -252,43 +252,6 @@ pub fn social_relationships_valid(
     })
 }
 
-/// Every body_state_v1 relationship passes validate_body_state's rules. good_keys
-/// holds keys known to parse to a pair of different people of the current agents, so
-/// its holder clears it when the agents change.
-#[pyfunction]
-pub fn body_relationships_valid(
-    relationships: &Bound<'_, PyDict>,
-    good_keys: &Bound<'_, PySet>,
-    key_ok: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        relationships.py(),
-        [
-            "contact_count",
-            "trust",
-            "contact_minutes",
-            "last_contact_minute",
-            "last_interaction",
-            "topic_ids",
-        ],
-    );
-    all_items(relationships.as_ptr(), |key, record| {
-        if !known_or_good_key(good_keys, key_ok, key)? {
-            return Ok(false);
-        }
-        let Some([contacts, trust, contact_minutes, minute, _, topics]) = reader.read(record)
-        else {
-            return Ok(false);
-        };
-        Ok(is_count(contacts)
-            && is_count(contact_minutes)
-            && (is_none(trust) || is_unit(trust))
-            && is_count_or_none(minute)
-            && is_exact_list(topics)
-            && topics_valid(topics))
-    })
-}
-
 pub(crate) fn topics_valid(topics: Object) -> bool {
     // SAFETY: topics is an exact list, and nothing here runs Python code.
     unsafe {
@@ -298,29 +261,6 @@ pub(crate) fn topics_valid(topics: Object) -> bool {
             is_exact_str(topic) && ffi::PyUnicode_GetLength(topic) <= 64
         }) && count <= 32
     }
-}
-
-/// Every record of body_state_v1 "agents" passes validate_body_state's rules.
-#[pyfunction]
-pub fn body_agents_valid(agents: &Bound<'_, PyDict>) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        agents.py(),
-        [
-            "sleep_debt_minutes",
-            "uncertainty",
-            "reassurance",
-            "discontent",
-            "positive_affect",
-            "negative_affect",
-            "hygiene_need",
-        ],
-    );
-    all_items(agents.as_ptr(), |_, record| {
-        let Some([sleep_debt, rest @ ..]) = reader.read(record) else {
-            return Ok(false);
-        };
-        Ok(is_within(sleep_debt, 0.0, 1440.0) && rest.iter().all(|value| is_unit(*value)))
-    })
 }
 
 /// Every record of psychological_distress_v1 "agents" passes
