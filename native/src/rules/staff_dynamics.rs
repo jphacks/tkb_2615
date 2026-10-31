@@ -14,7 +14,8 @@ use pyo3::types::{PyDict, PyList, PySet, PyString};
 
 use crate::core::mathx::{exp, py_max, py_min};
 use crate::core::row::{
-    attribute, exact_dict, exact_float, exact_int, exact_list, exact_str, unsupported, Field,
+    attribute, exact_dict, exact_float, exact_int, exact_list, exact_str, namespace_is_absent,
+    unsupported, Field,
 };
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::state::entities::{entities_of, EntityStore};
@@ -41,15 +42,6 @@ const CONFIG_FIELDS: [&str; 8] = [
 const FLOAT_EXACT_INT: u64 = 1 << 53;
 
 // ---- What the rules read from the rest of the world ------------------------------------------
-
-/// `world.model_state`, and whether it has the namespace: `state is None` in the Python rules.
-fn namespace_is_absent(world: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let py = world.py();
-    let table = attribute(world, intern!(py, "model_state"))?;
-    Ok(exact_dict(&table)?
-        .get_item(intern!(py, NAME))?
-        .is_none_or(|state| state.is_none()))
-}
 
 /// `state["staff_status"]` of `operational_events_v1`, or None without that namespace: the input
 /// of `staff_is_available` in `domain/operational.py`.
@@ -249,7 +241,7 @@ fn plan(
 #[pyfunction]
 fn update(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    if namespace_is_absent(world)? {
+    if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());
     }
     let minute = exact_int(minute)?;
@@ -296,12 +288,7 @@ fn update(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
                 return unsupported("the row changed under the plan");
             };
             let node = staff.child(&member.id)?;
-            record.set_consecutive_work_minutes(&node, next.consecutive_work_minutes)?;
-            record.set_total_work_minutes(&node, next.total_work_minutes)?;
-            record.set_total_rest_minutes(&node, next.total_rest_minutes)?;
-            record.set_fatigue(&node, next.fatigue)?;
-            record.set_rest_until_minute(&node, next.rest_until_minute)?;
-            record.set_last_activity(&node, next.last_activity)?;
+            record.set_all(&node, next)?;
         }
         Ok(())
     })
@@ -316,7 +303,7 @@ fn on_shift_now(
     staff_id: &Bound<'_, PyAny>,
     minute: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
-    if namespace_is_absent(world)? {
+    if namespace_is_absent(world, intern!(world.py(), NAME))? {
         return Ok(true);
     }
     let id = exact_str(staff_id)?;
@@ -363,7 +350,7 @@ fn is_available_now(
     staff_id: &Bound<'_, PyAny>,
     minute: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
-    if namespace_is_absent(world)? {
+    if namespace_is_absent(world, intern!(world.py(), NAME))? {
         return Ok(true);
     }
     let Ok(id) = staff_id.downcast_exact::<PyString>() else {
@@ -391,7 +378,7 @@ fn is_available_now(
 /// `add_staff`: one record, forwarded neither way.
 #[pyfunction]
 fn add_staff(world: &Bound<'_, PyAny>, staff_id: &Bound<'_, PyAny>) -> PyResult<()> {
-    if namespace_is_absent(world)? {
+    if namespace_is_absent(world, intern!(world.py(), NAME))? {
         return Ok(());
     }
     let id = exact_str(staff_id)?;

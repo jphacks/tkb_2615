@@ -5,7 +5,7 @@
 use pyo3::intern;
 use pyo3::prelude::*;
 
-use crate::core::row::{exact_dict, load_row, state_row, str_enum, IdMap, Maybe};
+use crate::core::row::{load_row, namespace_is_absent, state_row, str_enum, IdMap, Maybe};
 use crate::core::world_core::{mirror_of, NamespaceMirror, RowType};
 use crate::state::entities::{entities_of, EntityStore};
 
@@ -156,11 +156,8 @@ impl StaffDynamicsRow {
 #[pyfunction]
 fn validate(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = world.py();
-    let table = crate::core::row::attribute(world, intern!(py, "model_state"))?;
-    match exact_dict(&table)?.get_item(intern!(py, NAME))? {
-        None => return Ok(true),
-        Some(state) if state.is_none() => return Ok(true),
-        Some(_) => {}
+    if namespace_is_absent(world, intern!(py, NAME))? {
+        return Ok(true);
     }
     let mirror = mirror_of(world, NAME)?;
     let store = entities_of(world)?;

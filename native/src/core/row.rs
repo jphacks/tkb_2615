@@ -471,6 +471,13 @@ pub(crate) fn attribute<'py>(
     object.getattr(name).map_err(|_| Unsupported::new_err("an input has no such attribute"))
 }
 
+/// Whether `world.model_state` lacks this namespace: `state is None` in a Python rule, which then
+/// has nothing to do, so its kernel doesn't either and no exception is paid for it each tick.
+pub(crate) fn namespace_is_absent(world: &Bound<'_, PyAny>, name: &Bound<'_, PyString>) -> PyResult<bool> {
+    let table = attribute(world, pyo3::intern!(world.py(), "model_state"))?;
+    Ok(exact_dict(&table)?.get_item(name)?.is_none_or(|state| state.is_none()))
+}
+
 /// An int and nothing else: not a bool, and one that fits.
 pub(crate) fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
     let Ok(number) = value.downcast_exact::<PyInt>() else {
@@ -559,6 +566,21 @@ macro_rules! state_row {
                 &[$(|row, encoder| $crate::core::row::Field::write_json(&row.$field, encoder)),*];
             const JSON_ABSENT: &'static [fn(&Self) -> bool] =
                 &[$(|row| $crate::core::row::Field::is_absent(&row.$field)),*];
+
+            /// Every field with a setter takes next's value, through its setter: how a rule writes a
+            /// record it planned.
+            #[allow(dead_code)]
+            pub(crate) fn set_all<'py>(
+                &mut self,
+                tree: &$crate::core::world_core::Tree<'py>,
+                next: &Self,
+            ) -> pyo3::PyResult<()> {
+                let _ = (&tree, &next);
+                $($(
+                    self.$setter(tree, next.$field.clone())?;
+                )?)*
+                Ok(())
+            }
 
             $($(
                 /// The row and the tree, or neither when the value has the same bits.
