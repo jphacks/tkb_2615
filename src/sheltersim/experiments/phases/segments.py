@@ -18,7 +18,10 @@ from sheltersim import native
 
 # Name of a step's method -> (the module of native/src/rules/, the name of its kernel).
 SEGMENTS: dict[str, tuple[str, str]] = {
+    "_psychology_update": ("psychology", "update_psychology"),
     "_update_long_term_psychology": ("psychology", "update_long_term"),
+    "_apply_state_deltas": ("psychology", "apply_deltas"),
+    "_sample_information_contacts": ("information", "sample_contacts"),
     "_social_propagation": ("social_propagation", "update_social_propagation"),
 }
 

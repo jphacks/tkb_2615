@@ -104,26 +104,6 @@ def view_state_hash(*arguments: Any) -> str | None:
         return None
 
 
-def psychology_integrated(globals_: list[float], agents: list[list[float]]) -> list | None:
-    """The new state floats of IntegratedDistressLifeStatePolicy for each agent, or None."""
-    if _native is None:
-        return None
-    try:
-        return _native.psychology_integrated(globals_, agents)
-    except _native.Unsupported:
-        return None
-
-
-def information_contacts_without_messages(*arguments: Any) -> tuple | None:
-    """One tick of InformationSpreadPolicy.update while nobody holds a belief, or None."""
-    if _native is None:
-        return None
-    try:
-        return _native.information_contacts_without_messages(*arguments)
-    except (_native.Unsupported, TypeError):
-        return None
-
-
 def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
     """True only if every social_network_v1 relationship passes the Python rules."""
     return _native is not None and _native.social_relationships_valid(

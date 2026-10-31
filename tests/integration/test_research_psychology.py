@@ -167,6 +167,8 @@ def test_a_tick_without_a_psychology_trace_gets_the_same_deltas(
     deltas equal those of explain_update, value for value and bit for bit."""
     import struct
 
+    from sheltersim.experiments.phases.update import UpdatePhase
+    from sheltersim.experiments.runner import OfflineSimulationController
     from sheltersim.policies.psychology import IntegratedDistressLifeStatePolicy
 
     document = generated_scenario.model_dump(mode="json")
@@ -192,7 +194,7 @@ def test_a_tick_without_a_psychology_trace_gets_the_same_deltas(
     # The Rust kernel, when installed, is compared with this path in
     # tests/integration/test_native_kernels.py.
     monkeypatch.setattr(
-        IntegratedDistressLifeStatePolicy, "native_deltas", lambda self, view, minute: None
+        OfflineSimulationController, "_psychology_update", UpdatePhase._psychology_update
     )
     run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
     assert compared == list(range(360))

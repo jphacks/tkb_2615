@@ -42,8 +42,10 @@ CORRECTION = """\
 LINUX_ONLY = pytest.mark.skipif(sys.platform != "linux", reason="hashes are pinned on Linux")
 
 
-def _tool(*arguments: object, path: Path | None = None) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "SHELTERSIM_LLM_MODE": "offline"}
+def _tool(
+    *arguments: object, path: Path | None = None, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "SHELTERSIM_LLM_MODE": "offline", **(extra_env or {})}
     if path is not None:
         env["PYTHONPATH"] = os.pathsep.join(
             [str(path), *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]
@@ -71,7 +73,17 @@ def _patched_source(directory: Path, relative: str, before: str, after: str) -> 
 
 
 def _recorded(output: Path, *arguments: object, path: Path | None = None) -> Path:
-    done = _tool("--record", RUMORS, "--output", output, "--draws", *arguments, path=path)
+    """A stream of the Python rules, which are what _patched_source edits: Rust moved the rest."""
+    done = _tool(
+        "--record",
+        RUMORS,
+        "--output",
+        output,
+        "--draws",
+        *arguments,
+        path=path,
+        extra_env={"SHELTERSIM_NATIVE": "0"},
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     return output
 

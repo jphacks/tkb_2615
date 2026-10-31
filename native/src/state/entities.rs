@@ -585,7 +585,7 @@ fn class_of(installed: &Installed, kind: u8) -> &Py<PyType> {
 }
 
 /// Store an attribute of an entity without its `__setattr__`.
-fn raw_setattr(
+pub(crate) fn raw_setattr(
     object: &Bound<'_, PyAny>,
     name: &Bound<'_, PyString>,
     value: *mut ffi::PyObject,

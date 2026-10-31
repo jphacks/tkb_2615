@@ -1,6 +1,8 @@
 """Compare the Rust steps with their Python rules at every call, in any process.
 
-This file has the long-term psychology step and social_propagation_shadow.py the social one.
+This file has the long-term psychology step, psychology_update.py the other psychology steps,
+social_propagation_shadow.py the social one and information_shadow.py the information one, whose
+results are in DIR/information.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -15,7 +17,8 @@ write the bytes of the tree. Each process writes what it saw to DIR at exit, so 
 processes of a Project count too. The kernel's result is what goes on, so the hashes of such a run
 must still pass. Without SHELTERSIM_RULE_SHADOW this file does nothing.
 
-This is the pattern for the next kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
+psychology_update.py does the same for the other two steps. This is the pattern for the next
+kernels; docs/rust-port/lanes/p5-template-namespace.md says how.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ def _text(value: Any) -> str:
 
 
 def _install(output: str) -> None:
+    import psychology_update
+
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.domain.distress_monitor import record_distress_monitor_tick
@@ -122,6 +127,7 @@ def _install(output: str) -> None:
     rust_validate = native.state("psychological_distress").validate
     state_mirror.register_rust_validator(PSYCHOLOGICAL_STATE_KEY, validator)
     OfflineSimulationController._update_long_term_psychology = step  # type: ignore[method-assign]
+    psychology_update.install(seen, reasons, differences)
 
     import social_propagation_shadow
 
@@ -142,3 +148,6 @@ if OUTPUT:
     import capture_shadow
 
     capture_shadow.install(OUTPUT)
+    from information_shadow import install as _install_information
+
+    _install_information(OUTPUT)

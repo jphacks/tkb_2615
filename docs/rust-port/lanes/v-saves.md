@@ -84,7 +84,7 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 
 - **Windows と macOS では動かしていません。** `HistoryPins` と `rows_json` が使う C API（`PyDict_Next`、`PyList_GetItem`、`Py_NewRef` 相当）はどれも stable ABI です。
 - ゲートの行の網羅率（`--coverage`）は測っていません。保存の経路に届いた回数は上の表のとおりです。
-- `rows_json` と `Table::changed` は、今の Rust の規則（`add_agent_stress` と心理）では実体を書く規則がほぼありません。実体を書く規則が増えたあとの7日分の比較は、そのレーンの `rule_shadow` で確かめます。
+- `Table::changed` は、Rust から実体を書く規則（今は `rules/psychology.rs` の人の更新）も `get_mut` を通るので印が立ちます。この経路は7日分の `rule_shadow` で確かめます。
 
 ## 残っているもの
 

@@ -1,18 +1,16 @@
-//! What the per-tick contact models share: sampling keyed partners and reading the last
-//! tick's contact records. The models are in `rules/social_propagation.rs` and
+//! What the per-tick contact models share: reading exact numbers and sampling keyed partners.
+//! The models are in `rules/social_propagation.rs` and
 //! `rules/information.rs`. Each returns the same floats, draws and JSON keys as the Python
 //! code: every float operation keeps its order, and anything the Python code would reject,
 //! or any value of another type, raises `Unsupported` so the caller runs that code instead.
 
 use std::collections::HashMap;
 
-use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyFloat, PyInt, PyString};
+use pyo3::types::{PyFloat, PyInt};
 
 use crate::core::mathx::py_fsum;
 use crate::core::rng::{Key, KeyedDraws};
-use crate::core::tracked::as_readable_dict;
 use crate::{write_json_string, Unsupported};
 
 /// math.fsum of finite values, for tests.
@@ -34,66 +32,6 @@ pub(crate) fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
         .map_err(|_| Unsupported::new_err("not an int"))?
         .extract()
         .map_err(|_| Unsupported::new_err("int out of range"))
-}
-
-pub(crate) fn exact_dict<'a, 'py>(
-    value: &'a Bound<'py, PyAny>,
-) -> PyResult<&'a Bound<'py, PyDict>> {
-    as_readable_dict(value).ok_or_else(|| Unsupported::new_err("not a dict"))
-}
-
-pub(crate) fn texts<'a>(values: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
-    values
-        .iter()
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|_| Unsupported::new_err("not UTF-8"))
-        })
-        .collect()
-}
-
-/// The {pair key: {last_seen_minute, consecutive_minutes}} of the last tick, as
-/// non-negative ints.
-pub(crate) fn previous_contacts(
-    contacts: &Bound<'_, PyDict>,
-) -> PyResult<HashMap<String, (i64, i64)>> {
-    let py = contacts.py();
-    exact_dict(contacts.as_any())?;
-    let last_seen = intern!(py, "last_seen_minute");
-    let consecutive = intern!(py, "consecutive_minutes");
-    let mut previous = HashMap::with_capacity(contacts.len());
-    for (key, value) in contacts.iter() {
-        let key = key
-            .downcast_exact::<PyString>()
-            .map_err(|_| Unsupported::new_err("contact key is not a str"))?
-            .to_str()
-            .map_err(|_| Unsupported::new_err("not UTF-8"))?
-            .to_owned();
-        let value = exact_dict(&value)?;
-        let minute = value.get_item(last_seen)?;
-        let minutes = value.get_item(consecutive)?;
-        let (Some(minute), Some(minutes)) = (minute, minutes) else {
-            return Err(Unsupported::new_err("contact field is missing"));
-        };
-        let numbers = (exact_int(&minute)?, exact_int(&minutes)?);
-        if numbers.0 < 0 || numbers.1 < 0 {
-            return Err(Unsupported::new_err("contact field is negative"));
-        }
-        previous.insert(key, numbers);
-    }
-    Ok(previous)
-}
-
-pub(crate) fn contact_entry<'py>(
-    py: Python<'py>,
-    minute: i64,
-    minutes: i64,
-) -> PyResult<Bound<'py, PyDict>> {
-    let entry = PyDict::new(py);
-    entry.set_item(intern!(py, "last_seen_minute"), minute)?;
-    entry.set_item(intern!(py, "consecutive_minutes"), minutes)?;
-    Ok(entry)
 }
 
 #[derive(Clone, Copy)]

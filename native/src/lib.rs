@@ -20,7 +20,6 @@ mod contacts;
 mod core;
 mod eventlog;
 mod history;
-mod psychology;
 mod records;
 mod validation;
 mod watch;
@@ -262,33 +261,6 @@ fn float_json(value: f64) -> PyResult<String> {
     Ok(String::from_utf8(encoder.out).expect("a float is ASCII"))
 }
 
-/// One minute of the mean-reverting life-state psychology for every agent.
-/// `globals` has 23 floats and each agent 32; see psychology.rs.
-#[pyfunction]
-fn psychology_integrated(globals: Vec<f64>, agents: Vec<Vec<f64>>) -> PyResult<Vec<[f64; 12]>> {
-    let globals = psychology::Globals::from_slice(&globals)
-        .ok_or_else(|| Unsupported::new_err("psychology globals have the wrong length"))?;
-    agents
-        .iter()
-        .map(|agent| {
-            if agent.len() != psychology::AGENT_FIELDS {
-                return Err(Unsupported::new_err("agent inputs have the wrong length"));
-            }
-            let row = psychology::step(&globals, agent)
-                .ok_or_else(|| Unsupported::new_err("math.exp would raise"))?;
-            // Values outside AgentStateDelta's bounds are left to its Python checks.
-            let in_bounds = |value: f64| (0.0..=1.0).contains(&value);
-            if !row[..5].iter().copied().all(in_bounds)
-                || !(0.0..=1440.0).contains(&row[5])
-                || !row[6..].iter().copied().all(in_bounds)
-            {
-                return Err(Unsupported::new_err("a new value is out of bounds"));
-            }
-            Ok(row)
-        })
-        .collect()
-}
-
 #[pymodule]
 fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("Unsupported", module.py().get_type::<Unsupported>())?;
@@ -302,7 +274,6 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(canonical_sha256, module)?)?;
     module.add_function(wrap_pyfunction!(float_repr, module)?)?;
     module.add_function(wrap_pyfunction!(float_json, module)?)?;
-    module.add_function(wrap_pyfunction!(psychology_integrated, module)?)?;
     module.add_function(wrap_pyfunction!(records::scheduled_event_checked, module)?)?;
     module.add_function(wrap_pyfunction!(records::view_state_hash, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::sensitive_candidates, module)?)?;
@@ -326,7 +297,6 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(watch::install_dict_watcher, module)?)?;
     module.add_class::<watch::RecordWatch>()?;
     module.add_function(wrap_pyfunction!(contacts::fsum, module)?)?;
-    module.add_function(wrap_pyfunction!(rules::information::information_contacts_without_messages, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
     module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;
