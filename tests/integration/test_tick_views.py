@@ -1,7 +1,8 @@
 """The proposal view made from the update phase's view equals a view read from the world.
 
-Runs without the Rust kernels too: the view is not a kernel, and the tests check both the
-values and the audit hash, bit for bit, at every tick of Scenarios with and without
+These tests read Python's two ways of making a view, so they run with the Python rules. The views
+of rules/world_view.rs are compared with them in tests/integration/test_world_view_row.py. They
+check both the values and the audit hash, bit for bit, at every tick of Scenarios with and without
 messages and beliefs.
 """
 
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import copy
 import struct
+
+import pytest
 
 from sheltersim.core.engine import TraceLevel
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
@@ -57,6 +60,7 @@ def _compared_ticks(monkeypatch) -> list[WorldView]:
     return views
 
 
+@pytest.mark.python_rules
 def test_the_proposal_view_equals_a_read_view_at_every_tick(
     generated_scenario, tmp_path, monkeypatch
 ) -> None:
@@ -67,6 +71,7 @@ def test_the_proposal_view_equals_a_read_view_at_every_tick(
     assert [view.minute_index for view in views] == list(range(240))
 
 
+@pytest.mark.python_rules
 def test_the_proposal_view_equals_a_read_view_with_messages_and_beliefs(
     generated_previews,
     information_spread_scenario,
@@ -185,6 +190,7 @@ def test_a_tick_with_kept_inputs_gives_the_state_of_one_with_none(generated_scen
     assert run(False) == run(True)
 
 
+@pytest.mark.python_rules
 def test_the_proposal_view_equals_a_read_view_with_full_traces(
     generated_scenario, tmp_path, monkeypatch
 ) -> None:

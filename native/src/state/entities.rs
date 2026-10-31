@@ -283,6 +283,14 @@ macro_rules! member_field {
 
         const $all: &[$name] = &[$($name::$member),*];
 
+        impl $name {
+            /// The member of the Python enum.
+            #[allow(dead_code)]
+            pub(crate) fn member<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+                Ok(Field::to_py(&self, py)?.into_bound(py))
+            }
+        }
+
         impl Field for $name {
             fn from_py(value: &Bound<'_, PyAny>) -> Result<Self, Misfit> {
                 let members = &installed()?.$table;

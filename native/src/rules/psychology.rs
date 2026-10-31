@@ -3,8 +3,8 @@
 //! `policies/alternatives.py`), the distress monitor (`domain/distress_monitor.py`), the long-term
 //! distress (`update_psychological_state` in `domain/psychological_state.py`) and writing the new
 //! values (`apply_state_deltas`). The entity fields come from the rows of `state/entities.rs`, and
-//! what only a `WorldView` knows yet (the zone's conditions, the body record, what a person heard)
-//! from the view's `AgentView`, until the view itself moves.
+//! the zone's conditions, the body record, the group and what a person heard from the snapshot of
+//! `rules/world_view.rs`.
 //!
 //! A kernel changes nothing until it knows the Python rules would pass: first `plan_*` computes
 //! everything from the rows, and any value the Python rules would turn down, or that this kernel
@@ -24,6 +24,7 @@ use crate::core::mathx::{self, py_max, py_min, py_sum};
 use crate::core::row::{map_set, Field};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::{field_mirror_of, mirror_of, raw_dict_get, raw_dict_set, NamespaceMirror, Tree};
+use crate::rules::world_view::{view_of, RustView, ViewAgent, ViewZone};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
 use crate::state::metric_state::MetricRow;
 use crate::state::psychological_distress::{AgentRecord, DistressRow, NAME};
@@ -882,7 +883,7 @@ fn within_bounds(next: &Next) -> bool {
 struct ViewPerson<'py> {
     key: Bound<'py, PyString>,
     /// `group_id`, for the life-state models; an empty one is left to Python.
-    group: Option<Bound<'py, PyString>>,
+    group: Option<Arc<str>>,
     rest_efficiency: f64,
     environmental_per_minute: f64,
     toilet_growth: f64,
@@ -894,40 +895,32 @@ struct ViewPerson<'py> {
 }
 
 fn read_life<'py>(
-    fields: &Bound<'py, PyAny>,
+    agent: &ViewAgent,
+    zone: &ViewZone,
     key: &Bound<'py, PyString>,
     tables: &RateTables<'py>,
     g: &BodyRates,
     rest_efficiency: f64,
 ) -> PyResult<LifeInput> {
-    let py = fields.py();
-    let item = |name: &Bound<'py, PyString>| float_item(fields, name);
-    let required = raw_dict_get(fields, intern!(py, "required_sleep_minutes").as_any())?;
-    let required_sleep = match required {
-        None => return unsupported("a field is missing"),
-        Some(value) if value.is_none() => None,
-        Some(value) => match value.downcast_exact::<PyInt>() {
-            Ok(number) => match number.extract::<i64>() {
-                Ok(minutes) if (0..=1440).contains(&minutes) => Some(minutes),
-                _ => return unsupported("the required sleep is out of bounds"),
-            },
-            Err(_) => return unsupported("the required sleep is not an int"),
-        },
+    let required_sleep = match agent.person.required_sleep_minutes {
+        None => None,
+        Some(minutes) if (0..=1440).contains(&minutes) => Some(minutes),
+        Some(_) => return unsupported("the required sleep is out of bounds"),
     };
     let life = LifeInput {
-        debt: item(intern!(py, "sleep_debt_minutes"))?,
+        debt: agent.body.sleep_debt_minutes,
         required_sleep,
-        reassurance: item(intern!(py, "reassurance"))?,
-        uncertainty: item(intern!(py, "uncertainty"))?,
-        query_pressure: item(intern!(py, "information_query_pressure"))?,
-        misinformation_pressure: item(intern!(py, "misinformation_belief_pressure"))?,
-        discontent: item(intern!(py, "discontent"))?,
-        privacy_discontent: item(intern!(py, "privacy_discontent_per_minute"))?,
-        positive: item(intern!(py, "positive_affect"))?,
-        hygiene: item(intern!(py, "hygiene_need"))?,
-        ventilation_growth: item(intern!(py, "ventilation_hygiene_growth_per_minute"))?,
-        sanitation: item(intern!(py, "sanitation_level"))?,
-        negative: item(intern!(py, "negative_affect"))?,
+        reassurance: agent.body.reassurance,
+        uncertainty: agent.body.uncertainty,
+        query_pressure: agent.information_query_pressure,
+        misinformation_pressure: agent.misinformation_belief_pressure,
+        discontent: agent.body.discontent,
+        privacy_discontent: zone.privacy_discontent_per_minute,
+        positive: agent.body.positive_affect,
+        hygiene: agent.body.hygiene_need,
+        ventilation_growth: zone.ventilation_hygiene_growth_per_minute,
+        sanitation: zone.sanitation_level,
+        negative: agent.body.negative_affect,
         family_separated: false,
         sleep_rate: match &tables.sleep_debt {
             Some(by_agent) => rate_of(by_agent, key, g.sleep_debt_stress)?,
@@ -952,51 +945,39 @@ fn read_life<'py>(
 }
 
 fn read_view_people<'py>(
-    view: &Bound<'py, PyAny>,
+    rust_view: &Bound<'py, RustView>,
     tables: &RateTables<'py>,
     rates: &Rates,
     body: Option<&BodyRates>,
     model: Model,
 ) -> PyResult<Vec<ViewPerson<'py>>> {
-    let py = view.py();
-    // A mapping proxy of the view's dict, in the view's order: Python's rules go through it so.
-    let items = view.getattr(intern!(py, "agents"))?.call_method0(intern!(py, "items"))?;
+    let py = rust_view.py();
+    let rust_view = rust_view.get();
+    let data = rust_view.data();
     let reversion = matches!(model, Model::MeanReverting | Model::Integrated);
-    let mut found = Vec::with_capacity(items.len()?);
-    for item in items.try_iter()? {
-        let item = item?;
-        let item = item.downcast_exact::<PyTuple>()?;
-        let key = item.get_borrowed_item(0)?;
-        let Ok(key) = key.downcast_exact::<PyString>() else {
-            return unsupported("an id is not a str");
-        };
-        // A lone surrogate has no UTF-8; after this, to_str does not fail for it. An empty one
-        // fails the checks of AgentStateDelta.
-        if key.to_str().map_or(true, str::is_empty) {
-            return unsupported("an id is empty or not UTF-8");
+    let mut found = Vec::with_capacity(data.agents.len());
+    for (index, agent) in data.agents.iter().enumerate() {
+        // An empty id fails the checks of AgentStateDelta.
+        if agent.id.is_empty() {
+            return unsupported("an id is empty");
         }
-        let fields = item.get_borrowed_item(1)?.getattr(intern!(py, "__dict__"))?;
-        let rest_efficiency = float_item(&fields, intern!(py, "rest_efficiency_multiplier"))?;
+        let key = rust_view.key(py, index);
+        let zone = data.zone_of(agent);
+        let rest_efficiency = zone.rest_efficiency_multiplier;
         let (life, group) = match body {
             Some(g) => {
-                let group = raw_dict_get(&fields, intern!(py, "group_id").as_any())?;
-                let group = match group {
-                    None => return unsupported("a field is missing"),
-                    Some(group) if group.is_none() => None,
-                    Some(group) => match group.downcast_exact::<PyString>() {
-                        // `group_id or ""` meets the people of an empty group.
-                        Ok(text) if !text.to_str().map_or(true, str::is_empty) => Some(text.clone()),
-                        _ => return unsupported("a group id is empty or not a str"),
-                    },
-                };
-                (read_life(&fields, key, tables, g, rest_efficiency)?, group)
+                // `group_id or ""` meets the people of an empty group.
+                if agent.group_id.as_ref().is_some_and(|group| group.is_empty()) {
+                    return unsupported("a group id is empty");
+                }
+                (read_life(agent, zone, key, tables, g, rest_efficiency)?, agent.group_id.clone())
             }
             None => (LifeInput::default(), None),
         };
         found.push(ViewPerson {
             group,
             rest_efficiency,
-            environmental_per_minute: float_item(&fields, intern!(py, "environmental_stress_per_minute"))?,
+            environmental_per_minute: zone.environmental_stress_per_minute,
             toilet_growth: rate_of(&tables.toilet, key, rates.toilet_growth)?,
             hunger_growth: rate_of(&tables.hunger, key, rates.hunger_growth)?,
             awake_fatigue: rate_of(&tables.awake_fatigue, key, rates.awake_fatigue_growth)?,
@@ -1023,7 +1004,7 @@ fn separated_groups<'a>(
     let mut groups: FxHashMap<&'a str, bool> = FxHashMap::default();
     for (person, zone) in people.iter().zip(zones) {
         if let Some(group) = &person.group {
-            let group = group.to_str()?;
+            let group: &str = group;
             let spread = groups.entry(group).or_insert(false);
             match first_zone.get(group) {
                 Some(first) => *spread |= **first != *zone,
@@ -1153,7 +1134,8 @@ fn update_psychology<'py>(
         negative: by_agent(intern!(py, "negative_affect_stress_rate_by_agent"))?,
         discontent: by_agent(intern!(py, "discontent_stress_rate_by_agent"))?,
     };
-    let viewed = read_view_people(view, &tables, &rates, body.as_ref(), model)?;
+    let rust_view = view_of(view)?;
+    let viewed = read_view_people(&rust_view, &tables, &rates, body.as_ref(), model)?;
     let mut ids = Vec::with_capacity(viewed.len());
     for person in &viewed {
         ids.push(person.key.to_str()?);
@@ -1223,7 +1205,7 @@ fn update_psychology<'py>(
         let groups = separated_groups(&viewed, &zones)?;
         for (input, person) in inputs.iter_mut().zip(&viewed) {
             if let Some(group) = &person.group {
-                input.life.family_separated = groups.get(group.to_str()?).copied().unwrap_or(false);
+                input.life.family_separated = groups.get(&**group).copied().unwrap_or(false);
             }
         }
     }

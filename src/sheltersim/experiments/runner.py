@@ -118,6 +118,8 @@ class OfflineSimulationController(
         self.active_actions = active_action_index(world)
         # The update phase's view, from which the next phase's view is made.
         self._view_before_proposals: WorldView | None = None
+        # What rules/world_view.rs keeps between views.
+        self._rust_view_cache: Any = None
         # What the phases parsed from model_configs, while its values stay the same.
         self._config_scopes_minute: int | None = None
         self._config_scopes_object: dict[str, Any] | None = None
