@@ -60,8 +60,20 @@ Python の規則は比較の基準と、kernel が決めない値のために残
 
 部品の足し算では tick あたり約 50 µs 減る計算ですが、全体の差は A/A の揺れの中で、**速くなったとは確かめられていません。**
 
-## 結果の場所
+## 結果
 
-数字はレーンの報告にあります。`docs/rust-port/lanes/` の他のレーンと同じ確認を行いました。ゲートの行の網羅（`domain/staff_dynamics.py`）は、kernel ありだけで 34/179 行、kernel なしと合わせて 132/179 行です。残りは主に `raise` と `validate_override` で、`test_staff_dynamics_row.py` が確かめます。
+merge 後の `60d7149` の結果です（`feature/rust-port` のレーン B、C を含みます）。
+
+| 確認 | 結果 |
+|---|---|
+| テスト | kernel あり 2694件通過、6件 skip。`SHELTERSIM_NATIVE=0` 1774件通過、926件 skip |
+| `gate_all_paths.py --expect`（`rule_shadow` つき）、`--reversed-order` | どちらも55シナリオ、問題0件 |
+| 7日分のハッシュ | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041` |
+| `rule_shadow`（ゲート） | `update` は 31,530回のうち kernel 28,850回、残り 2,680回は名前空間がない世界。比べた値 870,006個、違い0件。読む kernel は `on_shift` 185,456回、`is_available` 149,458回、すべて kernel が動き、違い0件。`Unsupported` 0回 |
+| `rule_shadow`（7日分） | `update` 10,080回すべて kernel、比べた値 453,600個、`on_shift` 311,311回、`is_available` 74,785回、違い0件、`Unsupported` 0回 |
+| `tracked_mirror_gate.py` | **merge 後は終わっていません**（時間切れで止めました）。merge 前の `7f4a51c` で220行、問題0件 |
+| 道具の確認（merge 前）：kernel の疲労を 1% 変えたコピー | `rule_shadow` が違いを報告し、ゲートも `staff-fatigue-linear-v1` で失敗 |
+
+ゲートの行の網羅（merge 前、`domain/staff_dynamics.py`）：kernel ありだけで 34/179 行、kernel なしと合わせて 132/179 行です。残りは主に `raise` と `validate_override` で、`test_staff_dynamics_row.py` が確かめます。
 
 Windows と macOS では未確認です（CI で動きます）。`exp` の一致は Linux でだけ確かめました。
