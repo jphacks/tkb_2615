@@ -101,7 +101,7 @@ python -m coverage report --sort=cover
 
 `support/paths.py`（`fixtures/`のファイルのパス）と`support/isolation.py`（隔離の処理）は、fixtureを持たない部品です。テストで使う`fixtures/`のファイルが増えたら、`support/paths.py`に定数を足します。
 
-`support/tracked_mirror.py`も、fixtureを持たない部品です。Rust移植が計画する「`model_state`への書き込みを転送する入れ物」を純Pythonで試すもので、`src/`からは使いません。全テストをこの入れ物の上で動かすときは、`PYTHONPATH`に`tests`を足して`pytest -p support.tracked_mirror_plugin`を実行します。素の実行と各段階で比べるときは、`benchmarks/tracked_mirror_gate.py`を使います。使い方と結果は[rust-port/lanes/p1-tracked-mirror.md](rust-port/lanes/p1-tracked-mirror.md)にあります。
+`support/tracked_mirror.py`も、fixtureを持たない部品です。Rust移植の「`model_state`への書き込みを転送する入れ物」（`core/state_mirror.py`）に、Rustの代わりにPythonの影の文書を相手として渡し、世界のすべての文書を載せて、転送の漏れを探します。`src/`からは使いません。全テストをこの入れ物の上で動かすときは、`PYTHONPATH`に`tests`を足して`pytest -p support.tracked_mirror_plugin`を実行します。素の実行と各段階で比べるときは、`benchmarks/tracked_mirror_gate.py`を使います。使い方と結果は[rust-port/lanes/p1-tracked-mirror.md](rust-port/lanes/p1-tracked-mirror.md)にあります。
 
 `tests/unit/repo/test_tracked_write_lint.py`は、tick側のコードで、入れ物に入れた値を元の名前のまま書き換える書き方（`record = relationships[key] = {...}`のあとの`record["trust"] = x`）を見つけると失敗します。入れたあとは`record = relationships[key]`で読み直します。
 

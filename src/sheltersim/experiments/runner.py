@@ -66,6 +66,7 @@ from sheltersim.experiments.phases.dispatch import DispatchPhase
 from sheltersim.experiments.phases.metrics import MetricsPhase
 from sheltersim.experiments.phases.propose import ProposePhase
 from sheltersim.experiments.phases.sample import SamplePhase
+from sheltersim.experiments.phases.segments import install_segments
 from sheltersim.experiments.phases.update import UpdatePhase
 from sheltersim.experiments.scenario import ScenarioSpec, ToiletServiceConfig
 from sheltersim.inspection.traces import RunArtifactWriter
@@ -393,6 +394,9 @@ class OfflineSimulationController(
             self._run_sample_phase(minute, rng)
         elif phase is TickPhase.COLLECT_METRICS:
             self._run_metrics_phase(world, minute)
+
+
+install_segments(OfflineSimulationController)
 
 
 def run_scenario(

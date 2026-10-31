@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from support.tracked_mirror import Drift, Session, TrackedDict, TrackedList
+from support.tracked_mirror import Drift, Session, TrackedDict, TrackedList, mirror_of
 
 from sheltersim.core.engine import TickEngine, TickPhase
 from sheltersim.core.world import WorldState
@@ -57,8 +57,8 @@ def test_a_world_keeps_tracked_documents_through_copy_and_swap(generated_scenari
 
         # The swap brought the candidate's tree, with the shadow its writes built.
         assert isinstance(world.model_state["probe"]["values"], TrackedList)
-        assert world.model_state._m_mirror.shadow["probe"] == {"values": [1]}
-        assert world.model_state._m_mirror.difference() is None
+        assert mirror_of(world.model_state).shadow["probe"] == {"values": [1]}
+        assert mirror_of(world.model_state).difference() is None
 
 
 def _engine_with(scenario: Any, write: Callable[[WorldState], None]) -> TickEngine:

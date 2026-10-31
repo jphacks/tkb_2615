@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet, PyString};
 use std::ptr::{addr_of_mut, null_mut};
 
+use crate::core::tracked::{is_readable_dict_type, is_readable_list_type};
+
 type Object = *mut ffi::PyObject;
 
 fn type_is(value: Object, expected: *mut ffi::PyTypeObject) -> bool {
@@ -27,12 +29,16 @@ fn is_exact_str(value: Object) -> bool {
     type_is(value, addr_of_mut!(ffi::PyUnicode_Type))
 }
 
+/// A plain dict or a tracked one; `core/tracked.rs` says why no other subclass.
 fn is_exact_dict(value: Object) -> bool {
-    type_is(value, addr_of_mut!(ffi::PyDict_Type))
+    // SAFETY: value is a live object reached from a dict the caller holds.
+    is_readable_dict_type(unsafe { ffi::Py_TYPE(value) })
 }
 
+/// A plain list or a tracked one.
 pub(crate) fn is_exact_list(value: Object) -> bool {
-    type_is(value, addr_of_mut!(ffi::PyList_Type))
+    // SAFETY: as above.
+    is_readable_list_type(unsafe { ffi::Py_TYPE(value) })
 }
 
 fn is_none(value: Object) -> bool {
@@ -98,6 +104,9 @@ fn all_items(
     dict: Object,
     mut check: impl FnMut(Object, Object) -> PyResult<bool>,
 ) -> PyResult<bool> {
+    if !is_exact_dict(dict) {
+        return Ok(false);
+    }
     let mut position: ffi::Py_ssize_t = 0;
     let mut key: Object = null_mut();
     let mut value: Object = null_mut();

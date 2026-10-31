@@ -12,6 +12,7 @@ use pyo3::types::{PyDict, PyFloat, PyInt, PyString};
 
 use crate::core::mathx::py_fsum;
 use crate::core::rng::{Key, KeyedDraws};
+use crate::core::tracked::as_readable_dict;
 use crate::{write_json_string, Unsupported};
 
 /// math.fsum of finite values, for tests.
@@ -38,9 +39,7 @@ pub(crate) fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
 pub(crate) fn exact_dict<'a, 'py>(
     value: &'a Bound<'py, PyAny>,
 ) -> PyResult<&'a Bound<'py, PyDict>> {
-    value
-        .downcast_exact::<PyDict>()
-        .map_err(|_| Unsupported::new_err("not a dict"))
+    as_readable_dict(value).ok_or_else(|| Unsupported::new_err("not a dict"))
 }
 
 pub(crate) fn texts<'a>(values: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
@@ -60,6 +59,7 @@ pub(crate) fn previous_contacts(
     contacts: &Bound<'_, PyDict>,
 ) -> PyResult<HashMap<String, (i64, i64)>> {
     let py = contacts.py();
+    exact_dict(contacts.as_any())?;
     let last_seen = intern!(py, "last_seen_minute");
     let consecutive = intern!(py, "consecutive_minutes");
     let mut previous = HashMap::with_capacity(contacts.len());

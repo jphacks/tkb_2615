@@ -38,6 +38,15 @@ Checkpoint document) and times them.
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
   and `rules/information.rs` hold the contact kernels, which are also at the top of the module
   for the existing calls; what they share is in `contacts.rs`.
+- `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
+  `NamespaceMirror` per owned namespace, which holds its `Row` and is the sink of its tracked tree
+  (`sheltersim/core/state_mirror.py`). `src/state/sample_namespace.rs` is the template of an owned
+  namespace; `docs/rust-port/lanes/p4-world-core.md` is the how-to. Rows hold no Python handles.
+  A `Row`'s `apply` runs no Python code and no `PyRefMut` is held across a callback. Read the
+  world's core again after any callback (`core_of`), since a copy-and-swap may have moved it.
+- `src/core/tracked.rs`: the only dict and list subclasses a kernel may read through the C API.
+  Use `as_readable_dict` and `as_readable_list`, not `downcast` or `downcast_exact`, to accept
+  state: a mirrored namespace is made of those classes, and any other subclass may override reads.
 - Crates lanes need are already in `Cargo.toml` (`indexmap`, `smallvec`, `rustc-hash`, `itoa`),
   so `Cargo.lock` stays quiet. `HashMap` and `FxHashMap` are for lookups only: anything iterated
   into an output goes through `IndexMap`, or is sorted.

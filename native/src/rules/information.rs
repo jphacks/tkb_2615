@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
 use crate::contacts::{
-    contact_entry, exact_float, key_head, nearby_buckets, pair_key, previous_contacts, quoted_ids,
+    contact_entry, exact_dict, exact_float, key_head, nearby_buckets, pair_key, previous_contacts, quoted_ids,
     select_contacts, texts, zone_members, Basis, Bucket,
 };
 use crate::core::mathx::py_max;
@@ -36,7 +36,7 @@ pub fn information_contacts_without_messages<'py>(
     if id_texts.len() != zone_texts.len() {
         return Err(Unsupported::new_err("people and zones differ in length"));
     }
-    let pressure = query_pressure.copy()?;
+    let pressure = exact_dict(query_pressure.as_any())?.copy()?;
     for id in &ids {
         let Some(value) = pressure.get_item(id)? else {
             return Err(Unsupported::new_err("a person has no query pressure"));

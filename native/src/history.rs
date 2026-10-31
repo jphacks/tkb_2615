@@ -8,24 +8,40 @@
 //! anything else in an entry (a subclass, a non-str key) makes it different, and the
 //! caller reads the entry again. So a false here never changes a result.
 //!
-//! Only exact built-in types are compared, so no Python code runs during the walk.
+//! Only exact built-in types and the tracked containers, whose reads are the inherited C code,
+//! are compared, so no Python code runs during the walk. A tracked container counts as the plain
+//! one its document holds.
 
 use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use std::ptr::{addr_of_mut, null_mut};
 
+use crate::core::tracked::{as_readable_list, is_readable_dict_type, is_readable_list_type};
+
 type Object = *mut ffi::PyObject;
 
 // Deeper values are left to the caller, which reads the entry again.
 const MAX_DEPTH: usize = 32;
 
+/// The built-in type a tracked container stands for; any other type is itself.
+#[inline]
+fn plain_kind(kind: *mut ffi::PyTypeObject) -> *mut ffi::PyTypeObject {
+    if is_readable_dict_type(kind) {
+        addr_of_mut!(ffi::PyDict_Type)
+    } else if is_readable_list_type(kind) {
+        addr_of_mut!(ffi::PyList_Type)
+    } else {
+        kind
+    }
+}
+
 fn same_value(left: Object, right: Object, depth: usize) -> bool {
     // SAFETY: both are live objects reached from lists the caller holds, the GIL is
     // held, and nothing below runs Python code, so nothing borrowed here goes away.
     unsafe {
-        let kind = ffi::Py_TYPE(left);
-        if kind != ffi::Py_TYPE(right) {
+        let kind = plain_kind(ffi::Py_TYPE(left));
+        if kind != plain_kind(ffi::Py_TYPE(right)) {
             return false;
         }
         if kind == addr_of_mut!(ffi::PyUnicode_Type) || kind == addr_of_mut!(ffi::PyLong_Type) {
@@ -77,11 +93,14 @@ fn same_value(left: Object, right: Object, depth: usize) -> bool {
 /// Whether each of `current[:count]` is exactly `documents[start + i]`.
 #[pyfunction]
 pub fn same_json_items(
-    current: &Bound<'_, PyList>,
+    current: &Bound<'_, PyAny>,
     documents: &Bound<'_, PyList>,
     start: usize,
     count: usize,
 ) -> bool {
+    let Some(current) = as_readable_list(current) else {
+        return false;
+    };
     if count > current.len() || start.saturating_add(count) > documents.len() {
         return false;
     }

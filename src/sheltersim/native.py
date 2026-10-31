@@ -45,6 +45,17 @@ def state(name: str) -> Any:
     return None if _native is None else getattr(_native.state, name)
 
 
+def world_core() -> Any:
+    """A new sheltersim_native.WorldCore, or None without the extension (core/state_mirror.py)."""
+    return None if _native is None else _native.WorldCore()
+
+
+def install_tracked_types(*classes: type) -> None:
+    """Tell the kernels which dict and list subclasses read as plain ones (core/tracked.rs)."""
+    if _native is not None:
+        _native.install_tracked_types(*classes)
+
+
 def canonical_json(value: Any) -> bytes | None:
     """json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     allow_nan=False).encode(), or None when the kernel leaves value to json."""
@@ -197,11 +208,7 @@ def same_saved_records(records: list[Any], raws: list[bytes], *types: type) -> b
 def same_json_items(current: Any, documents: list[Any], start: int, count: int) -> bool | None:
     """Whether each of current[:count] is exactly documents[start + i], types included
     (1, 1.0 and True differ, and a tuple and a list), or None without the kernel."""
-    if _native is None:
-        return None
-    if type(current) is not list:
-        return False
-    return _native.same_json_items(current, documents, start, count)
+    return None if _native is None else _native.same_json_items(current, documents, start, count)
 
 
 def _dict_watchers_installed() -> bool:

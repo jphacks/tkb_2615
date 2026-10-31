@@ -10,6 +10,7 @@ from sheltersim.contracts.operations import (
     validate_shared_operations_config,
 )
 from sheltersim.contracts.policies import selected_models
+from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import ACTION_LIFECYCLE_POLICY_VERSION
 from sheltersim.domain.agent_dynamics import (
@@ -333,35 +334,49 @@ def validate_simulator_extensions(
         )
     if missing:
         raise ValueError(f"required simulator state is missing: {sorted(missing)}")
-    validate_agent_dynamics_state(world)
-    validate_body_state(
-        world,
-        validate_event_history=validate_event_history,
-        tick_memo=tick_memo,
-        history_memo=history_memo,
-    )
-    validate_population_dynamics_state(world)
-    if tick_memo is None or not tick_memo.lifecycle_unchanged:
+    if not rust_validated(world, "agent_dynamics_v1"):
+        validate_agent_dynamics_state(world)
+    if not rust_validated(world, "body_state_v1"):
+        validate_body_state(
+            world,
+            validate_event_history=validate_event_history,
+            tick_memo=tick_memo,
+            history_memo=history_memo,
+        )
+    if not rust_validated(world, "population_dynamics_v1"):
+        validate_population_dynamics_state(world)
+    if (tick_memo is None or not tick_memo.lifecycle_unchanged) and not rust_validated(
+        world, "population_lifecycle_v1"
+    ):
         validate_population_lifecycle_state(world)
-    validate_social_network_state(world, tick_memo=tick_memo)
-    validate_staff_dynamics_state(world)
-    validate_staff_operations_state(world)
-    validate_temporary_spaces_state(world)
-    validate_movement_runtime_state(world)
-    if tick_memo is None or not tick_memo.overlay_unchanged:
+    if not rust_validated(world, "social_network_v1"):
+        validate_social_network_state(world, tick_memo=tick_memo)
+    if not rust_validated(world, "staff_dynamics_v1"):
+        validate_staff_dynamics_state(world)
+    if not rust_validated(world, "staff_operations_v1"):
+        validate_staff_operations_state(world)
+    if not rust_validated(world, "temporary_spaces_v1"):
+        validate_temporary_spaces_state(world)
+    if not rust_validated(world, "movement_v1"):
+        validate_movement_runtime_state(world)
+    if (tick_memo is None or not tick_memo.overlay_unchanged) and not rust_validated(
+        world, "geometry_overlay_v1"
+    ):
         validate_geometry_overlay_state(world)
-    validate_facility_queue_state(world)
+    if not rust_validated(world, "facility_queues_v1"):
+        validate_facility_queue_state(world)
     if (
         SHARED_OPERATIONS_KEY in world.model_state
         and "shared_operations" not in world.model_configs
     ):
         raise ValueError("shared_operations_v1 requires its signed Scenario contract")
-    validate_shared_operations_state(
-        world,
-        validate_event_history=validate_event_history,
-        tick_memo=tick_memo,
-        history_memo=history_memo,
-    )
+    if not rust_validated(world, SHARED_OPERATIONS_KEY):
+        validate_shared_operations_state(
+            world,
+            validate_event_history=validate_event_history,
+            tick_memo=tick_memo,
+            history_memo=history_memo,
+        )
 
 
 def restore_simulator_extensions(world: WorldState, model_state: dict[str, Any]) -> None:

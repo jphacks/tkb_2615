@@ -1,17 +1,19 @@
-"""A test-only prototype of the tracked mirror the Rust port plans (docs/rust-port/lanes/).
+"""A test-only sink for the tracked containers of the Rust port (docs/rust-port/lanes/).
 
-Rust will own model_state, and unported Python keeps using nested dicts and lists that forward
-each write to Rust. A write that is not forwarded drifts silently, so this module runs the same
-idea in pure Python and looks for such writes:
+Rust owns a namespace with core/state_mirror.py, and unported Python keeps using nested dicts and
+lists that forward each write to Rust. A write that is not forwarded drifts silently, so this module
+puts every document of a world in the same containers and looks for such writes:
 
-- TrackedDict and TrackedList forward every write through their mutators to a Mirror, which
-  applies it to a plain shadow document, by path, the way Rust would apply it to its rows.
+- The production TrackedDict and TrackedList forward every write through their mutators to a sink.
+  Here that is a Mirror, which applies it to a plain shadow document, by path, the way Rust applies
+  it to its rows. Where a container in a tree already holds a place, this keeps both places and
+  reports a write to it (write_to_shared_node), to find what production's copy would change.
 - A plain container inserted into a tracked one is converted on insert, so an alias of the plain
   object no longer reaches the tree. Session keeps such aliases and reports any later change.
 - At each phase end Session compares every tracked document with its shadow. It can also compare
   with a stream of digests a plain run of the same scenario recorded.
 
-Nothing here runs in production and src/ does not import it. See
+Nothing here runs in production and src/ does not import this module. See
 tests/support/tracked_mirror_plugin.py for the whole test suite under the mirror, and
 benchmarks/tracked_mirror_gate.py for the lockstep runs over many scenarios.
 """
@@ -32,6 +34,9 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from sheltersim.core import state_mirror
+from sheltersim.core.state_mirror import TrackedDict, TrackedList
+
 # The fields of WorldState that are plain JSON-like trees. The Rust design owns model_state and
 # metric_state through this mirror; the others are here because a write to them would matter
 # the same way.
@@ -44,7 +49,7 @@ TRACKED_FIELDS = (
     "rng_state",
 )
 _ATOMS = frozenset({str, int, float, bool, type(None)})
-_THIS_FILE = __file__
+_OWN_FILES = (__file__, state_mirror.__file__)
 _MISSING = object()
 _active: Session | None = None
 
@@ -154,9 +159,9 @@ def _node_tokens(value: Any) -> Any:
 
 
 def _caller_site() -> str:
-    """file:line of the first frame outside this module."""
+    """file:line of the first frame outside this module and the containers."""
     frame = sys._getframe(1)
-    while frame is not None and frame.f_code.co_filename == _THIS_FILE:
+    while frame is not None and frame.f_code.co_filename in _OWN_FILES:
         frame = frame.f_back
     if frame is None:
         return "<unknown>"
@@ -187,13 +192,25 @@ def _locate(parent: Any, node: Any, hint: Any) -> Any:
     return _MISSING
 
 
+class _Record:
+    """What a node of this sink knows: its _node slot. Its parents hold (weak parent, key)."""
+
+    __slots__ = ("owner", "mirror", "parents")
+
+    def __init__(self, owner: Any, parents: list[tuple[Any, Any]]) -> None:
+        self.owner = weakref.ref(owner)
+        self.mirror: Mirror | None = None
+        self.parents = parents
+
+
 def _paths(node: Any) -> list[tuple[Mirror, tuple[Any, ...]]]:
     """Every (mirror, path) that reaches node now. More than one means a shared node."""
     found: list[tuple[Mirror, tuple[Any, ...]]] = []
-    if node._m_mirror is not None:
-        found.append((node._m_mirror, ()))
+    record = node._node
+    if record.mirror is not None:
+        found.append((record.mirror, ()))
     alive = []
-    for entry in node._m_parents:
+    for entry in record.parents:
         parent = entry[0]()
         if parent is None:
             continue
@@ -202,8 +219,13 @@ def _paths(node: Any) -> list[tuple[Mirror, tuple[Any, ...]]]:
             continue
         alive.append((entry[0], key))
         found.extend((mirror, (*path, key)) for mirror, path in _paths(parent))
-    node._m_parents = alive
+    record.parents = alive
     return found
+
+
+def _bind(node: Any, parents: list[tuple[Any, Any]]) -> None:
+    node._node = _Record(node, parents)
+    node._sink = _SINK
 
 
 def _adopt(value: Any, parent: Any, key: Any, session: Session | None, top: bool = False) -> Any:
@@ -213,8 +235,7 @@ def _adopt(value: Any, parent: Any, key: Any, session: Session | None, top: bool
         return value
     if kind is dict or kind is list:
         node = (_dict_class(session) if kind is dict else TrackedList)()
-        node._m_adopted = True
-        node._m_parents = [(weakref.ref(parent), key)] if parent is not None else []
+        _bind(node, [(weakref.ref(parent), key)] if parent is not None else [])
         if kind is dict:
             for child_key, child in dict.items(value):
                 if type(child_key) is not str and session is not None:
@@ -227,23 +248,24 @@ def _adopt(value: Any, parent: Any, key: Any, session: Session | None, top: bool
             session.note_plain_insert(value, node)
         return node
     if isinstance(value, (TrackedDict, TrackedList)):
-        if parent is not None:
-            value._m_parents = [
-                entry
-                for entry in value._m_parents
-                if entry[0]() is not None
-                and (entry[0]() is not parent or (isinstance(parent, dict) and entry[1] != key))
-            ]
-            value._m_parents.append((weakref.ref(parent), key))
-        if not value._m_adopted:
+        if value._sink is None:
             # Built by a constructor call, such as dataclasses.asdict's type(obj)(...).
-            value._m_adopted = True
+            _bind(value, [])
             if isinstance(value, dict):
                 for child_key, child in dict.items(value):
                     dict.__setitem__(value, child_key, _adopt(child, value, child_key, session))
             else:
                 for index, child in enumerate(list(list.__iter__(value))):
                     list.__setitem__(value, index, _adopt(child, value, index, session))
+        if parent is not None:
+            record = value._node
+            record.parents = [
+                entry
+                for entry in record.parents
+                if entry[0]() is not None
+                and (entry[0]() is not parent or (isinstance(parent, dict) and entry[1] != key))
+            ]
+            record.parents.append((weakref.ref(parent), key))
         return value
     if kind is tuple:
         if session is not None and any(type(item) not in _ATOMS for item in value):
@@ -274,92 +296,56 @@ def _forward(node: Any, op: str, *arguments: Any) -> None:
     mirror.apply(path, op, arguments)
 
 
-# ---- Tracked containers -----------------------------------------------------------------------
+class _Sink:
+    """The sink protocol of core/state_mirror.py. Nodes stay bound when they leave a tree, so a
+    later write to one is seen and reported (write_to_detached_node)."""
+
+    @staticmethod
+    def dict_set(node: Any, _record: _Record, key: Any, value: Any) -> None:
+        stored = _adopt(value, node, key, _active, top=True)
+        dict.__setitem__(node, key, stored)
+        _forward(node, "set", key, plain_copy(stored))
+
+    @staticmethod
+    def list_append(node: Any, _record: _Record, value: Any) -> None:
+        stored = _adopt(value, node, list.__len__(node), _active, top=True)
+        list.append(node, stored)
+        _forward(node, "append", plain_copy(stored))
+
+    @staticmethod
+    def adopt(record: _Record, key: Any, value: Any) -> Any:
+        return _adopt(value, record.owner(), key, _active, top=True)
+
+    @staticmethod
+    def release(_value: Any) -> None:
+        pass
+
+    @staticmethod
+    def forward(node: Any, _record: _Record, op: str, *arguments: Any) -> None:
+        if op == "set":
+            _forward(node, op, arguments[0], plain_copy(arguments[1]))
+        elif op in {"del", "clear", "del_range", "reverse"}:
+            _forward(node, op, *arguments)
+        elif op == "insert":
+            _forward(node, op, arguments[0], plain_copy(arguments[1]))
+        elif op == "extend":
+            _forward(node, op, [plain_copy(item) for item in arguments[0]])
+        elif op == "slice_set":
+            _forward(node, op, arguments[0], [plain_copy(item) for item in arguments[1]])
+        elif op == "replace_all":
+            _forward(node, op, plain_copy(node))
+        else:  # pragma: no cover - only the production containers forward
+            raise ValueError(op)
 
 
-class TrackedDict(dict):
-    """A dict whose every mutator forwards the write. Reads are the inherited C code."""
-
-    __slots__ = ("_m_mirror", "_m_parents", "_m_adopted", "__weakref__")
-
-    def __new__(cls, *_arguments: Any, **_keywords: Any) -> TrackedDict:
-        self = super().__new__(cls)
-        self._m_mirror = None
-        self._m_parents = []
-        self._m_adopted = False
-        return self
-
-    def __init__(self, *arguments: Any, **keywords: Any) -> None:
-        if self._m_adopted:
-            self.update(*arguments, **keywords)
-        else:
-            dict.__init__(self, *arguments, **keywords)
-
-    def __setitem__(self, key: Any, value: Any) -> None:
-        if not self._m_adopted:
-            dict.__setitem__(self, key, value)
-            return
-        node = _adopt(value, self, key, _active, top=True)
-        dict.__setitem__(self, key, node)
-        _forward(self, "set", key, plain_copy(node))
-
-    def __delitem__(self, key: Any) -> None:
-        dict.__delitem__(self, key)
-        if self._m_adopted:
-            _forward(self, "del", key)
-
-    def pop(self, key: Any, *default: Any) -> Any:
-        present = key in self
-        value = dict.pop(self, key, *default)
-        if present and self._m_adopted:
-            _forward(self, "del", key)
-        return value
-
-    def popitem(self) -> tuple[Any, Any]:
-        key, value = dict.popitem(self)
-        if self._m_adopted:
-            _forward(self, "del", key)
-        return key, value
-
-    def setdefault(self, key: Any, default: Any = None) -> Any:
-        if key in self:
-            return dict.__getitem__(self, key)
-        self[key] = default
-        # The stored node, not the plain default: this is what makes setdefault's result safe.
-        return dict.__getitem__(self, key)
-
-    def update(self, *arguments: Any, **keywords: Any) -> None:
-        for key, value in dict(*arguments, **keywords).items():
-            self[key] = value
-
-    def clear(self) -> None:
-        dict.clear(self)
-        if self._m_adopted:
-            _forward(self, "clear")
-
-    def __ior__(self, other: Any) -> TrackedDict:
-        self.update(other)
-        return self
-
-    def copy(self) -> dict[Any, Any]:
-        return dict(self)
-
-    def __copy__(self) -> dict[Any, Any]:
-        return dict(self)
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> dict[Any, Any]:
-        result: dict[Any, Any] = {}
-        memo[id(self)] = result
-        for key, value in self.items():
-            result[copy.deepcopy(key, memo)] = copy.deepcopy(value, memo)
-        return result
-
-    def __reduce_ex__(self, _protocol: Any) -> tuple[Any, ...]:
-        return (dict, (dict(self),))
+_SINK = _Sink()
 
 
 class ReverseReadDict(TrackedDict):
-    """Every iteration runs backwards, to find code that depends on dict order within a phase."""
+    """Every iteration runs backwards, to find code that depends on dict order within a phase.
+
+    Kernels turn this class down, since they read through the C API and would not see the order.
+    """
 
     __slots__ = ()
 
@@ -384,121 +370,12 @@ class ReverseReadDict(TrackedDict):
         key = next(iter(self))
         return key, self.pop(key)
 
-
-class TrackedList(list):
-    """A list whose every mutator forwards the write. Reads are the inherited C code."""
-
-    __slots__ = ("_m_mirror", "_m_parents", "_m_adopted", "__weakref__")
-
-    def __new__(cls, *_arguments: Any, **_keywords: Any) -> TrackedList:
-        self = super().__new__(cls)
-        self._m_mirror = None
-        self._m_parents = []
-        self._m_adopted = False
-        return self
-
-    def __init__(self, *arguments: Any) -> None:
-        if self._m_adopted:
-            self[:] = list(*arguments)
-        else:
-            list.__init__(self, *arguments)
-
-    def __setitem__(self, index: Any, value: Any) -> None:
-        if not self._m_adopted:
-            list.__setitem__(self, index, value)
-            return
-        if isinstance(index, slice):
-            nodes = [_adopt(item, self, None, _active, top=True) for item in value]
-            list.__setitem__(self, index, nodes)
-            _forward(self, "slice_set", index, [plain_copy(node) for node in nodes])
-            return
-        node = _adopt(value, self, index, _active, top=True)
-        list.__setitem__(self, index, node)
-        _forward(self, "set", index, plain_copy(node))
-
-    def __delitem__(self, index: Any) -> None:
-        list.__delitem__(self, index)
-        if self._m_adopted:
-            _forward(self, "del", index)
-
-    def append(self, value: Any) -> None:
-        if not self._m_adopted:
-            list.append(self, value)
-            return
-        node = _adopt(value, self, list.__len__(self), _active, top=True)
-        list.append(self, node)
-        _forward(self, "append", plain_copy(node))
-
-    def extend(self, values: Any) -> None:
-        if not self._m_adopted:
-            list.extend(self, values)
-            return
-        size = list.__len__(self)
-        nodes = [
-            _adopt(item, self, size + offset, _active, top=True)
-            for offset, item in enumerate(list(values))
-        ]
-        list.extend(self, nodes)
-        _forward(self, "extend", [plain_copy(node) for node in nodes])
-
-    def insert(self, index: Any, value: Any) -> None:
-        if not self._m_adopted:
-            list.insert(self, index, value)
-            return
-        node = _adopt(value, self, None, _active, top=True)
-        list.insert(self, index, node)
-        _forward(self, "insert", index, plain_copy(node))
-
-    def remove(self, value: Any) -> None:
-        index = list.index(self, value)
-        del self[index]
-
-    def pop(self, index: Any = -1) -> Any:
-        value = list.pop(self, index)
-        if self._m_adopted:
-            _forward(self, "del", index)
-        return value
-
-    def clear(self) -> None:
-        list.clear(self)
-        if self._m_adopted:
-            _forward(self, "clear")
-
-    def sort(self, *, key: Any = None, reverse: bool = False) -> None:
-        list.sort(self, key=key, reverse=reverse)
-        if self._m_adopted:
-            _forward(self, "replace_all", plain_copy(self))
-
-    def reverse(self) -> None:
-        list.reverse(self)
-        if self._m_adopted:
-            _forward(self, "reverse")
-
-    def __iadd__(self, values: Any) -> TrackedList:
-        self.extend(values)
-        return self
-
-    def __imul__(self, count: Any) -> TrackedList:
-        list.__imul__(self, count)
-        if self._m_adopted:
-            _forward(self, "replace_all", plain_copy(self))
-        return self
-
-    def copy(self) -> list[Any]:
-        return list(self)
-
-    def __copy__(self) -> list[Any]:
-        return list(self)
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> list[Any]:
-        result: list[Any] = []
+    def __deepcopy__(self, memo: dict[int, Any]) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
         memo[id(self)] = result
-        for value in self:
-            result.append(copy.deepcopy(value, memo))
+        for key, value in self.items():
+            result[copy.deepcopy(key, memo)] = copy.deepcopy(value, memo)
         return result
-
-    def __reduce_ex__(self, _protocol: Any) -> tuple[Any, ...]:
-        return (list, (list(self),))
 
 
 class Mirror:
@@ -532,6 +409,8 @@ class Mirror:
             target[arguments[0]] = arguments[1]
         elif op == "del":
             del target[arguments[0]]
+        elif op == "del_range":
+            del target[arguments[0] : arguments[1]]
         elif op == "clear":
             target.clear()
         elif op == "append":
@@ -592,17 +471,23 @@ def tracked_root(value: Any, field: str = "model_state", session: Session | None
     """Convert a plain document into a tracked tree with its own Mirror."""
     session = session if session is not None else _active
     if isinstance(value, (TrackedDict, TrackedList)):
-        if value._m_mirror is not None:
+        if mirror_of(value) is not None:
             return value
         value = plain_copy(value)
     root = _adopt(value, None, None, session)
-    root._m_mirror = Mirror(field, session, root)
+    root._node.mirror = Mirror(field, session, root)
     return root
+
+
+def mirror_of(root: Any) -> Mirror | None:
+    """The Mirror of a tracked document's root, or None for anything else."""
+    record = getattr(root, "_node", None)
+    return record.mirror if isinstance(record, _Record) else None
 
 
 def check_shadow(root: Any) -> None:
     """Raise Drift if the tracked document differs from what its forwarded writes rebuilt."""
-    found = root._m_mirror.difference(strict=True)
+    found = mirror_of(root).difference(strict=True)
     if found is not None:
         raise Drift(f"tracked document differs from its write stream at {found[0]}: {found[1]}")
 
@@ -1009,7 +894,7 @@ class Session:
             if self.tracked:
                 for field in TRACKED_FIELDS:
                     value = getattr(world, field, None)
-                    mirror = getattr(value, "_m_mirror", None)
+                    mirror = mirror_of(value)
                     if mirror is not None:
                         reverse_tree(mirror.shadow)
         if last_phase:
@@ -1023,7 +908,7 @@ class Session:
         sort = self._sorted_digests()
         for field in TRACKED_FIELDS:
             value = getattr(world, field, None)
-            mirror = getattr(value, "_m_mirror", None)
+            mirror = mirror_of(value)
             if mirror is None:
                 continue
             found = mirror.difference(sort=sort, strict=False)
@@ -1066,9 +951,8 @@ class Session:
             for group, value in rows.items():
                 expected = self.expect.get((number, minute, phase, group))
                 if group.startswith("key_order/"):
-                    # Rust kernels turn down tracked containers, and a kernel and the Python
-                    # code it replaces may build a dict in different orders. Not state: the
-                    # reversing runs show that no result depends on it.
+                    # A kernel and the Python code it replaces may build a dict in different
+                    # orders. Not state: the reversing runs show that no result depends on it.
                     if expected != value and not self._sorted_digests():
                         self.note("key_order_differs_from_plain", group)
                     continue
@@ -1090,7 +974,7 @@ class Session:
             root = reference()
             if root is None:
                 continue
-            found = root._m_mirror.difference(sort=self._sorted_digests())
+            found = mirror_of(root).difference(sort=self._sorted_digests())
             if found is not None:
                 self._drift(
                     f"after minute {self.minute} phase {self.phase} {found[0]}: "
