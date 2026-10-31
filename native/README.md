@@ -118,7 +118,8 @@ each OS, because both call the same libm.
   conditions are still computed in Python, only when they change, and kept with the object the
   Python cache holds. A value a typed field can't hold, or anything Python would raise on, says
   `Unsupported`, and `from_world` runs. `view_of(view)` gives a kernel the snapshot; for a view Python
-  made it reads the fields the update kernels read and sets `partial`.
+  made it reads the fields the update kernels read and sets `partial`. Nothing refuses a partial
+  view for a rule: a rule that reads other fields must check `partial` and say `Unsupported`.
 
 - `rules.social_propagation.update_social_propagation(controller, world, view, deltas, minute, rng)`:
   the update phase's step `_social_propagation` for the three social policies (contact sampling,

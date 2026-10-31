@@ -11,8 +11,8 @@
 //!
 //! What stays in Python, called only when its input changes: parsing a person's context
 //! (`PersonContext`), and a zone's conditions (`zone_environment_view` and the formulas it selects),
-//! each kept here until the Python caches of the phases replace it. No coefficient lives in this
-//! file.
+//! each kept here until the Python caches of the phases replace it. The one coefficient here is in
+//! `misinformation_of`, with `from_world`'s weight, threshold and cap; stressors sum their rates.
 //!
 //! The rows are not read through `AgentView.__dict__` any more: the psychology and social kernels
 //! take `view_of`. Rules at a later phase than the view (the information kernel) take `group_of`,
@@ -1689,7 +1689,7 @@ fn new_view<'py>(
 
 /// What the kernels read of a view Python made (a Rust view was refused, or a test made it). Its
 /// `__dict__` is read with the checks of a typed field. Only what the update kernels read is filled:
-/// `ViewData::partial` says so, and a rule that reads more says Unsupported on it.
+/// `ViewData::partial` says so. Nothing refuses it for a rule: one that reads more must check it.
 fn from_python_view<'py>(view: &Bound<'py, PyAny>) -> PyResult<Bound<'py, RustView>> {
     let py = view.py();
     let items = view.getattr(intern!(py, "agents"))?.call_method0(intern!(py, "items"))?;
