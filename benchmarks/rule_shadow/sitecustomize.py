@@ -1,4 +1,7 @@
-"""Compare the Rust long-term psychology step with its Python rules at every call, in any process.
+"""Compare the Rust steps with their Python rules at every call, in any process.
+
+This file has the long-term psychology step, social_propagation_shadow.py the social one and
+information_shadow.py the information one, whose results are in DIR/information.
 
 Hashes do not see a 1% change in a value that doesn't reach them yet, and a kernel may never run if
 it always says Unsupported. Put this directory first on PYTHONPATH and run anything:
@@ -124,6 +127,10 @@ def _install(output: str) -> None:
     state_mirror.register_rust_validator(PSYCHOLOGICAL_STATE_KEY, validator)
     OfflineSimulationController._update_long_term_psychology = step  # type: ignore[method-assign]
 
+    import social_propagation_shadow
+
+    social_propagation_shadow.install(seen, reasons, differences)
+
     def report() -> None:
         if seen or reasons or differences:
             target = Path(output) / f"{os.getpid()}.json"
@@ -139,3 +146,6 @@ if OUTPUT:
         if shadow.stem != "shadow_kit":
             importlib.import_module(shadow.stem).prepare(OUTPUT)
     _install(OUTPUT)
+    from information_shadow import install as _install_information
+
+    _install_information(OUTPUT)

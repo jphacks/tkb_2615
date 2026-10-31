@@ -36,8 +36,7 @@ Checkpoint document) and times them.
   `native.rules("movement")` or `native.state("movement")`, which are `None` without the
   extension. Catch `native.Unsupported` around a call; the Python code then decides.
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
-  and `rules/information.rs` hold the contact kernels, which are also at the top of the module
-  for the existing calls; what they share is in `contacts.rs`.
+  and `rules/information.rs` hold the contact kernels; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
   `NamespaceMirror` per owned namespace, which holds its `Row` and is the sink of its tracked tree
   (`sheltersim/core/state_mirror.py`). `src/state/sample_namespace.rs` is the small test-only
@@ -109,20 +108,26 @@ each OS, because both call the same libm.
   A new value outside `AgentStateDelta`'s bounds raises `Unsupported`, so its Python
   checks raise the same error; otherwise those checks are skipped.
 
-- `social_channel_update(...)`: one tick of `ExpressivenessChannelOpennessPolicy.update`
-  (contact sampling, durations, cooldowns, the bounded stress synchrony and its traces),
-  through `native_update`. `CounterRNG` draws, `math.fsum` (`fsum`, exposed for tests),
-  `max`/`min` ties and float order are those of Python. Contacts whose weights sum to
-  zero make the Python code raise, so they are left to it.
+- `rules.social_propagation.update_social_propagation(controller, world, view, deltas, minute, rng)`:
+  the update phase's step `_social_propagation` for the three social policies (contact sampling,
+  durations, cooldowns, each stress operator). Rust owns `social_propagation_v1`
+  (`src/state/social_propagation.rs`) and reads agents from the entity rows. Each tick refills the
+  contacts in the order of Python's new dict, reusing the nodes of the records
+  (`NamespaceMirror::refill_record_map`). `CounterRNG` draws, `math.fsum`, `sum`, `max`/`min` ties
+  and float order are those of Python. A trace, another RNG, a policy's subclass, and what the
+  Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
+  draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
-- `information_contacts_without_messages(...)`: one tick of
-  `InformationSpreadPolicy.update` while no message, belief or support-request record
-  exists: decayed query pressure, sampled contacts and their records. It needs only
-  people's IDs and zones, so the runner builds no `WorldView` for it. Any message
-  sends the tick to Python.
+- `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
+  `_sample_information_contacts` for the three information policies (contact sampling, durations,
+  forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
+  (`src/state/information.rs`) and reads agents from the entity rows; the household of the view is
+  read from `population_presence_v1`, which Python holds. The tree gets single values and the
+  refilled contacts, never the whole namespace, and the events go through the Python method
+  `_schedule_information_contact`. A trace, another RNG, a policy's subclass and whatever the Python
+  rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
+  same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 
-  Both raise `Unsupported` for any value of another type or any state Python would
-  reject, and neither runs when a trace needs the Python contact records.
   Seven days, run beside the previous commit: `update_agent_state` 76.4 s -> 26.1 s,
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).

@@ -8,8 +8,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
-from sheltersim import native
-from sheltersim.core.rng import CounterRNG, KeyedRandom
+from sheltersim.core.rng import KeyedRandom
 from sheltersim.domain.information import upgrade_information_runtime_state
 from sheltersim.domain.models import (
     AgentInformationState,
@@ -292,69 +291,6 @@ class InformationSpreadPolicy:
             )
         )
         return InformationSpreadResult(state, tuple(proposals), tuple(traces))
-
-    def native_update(
-        self,
-        people: Mapping[str, Any],
-        minute: int,
-        runtime_state: Mapping[str, Any],
-        rng: KeyedRandom,
-        *,
-        zone_neighbors: Mapping[str, tuple[str, ...]],
-    ) -> InformationSpreadResult | None:
-        """update() from the Rust kernel while no message exists, without contact traces;
-        None when the kernel is unavailable or leaves this state to update().
-
-        Only ``people``' IDs and zones matter while nobody holds a belief, so the caller
-        needs no WorldView (feature/rust-port).
-        """
-        if (
-            not native.available()
-            or not self.config.enabled
-            or type(self) not in (InformationSpreadPolicy, EvidenceAwareInformationPolicy)
-            or type(rng) is not CounterRNG
-            or runtime_state.get("schema_version") != 2
-            or runtime_state.get("messages")
-            or runtime_state.get("support_requests")
-            or len(runtime_state) != 7
-        ):
-            return None
-        beliefs = runtime_state.get("beliefs")
-        if not isinstance(beliefs, dict) or any(beliefs.values()):
-            return None
-        ids = sorted(people)
-        if not all(agent_id in beliefs for agent_id in ids):
-            return None
-        native_result = native.information_contacts_without_messages(
-            str(rng.seed),
-            minute,
-            self.config.max_contacts_per_agent,
-            ids,
-            [people[agent_id].zone_id for agent_id in ids],
-            zone_neighbors,
-            runtime_state["contacts"],
-            runtime_state["query_pressure"],
-            self.config.query_pressure_decay_per_minute,
-        )
-        if native_result is None:
-            return None
-        query_pressure, contacts, attempts = native_result
-        counters = dict(runtime_state["counters"])
-        counters["contact_attempts"] += attempts
-        return InformationSpreadResult(
-            {
-                "schema_version": runtime_state["schema_version"],
-                "messages": {},
-                "beliefs": {agent_id: {} for agent_id in beliefs},
-                "contacts": contacts,
-                "query_pressure": query_pressure,
-                "support_requests": [],
-                "counters": counters,
-            },
-            (),
-            (),
-            self.policy_version,
-        )
 
     def _sender_sharing_factor(self, belief: AgentInformationState, sender: Any) -> float:
         """Return a multiplicative propensity; the legacy model shares as before."""

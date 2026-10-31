@@ -699,6 +699,8 @@ def entities_assigned(world: Any, name: str, value: Any) -> Any:
 OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "psychological_distress_v1": ("psychological_distress", "ROW"),
     "staff_dynamics_v1": ("staff_dynamics", "ROW"),
+    "information_spread_v1": ("information", "ROW"),
+    "social_propagation_v1": ("social_propagation", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field

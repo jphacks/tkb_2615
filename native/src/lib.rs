@@ -324,8 +324,6 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(watch::install_dict_watcher, module)?)?;
     module.add_class::<watch::RecordWatch>()?;
     module.add_function(wrap_pyfunction!(contacts::fsum, module)?)?;
-    module.add_function(wrap_pyfunction!(rules::information::information_contacts_without_messages, module)?)?;
-    module.add_function(wrap_pyfunction!(rules::social_propagation::social_channel_update, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
     module.add_function(wrap_pyfunction!(eventlog::saved_record_fields, module)?)?;

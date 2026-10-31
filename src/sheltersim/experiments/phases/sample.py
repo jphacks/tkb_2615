@@ -18,65 +18,34 @@ class SamplePhase:
         self._sample_proximity_contacts(minute)
 
     def _sample_information_contacts(self, minute: int, rng: KeyedRandom) -> None:
+        """The Python rule; the kernel of rules/information.rs replaces this step (segments.py)."""
         if self.information_policy is None:
             return
-        # While no message exists, the Rust kernel needs only the people's zones. No
-        # trace here: it records the contacts.
-        result = (
-            self.information_policy.native_update(
-                self.world.agents,
-                minute,
-                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
-                rng,
-                zone_neighbors=self.zone_neighbors,
-            )
-            if self.artifacts.trace_level is TraceLevel.OFF
-            else None
+        result = self.information_policy.update(
+            # Information policies read the people and the minute, never the audit hash.
+            WorldView.from_world(
+                self.world,
+                include_state_hash=False,
+                person_cache=self._person_contexts,
+                environment_cache=self._zone_environments,
+            ),
+            self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
+            rng,
+            zone_neighbors=self.zone_neighbors,
         )
-        if result is None:
-            result = self.information_policy.update(
-                # Information policies read the people and the minute, never the audit hash.
-                WorldView.from_world(
-                    self.world,
-                    include_state_hash=False,
-                    person_cache=self._person_contexts,
-                    environment_cache=self._zone_environments,
-                ),
-                self.world.model_state[INFORMATION_SPREAD_STATE_KEY],
-                rng,
-                zone_neighbors=self.zone_neighbors,
-            )
         self.world.model_state[INFORMATION_SPREAD_STATE_KEY] = result.runtime_state
         for proposal in result.proposals:
-            due_minute = minute + 1
-            if due_minute >= self.world.duration_minutes:
-                continue
-            sequence = self.world.allocate_event_sequence()
-            self.world.schedule_event(
-                ScheduledEvent(
-                    event_id=f"information-contact-{sequence}",
-                    kind=EventKind.ENDOGENOUS,
-                    due_minute=due_minute,
-                    priority=40,
-                    sequence=sequence,
-                    event_type="information_contact_update",
-                    payload={
-                        "message_id": proposal.message_id,
-                        "sender_agent_id": proposal.sender_agent_id,
-                        "recipient_agent_id": proposal.recipient_agent_id,
-                        "belief": proposal.belief.value,
-                        "contact_basis": proposal.contact_basis,
-                        "contact_minutes": proposal.contact_minutes,
-                    },
-                    source_id=proposal.message_source_id,
-                    causation_id=proposal.causation_id,
-                    provenance={
-                        "source_type": "assumption",
-                        "source_id": "ASM-INFORMATION-SPREAD-V1",
-                        "policy_version": self.information_policy.policy_version,
-                        "transmission_probability": proposal.probability,
-                    },
-                )
+            self._schedule_information_contact(
+                minute,
+                proposal.message_id,
+                proposal.sender_agent_id,
+                proposal.recipient_agent_id,
+                proposal.belief.value,
+                proposal.contact_basis,
+                proposal.contact_minutes,
+                proposal.probability,
+                proposal.message_source_id,
+                proposal.causation_id,
             )
         if self.artifacts.trace_level is not TraceLevel.OFF:
             self.artifacts.record_information_spread_trace(
@@ -89,6 +58,51 @@ class SamplePhase:
                     ),
                 )
             )
+
+    def _schedule_information_contact(
+        self,
+        minute: int,
+        message_id: str,
+        sender_agent_id: str,
+        recipient_agent_id: str,
+        belief: str,
+        contact_basis: str,
+        contact_minutes: int,
+        probability: float,
+        message_source_id: str,
+        causation_id: str,
+    ) -> None:
+        """Next minute's transfer of one claim, called by the Python rule and the kernel."""
+        due_minute = minute + 1
+        if due_minute >= self.world.duration_minutes:
+            return
+        sequence = self.world.allocate_event_sequence()
+        self.world.schedule_event(
+            ScheduledEvent(
+                event_id=f"information-contact-{sequence}",
+                kind=EventKind.ENDOGENOUS,
+                due_minute=due_minute,
+                priority=40,
+                sequence=sequence,
+                event_type="information_contact_update",
+                payload={
+                    "message_id": message_id,
+                    "sender_agent_id": sender_agent_id,
+                    "recipient_agent_id": recipient_agent_id,
+                    "belief": belief,
+                    "contact_basis": contact_basis,
+                    "contact_minutes": contact_minutes,
+                },
+                source_id=message_source_id,
+                causation_id=causation_id,
+                provenance={
+                    "source_type": "assumption",
+                    "source_id": "ASM-INFORMATION-SPREAD-V1",
+                    "policy_version": self.information_policy.policy_version,
+                    "transmission_probability": probability,
+                },
+            )
+        )
 
     def _sample_proximity_contacts(self, minute: int) -> None:
         """Schedule only reproducible same-zone physical proximity observations."""

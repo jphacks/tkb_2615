@@ -180,12 +180,13 @@ def test_a_rebuilt_tree_has_the_values_and_the_order_of_the_first() -> None:
 
 @needs_kernels
 @pytest.mark.parametrize(
+    # The overflow message is CPython's: "too large" on Linux, "too big" on Windows.
     ("write", "reason"),
     [
         (lambda record: record.__setitem__("daily_acute_sum", 1), "not a float"),
         (lambda record: record.__setitem__("daily_observed_minutes", 1.0), "not an int"),
         (lambda record: record.__setitem__("daily_observed_minutes", True), "not an int"),
-        (lambda record: record.__setitem__("daily_observed_minutes", 2**70), "too large"),
+        (lambda record: record.__setitem__("daily_observed_minutes", 2**70), "too "),
         (lambda record: record.__setitem__("extra", 1.0), "no field"),
         (lambda record: record.__delitem__("completed_days"), "which fields"),
         (lambda record: record.clear(), "which fields"),
