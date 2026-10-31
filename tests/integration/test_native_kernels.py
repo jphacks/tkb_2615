@@ -76,14 +76,14 @@ def _outcome(validate, world) -> str:
 
 
 def test_the_social_relationship_check_judges_every_record_as_python_does(
-    generated_scenario, monkeypatch
+    generated_scenario,
 ) -> None:
     """Each record and key, valid or broken in any field, gets the same outcome (the
     same first error) with the Rust check in front of the Python loop as from the loop."""
     from enum import IntEnum
 
+    from sheltersim.core.state_mirror import rust_validated
     from sheltersim.core.world import WorldState
-    from sheltersim.domain import social_network
     from sheltersim.domain.social_network import (
         SOCIAL_NETWORK_STATE_KEY,
         create_social_network_state,
@@ -137,13 +137,15 @@ def test_the_social_relationship_check_judges_every_record_as_python_does(
     ]
     # Several records: the first broken one decides, as in the Python loop.
     cases.append({'["A001","A003"]': record, '["A002","A003"]': candidates[1], "[": record})
+    def validated(world: WorldState) -> None:
+        if not rust_validated(world, SOCIAL_NETWORK_STATE_KEY):
+            validate_social_network_state(world)
+
     for case in cases:
         relationships.clear()
         relationships.update(case)
-        rust = _outcome(validate_social_network_state, world)
-        with monkeypatch.context() as patch:
-            patch.setattr(social_network.native, "social_relationships_valid", lambda *a: False)
-            python = _outcome(validate_social_network_state, world)
+        rust = _outcome(validated, world)
+        python = _outcome(validate_social_network_state, world)
         assert rust == python, case
 
 
@@ -538,7 +540,6 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
     from sheltersim.domain.body_state import _pair_key_is_good
     from sheltersim.domain.information import _contact_key_is_good
     from sheltersim.domain.models import Activity, InitialNeedProfile, NeedState
-    from sheltersim.domain.social_network import _key_is_good
 
     document = generated_scenario.model_dump(mode="json")
     document["duration_minutes"] = 360
@@ -549,9 +550,7 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
     body = state["body_state_v1"]
     assert body["relationships"]
     assert native.world_agents_valid(agents, world.zones, Activity, InitialNeedProfile, NeedState)
-    assert native.social_relationships_valid(
-        state["social_network_v1"]["relationships"], set(), _key_is_good
-    )
+    assert native.state("social_network").validate(world)
     assert native.body_relationships_valid(
         body["relationships"],
         PairKeys().good_keys(agent_ids),

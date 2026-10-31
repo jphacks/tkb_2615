@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from sheltersim.contracts.operations import NumericStateChange
 from sheltersim.core.rng import CounterRNG
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.care_receipts import (
     care_receipt_for_request,
@@ -1358,6 +1359,7 @@ def _recalculate_infrastructure_capacity(world: WorldState, cause: ScheduledEven
 class SocialInteractionHandler:
     """Apply one allowlisted, bounded social proposal at its scheduled minute."""
 
+    @kernel_first("social_interaction", "apply")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         interaction_type = event.payload.get("interaction_type")
         if interaction_type is not None:

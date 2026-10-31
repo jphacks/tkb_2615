@@ -33,6 +33,7 @@ use crate::core::row::{Field, IdMap};
 use crate::core::rng::{start_draw_log, take_draw_log, KeyedDraws};
 use crate::core::tracked::{as_readable_dict, as_readable_list};
 use crate::core::world_core::{mirror_of, NamespaceMirror};
+use crate::rules::social_network::record_observed_contacts;
 use crate::rules::world_view::view_of;
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::social_propagation::{ContactRecord, SocialRow, NAME, SCHEMA_VERSION};
@@ -621,15 +622,25 @@ fn update_social_propagation<'py>(
         Ok(())
     })?;
 
-    // Its own namespace's rules run in Python until they move: a callback, after every write.
+    // What it records in `social_network_v1`, after every write, as the Python step does.
     if world.getattr(intern!(py, "model_state"))?.contains(intern!(py, "social_network_v1"))? {
-        let pairs = PyList::empty(py);
+        let mut ids = Vec::with_capacity(observed.len());
         for &(recipient, source) in &observed {
-            pairs.append((&inputs[recipient].id, &inputs[source].id))?;
+            ids.push((inputs[recipient].id.to_str()?, inputs[source].id.to_str()?));
         }
-        py.import(intern!(py, "sheltersim.domain.social_network"))?
-            .getattr(intern!(py, "record_observed_contacts"))?
-            .call1((world, pairs, minute))?;
+        match record_observed_contacts(&world, &ids, minute_value) {
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                // That namespace's own rules decide, in their own words; this one is written.
+                let pairs = PyList::empty(py);
+                for &(recipient, source) in &observed {
+                    pairs.append((&inputs[recipient].id, &inputs[source].id))?;
+                }
+                py.import(intern!(py, "sheltersim.domain.social_network"))?
+                    .getattr(intern!(py, "record_observed_contacts"))?
+                    .call1((world, pairs, minute))?;
+            }
+            other => other?,
+        }
     }
     Ok(final_deltas.into_any())
 }

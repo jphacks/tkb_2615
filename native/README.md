@@ -153,7 +153,7 @@ each OS, because both call the same libm.
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
 
-- `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
+- `body_relationships_valid`, `body_agents_valid`,
   `psychological_agents_valid`, `agent_dynamics_valid`, `movement_positions_valid`,
   `information_contacts_valid`, `unit_values_valid`, `world_agents_valid`: fast
   acceptance of the large loops of validation, read where Python keeps the state. Each

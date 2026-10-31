@@ -215,43 +215,6 @@ fn known_or_good_key(
     Ok(good)
 }
 
-/// Every social_network_v1 relationship passes validate_social_network_state's rules.
-#[pyfunction]
-pub fn social_relationships_valid(
-    relationships: &Bound<'_, PyDict>,
-    good_keys: &Bound<'_, PySet>,
-    key_ok: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        relationships.py(),
-        [
-            "contact_count",
-            "conversation_count",
-            "cooperation_count",
-            "trust",
-            "shared_message_ids",
-            "last_contact_minute",
-            "last_interaction",
-        ],
-    );
-    all_items(relationships.as_ptr(), |key, record| {
-        if !known_or_good_key(good_keys, key_ok, key)? {
-            return Ok(false);
-        }
-        let Some([contacts, conversations, cooperations, trust, messages, minute, _]) =
-            reader.read(record)
-        else {
-            return Ok(false);
-        };
-        Ok(is_count(contacts)
-            && is_count(conversations)
-            && is_count(cooperations)
-            && is_exact_list(messages)
-            && (is_none(trust) || is_unit(trust))
-            && is_count_or_none(minute))
-    })
-}
-
 /// Every body_state_v1 relationship passes validate_body_state's rules. good_keys
 /// holds keys known to parse to a pair of different people of the current agents, so
 /// its holder clears it when the agents change.
