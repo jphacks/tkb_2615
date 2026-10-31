@@ -28,7 +28,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
+use pyo3::types::{PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 use rustc_hash::{FxBuildHasher, FxHashSet};
 
@@ -37,7 +37,7 @@ use crate::core::value::V;
 use crate::core::world_core::{
     core_of, new_tracked_list, raw_dict_get, raw_dict_set, raw_list_append, Misfit,
 };
-use crate::Unsupported;
+use crate::{write_json_string, Encoder, Unsupported};
 
 // ---- What Python hands over ---------------------------------------------------------------
 
@@ -58,6 +58,10 @@ struct Installed {
     activity: Vec<Py<PyAny>>,
     mobility: Vec<Py<PyAny>>,
     status: Vec<Py<PyAny>>,
+    // The `.value` of each member, which is what a document holds.
+    activity_values: Vec<String>,
+    mobility_values: Vec<String>,
+    status_values: Vec<String>,
 }
 
 static INSTALLED: AtomicPtr<Installed> = AtomicPtr::new(null_mut());
@@ -73,6 +77,7 @@ fn installed() -> Result<&'static Installed, Misfit> {
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn install(
+    py: Python<'_>,
     agent: Py<PyType>,
     needs: Py<PyType>,
     facility: Py<PyType>,
@@ -89,6 +94,11 @@ fn install(
     {
         return Err(PyValueError::new_err("the enums of domain/models.py do not match the rows"));
     }
+    let values = |members: &[Py<PyAny>]| -> PyResult<Vec<String>> {
+        members.iter().map(|member| member.bind(py).getattr("value")?.extract()).collect()
+    };
+    let (activity_values, mobility_values, status_values) =
+        (values(&activity)?, values(&mobility)?, values(&status)?);
     let new = Box::leak(Box::new(Installed {
         agent,
         needs,
@@ -99,6 +109,9 @@ fn install(
         activity,
         mobility,
         status,
+        activity_values,
+        mobility_values,
+        status_values,
     }));
     INSTALLED.store(new, Ordering::Release);
     Ok(())
@@ -111,6 +124,19 @@ trait Field: Sized {
     fn from_py(value: &Bound<'_, PyAny>) -> Result<Self, Misfit>;
     fn to_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>>;
     fn same(&self, other: &Self) -> bool;
+    /// The bytes `canonical_json` writes for this value in a WorldState document of this version.
+    fn write_json(&self, encoder: &mut Encoder, version: i64) -> PyResult<()>;
+}
+
+fn write_strings(encoder: &mut Encoder, items: &[Arc<str>]) {
+    encoder.out.push(b'[');
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            encoder.out.push(b',');
+        }
+        write_json_string(&mut encoder.out, item);
+    }
+    encoder.out.push(b']');
 }
 
 impl Field for f64 {
@@ -122,6 +148,9 @@ impl Field for f64 {
     }
     fn same(&self, other: &Self) -> bool {
         self.to_bits() == other.to_bits()
+    }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        encoder.float(*self)
     }
 }
 
@@ -136,6 +165,10 @@ impl Field for i64 {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        encoder.out.extend_from_slice(itoa::Buffer::new().format(*self).as_bytes());
+        Ok(())
+    }
 }
 
 impl Field for Arc<str> {
@@ -148,6 +181,10 @@ impl Field for Arc<str> {
     }
     fn same(&self, other: &Self) -> bool {
         self == other
+    }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        write_json_string(&mut encoder.out, self);
+        Ok(())
     }
 }
 
@@ -172,6 +209,15 @@ impl<T: Field> Field for Option<T> {
             _ => false,
         }
     }
+    fn write_json(&self, encoder: &mut Encoder, version: i64) -> PyResult<()> {
+        match self {
+            Some(value) => value.write_json(encoder, version),
+            None => {
+                encoder.out.extend_from_slice(b"null");
+                Ok(())
+            }
+        }
+    }
 }
 
 /// An ID list: a list of a facility or a staff member. Its node is a `TrackedList`.
@@ -185,6 +231,10 @@ impl Field for Vec<Arc<str>> {
     }
     fn same(&self, other: &Self) -> bool {
         self == other
+    }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        write_strings(encoder, self);
+        Ok(())
     }
 }
 
@@ -203,6 +253,10 @@ impl Field for Skills {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        write_strings(encoder, &self.0);
+        Ok(())
+    }
 }
 
 impl Field for V {
@@ -215,12 +269,15 @@ impl Field for V {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
+    fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+        V::write_json(self, encoder)
+    }
 }
 
 /// An enum field: a member in the row is its number, and the member object is `Installed`'s, so
 /// `agent.activity is Activity.IDLE` holds for anything Rust writes.
 macro_rules! member_field {
-    ($name:ident, $all:ident, $table:ident, [$($member:ident),* $(,)?]) => {
+    ($name:ident, $all:ident, $table:ident, $values:ident, [$($member:ident),* $(,)?]) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub(crate) enum $name { $($member),* }
 
@@ -250,19 +307,44 @@ macro_rules! member_field {
             fn same(&self, other: &Self) -> bool {
                 self == other
             }
+            fn write_json(&self, encoder: &mut Encoder, _version: i64) -> PyResult<()> {
+                let values = &installed().map_err(|misfit| PyRuntimeError::new_err(misfit.0))?.$values;
+                write_json_string(&mut encoder.out, &values[*self as usize]);
+                Ok(())
+            }
         }
     };
 }
 
-member_field!(Activity, ACTIVITIES, activity, [Idle, Moving, Queued, InService, SeekingHelp, Sleeping, Resting]);
-member_field!(Mobility, MOBILITIES, mobility, [Independent, Assisted, Wheelchair]);
-member_field!(RequestStatus, STATUSES, status, [Pending, Assigned, Resolved, Unresolved]);
+member_field!(Activity, ACTIVITIES, activity, activity_values, [Idle, Moving, Queued, InService, SeekingHelp, Sleeping, Resting]);
+member_field!(Mobility, MOBILITIES, mobility, mobility_values, [Independent, Assisted, Wheelchair]);
+member_field!(RequestStatus, STATUSES, status, status_values, [Pending, Assigned, Resolved, Unresolved]);
 
 // ---- Rows ------------------------------------------------------------------------------------
 
-/// A struct of fields, each named as the attribute of the Python object.
+/// A document holds this field only in WorldState v6.
+fn v6<T>(_value: &T, version: i64) -> bool {
+    version == 6
+}
+
+/// A document leaves this field out while it is None.
+fn set<T>(value: &Option<T>, _version: i64) -> bool {
+    value.is_some()
+}
+
+macro_rules! keeps_field {
+    ($value:expr, $version:expr) => {
+        true
+    };
+    ($value:expr, $version:expr, $keep:ident) => {
+        $keep($value, $version)
+    };
+}
+
+/// A struct of fields, each named as the attribute of the Python object. `name[rule]` says when a
+/// document holds the field (`v6`, `set`).
 macro_rules! row {
-    ($name:ident { $($field:ident: $kind:ty),* $(,)? }) => {
+    ($name:ident { $($field:ident $([$keep:ident])?: $kind:ty),* $(,)? }) => {
         // Rules read these fields as they move to Rust.
         #[allow(dead_code)]
         #[derive(Clone)]
@@ -287,6 +369,30 @@ macro_rules! row {
             fn same(&self, other: &Self) -> bool {
                 true $(&& self.$field.same(&other.$field))*
             }
+            fn write_json(&self, encoder: &mut Encoder, version: i64) -> PyResult<()> {
+                const NAMES: &[&str] = &[$(stringify!($field)),*];
+                const ORDER: [usize; NAMES.len()] = crate::core::row::sorted_order(NAMES);
+                type Writer = fn(&$name, &mut Encoder, i64, &mut bool) -> PyResult<()>;
+                const WRITERS: &[Writer] = &[$(|row, encoder, version, first| {
+                    if !keeps_field!(&row.$field, version $(, $keep)?) {
+                        return Ok(());
+                    }
+                    if !*first {
+                        encoder.out.push(b',');
+                    }
+                    *first = false;
+                    write_json_string(&mut encoder.out, stringify!($field));
+                    encoder.out.push(b':');
+                    Field::write_json(&row.$field, encoder, version)
+                }),*];
+                let mut first = true;
+                encoder.out.push(b'{');
+                for index in ORDER {
+                    WRITERS[index](self, encoder, version, &mut first)?;
+                }
+                encoder.out.push(b'}');
+                Ok(())
+            }
         }
 
         impl $name {
@@ -304,7 +410,7 @@ macro_rules! row {
     };
 }
 
-row!(NeedRow { toilet_urgency: f64, hunger: f64, fatigue: f64, hydration_need: f64 });
+row!(NeedRow { toilet_urgency: f64, hunger: f64, fatigue: f64, hydration_need[v6]: f64 });
 
 row!(ProfileRow {
     id: Arc<str>,
@@ -339,8 +445,8 @@ row!(FacilityRow {
     working_units: i64,
     active_agent_ids: Vec<Arc<str>>,
     queue_agent_ids: Vec<Arc<str>>,
-    resource_active_agent_ids: Vec<Arc<str>>,
-    resource_queue_agent_ids: Vec<Arc<str>>,
+    resource_active_agent_ids[v6]: Vec<Arc<str>>,
+    resource_queue_agent_ids[v6]: Vec<Arc<str>>,
 });
 
 row!(StaffRow {
@@ -362,8 +468,8 @@ row!(RequestRow {
     task_id: Option<Arc<str>>,
     resolved_minute: Option<i64>,
     cooldown_until: i64,
-    last_assignment_attempt_minute: Option<i64>,
-    last_assignment_wait_reason_code: Option<Arc<str>>,
+    last_assignment_attempt_minute[set]: Option<i64>,
+    last_assignment_wait_reason_code[set]: Option<Arc<str>>,
 });
 
 row!(TaskRow {
@@ -376,30 +482,44 @@ row!(TaskRow {
     staff_id: Option<Arc<str>>,
 });
 
-/// The rows of one `IdMap`: a stable slot per row, and the keys in the dict's order.
+/// The rows of one `IdMap`: a stable slot per row, and the keys in the dict's order. `changed` says
+/// which slots may differ from the document bytes kept for them (`EntityStore::rows_json`): anything
+/// that can reach a row for writing sets it, so a clear flag means the row is the one written.
 pub(crate) struct Table<R> {
     rows: Vec<Option<R>>,
     free: Vec<u32>,
     ids: IndexMap<Arc<str>, u32, FxBuildHasher>,
+    changed: Vec<bool>,
 }
 
 impl<R> Default for Table<R> {
     fn default() -> Self {
-        Self { rows: Vec::new(), free: Vec::new(), ids: IndexMap::default() }
+        Self { rows: Vec::new(), free: Vec::new(), ids: IndexMap::default(), changed: Vec::new() }
     }
 }
 
 impl<R> Table<R> {
     fn reserve_slot(&mut self) -> u32 {
-        self.free.pop().unwrap_or_else(|| {
+        let slot = self.free.pop().unwrap_or_else(|| {
             self.rows.push(None);
+            self.changed.push(true);
             u32::try_from(self.rows.len() - 1).expect("under 2**32 entities")
-        })
+        });
+        self.changed[slot as usize] = true;
+        slot
+    }
+
+    /// The row in a slot, for writing.
+    fn slot_mut(&mut self, slot: u32) -> Option<&mut R> {
+        let row = self.rows.get_mut(slot as usize)?.as_mut()?;
+        self.changed[slot as usize] = true;
+        Some(row)
     }
 
     fn release_slot(&mut self, slot: u32) {
         if let Some(row) = self.rows.get_mut(slot as usize) {
             if row.take().is_some() {
+                self.changed[slot as usize] = true;
                 self.free.push(slot);
             }
         }
@@ -415,7 +535,8 @@ impl<R> Table<R> {
     }
 
     pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut R> {
-        self.rows.get_mut(*self.ids.get(id)? as usize)?.as_mut()
+        let slot = *self.ids.get(id)?;
+        self.slot_mut(slot)
     }
 
     /// The keys and rows in the order of the dict.
@@ -490,11 +611,52 @@ fn exact_type_is(value: &Bound<'_, PyAny>, class: &Py<PyType>) -> bool {
 
 // ---- The store -------------------------------------------------------------------------------
 
+/// The canonical JSON of each row of a table as `canonical_json` writes it, in the order
+/// `WorldState._canonical_data` gives: by the entity's own ID, stably from the dict's order. A row
+/// nothing reached for writing keeps its bytes object, so the same object means the same row.
+fn table_json<'py, R: Field>(
+    py: Python<'py>,
+    table: &mut Table<R>,
+    kept: &mut Vec<Option<Py<PyBytes>>>,
+    version: i64,
+    id_of: fn(&R) -> &str,
+) -> PyResult<Bound<'py, PyList>> {
+    let Table { rows, ids, changed, .. } = table;
+    let mut order: Vec<(&str, u32)> = ids
+        .values()
+        .filter_map(|slot| Some((id_of(rows[*slot as usize].as_ref()?), *slot)))
+        .collect();
+    order.sort_by(|first, second| first.0.as_bytes().cmp(second.0.as_bytes()));
+    kept.resize_with(rows.len(), || None);
+    let mut encoder = Encoder { out: Vec::with_capacity(512) };
+    let list = PyList::empty(py);
+    for (_, slot) in order {
+        let slot = slot as usize;
+        let current = match &kept[slot] {
+            Some(raw) if !changed[slot] => raw.clone_ref(py),
+            _ => {
+                encoder.out.clear();
+                let Some(row) = rows[slot].as_ref() else { continue };
+                row.write_json(&mut encoder, version)?;
+                let raw = PyBytes::new(py, &encoder.out).unbind();
+                kept[slot] = Some(raw.clone_ref(py));
+                changed[slot] = false;
+                raw
+            }
+        };
+        list.append(current)?;
+    }
+    Ok(list)
+}
+
 /// The rows of one world, and the sink of its attached objects, `IdMap`s and ID lists.
 #[pyclass(module = "sheltersim_native")]
 #[derive(Default)]
 pub struct EntityStore {
     rows: Entities,
+    // The document bytes of each table's rows by slot, and the WorldState version they are for.
+    row_json: [Vec<Option<Py<PyBytes>>>; 5],
+    json_version: i64,
     taint: Option<String>,
     forwards: u64,
     attaches: u64,
@@ -791,7 +953,7 @@ impl EntityStore {
             slot: u32,
             apply: impl FnOnce(&mut R) -> Result<(), Misfit>,
         ) -> Result<(), Misfit> {
-            match table.rows.get_mut(slot as usize).and_then(Option::as_mut) {
+            match table.slot_mut(slot) {
                 Some(row) => apply(row),
                 None => Err(Misfit::new("an attached object has no row")),
             }
@@ -1151,6 +1313,28 @@ impl EntityStore {
             "active_tasks" => document(py, &self.rows.active_tasks, id),
             _ => Err(PyValueError::new_err("not a field of entities")),
         }
+    }
+
+    /// `{field: [bytes of each row]}` for a WorldState document of this version: what
+    /// `canonical_json` writes for the items `WorldState._canonical_data` makes of the entities.
+    /// Unsupported for a tainted store and for a value canonical JSON refuses (NaN).
+    fn rows_json<'py>(&mut self, py: Python<'py>, version: i64) -> PyResult<Bound<'py, PyDict>> {
+        if self.taint.is_some() {
+            return Err(Unsupported::new_err("the entity store is tainted"));
+        }
+        if self.json_version != version {
+            self.row_json = Default::default();
+            self.json_version = version;
+        }
+        let rows = &mut self.rows;
+        let [agents, facilities, staff, requests, tasks] = &mut self.row_json;
+        let documents = PyDict::new(py);
+        documents.set_item("agents", table_json(py, &mut rows.agents, agents, version, |row| &row.profile.id)?)?;
+        documents.set_item("facilities", table_json(py, &mut rows.facilities, facilities, version, |row| &row.id)?)?;
+        documents.set_item("staff", table_json(py, &mut rows.staff, staff, version, |row| &row.id)?)?;
+        documents.set_item("support_requests", table_json(py, &mut rows.support_requests, requests, version, |row| &row.id)?)?;
+        documents.set_item("active_tasks", table_json(py, &mut rows.active_tasks, tasks, version, |row| &row.id)?)?;
+        Ok(documents)
     }
 
     /// The keys of a table in the order of its dict.

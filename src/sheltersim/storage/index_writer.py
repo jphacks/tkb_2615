@@ -17,6 +17,7 @@ does not continue the index is never indexed as if it did.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import multiprocessing
 import queue
@@ -116,9 +117,13 @@ def _view(document: dict[str, Any]) -> SimpleNamespace:
     """A checkpoint as ingest reads it, from a sent document."""
     # A history sent from its minute on is read from its start (see _send_document).
     resources = _Tail(*document["resources"])
-    total, start, new_events = document["events"]
-    new_events = [json.loads(item) if isinstance(item, bytes) else item for item in new_events]
+    total, start, sent_events = document["events"]
+    new_events = [json.loads(item) if isinstance(item, bytes) else item for item in sent_events]
     return SimpleNamespace(
+        # The key of an event's row is the digest of its document: the SHA-256 of what was sent.
+        event_keys=[hashlib.sha256(item).hexdigest() for item in sent_events]
+        if all(isinstance(item, bytes) for item in sent_events)
+        else None,
         simulation_minute=document["simulation_minute"],
         checkpoint_hash=document["checkpoint_hash"],
         state_hash=document["state_hash"],

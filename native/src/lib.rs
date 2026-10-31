@@ -50,7 +50,7 @@ impl Encoder {
                 .extend_from_slice(if flag.is_true() { b"true" } else { b"false" });
         } else if let Ok(number) = value.downcast::<PyInt>() {
             match number.extract::<i64>() {
-                Ok(small) => self.out.extend_from_slice(small.to_string().as_bytes()),
+                Ok(small) => self.out.extend_from_slice(itoa::Buffer::new().format(small).as_bytes()),
                 // json writes int.__repr__ of any other int.
                 Err(_) => {
                     let text = py_int_repr(number)?;
@@ -280,8 +280,10 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(checkpoint::chunk_hashes, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::same_saved_records, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::index_row, module)?)?;
+    module.add_function(wrap_pyfunction!(checkpoint::dumps_length, module)?)?;
     module.add_function(wrap_pyfunction!(checkpoint::record_json, module)?)?;
     module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;
+    module.add_class::<history::HistoryPins>()?;
     module.add_function(wrap_pyfunction!(validation::social_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;
