@@ -55,25 +55,39 @@ Python の規則は比較の基準と、kernel が決めない値のために残
 
 | 版 | 基準との比 | A/A |
 |---|---:|---:|
-| merge 前（3回、load average 21〜96） | 1.037（1.054、1.017、1.037） | 0.988 |
-| merge 後（5回） | 1.021（0.983、1.07、1.021、0.967、1.03） | 1.029（1.071、0.987、0.973、1.029、1.065） |
+| 最初の merge 前（3回、load average 21〜96） | 1.037（1.054、1.017、1.037） | 0.988 |
+| `60d7149`（レーン B、C の merge 後、5回） | 1.021（0.983、1.07、1.021、0.967、1.03） | 1.029（1.071、0.987、0.973、1.029、1.065） |
 
-部品の足し算では tick あたり約 50 µs 減る計算ですが、全体の差は A/A の揺れの中で、**速くなったとは確かめられていません。**
+部品の足し算では tick あたり約 50 µs 減る計算ですが、全体の差は A/A の揺れの中で、**速くなったとは確かめられていません。** `33ce270`（レーン A の merge 後）では測り直していません。
 
 ## 結果
 
-merge 後の `60d7149` の結果です（`feature/rust-port` のレーン B、C を含みます）。
+`feature/rust-port` の `1506f2b`（レーン A、B、C、P4〜P6）を merge した `33ce270` の結果です。
 
 | 確認 | 結果 |
 |---|---|
-| テスト | kernel あり 2694件通過、6件 skip。`SHELTERSIM_NATIVE=0` 1774件通過、926件 skip |
-| `gate_all_paths.py --expect`（`rule_shadow` つき）、`--reversed-order` | どちらも55シナリオ、問題0件 |
-| 7日分のハッシュ | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041` |
-| `rule_shadow`（ゲート） | `update` は 31,530回のうち kernel 28,850回、残り 2,680回は名前空間がない世界。比べた値 870,006個、違い0件。読む kernel は `on_shift` 185,456回、`is_available` 149,458回、すべて kernel が動き、違い0件。`Unsupported` 0回 |
-| `rule_shadow`（7日分） | `update` 10,080回すべて kernel、比べた値 453,600個、`on_shift` 311,311回、`is_available` 74,785回、違い0件、`Unsupported` 0回 |
-| `tracked_mirror_gate.py` | **merge 後は終わっていません**（時間切れで止めました）。merge 前の `7f4a51c` で220行、問題0件 |
-| 道具の確認（merge 前）：kernel の疲労を 1% 変えたコピー | `rule_shadow` が違いを報告し、ゲートも `staff-fatigue-linear-v1` で失敗 |
+| テスト | kernel あり 2739件通過、6件 skip。`SHELTERSIM_NATIVE=0` 1774件通過、971件 skip |
+| `gate_all_paths.py --expect`（素のまま、`rule_shadow` つき）、`--reversed-order` | どれも55シナリオ、問題0件 |
+| 7日分のハッシュ（素のまま、`rule_shadow` つき） | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041` |
+| `rule_shadow`（ゲート） | `update` は 31,530回のうち kernel 28,850回、残り 2,680回は名前空間がない世界。比べた値 870,006個。読む kernel は `on_shift` 185,456回、`is_available` 149,458回、`canonical_config` 36,517回、`create_state` 65回、すべて kernel が動きました。`add_staff` は34回のうち33回。違い0件、このレーンの `Unsupported` 0回 |
+| `rule_shadow`（7日分） | `update` 10,080回すべて kernel、比べた値 453,600個、`on_shift` 311,311回、`is_available` 74,785回、`canonical_config` 10,799回、`create_state` 1回、違い0件、このレーンの `Unsupported` 0回 |
+| `tracked_mirror_gate.py` | 220行、問題0件 |
+| `ruff check`、`ruff format --check`、`clippy`（`disallowed_methods`） | 問題なし |
+| 道具の確認（最初の merge 前）：kernel の疲労を 1% 変えたコピー | `rule_shadow` が違いを報告し、ゲートも `staff-fatigue-linear-v1` で失敗 |
 
-ゲートの行の網羅（merge 前、`domain/staff_dynamics.py`）：kernel ありだけで 34/179 行、kernel なしと合わせて 132/179 行です。残りは主に `raise` と `validate_override` で、`test_staff_dynamics_row.py` が確かめます。
+ゲートの行の網羅（最初の merge 前、`domain/staff_dynamics.py`）：kernel ありだけで 34/179 行、kernel なしと合わせて 132/179 行です。残りは主に `raise` と `validate_override` で、`test_staff_dynamics_row.py` が確かめます。
 
 Windows と macOS では未確認です（CI で動きます）。`exp` の一致は Linux でだけ確かめました。
+
+## M2〜M6 の見積もり
+
+このレーンの大きさから見た、残りの移植の見積もりです。誤差は2倍ほどあります。
+
+| 項目 | 見積もり |
+|---|---:|
+| 残りの Python | 約 25,000 行 |
+| レーン | 約 32 |
+| 書く Rust | 約 55,000 行 |
+| 実時間 | 約 32〜40 時間 |
+
+実測した速さは 28 行/分の1つだけです。エラーの文の移植（`raise` 1,373か所）は含みません。
