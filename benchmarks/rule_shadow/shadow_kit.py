@@ -65,7 +65,7 @@ def pure_shadow(
     *,
     detail: Callable[[Any], None] = lambda result: None,
 ) -> Callable[..., Any]:
-    """A stand-in for a kernel that only reads or builds: the same result as the rule, or Unsupported.
+    """A stand-in for a kernel that only reads or builds: the rule's result, or Unsupported.
 
     python_rule gives the rule when it is called, since the rule's module imports the stand-in.
     """
