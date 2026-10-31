@@ -136,6 +136,9 @@ each OS, because both call the same libm.
   Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
   draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
+- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
+  Python rules write one record at a time through the forwarded writes, and M4 moves them.
+
 - `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
   `_sample_information_contacts` for the three information policies (contact sampling, durations,
   forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
