@@ -51,7 +51,7 @@ impl Encoder {
                 .extend_from_slice(if flag.is_true() { b"true" } else { b"false" });
         } else if let Ok(number) = value.downcast::<PyInt>() {
             match number.extract::<i64>() {
-                Ok(small) => self.out.extend_from_slice(small.to_string().as_bytes()),
+                Ok(small) => self.out.extend_from_slice(itoa::Buffer::new().format(small).as_bytes()),
                 // json writes int.__repr__ of any other int.
                 Err(_) => {
                     let text = py_int_repr(number)?;

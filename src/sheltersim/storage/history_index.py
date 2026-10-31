@@ -41,9 +41,9 @@ CREATE INDEX IF NOT EXISTS record_cause ON records(branch,cause,kind,minute,key)
 CREATE INDEX IF NOT EXISTS record_source ON records(branch,kind,source,minute,key);
 CREATE INDEX IF NOT EXISTS record_status ON records(branch,kind,status,minute,key);
 CREATE INDEX IF NOT EXISTS record_type ON records(branch,kind,event_type,minute,key);
-CREATE TABLE IF NOT EXISTS entities(branch TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, entity TEXT NOT NULL, minute INTEGER NOT NULL, PRIMARY KEY(branch,kind,key,entity));
+CREATE TABLE IF NOT EXISTS entities(branch TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, entity TEXT NOT NULL, minute INTEGER NOT NULL, PRIMARY KEY(branch,kind,key,entity)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS entity_turn_order ON entities(branch,kind,entity,key) WHERE kind='conversations';
-CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key));
+CREATE TABLE IF NOT EXISTS tokens(branch TEXT NOT NULL, kind TEXT NOT NULL, token TEXT NOT NULL, minute INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(branch,kind,token,minute,key)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS lineage(branch TEXT PRIMARY KEY, parent TEXT NOT NULL, fork_minute INTEGER NOT NULL);
 PRAGMA user_version=2;
 """  # noqa: E501
@@ -53,6 +53,9 @@ _SCHEMA_VERSION = 2
 # for each commit to journal and write. A file made before it was partial keeps its index
 # and answers the same, and so does one that still has entity_time, an index on entities
 # that no query reads; all of these are version 2.
+# entities and tokens are nothing but their keys, so they have no table apart from them. Without
+# that each of their many small rows goes into two B-trees. A file made with rowids keeps them and
+# answers the same, since no query reads a rowid; that is version 2 too.
 _WRITE_CACHE_KIB = 16_384
 # The indexing process keeps its connection, and its cache, from one save to the next.
 _KEPT_WRITER_CACHE_KIB = 262_144

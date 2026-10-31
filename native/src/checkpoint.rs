@@ -14,7 +14,7 @@
 //! and `\d` matches every Unicode decimal digit; a string with one of those is
 //! returned whatever else it holds (`char::is_numeric` covers more than `\d`).
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::Encoder;
 
@@ -75,12 +75,19 @@ fn decode(raw: &[u8]) -> Result<String, String> {
     serde_json::from_slice(raw).map_err(|error| error.to_string())
 }
 
+/// decode of a quoted string with no escape or control character in it.
+fn decode_plain(quoted: &[u8]) -> Result<String, String> {
+    std::str::from_utf8(&quoted[1..quoted.len() - 1])
+        .map(str::to_owned)
+        .map_err(|error| error.to_string())
+}
+
 /// The distinct keys and the distinct string values to check in raw, one JSON text.
-fn candidates(raw: &[u8]) -> Result<(HashSet<String>, HashSet<String>), String> {
-    let mut keys: HashSet<String> = HashSet::new();
-    let mut strings: HashSet<String> = HashSet::new();
-    let mut seen_keys: HashSet<&[u8]> = HashSet::new();
-    let mut seen_strings: HashSet<&[u8]> = HashSet::new();
+fn candidates(raw: &[u8]) -> Result<(FxHashSet<String>, FxHashSet<String>), String> {
+    let mut keys: FxHashSet<String> = FxHashSet::default();
+    let mut strings: FxHashSet<String> = FxHashSet::default();
+    let mut seen_keys: FxHashSet<&[u8]> = FxHashSet::default();
+    let mut seen_strings: FxHashSet<&[u8]> = FxHashSet::default();
     let mut index = 0;
     let length = raw.len();
     while index < length {
@@ -95,6 +102,9 @@ fn candidates(raw: &[u8]) -> Result<(HashSet<String>, HashSet<String>), String> 
             if raw[index] == b'\\' {
                 escaped = true;
                 index += 1;
+            } else if raw[index] < 0x20 {
+                // serde_json says what is wrong with it.
+                escaped = true;
             }
             index += 1;
         }
@@ -106,7 +116,7 @@ fn candidates(raw: &[u8]) -> Result<(HashSet<String>, HashSet<String>), String> 
         // In JSON only an object key is followed by ":".
         if raw.get(index) == Some(&b':') {
             if seen_keys.insert(quoted) {
-                keys.insert(decode(quoted)?);
+                keys.insert(if escaped { decode(quoted)? } else { decode_plain(quoted)? });
             }
         } else if seen_strings.insert(quoted) {
             if escaped {
@@ -115,7 +125,7 @@ fn candidates(raw: &[u8]) -> Result<(HashSet<String>, HashSet<String>), String> 
                     strings.insert(text);
                 }
             } else if could_match(&quoted[1..quoted.len() - 1]) {
-                strings.insert(decode(quoted)?);
+                strings.insert(decode_plain(quoted)?);
             }
         }
     }
@@ -142,7 +152,7 @@ pub fn sensitive_candidates(
                 .par_iter()
                 .map(|raw| candidates(raw))
                 .try_reduce(
-                    || (HashSet::new(), HashSet::new()),
+                    || (FxHashSet::default(), FxHashSet::default()),
                     |(mut keys, mut strings), (more_keys, more_strings)| {
                         keys.extend(more_keys);
                         strings.extend(more_strings);
