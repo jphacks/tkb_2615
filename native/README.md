@@ -153,8 +153,9 @@ each OS, because both call the same libm.
   forgetting, transfers and their probabilities). Rust owns `information_spread_v1`
   (`src/state/information.rs`) and reads agents from the entity rows; the household of the view is
   read from `population_presence_v1`, which Python holds. The tree gets single values and the
-  refilled contacts, never the whole namespace, and the events go through the Python method
-  `_schedule_information_contact`. A trace, another RNG, a policy's subclass and whatever the Python
+  refilled contacts, never the whole namespace, and the events are scheduled as rows
+  (`EventWriter` of `src/state/events.rs`); `_schedule_information_contact` stays for what a row
+  refuses, and raises its error. A trace, another RNG, a policy's subclass and whatever the Python
   rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
   same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 
@@ -163,9 +164,10 @@ each OS, because both call the same libm.
   (docs/rust-port.md).
 
 - `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
-  `psychological_agents_valid`, `agent_dynamics_valid`, `movement_positions_valid`,
-  `information_contacts_valid`, `unit_values_valid`, `world_agents_valid`: fast
-  acceptance of the large loops of validation, read where Python keeps the state. Each
+  `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
+  acceptance of the large loops of validation, read where Python keeps the state. The
+  namespaces Rust owns have their `validate` in `state/` instead, which reads the row
+  (`docs/rust-port/lanes/t-tick-validation.md`). Each
   returns true only if every entry passes the Python rules; on false the caller runs
   those rules, which accept the value or raise their own error, so results and error
   messages come from one place. Key checks stay Python functions, remembered per key
@@ -183,10 +185,21 @@ each OS, because both call the same libm.
   the scans of unsettled requests during a tick (`WorldState.unsettled_support_requests`)
   read only the rest.
 
+- `state.events.QueueStore` and `EventWriter` (`src/state/events.rs`,
+  `docs/rust-port/lanes/e-events.md`): the pending events behind
+  `sheltersim.events.queue.EventQueue`, in the order of `pending()`, and what a Rust rule uses to
+  allocate a sequence, schedule an `EventRow` and record an outcome with no Python object. Python
+  gets a `ScheduledEvent` when it first reads the event. An order outside i64 moves that queue to
+  Python (`_LargeOrderEventQueue`), and `EventWriter::of` then says `Unsupported`.
+
 - `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
-  Each record is its Python object, its canonical JSON bytes, or both; the indexes
+  Each record is its canonical JSON bytes, its Python object, or both; the indexes
   (ID, sequence, minute, type, provenance keys, care requests, support kinds, facility
-  events) live in Rust. `extend_saved` builds the log from saved bytes, parsing and
+  events) live in Rust. Appending from Python writes the bytes from the frozen fields in the same
+  step, and `all_encoded` says that every record has bytes written or checked here: a save's
+  restore check then reads the live log instead of parsing the bytes and comparing them
+  (`CheckpointHistoryCache.restored_log`). A value the writer refuses, such as a str subclass in a
+  payload, leaves that record's bytes to the Python encoder, and the old check runs. `extend_saved` builds the log from saved bytes, parsing and
   checking them in parallel without the GIL: each must be the canonical JSON of a record
   that passes the `EventLogRecord`/`ScheduledEvent` checks. A record object is made
   only when Python reads it. `split_json_array` cuts a saved chunk into item bytes.
@@ -208,7 +221,8 @@ each OS, because both call the same libm.
 
 - `same_saved_records(records, raws, record_type, event_type)` (`src/checkpoint.rs`): whether
   each live EventLog record is exactly what restoring its saved bytes gives, field by field
-  with the types, without building the restored record. It reads every field of the bytes,
+  with the types, without building the restored record. A save uses it only for a log with a
+  record whose bytes the Python encoder made. It reads every field of the bytes,
   and a false says nothing about `==`: the restore check of a save then compares restored
   records as before (`WorldState.same_state`).
 
