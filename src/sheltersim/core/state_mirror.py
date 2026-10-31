@@ -763,11 +763,16 @@ def _rows_are_what_the_world_holds(world: Any, name: str) -> bool:
     if mirror is None:
         # Not owned: the kernel says Unsupported itself.
         return True
-    value = dict.get(table, name, _MISSING)
-    if value is _MISSING:
+    if dict.get(table, name, _MISSING) is _MISSING:
         # Truly absent the kernel answers; a row left behind answers for nothing.
         return mirror.row_json() is None
-    return value is _DETACHED or mirror.holds(value)
+    return _table_holds_row_of(table, mirror, name)
+
+
+def _table_holds_row_of(table: Any, mirror: Any, name: str) -> bool:
+    """Whether what the table holds under this name is the tree of this row, or the row alone."""
+    value = dict.get(table, name, _MISSING)
+    return value is _DETACHED or (value is not _MISSING and mirror.holds(value))
 
 
 def _attach_owned(world: Any, core: Any) -> None:
@@ -804,8 +809,9 @@ def owned_row_bytes(
 
     Returns the items of each entity field, each owned namespace and each owned world field. What
     has no bytes here has no row that holds it (tainted, a field assigned whole, a value canonical
-    JSON refuses, a map stored past WorldState.__setattr__), and the caller encodes the Python
-    objects as always. A row needs nothing but
+    JSON refuses, a map or a namespace stored past WorldState.__setattr__, IdMap or NamespaceTable,
+    as rust_validated sees them), and the caller encodes the Python objects as always. A row needs
+    nothing but
     state_row! (or a Row with write_json) and its line in OWNED_NAMESPACES or OWNED_FIELDS.
     """
     core = world.__dict__.get("_core")
@@ -813,20 +819,23 @@ def owned_row_bytes(
         return {}, {}, {}
     store = core.entities()
     entities: Any = {}
-    # A map stored past WorldState.__setattr__ is not what the rows hold.
-    if all(
-        type(world.__dict__[name]) is IdMap and world.__dict__[name]._store is store
-        for name in ENTITY_FIELDS
-    ):
+    # A map stored past WorldState.__setattr__, or written past IdMap, is not what the rows hold.
+    if store.follows(world.__dict__):
         try:
             entities = store.rows_json(world.schema_version)
         except native.Unsupported:
             pass
     namespaces = {}
-    for name in OWNED_NAMESPACES:
+    table = world.__dict__.get("model_state")
+    # Without the table the namespaces are in a dict no row follows.
+    for name in OWNED_NAMESPACES if isinstance(table, NamespaceTable) else ():
         mirror = core.mirror(name)
         try:
-            raw = None if mirror is None else mirror.row_json()
+            raw = (
+                mirror.row_json()
+                if mirror is not None and _table_holds_row_of(table, mirror, name)
+                else None
+            )
         except native.Unsupported:
             raw = None
         if raw is not None:

@@ -44,11 +44,24 @@ M1 の最後のレーンです。Rust が持つ名前空間について、Python
 
 ### 証明できないもの
 
-**追跡する木の節点への `dict.__setitem__`（`list.__setitem__` も同じ）は、行にも kernel にも届きません。** 毎 tick の検証も、保存のときの完全検証も通ります（完全検証も `rust_validated` を使うためです）。保存される byte 列は行のものなので、値は保存されませんが、Python の規則はその値を読みます。**このレーンで弱くなったのではなく、P5 以降の行の kernel の性質です。** `src/` にはこの書き込みがなく（`test_tracked_write_lint.py`）、`verify()` は違いを見つけます。テスト `test_a_write_past_a_tracked_dict_is_seen_only_by_the_python_rules` が今の振る舞いを固定しています。閉じるなら、完全検証のときに `verify()` で確かめるのが安い方法ですが、「完全検証は変えない」というレーンの条件の外なので、していません。
+**追跡する木の節点への `dict.__setitem__`（`list.__setitem__` も同じはずです。リストは確かめていません）は、行にも kernel にも届きません。** 毎 tick の検証も、保存のときの完全検証も通ります（完全検証も `rust_validated` を使うためです）。保存される byte 列は行のものなので、値は保存されませんが、Python の規則はその値を読みます。**このレーンで弱くなったのではなく、P5 以降の行の kernel の性質です。** テスト `test_a_write_past_a_tracked_dict_is_seen_only_by_the_python_rules` が今の振る舞いを固定しています。
+
+**判断（コーディネーター）：今は閉じません。** `src/` にこの書き込みはなく、lint（`test_tracked_write_lint.py`）と `verify()` が見つけるからです。手順4で Python の木が規則の入力でなくなると、この穴はなくなります。
 
 `IdMap` の中身を同じ長さのまま `dict.__setitem__` で入れ替えると、`follows` には見えません。実体の規則がオブジェクトを読むので、今はそこで止まります。
 
-保存の側にも同じ穴が1つあります：`world.__dict__["model_state"]` を差し替えた世界でも、`capture` の行の byte 列（`state_mirror` の `mirror.row_json()`）は古い行から作ります。`OWNED_FIELDS` には `holds` の確認がありますが、`OWNED_NAMESPACES` にはありません。`src/` にこの書き込みはありません。レーン V の範囲なので触っていません。
+## 保存の確認（`owned_row_bytes`）
+
+`world.__dict__["model_state"]` を差し替えた世界の保存が、古い行の byte 列を書いていました。テストで再現しました（書いた `long_term_distress` が 0.123 のとき、保存された値は 0.0）。世界は検証を通るので、何も止めず、状態が黙って失われます。`dict.__setitem__(world.model_state, 名前, ...)` と、`dict.pop(world.support_requests, キー)`（`IdMap` を通らない書き込み）でも同じでした。
+
+`owned_row_bytes` は `rust_validated` と同じ確認（`_table_holds_row_of`、`EntityStore.follows`）を使うようにしました。合わないものは行の byte 列を使わず、Python のオブジェクトから作ります。費用は同一性と長さの比較だけです。`tests/integration/test_capture_rows.py` が確かめます。
+
+**この確認で見えない、同じ種類の書き込み：**
+
+- `agent.__dict__["stress"] = 0.5`（規則に合う値）は行に届かないので、保存は古い値を書きます。
+- `dict.__setitem__(world.support_requests, キー, 別のオブジェクト)` は長さが変わらないので、`follows` に見えません。
+
+1つ目は実際に確かめました（世界が 0.4321 を持つとき、保存された値は元の 0.821…。完全検証も復元の確認も通ります）。`test_a_write_to_the_dict_of_an_entity_does_not_reach_a_save` が今の振る舞いを固定しています。2つ目はコードを読んだ判断で、動かしていません。どちらも `src/` にはありません。毎回の保存で実体を全部読めば閉じますが、「保存あたり数回の比較」の費用に収まらないので、していません。
 
 ## 残したもの
 
@@ -57,7 +70,7 @@ M1 の最後のレーンです。Rust が持つ名前空間について、Python
 | `world_agents_valid` と `core/world.py` の実体の規則（キーと ID、人、設備、列、職員、作業、支援の依頼） | `agent.__dict__` への書き込みは行に届きません。行で判定すると、この経路を検出できなくなります。さらに、作業と支援の依頼の規則はイベントの列と突き合わせます | Python のオブジェクトが行の写しでなくなるとき（M4、M5）。イベントは M2 の E |
 | `RecordWatch`（`watch.rs`）、`social_relationships_valid`、`body_relationships_valid`、`body_agents_valid`、`PairKeys`、`TickValidationMemo` の `social_watch`・`body_watch` | `social_network_v1`、`body_state_v1` を Rust が持っていません | M3 |
 | `agent_dynamics_valid` | `agent_dynamics_v1` | M2 の F |
-| `movement_positions_valid` | `movement_v1` | M2 の I |
+| `movement_positions_valid` | レーン I で `movement_v1` は Rust の行になりましたが（`state/movement.rs`）、規則は Python のままで、この確認は今も木を読みます | 規則が移る M4 |
 | `TickValidationMemo` の `population_*`・`geometry_overlay_v1` の正準 JSON、共有運用、予約 ID、支援の依頼の記憶 | それぞれの名前空間と実体を Rust が持っていません | M3〜M5 |
 
 `agent.__dict__` の書き込みを dict watcher で taint に変える案も考えました。監視するには実体の `__dict__` を作る必要があり、作ると属性の読み取りが遅くなります（`NeedState` の読み取りで 18 ns → 38 ns。load average 約 77 の1回の値で、ループの分を含みます）。P6 の数えた約 12,700 回/tick を掛けると約 250 µs で、書き込みごとの callback も増えます。行で判定して減るのは、`world_agents_valid` の約 50 µs/tick と、イベントと突き合わせない規則の約 150 µs/tick なので、割に合いません。試作はしていません。

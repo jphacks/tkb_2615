@@ -231,6 +231,83 @@ def test_an_entity_map_stored_past_the_world_is_not_taken_from_its_old_rows(
     assert isinstance(with_map.world_state["agents"], list)
 
 
+def _plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _new_table_with_other_distress(world: WorldState) -> dict[str, Any]:
+    table = {key: _plain(value) for key, value in world.model_state.items()}
+    record = next(iter(table["psychological_distress_v1"]["agents"].values()))
+    record["long_term_distress"] = 0.123
+    return table
+
+
+def _table_in_the_world_dict(world: WorldState) -> None:
+    world.__dict__["model_state"] = _new_table_with_other_distress(world)
+
+
+def _namespace_past_the_table(world: WorldState) -> None:
+    name = "psychological_distress_v1"
+    dict.__setitem__(world.model_state, name, _new_table_with_other_distress(world)[name])
+
+
+@needs_kernels
+@pytest.mark.parametrize("swap", [_table_in_the_world_dict, _namespace_past_the_table])
+def test_a_namespace_stored_past_the_table_is_saved_as_the_world_holds_it(
+    finished_document, monkeypatch: pytest.MonkeyPatch, swap
+) -> None:
+    """The world is valid, so nothing stops the save: an old row here would lose the state."""
+    saved = _capture_twice(finished_document, swap)[1]
+    agents = saved.world_state["model_state"]["psychological_distress_v1"]["agents"]
+    assert next(iter(agents.values()))["long_term_distress"] == 0.123
+    _without_rows(monkeypatch)
+    assert saved == _capture_twice(finished_document, swap)[1]
+
+
+@needs_kernels
+def test_a_namespace_taken_away_past_the_table_is_not_saved_from_its_old_row(
+    finished_document,
+) -> None:
+    name = "social_propagation_v1"
+
+    def take_away(world: WorldState) -> None:
+        dict.pop(world.model_state, name)
+
+    saved = _capture_twice(finished_document, take_away)[1]
+    assert name not in saved.world_state["model_state"]
+
+
+@needs_kernels
+def test_an_entity_taken_away_past_its_map_is_not_saved_from_its_old_row(
+    finished_document,
+) -> None:
+    def take_away(world: WorldState) -> None:
+        dict.pop(world.support_requests, next(iter(world.support_requests)))
+
+    saved = _capture_twice(finished_document, take_away)[1]
+    assert len(saved.world_state["support_requests"]) == (
+        len(finished_document["support_requests"]) - 1
+    )
+
+
+@needs_kernels
+def test_a_write_to_the_dict_of_an_entity_does_not_reach_a_save(finished_document) -> None:
+    """A gap, kept visible: no identity shows this write, and the rows are what is saved.
+
+    src/ has no such write. docs/rust-port/lanes/t-tick-validation.md has the rest.
+    """
+
+    def write(world: WorldState) -> None:
+        next(iter(world.agents.values())).__dict__["stress"] = 0.4321
+
+    saved = _capture_twice(finished_document, write)[1]
+    assert saved.world_state["agents"][0]["stress"] != 0.4321
+
+
 @needs_kernels
 def test_metric_state_assigned_whole_is_not_taken_from_its_old_row(finished_document) -> None:
     def assign(world: WorldState) -> None:
