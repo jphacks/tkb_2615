@@ -23,7 +23,7 @@ def _queue_order(event: ScheduledEvent) -> tuple[int, int, int]:
 
 
 @dataclass
-class EventQueue:
+class _PythonEventQueue:
     """Mutable future queue ordered by due minute, priority, and sequence."""
 
     _events: list[ScheduledEvent] = field(default_factory=list)
@@ -116,6 +116,147 @@ class EventQueue:
             raise ValueError("event queue contains duplicate event IDs")
         if len(sequences) != len(set(sequences)):
             raise ValueError("event queue contains duplicate event sequences")
+
+
+class _NativeEventQueue:
+    """The EventQueue held in Rust (native/src/state/events.rs); the same methods and errors as
+    _PythonEventQueue. A Rust rule's event has no object until one of these reads it.
+
+    An order outside i64, which no Scenario can reach, makes this queue _LargeOrderEventQueue.
+    """
+
+    __slots__ = ("_store", "_python")
+    __hash__ = None  # type: ignore[assignment]
+
+    def __init__(self, _events: Iterable[ScheduledEvent] = ()) -> None:
+        events = list(_events)
+        self._store = native.state("events").QueueStore()
+        if not self._store.load(events):
+            self._leave_rust(events)
+
+    def _leave_rust(self, events: list[ScheduledEvent]) -> None:
+        self._store = None
+        self.__class__ = _LargeOrderEventQueue  # type: ignore[assignment]
+        self._python = _PythonEventQueue(events)  # type: ignore[attr-defined]
+
+    @property
+    def _events(self) -> list[ScheduledEvent]:
+        return self._store.events()
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+    def __iter__(self) -> Iterator[ScheduledEvent]:
+        return iter(self.pending())
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, (_NativeEventQueue, _PythonEventQueue)):
+            return NotImplemented
+        return self._events == other._events
+
+    def __repr__(self) -> str:
+        return f"EventQueue(_events={self._events!r})"
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _NativeEventQueue:
+        # Events are frozen and shared, like the records of a copied EventLog.
+        copied = _NativeEventQueue.__new__(_NativeEventQueue)
+        copied._store = self._store.copy()
+        memo[id(self)] = copied
+        return copied
+
+    def pending(self) -> tuple[ScheduledEvent, ...]:
+        """Return a stable immutable view of pending events."""
+        return self._store.pending()
+
+    def find(self, event_id: str) -> ScheduledEvent | None:
+        """The pending event with this ID, if any."""
+        return self._store.find(event_id)
+
+    def schedule(self, event: ScheduledEvent) -> None:
+        """Add an event, rejecting ambiguous or repeated identities."""
+        refused = self._store.schedule(event)
+        if refused == 1:
+            raise DuplicateEventError(f"duplicate event ID {event.event_id!r}")
+        if refused == 2:
+            raise DuplicateEventError(f"duplicate event sequence {event.sequence}")
+        if refused == 3:
+            self._leave_rust(self._events)
+            self.schedule(event)
+
+    def due(self, minute: int) -> tuple[ScheduledEvent, ...]:
+        """Snapshot all events due through ``minute`` without removing them."""
+        if minute < 0:
+            raise ValueError("minute cannot be negative")
+        due = self._store.due(minute)
+        if due is None:
+            return tuple(event for event in self.pending() if not event.due_minute > minute)
+        return due
+
+    def remove(self, event_id: str) -> ScheduledEvent:
+        """Remove and return one event after its handler has finished."""
+        return self._store.remove(event_id)
+
+    def replace(self, event_id: str, event: ScheduledEvent) -> None:
+        """Atomically replace one pending event while preserving its identity."""
+        refused = self._store.replace(event_id, event)
+        if refused == 1:
+            raise DuplicateEventError("replacement event must preserve ID and sequence")
+        if refused == 2:
+            raise DuplicateEventError("replacement event identity is already in use")
+        if refused == 3:
+            self._leave_rust(self._events)
+            self.replace(event_id, event)
+
+    def validate(self) -> None:
+        problem = self._store.validate()
+        if problem == 1:
+            raise ValueError("event queue contains duplicate event IDs")
+        if problem == 2:
+            raise ValueError("event queue contains duplicate event sequences")
+
+
+class _LargeOrderEventQueue(_NativeEventQueue):
+    """A queue holding an order outside i64, in Python. EventWriter says Unsupported for it."""
+
+    __slots__ = ()
+
+    @property
+    def _events(self) -> list[ScheduledEvent]:
+        return self._python._events
+
+    def __len__(self) -> int:
+        return len(self._python)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _LargeOrderEventQueue:
+        copied = _LargeOrderEventQueue.__new__(_LargeOrderEventQueue)
+        copied._store = None
+        copied._python = _PythonEventQueue(self._python._events)
+        memo[id(self)] = copied
+        return copied
+
+    def pending(self) -> tuple[ScheduledEvent, ...]:
+        return self._python.pending()
+
+    def find(self, event_id: str) -> ScheduledEvent | None:
+        return self._python.find(event_id)
+
+    def schedule(self, event: ScheduledEvent) -> None:
+        self._python.schedule(event)
+
+    def due(self, minute: int) -> tuple[ScheduledEvent, ...]:
+        return self._python.due(minute)
+
+    def remove(self, event_id: str) -> ScheduledEvent:
+        return self._python.remove(event_id)
+
+    def replace(self, event_id: str, event: ScheduledEvent) -> None:
+        self._python.replace(event_id, event)
+
+    def validate(self) -> None:
+        self._python.validate()
+
+
+EventQueue: Any = _NativeEventQueue if native.available() else _PythonEventQueue
 
 
 def record_bytes(record: EventLogRecord) -> bytes:
@@ -414,7 +555,7 @@ class _NativeEventLog:
 
     def __init__(self, _records: Iterable[EventLogRecord] = ()) -> None:
         self._store = native.event_store()
-        self._store.set_codecs(record_bytes, record_from_bytes)
+        self._store.set_codecs(record_bytes, record_from_bytes, EventLogRecord, ScheduledEvent)
         # Results derived from the records so far, kept by readers for when the log has grown.
         self.derived: dict[Any, Any] = {}
         for record in _records:
@@ -445,6 +586,14 @@ class _NativeEventLog:
     def unread(self) -> int:
         """How many records read back from saved bytes have no object yet."""
         return self._store.unread()
+
+    def all_encoded(self) -> bool:
+        """Whether the log's bytes restore to exactly this log, so a save need not check it.
+
+        True when Rust wrote or checked each record's bytes, from exact frozen values. A record
+        with another value, such as a str subclass in a payload, makes this false for good.
+        """
+        return self._store.all_encoded()
 
     def append(self, record: EventLogRecord) -> None:
         refused = self._store.append(record)

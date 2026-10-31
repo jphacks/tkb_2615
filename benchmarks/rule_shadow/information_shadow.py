@@ -7,7 +7,7 @@ runs the kernel on the world. It compares, as text in which a float keeps its bi
 
 - every draw, by key and value, including those of the partner sampling in contacts.rs;
 - every contact: who, on what basis, for how long, which claim, with what probability, the outcome;
-- the events the kernel schedules with the rule's proposals;
+- the events the kernel schedules against those of `_schedule_information_contact`, key order too;
 - the new namespace, with the row against the tree.
 """
 
@@ -19,6 +19,7 @@ import math
 import os
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -47,7 +48,6 @@ def install(output: str) -> None:
     python_step = SamplePhase._sample_information_contacts
     python_schedule = SamplePhase._schedule_information_contact
     rust_validate = native.state("information").validate
-    scheduled: list[tuple[Any, ...]] = []
 
     class RecordingRNG(CounterRNG):
         def __init__(self, seed: int) -> None:
@@ -59,10 +59,6 @@ def install(output: str) -> None:
             key = json.dumps(list(key_parts), ensure_ascii=False, separators=(",", ":"))
             self.made.append((key, value.hex()))
             return value
-
-    def schedule(self: Any, *arguments: Any) -> None:
-        scheduled.append(arguments)
-        python_schedule(self, *arguments)
 
     def note(minute: int, what: str) -> None:
         differences.append(f"minute {minute}: {what}")
@@ -148,7 +144,8 @@ def install(output: str) -> None:
         if python_result.policy_version != planned["policy_version"]:
             note(minute, "the model's version")
 
-        scheduled.clear()
+        queued_before = {event.event_id for event in world.event_queue.pending()}
+        first_sequence = world.id_counters.get("event", 0)
         rules.sample_contacts(self, minute, rng)
         seen["kernel_ran"] += 1
         state = world.model_state[KEY]
@@ -184,8 +181,32 @@ def install(output: str) -> None:
             )
             for item in python_result.proposals
         ]
-        if json.dumps(scheduled) != json.dumps(proposals):
-            note(minute, f"proposals: {scheduled[:2]} and {proposals[:2]}")
+        # The Python method's events, from the same sequences, against those the kernel made.
+        made: list[Any] = []
+        counter = [first_sequence]
+
+        def allocate() -> int:
+            counter[0] += 1
+            return counter[0] - 1
+
+        twin = SimpleNamespace(
+            world=SimpleNamespace(
+                duration_minutes=world.duration_minutes,
+                allocate_event_sequence=allocate,
+                schedule_event=made.append,
+            ),
+            information_policy=policy,
+        )
+        for proposal in proposals:
+            python_schedule(twin, *proposal)
+        kernel_made = sorted(
+            (e for e in world.event_queue.pending() if e.event_id not in queued_before),
+            key=lambda e: e.sequence,
+        )
+        expected = [event.to_dict() for event in made]
+        if json.dumps([e.to_dict() for e in kernel_made]) != json.dumps(expected):
+            note(minute, f"events: {[e.to_dict() for e in kernel_made][:2]} and {expected[:2]}")
+        seen["events_made_by_rust"] += len(kernel_made)
         seen["proposals"] += len(proposals)
         seen["values_compared"] += (
             len(python_made) + len(contacts) * 10 + len(proposals) * 10 + _values(state)
@@ -205,7 +226,6 @@ def install(output: str) -> None:
         return accepted
 
     state_mirror.register_rust_validator(KEY, validator)
-    SamplePhase._schedule_information_contact = schedule  # type: ignore[method-assign]
     OfflineSimulationController._sample_information_contacts = step  # type: ignore[method-assign]
 
     def report() -> None:
