@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import random
 from types import SimpleNamespace
 from typing import Any
@@ -150,6 +151,9 @@ def _assert_same_as_python(
         ]
     )
     assert planned["policy_version"] == python.policy_version
+    if isinstance(policy, EvidenceAwareInformationPolicy):
+        forget = -math.expm1(-policy.config.forgetting_rate_per_minute)
+        assert planned["forget_probability"].hex() == forget.hex()
 
     _kernels().sample_contacts(controller, minute, rng)
     assert json.dumps(controller.calls) == json.dumps(
@@ -275,7 +279,7 @@ def test_single_writes_from_python_reach_the_row(generated_scenario: Any) -> Non
     assert _mirror(world).verify()
 
 
-# ---- The kernel runs, and writes values in place --------------------------------------------------
+# ---- The kernel runs, and writes values in place ------------------------------------------------
 
 
 @needs_kernels
@@ -496,7 +500,7 @@ def test_a_probability_has_the_bits_of_the_python_rule_and_one_percent_shows() -
         assert python == 0.0 or (rust * 1.01).hex() != python.hex()
 
 
-# ---- What the kernel leaves to the Python rule ----------------------------------------------------
+# ---- What the kernel leaves to the Python rule --------------------------------------------------
 
 
 @needs_kernels

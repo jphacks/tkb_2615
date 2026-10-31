@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import math
 import os
 from collections import Counter
 from pathlib import Path
@@ -34,6 +35,7 @@ def install(output: str) -> None:
     )
     from sheltersim.experiments.phases.sample import SamplePhase
     from sheltersim.experiments.runner import OfflineSimulationController
+    from sheltersim.policies.information import EvidenceAwareInformationPolicy
     from sheltersim.policies.world_view import WorldView
 
     if not native.available():
@@ -100,6 +102,11 @@ def install(output: str) -> None:
             note(minute, f"the kernel took what Python turned down: {python_error}")
             return
         seen[f"model {planned['policy_version']}"] += 1
+        if isinstance(policy, EvidenceAwareInformationPolicy):
+            # A comparison may not flip for a 1% change, so the probability itself is compared.
+            forget = -math.expm1(-policy.config.forgetting_rate_per_minute)
+            if planned["forget_probability"].hex() != forget.hex():
+                note(minute, "the forgetting probability")
         made = sorted((key, value.hex()) for key, value in planned["draws"])
         python_made = sorted(recording.made)
         if made != python_made:

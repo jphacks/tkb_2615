@@ -741,8 +741,8 @@ fn optional<'py>(py: Python<'py>, text: &Option<Arc<str>>) -> Bound<'py, PyAny> 
 }
 
 /// What this tick would do, changing nothing: the draws in the order they were made, as
-/// `(key, value)`, each contact as the Python rule's `InformationContactTrace` fields, and the
-/// model's version. Says Unsupported exactly when `sample_contacts` would. The planned draws show
+/// `(key, value)`, each contact as the Python rule's `InformationContactTrace` fields, the
+/// model's version and its forgetting probability, which no contact shows. Says Unsupported exactly when `sample_contacts` would. The planned draws show
 /// in `core/rng.rs`'s log of this thread, which this leaves off.
 #[pyfunction]
 fn planned_contacts<'py>(
@@ -779,6 +779,7 @@ fn planned_contacts<'py>(
     }
     document.set_item("contacts", contacts)?;
     document.set_item("policy_version", inputs.model.version())?;
+    document.set_item("forget_probability", inputs.settings.forget_probability)?;
     Ok(Some(document))
 }
 
