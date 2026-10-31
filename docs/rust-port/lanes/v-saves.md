@@ -29,13 +29,14 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 `rows_json` が `Unsupported`、`row_json` が `None` のときは、そのフィールドだけ Python のオブジェクトから作ります。エラーの文は変わりません。
 
 - taint した store、名前空間
+- `world.agents` などが store の `IdMap` でないとき（`__setattr__` を通らずに入れた map）。**この確かめは `tracked_mirror_gate.py` で見つかった不具合の修正です。** 確かめがなかった版は、session が `__setattr__` を差し替える回で、古い行を保存していました（`population`、`arrivals` の6行）。本番の `__setattr__` を通る経路ではゲートもハッシュも通っていて、ハッシュの比較だけでは見えませんでした。
 - NaN・無限大（`Encoder.float` が断ります）
 - 丸ごと代入された `metric_state`（`mirror.holds` が false）
 - hash の木が中を分けて持つ名前空間（`_WORLD_TREE` の `body_state_v1` など）。**これらを持つレーンは、履歴を行の外に持つ形を決めるまで、Python の経路のままです。**
 
 ## 計測
 
-2026-10-31、WSL2、16コア。ほかのレーンが同時に動いていました（load average 約 30〜150）。7日分の生成 Run（project の経路）を、基準（レーンの開始点 `dd6a294`）と今のツリーで同時に動かした1回の組です。別の組（修正前の版）でも比はほぼ同じでした。
+2026-10-31、WSL2、16コア。ほかのレーンが同時に動いていました（load average 約 30〜150）。7日分の生成 Run（project の経路）を、基準（レーンの開始点 `dd6a294`）と `daca212` で同時に動かした1回の組です。そのあとの修正は `IdMap` の確かめだけで、その commit でも7日分のハッシュ、ゲート、両モードのテストを確かめました。`rule_shadow`、`--reversed-order`、`tick_budget.py` は `daca212` の結果です。別の組（修正前の版）でも比はほぼ同じでした。
 
 | 7日分（スレッドの CPU 秒） | 基準 | 今 | 比 |
 |---|---:|---:|---:|
@@ -61,7 +62,8 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 | `tick_budget.py`（9600分から480 tick、3回、同時） | 基準との比 0.984（0.956、0.999、0.984）。A/A 1.009（1.056、0.967、1.009）。状態は3つとも一致 |
 | `gate_all_paths.py --expect` | 55個すべて一致、問題0件（素の回、`rule_shadow` の回とも） |
 | `gate_all_paths.py --expect --reversed-order` | 55個すべて一致、問題0件 |
-| 両モードの全テスト | Rust あり 2,317件通過・6件 skip。`SHELTERSIM_NATIVE=0` 1,781件通過・542件 skip |
+| 両モードの全テスト | Rust あり 2,318件通過・6件 skip。`SHELTERSIM_NATIVE=0` 1,781件通過・543件 skip |
+| `tracked_mirror_gate.py` | 220行のうち、最初の回は6行で問題（`population`、`arrivals`。上の「落ちる先」の不具合）。修正後にその2つのシナリオの8行を動かして問題0件。残りの53シナリオは修正前の commit の回で問題0件で、全体を修正後にもう一度は動かしていません |
 | 索引の行の kernel（`index_row`、1行あたり） | 18.3 → 13.1 µs（行動の行）、46.6 → 35.1 µs（会話の行） |
 
 ## 確かめていないこと
