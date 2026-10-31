@@ -35,7 +35,40 @@ Checkpoint の保存（`Checkpoint.capture` と `TimelineStore.record`）のう�
 
 ## 計測
 
-RESULTS_PLACEHOLDER
+2026-10-31、WSL2、16コア。ほかのレーンが同時に動いていました（load average 約 30〜150）。7日分の生成 Run（project の経路）を、基準（レーンの開始点 `dd6a294`）と今のツリーで同時に動かした1回の組です。別の組（修正前の版）でも比はほぼ同じでした。
+
+| 7日分（スレッドの CPU 秒） | 基準 | 今 | 比 |
+|---|---:|---:|---:|
+| `Checkpoint.capture` | 72.0 | 49.9 | 0.69 |
+| `save_captured_branch` | 15.4 | 14.0 | 0.91 |
+| `TimelineStore.record`（上の2つと frame） | 113.5 | 89.9 | 0.79 |
+| `_cache_frame` | 23.8 | 23.6 | 0.99 |
+| 索引のプロセスの ingest | 141.7 | 121.7 | 0.86 |
+| `record_decision` | 2.8 | 1.7 | 0.61 |
+| `TickEngine.step` | 109.1 | 109.1 | 1.00 |
+| 計算のスレッド全体 | 226.3 | 202.1 | 0.89 |
+
+負荷の高い回の値なので、秒そのものは静かな回より大きくなります。比を見てください。fsync はどちらも 3,034回でした（壁時計は 43.8 秒と 45.3 秒で、揺れの範囲です）。Run の保存先の大きさは 4.31 GB から 3.52 GB になりました（`history.sqlite` の rowid なし）。ピーク RSS は同時に動かした1回で 4,492,892 KB と 4,530,604 KB（+0.8%）でした。
+
+| 確認 | 結果 |
+|---|---|
+| 7日分のハッシュ | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。基準と同じ |
+| 保存の byte 列（基準と比べた7日分） | 338個の Checkpoint の hash がすべて同じ。`history.sqlite` 以外の 1,020 個のファイルは名前と大きさが同じで、pack と frame の全 byte の SHA-256 も同じ |
+| 索引の内容 | `records` 852,674行、`entities` 4,923,026行、`tokens` 3,242,150行、ほかの表も、全列で並べて比べて同じ。ファイルは rowid のぶん違います |
+| `rule_shadow`（7日分） | 保存 336回、実体 554,258項目（183 MB）と名前空間 672回（15 MB）の byte 列が Python の経路と差0件。落ちた回数0。復元の確認 336回で、等しいと分かっていた行 499,568、復元した行 54,690。省かない比較と結果の違い0件 |
+| `rule_shadow`（ゲート） | 履歴キャッシュのある保存 217回、実体 18,380項目（8.5 MB）と名前空間 434回（3.4 MB）で差0件。落ちた回数0。ゲートでは保存の回数が少ないので、taint や NaN の経路は `test_capture_rows.py` が通します |
+| 道具の確認（`rule_shadow`） | 小数の書き出しを 1.01 倍したコピー：差を報告し、Run も途中で止まりました。行の印を立てないコピー（古い byte 列を返す）：実体4種の差と「復元の確認の結果が省かない比較と違う」を毎回報告 |
+| `tick_budget.py`（9600分から480 tick、3回、同時） | 基準との比 0.984（0.956、0.999、0.984）。A/A 1.009（1.056、0.967、1.009）。状態は3つとも一致 |
+| `gate_all_paths.py --expect` | 55個すべて一致、問題0件（素の回、`rule_shadow` の回とも） |
+| `gate_all_paths.py --expect --reversed-order` | 55個すべて一致、問題0件 |
+| 両モードの全テスト | Rust あり 2,317件通過・6件 skip。`SHELTERSIM_NATIVE=0` 1,781件通過・542件 skip |
+| 索引の行の kernel（`index_row`、1行あたり） | 18.3 → 13.1 µs（行動の行）、46.6 → 35.1 µs（会話の行） |
+
+## 確かめていないこと
+
+- **Windows と macOS では動かしていません。** `HistoryPins` と `rows_json` が使う C API（`PyDict_Next`、`PyList_GetItem`、`Py_NewRef` 相当）はどれも stable ABI です。
+- ゲートの行の網羅率（`--coverage`）は測っていません。保存の経路に届いた回数は上の表のとおりです。
+- `rows_json` と `Table::changed` は、今の Rust の規則（`add_agent_stress` と心理）では実体を書く規則がほぼありません。実体を書く規則が増えたあとの7日分の比較は、そのレーンの `rule_shadow` で確かめます。
 
 ## 残っているもの
 
