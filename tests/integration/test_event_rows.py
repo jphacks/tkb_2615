@@ -472,3 +472,46 @@ def test_a_log_with_a_record_it_could_not_write_gets_the_old_restore_check(
     assert captured.checkpoint_hash == Checkpoint.capture(world).checkpoint_hash
     Checkpoint.capture(world, history_cache=cache)
     assert len(captured.restore_world().event_log) == 4
+
+
+def _random_value(chooser: random.Random, depth: int = 0) -> Any:
+    kinds = 8 if depth < 4 else 6
+    kind = chooser.randrange(kinds)
+    if kind == 0:
+        return None
+    if kind == 1:
+        return chooser.random() < 0.5
+    if kind == 2:
+        return chooser.choice([0, -1, 2**53, 2**63, -(2**63) - 1, chooser.randrange(-1000, 1000)])
+    if kind == 3:
+        scale = 10.0 ** chooser.randrange(-30, 30)
+        return chooser.choice([0.0, -0.0, 1.0, 1e16, 1e-4, chooser.random() * scale])
+    if kind in (4, 5):
+        return "".join(chooser.choice('aé"\\\n\tあ\U0001f600\x7f\x00') for _ in range(4))
+    if kind == 6:
+        return [_random_value(chooser, depth + 1) for _ in range(chooser.randrange(4))]
+    return {
+        f"k{chooser.randrange(50)}é": _random_value(chooser, depth + 1)
+        for _ in range(chooser.randrange(4))
+    }
+
+
+def test_random_values_written_on_appending_restore_to_the_record() -> None:
+    """A save trusts this writer: its restore check does not read bytes the log wrote."""
+    chooser = random.Random(11)
+    state = _state()
+    log = _NativeEventLog()
+    records = []
+    for index in range(2000):
+        event = _event(f"e{index}", index, value=_random_value(chooser))
+        record = EventLogRecord(event, index, chooser.choice(list(EventStatus)), None)
+        log.append(record)
+        records.append(record)
+        raw = log.items_bytes(index, index + 1)[0]
+        assert raw == _python_bytes(record)
+        assert state.row_record_json(event, index, record.status.value) == raw
+        assert native.same_saved_records([record], [raw], EventLogRecord, ScheduledEvent)
+        assert json.dumps(state.row_copy(event).to_dict()) == json.dumps(event.to_dict())
+        assert state.saved_row_copy(raw) == event
+    assert log.all_encoded()
+    assert _NativeEventLog.from_saved(log.items_bytes(0, 2000)).records_from(0) == records
