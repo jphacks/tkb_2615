@@ -217,7 +217,7 @@ def test_each_proposal_of_a_drawn_world_has_the_bits_of_python(
 def test_requests_cooldowns_and_queued_tasks_are_read_as_python_reads_them(
     generated_scenario: Any,
 ) -> None:
-    """No scenario of the gate has someone due with a request or a queued task, so these are here."""
+    """No gate scenario has someone due with a request or a queued task, so these are here."""
     world = WorldState.from_scenario(generated_scenario)
     controller = _controller(world)
     _everyone_due(world)
