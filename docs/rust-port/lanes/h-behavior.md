@@ -57,9 +57,16 @@ Policy の既定値（`temperature` など）は Python のままで、呼ぶた
 
 2026-11-01、WSL2、16コア。ほかのレーンと同時に動かしました。
 
-`tick_budget.py`（9600分から480 tick、3回、load average 37〜68）：基準との比 **0.872**（0.872、0.866、0.929）、A/A は 1.004（0.996、1.004、1.004）。世界の状態は3回とも一致しました。基準はこのレーンの直前（レーン G と feature/rust-port のマージ）です。
+`tick_budget.py`（9600分から480 tick、3回。基準はこのレーンの直前の feature/rust-port）：
 
-部品（µs/tick、生成 Run の最初の480分、基準とレーンを同時に3回、スレッドの CPU 時間、load average 約 30）。
+| 回 | 基準との比 | A/A | load average |
+|---|---:|---:|---:|
+| マージ前（レーン G の上） | **0.872**（0.872、0.866、0.929） | 1.004（0.996、1.004、1.004） | 37〜68 |
+| 最後のマージの後（`924a610`） | **0.894**（0.931、0.864、0.894） | 0.937（0.935、0.937、1.060） | 7〜19 |
+
+世界の状態はどの回も一致しました。2回目は A/A の揺れが大きいので、差は「1割前後の短縮」とだけ読みます。
+
+部品（マージ前。µs/tick、生成 Run の最初の480分、基準とレーンを同時に3回、スレッドの CPU 時間、load average 約 30）。
 
 | 部品 | 基準 | レーン |
 |---|---:|---:|
@@ -72,17 +79,19 @@ Policy の既定値（`temperature` など）は Python のままで、呼ぶた
 
 ## 結果
 
+最後のマージの後（`924a610`、拡張の sha256 `2eb5c847…`）の結果です。その後の変更はこの文書だけです。
+
 | 確認 | 結果 |
 |---|---|
-| 両モードの全テスト | Rust あり 2806件成功、6件 skip。`SHELTERSIM_NATIVE=0` 1780件成功、1032件 skip |
+| 両モードの全テスト | Rust あり 2882件成功、6件 skip。`SHELTERSIM_NATIVE=0` 1795件成功、1093件 skip |
 | `gate_all_paths.py --expect` | 55シナリオ、問題0件 |
-| `--reversed-order` | 55シナリオ、問題0件（影なし、影ありの両方） |
-| 7日分 `--expect` | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。すべて一致。スレッドの CPU 時間 120秒 |
+| `--reversed-order` | 55シナリオ、問題0件 |
+| 7日分 `--expect` | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。すべて一致。スレッドの CPU 時間 124秒（load average 約 5〜20） |
 | `tracked_mirror_gate.py`（55シナリオ × 4回） | 220行、問題0件 |
 | `ruff check`、`ruff format --check`、`clippy` の disallowed_methods | 通過 |
-| 道具の確認（コピーで変更、480分） | トイレの 0.90 → 0.909、手助けの 0.15 → 0.1515、照明の 0.3 → 0.303 と `discontent` の 0.75 → 0.7575。どれも影が報告 |
+| 道具の確認（コピーで変更、480分。マージ前の `c72ce8f`） | トイレの 0.90 → 0.909、手助けの 0.15 → 0.1515、照明の 0.3 → 0.303 と `discontent` の 0.75 → 0.7575。どれも影が報告 |
 
-| `rule_shadow` | ゲート | 7日分 | 逆順のゲート |
+| `rule_shadow` | ゲート | 7日分 | 逆順のゲート（マージ前の `6132710`） |
 |---|---:|---:|---:|
 | `propose_due` が動いた / 手順の数 | 31,530 / 31,530 | 10,080 / 10,080 | 94,590 / 94,590 |
 | `observed_state` が動いた / 手順の数 | 63,473 / 63,473 | 87,464 / 87,464 | 190,419 / 190,419 |
@@ -94,7 +103,7 @@ Policy の既定値（`temperature` など）は Python のままで、呼ぶた
 
 **ゲートが届かないもの：** 決定のときに依頼（`support_request_id`）か列のタスクを持つ人は、ゲートでも7日分でも0回でした（`observed_with_queue`、`observed_with_request`、`people_with_request`）。この枝は `tests/integration/test_behavior_row.py` が Python と比べます。
 
-ゲートの行の網羅（kernel ありだけ / kernel ありとなしの合計）：`policies/behavior.py` 44% / 89%、`experiments/phases/propose.py` 78% / 81%。Rust の行の網羅は測っていません。上の枝の件数で見ています。
+ゲートの行の網羅（マージ前の `6132710`。kernel ありだけ / kernel ありとなしの合計）：`policies/behavior.py` 44% / 89%、`experiments/phases/propose.py` 78% / 81%。Rust の行の網羅は測っていません。上の枝の件数で見ています。
 
 ## 確かめていないこと、危ないところ
 
