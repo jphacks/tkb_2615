@@ -387,7 +387,9 @@ class _RecordBatch:
         self.entities.extend((branch, kind, key, item, minute) for item in set(identities))
         # Index bounded metadata, never long answers, raw prompts or arbitrary prose.
         words = _terms(
-            read[6] if read is not None else " ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS)
+            read[6]
+            if read is not None
+            else " ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS)
         )
         words = sorted({*words, *("@event:" + event for event in references)})
         self.tokens.extend((branch, kind, token, minute, key) for token in words)

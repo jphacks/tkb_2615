@@ -767,7 +767,9 @@ def _attach_fields(world: Any, core: Any) -> None:
             world.__dict__[name] = mirror.replace_root(current)
 
 
-def owned_row_bytes(world: Any) -> tuple[dict[str, list[bytes]], dict[str, bytes], dict[str, bytes]]:
+def owned_row_bytes(
+    world: Any,
+) -> tuple[dict[str, list[bytes]], dict[str, bytes], dict[str, bytes]]:
     """The canonical JSON the Rust rows of a validated world write, without reading its objects.
 
     Returns the items of each entity field, each owned namespace and each owned world field. What

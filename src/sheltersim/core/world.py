@@ -1740,10 +1740,11 @@ class WorldState:
                 )
                 return agent
 
-            def rows_of(name: str, build: Any) -> dict[str, Any]:
-                return _restored_rows(document[name], (_known_rows or {}).get(name), build)
+            def rows_of(name: str, build: Any, *, by_id: bool = True) -> dict[str, Any]:
+                known = (_known_rows or {}).get(name)
+                return _restored_rows(document[name], known, build, by_id)
 
-            agents = rows_of("agents", agent_from)
+            agents = rows_of("agents", agent_from, by_id=False)
             zones = {item["id"]: ZoneState(**item) for item in document["zones"]}
             zone_edges = {item["id"]: ZoneEdgeState(**item) for item in document["zone_edges"]}
             facility_fields = {
@@ -1757,11 +1758,13 @@ class WorldState:
             }
             if version == 6:
                 facility_fields.update({"resource_active_agent_ids", "resource_queue_agent_ids"})
-
-            def facility_from(item: dict[str, Any]) -> FacilityState:
-                if not isinstance(item, dict) or set(item) != facility_fields:
-                    raise StateInvariantError(f"facility fields do not match WorldState v{version}")
-                return FacilityState(**item)
+            # A row wrote these with exactly its fields.
+            if not isinstance(document["facilities"], SavedItems):
+                for item in document["facilities"]:
+                    if not isinstance(item, dict) or set(item) != facility_fields:
+                        raise StateInvariantError(
+                            f"facility fields do not match WorldState v{version}"
+                        )
 
             def staff_from(item: dict[str, Any]) -> StaffState:
                 return StaffState(
@@ -1772,7 +1775,7 @@ class WorldState:
                     }
                 )
 
-            facilities = rows_of("facilities", facility_from)
+            facilities = rows_of("facilities", lambda item: FacilityState(**item))
             staff = rows_of("staff", staff_from)
             support_requests = rows_of("support_requests", lambda item: SupportRequestState(**item))
             active_tasks = rows_of("active_tasks", lambda item: ActiveTask(**item))
@@ -1853,7 +1856,6 @@ class WorldState:
         known_equal_events: int = 0,
         known_equal_histories: Mapping[tuple[str, str], int] | None = None,
         known_equal_rows: Mapping[str, set[str]] | None = None,
-        known_equal_owned: frozenset[str] = frozenset(),
     ) -> bool:
         """Whether two worlds hold equal state, so they pass the same validation.
 
@@ -1861,19 +1863,19 @@ class WorldState:
         to be equal and are not compared, and likewise the first entries of each
         model_state list in known_equal_histories, by its (name, field). Pending events
         compare in queue order. known_equal_rows names, by entity field, the entities known
-        to be equal, and known_equal_owned the world fields and model_state namespaces.
+        to be equal.
         """
         known_rows = known_equal_rows or {}
         for item in fields(self):
-            if item.name in {"event_queue", "event_log"} or item.name in known_equal_owned:
+            if item.name in {"event_queue", "event_log"}:
                 continue
             known = known_rows.get(item.name)
             if known is not None:
                 if not _same_rows(getattr(self, item.name), getattr(other, item.name), known):
                     return False
-            elif item.name == "model_state" and (known_equal_histories or known_equal_owned):
+            elif item.name == "model_state" and known_equal_histories:
                 if not _same_model_state(
-                    self.model_state, other.model_state, known_equal_histories or {}, known_equal_owned
+                    self.model_state, other.model_state, known_equal_histories
                 ):
                     return False
             elif getattr(self, item.name) != getattr(other, item.name):
@@ -1988,10 +1990,15 @@ class WorldState:
 
 
 def _restored_rows(
-    saved: Any, known: Mapping[int, tuple[bytes, Any, str]] | None, build: Any
+    saved: Any, known: Mapping[int, tuple[bytes, Any, str]] | None, build: Any, by_id: bool
 ) -> dict[str, Any]:
-    """The entities of a saved list by their IDs; known holds those restored before, by id(raw)."""
+    """The entities of a saved list by their IDs; known holds those restored before, by id(raw).
+
+    by_id says a broken document fails on its "id" before anything else of an item is read.
+    """
     if known is None or not isinstance(saved, SavedItems):
+        if by_id:
+            return {item["id"]: build(item) for item in saved}
         rows = {}
         for item in saved:
             row = build(item)
@@ -2018,20 +2025,15 @@ def _same_rows(mine: dict[str, Any], theirs: dict[str, Any], known: set[str]) ->
 
 
 def _same_model_state(
-    mine: dict[str, Any],
-    theirs: dict[str, Any],
-    known: Mapping[tuple[str, str], int],
-    known_owned: frozenset[str] = frozenset(),
+    mine: dict[str, Any], theirs: dict[str, Any], known: Mapping[tuple[str, str], int]
 ) -> bool:
-    """mine == theirs, except for the leading list entries and namespaces known to be equal."""
+    """mine == theirs, except for the leading list entries known to be equal."""
     if mine.keys() != theirs.keys():
         return False
     fields_of = {}
     for name, field_name in known:
         fields_of.setdefault(name, set()).add(field_name)
     for name, state in mine.items():
-        if name in known_owned:
-            continue
         other = theirs[name]
         lists = fields_of.get(name)
         if lists is None or not isinstance(state, dict) or not isinstance(other, dict):

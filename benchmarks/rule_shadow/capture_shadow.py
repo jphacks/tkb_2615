@@ -21,7 +21,11 @@ from typing import Any
 def install(output: str) -> None:
     from sheltersim import native
     from sheltersim.core import state_mirror
-    from sheltersim.core.checkpoint_cache import _WORLD_TREE, CheckpointHistoryCache, canonical_bytes
+    from sheltersim.core.checkpoint_cache import (
+        _WORLD_TREE,
+        CheckpointHistoryCache,
+        canonical_bytes,
+    )
     from sheltersim.core.world import WorldState
 
     if not native.available():
@@ -52,7 +56,11 @@ def install(output: str) -> None:
             expected = [canonical_bytes(item) for item in python[name]]
             if raws != expected:
                 bad = next(
-                    (i for i, pair in enumerate(zip(raws, expected, strict=False)) if pair[0] != pair[1]),
+                    (
+                        i
+                        for i, pair in enumerate(zip(raws, expected, strict=False))
+                        if pair[0] != pair[1]
+                    ),
                     min(len(raws), len(expected)),
                 )
                 differences.append(f"minute {minute}: {name}[{bad}]")
@@ -82,12 +90,11 @@ def install(output: str) -> None:
     def checked_same_state(self: Any, other: Any, **known: Any) -> bool:
         result = same_state(self, other, **known)
         rows = known.get("known_equal_rows")
-        owned = known.get("known_equal_owned")
-        if rows or owned:
+        if rows:
             seen["restore_checks"] += 1
-            seen["rows_known_equal"] += sum(map(len, (rows or {}).values()))
+            seen["rows_known_equal"] += sum(map(len, rows.values()))
             seen["rows_restored"] += sum(
-                len(getattr(self, name)) - len(ids) for name, ids in (rows or {}).items()
+                len(getattr(self, name)) - len(ids) for name, ids in rows.items()
             )
             whole = same_state(
                 self,

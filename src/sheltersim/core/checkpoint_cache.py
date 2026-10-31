@@ -37,8 +37,8 @@ from typing import Any
 from sheltersim import native
 from sheltersim.contracts.policies import model_signatures
 from sheltersim.core.save_validation import SaveValidationMemo
-from sheltersim.core.state_mirror import owned_row_bytes
 from sheltersim.core.saved_items import SavedItems, json_default
+from sheltersim.core.state_mirror import owned_row_bytes
 from sheltersim.core.world import WorldState
 from sheltersim.events.models import EventLogRecord, ScheduledEvent
 from sheltersim.events.queue import EventLog, keeps_saved_bytes
@@ -204,8 +204,10 @@ class CanonicalEncoder:
         items = self.list_items(value)
         if items is not None:
             if joined:
-                yield self._leaf(value) if id(value) in self._rewritten else (
-                    b"[" + b",".join(items) + b"]"
+                yield (
+                    self._leaf(value)
+                    if id(value) in self._rewritten
+                    else (b"[" + b",".join(items) + b"]")
                 )
             else:
                 yield b"["
@@ -587,7 +589,9 @@ class CheckpointHistoryCache:
         self._row_items = entity_rows
         # A namespace on the hash tree's path has fields hashed apart: it stays on the Python path.
         namespace_rows = {
-            name: raw for name, raw in namespace_rows.items() if name not in _WORLD_TREE["model_state"]
+            name: raw
+            for name, raw in namespace_rows.items()
+            if name not in _WORLD_TREE["model_state"]
         }
         self._owned_rows = frozenset(namespace_rows) | frozenset(field_rows)
         data = world._canonical_data(include_event_log=False, without_entities=bool(entity_rows))
@@ -741,21 +745,12 @@ class CheckpointHistoryCache:
         return self._restored_rows if self._row_items else None
 
     def known_equal_rows(self) -> dict[str, set[str]]:
-        """The IDs of the entities of the last documents() whose rows the last check showed equal."""
+        """The IDs of the entities of the last documents() whose rows a check showed equal."""
         known = {}
         for name, raws in self._row_items.items():
             kept = self._restored_rows.get(name, {})
-            known[name] = {
-                entry[2] for entry in map(kept.get, map(id, raws)) if entry is not None
-            }
+            known[name] = {entry[2] for entry in map(kept.get, map(id, raws)) if entry is not None}
         return known
-
-    def known_equal_owned(self) -> frozenset[str]:
-        """The namespaces and world fields whose documents the last documents() read from rows.
-
-        A typed row holds exact types only, so its bytes read back as what the tree holds.
-        """
-        return self._owned_rows
 
     def remember_restored_rows(self, restored: WorldState, *, equal: bool) -> None:
         """Keep the entities of a restore check for the rows that do not change until the next."""

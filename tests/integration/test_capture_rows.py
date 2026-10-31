@@ -164,7 +164,9 @@ def test_a_capture_from_rows_is_the_capture_from_the_objects(
         assert mine.to_json() == theirs.to_json()
         assert mine == theirs
     # A later reader sees the bytes of an ordinary Checkpoint, and restores the same state.
-    assert Checkpoint.from_json(with_rows[1].to_json()).checkpoint_hash == with_rows[1].checkpoint_hash
+    assert (
+        Checkpoint.from_json(with_rows[1].to_json()).checkpoint_hash == with_rows[1].checkpoint_hash
+    )
     assert with_rows[1].restore_world().same_state(without[1].restore_world())
 
 
@@ -191,7 +193,9 @@ def test_entity_lists_of_a_capture_are_rows_bytes(finished_document) -> None:
     for name in _ENTITIES:
         assert isinstance(saved.world_state[name], SavedItems)
     assert saved.world_state["agents"] == finished_document["agents"]
-    assert saved.to_dict()["world_state"]["support_requests"] == finished_document["support_requests"]
+    assert (
+        saved.to_dict()["world_state"]["support_requests"] == finished_document["support_requests"]
+    )
 
 
 def test_a_tainted_store_or_namespace_saves_the_same_checkpoint(
@@ -367,9 +371,10 @@ def test_a_new_owned_row_is_captured_by_its_declaration_alone(
     assert world._core.mirror("zone_environment_v1").row_json() is not None
     cache = CheckpointHistoryCache()
     saved = Checkpoint.capture(world, history_cache=cache)
-    assert "zone_environment_v1" in cache.known_equal_owned()
-    assert saved.world_state["model_state"]["zone_environment_v1"] == (
-        finished_document["model_state"]["zone_environment_v1"]
+    assert "zone_environment_v1" in cache._owned_rows
+    assert (
+        saved.world_state["model_state"]["zone_environment_v1"]
+        == (finished_document["model_state"]["zone_environment_v1"])
     )
     monkeypatch.undo()
     assert saved.checkpoint_hash == Checkpoint.capture(_world(finished_document)).checkpoint_hash
@@ -385,7 +390,7 @@ def test_a_namespace_with_histories_hashed_apart_stays_on_the_python_path(
     world = _world(finished_document)
     cache = CheckpointHistoryCache()
     saved = Checkpoint.capture(world, history_cache=cache)
-    assert "body_state_v1" not in cache.known_equal_owned()
+    assert "body_state_v1" not in cache._owned_rows
     monkeypatch.undo()
     assert saved.checkpoint_hash == Checkpoint.capture(_world(finished_document)).checkpoint_hash
 
@@ -473,7 +478,7 @@ def test_pins_refuse_entries_their_documents_do_not_read_back_as() -> None:
 
 @needs_kernels
 def test_an_old_entry_equal_in_another_order_is_still_reused() -> None:
-    """Pins say false for a new order, and the comparison with the documents decides (--reversed-order)."""
+    """Pins say false for a new order, and comparing with the documents decides."""
     from sheltersim.core.checkpoint_cache import _SealedItems, _world_json
 
     items, _ = _history()
@@ -510,7 +515,9 @@ def _random_json(rng: random.Random, depth: int = 0) -> Any:
     if kind == 6:
         return [_random_json(rng, depth + 1) for _ in range(rng.randrange(4))]
     return {
-        "".join(rng.choice('k,:"\\所') for _ in range(rng.randrange(1, 5))): _random_json(rng, depth + 1)
+        "".join(rng.choice('k,:"\\所') for _ in range(rng.randrange(1, 5))): _random_json(
+            rng, depth + 1
+        )
         for _ in range(rng.randrange(4))
     }
 

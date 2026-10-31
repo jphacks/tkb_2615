@@ -157,7 +157,6 @@ class Checkpoint:
             known_equal_events=history_cache.restored_events_equal(),
             known_equal_histories=history_cache.known_equal_histories(),
             known_equal_rows=history_cache.known_equal_rows(),
-            known_equal_owned=history_cache.known_equal_owned(),
         )
         if not equal:
             try:
