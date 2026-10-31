@@ -367,6 +367,37 @@ impl<'py> Tree<'py> {
         }
     }
 
+    /// d.clear(), for a dict of scalars, which leaves the table of nodes as it is.
+    pub(crate) fn clear(&self) -> PyResult<()> {
+        if let Some(node) = &self.node {
+            raw_dict_clear(node);
+        }
+        Ok(())
+    }
+
+    /// Put a dict's keys, which are exactly these, in this order with these key objects, unless
+    /// the first is the first of them already. After a restore the order is that of the JSON.
+    pub(crate) fn order_keys<const N: usize>(&self, keys: [&Bound<'py, PyString>; N]) -> PyResult<()> {
+        let Some(node) = &self.node else {
+            return Ok(());
+        };
+        if first_key_is(node, keys[0]) {
+            return Ok(());
+        }
+        let mut values = Vec::with_capacity(N);
+        for key in keys {
+            values.push(
+                raw_dict_get(node, key.as_any())?
+                    .ok_or_else(|| PyRuntimeError::new_err("the tree does not have the row's key"))?,
+            );
+        }
+        raw_dict_clear(node);
+        for (key, value) in keys.iter().zip(&values) {
+            raw_dict_set(node, key.as_any(), value)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_str<T: Scalar>(&self, key: &str, value: &T) -> PyResult<()> {
         match &self.node {
             Some(node) => raw_dict_set(node, PyString::new(self.py, key).as_any(), &value.to_py(self.py)?),
@@ -447,6 +478,23 @@ pub(crate) fn raw_dict_set(dict: &Bound<'_, PyAny>, key: &Bound<'_, PyAny>, valu
         return Err(PyErr::fetch(dict.py()));
     }
     Ok(())
+}
+
+fn raw_dict_clear(dict: &Bound<'_, PyAny>) {
+    // SAFETY: dict is a live dict. Its values are released here; a caller keeps any node it needs.
+    unsafe { ffi::PyDict_Clear(dict.as_ptr()) }
+}
+
+/// The first key of a non-empty dict, without a new reference.
+fn first_key_is(dict: &Bound<'_, PyAny>, key: &Bound<'_, PyString>) -> bool {
+    // SAFETY: dict is a live dict, and the key found is only compared.
+    unsafe {
+        let mut position = 0;
+        let mut found = null_mut();
+        let mut value = null_mut();
+        ffi::PyDict_Next(dict.as_ptr(), &mut position, &mut found, &mut value) != 0
+            && found == key.as_ptr()
+    }
 }
 
 pub(crate) fn raw_list_append(list: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -699,6 +747,63 @@ impl NamespaceMirror {
         raw_dict_set(node, key, &stored)?;
         if let Some(old) = old {
             Self::release_value(slf, &old, py.None().bind(py))?;
+        }
+        Ok(())
+    }
+
+    /// Make `root[field]`, a dict of records of scalars, hold these entries in this order, as a new
+    /// dict of new dicts would: the cheapest write of a map whose keys change at every tick. The
+    /// records already in the tree carry the new values, so they make no new nodes: a record has
+    /// no meaning of its own, and nothing keeps one across a tick. One whose first key is not the
+    /// interned first name, as after a restore, has another order, and leaves the tree. The row is
+    /// the caller's to change; values must not be containers, and `entries` must not run Python.
+    pub(crate) fn refill_record_map<'py, const N: usize>(
+        slf: &Bound<'py, Self>,
+        field: &Bound<'py, PyString>,
+        names: [&Bound<'py, PyString>; N],
+        entries: impl Iterator<Item = PyResult<(Bound<'py, PyString>, [Bound<'py, PyAny>; N])>>,
+    ) -> PyResult<()> {
+        let py = slf.py();
+        let Some(root) = slf.try_borrow()?.root.as_ref().map(|root| root.bind(py).clone()) else {
+            return Ok(());
+        };
+        let map = raw_dict_get(&root, field.as_any())?
+            .ok_or_else(|| PyRuntimeError::new_err("the tree does not have the row's key"))?;
+        let parent: u32 = map.getattr(intern!(py, "_node"))?.extract()?;
+        let mut pool = Vec::new();
+        let mut leaving = Vec::new();
+        for (_, record) in dict_values(&map) {
+            if tracked_kind(&record) == Some(false) && first_key_is(&record, names[0]) {
+                pool.push(record);
+            } else {
+                leaving.push(record);
+            }
+        }
+        raw_dict_clear(&map);
+        for entry in entries {
+            let (key, values) = entry?;
+            let record = match pool.pop() {
+                Some(record) => {
+                    let id: usize = record.getattr(intern!(py, "_node"))?.extract()?;
+                    let mut this = slf.try_borrow_mut()?;
+                    let node = this.table.nodes.get_mut(id).and_then(Option::as_mut);
+                    node.ok_or_else(|| PyRuntimeError::new_err("a record left the table"))?.key =
+                        NodeKey::Key(key.clone().unbind());
+                    record
+                }
+                None => {
+                    let record = new_container(py, false)?;
+                    Self::add_node(slf, &record, parent, NodeKey::Key(key.clone().unbind()), false)?;
+                    record
+                }
+            };
+            for (name, value) in names.iter().zip(&values) {
+                raw_dict_set(&record, name.as_any(), value)?;
+            }
+            raw_dict_set(&map, key.as_any(), &record)?;
+        }
+        for record in pool.into_iter().chain(leaving) {
+            Self::release_value(slf, &record, py.None().bind(py))?;
         }
         Ok(())
     }
