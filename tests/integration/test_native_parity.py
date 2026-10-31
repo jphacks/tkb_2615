@@ -200,6 +200,9 @@ def test_max_and_min_of_floats_keep_the_first_argument_on_a_tie(parity) -> None:
     pairs += [(x, y) for x in EDGES for y in EDGES]
     _assert_all_same(pairs, parity.max_floats(pairs), [max(x, y) for x, y in pairs])
     _assert_all_same(pairs, parity.min_floats(pairs), [min(x, y) for x, y in pairs])
+    near = [(x, x * (1.0 + 1e-9 * step)) for x in values for step in (0.5, 1.0, 1.5)]
+    pairs += [pair for pair in near if math.isfinite(pair[1])]
+    assert parity.is_close(pairs) == [math.isclose(x, y) for x, y in pairs]
 
 
 def test_max_of_an_int_and_a_float_returns_the_type_python_returns(parity) -> None:

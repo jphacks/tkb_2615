@@ -68,11 +68,17 @@ class ProposePhase:
         )
 
     def _apply_due_proposals(self, view: WorldView, rng: KeyedRandom) -> None:
-        for proposal in self.decisions.propose_due(view, rng):
+        for proposal in self._propose_due(view, rng):
             self._apply_proposal(
                 proposal,
-                observed_state=_agent_view_snapshot(view.agents[proposal.agent_id]),
+                observed_state=self._observed_state(view, proposal.agent_id),
             )
+
+    def _propose_due(self, view: WorldView, rng: KeyedRandom) -> tuple[Any, ...]:
+        return self.decisions.propose_due(view, rng)
+
+    def _observed_state(self, view: WorldView, agent_id: str) -> dict[str, Any]:
+        return _agent_view_snapshot(view.agents[agent_id])
 
     def _apply_proposal(
         self,
