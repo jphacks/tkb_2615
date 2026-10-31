@@ -21,7 +21,12 @@ from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.body_state import create_body_state
-from sheltersim.domain.models import Activity
+from sheltersim.domain.models import (
+    ActiveTask,
+    Activity,
+    SupportRequestState,
+    SupportRequestStatus,
+)
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.phases.propose import ProposePhase, _agent_view_snapshot
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
@@ -207,6 +212,53 @@ def test_each_proposal_of_a_drawn_world_has_the_bits_of_python(
     for agent_id in world.agents:
         rust = _rules().observed_state(SimpleNamespace(), view, agent_id)
         assert _exact(rust) == _exact(_agent_view_snapshot(view.agents[agent_id]))
+
+
+def test_requests_cooldowns_and_queued_tasks_are_read_as_python_reads_them(
+    generated_scenario: Any,
+) -> None:
+    """No scenario of the gate has someone due with a request or a queued task, so these are here."""
+    world = WorldState.from_scenario(generated_scenario)
+    controller = _controller(world)
+    _everyone_due(world)
+    people = sorted(world.agents)
+    world.minute_index = 40
+    for number, status in enumerate(SupportRequestStatus):
+        request = SupportRequestState(f"R{number}", people[number], 5, 10, status=status)
+        world.support_requests[request.id] = request
+        world.agents[people[number]].support_request_id = request.id
+        # Enough for the help candidate but for the request.
+        world.agents[people[number]].needs.fatigue = 0.9
+    world.agents[people[4]].support_request_id = "nothing"
+    world.agents[people[5]].support_cooldown_until = 55
+    world.agents[people[6]].support_cooldown_until = 25
+    world.active_tasks["T1"] = ActiveTask("T1", "toilet_queue", people[7], "F1", 10, 90)
+    world.active_tasks["T2"] = ActiveTask("T2", "resource_service_queue", people[8], None, 50, 90)
+    world.active_tasks["T3"] = ActiveTask("T3", "toilet_queue", people[9], "F1", 20, 90)
+    world.active_tasks["T4"] = ActiveTask("T4", "resource_service_queue", people[9], "F2", 30, 90)
+    view = _view(world, controller)
+    for threshold in (1.1, 0.0):
+        policy = UtilityBehaviorPolicy(information_query_threshold=threshold)
+        made = _both(policy, view)
+        assert {proposal.agent_id for proposal in made} == set(people)
+    snapshots = {}
+    for agent_id in people:
+        snapshots[agent_id] = _rules().observed_state(SimpleNamespace(), view, agent_id)
+        assert _exact(snapshots[agent_id]) == _exact(_agent_view_snapshot(view.agents[agent_id]))
+    assert snapshots[people[0]]["support"]["status"] == "pending"
+    assert snapshots[people[0]]["support"]["wait_minutes"] == 35
+    assert snapshots[people[4]]["support"]["request_id"] == "nothing"
+    assert snapshots[people[5]]["support"]["cooldown_remaining_minutes"] == 15
+    assert snapshots[people[6]]["support"]["cooldown_remaining_minutes"] == 0
+    assert snapshots[people[7]]["queue"]["wait_minutes"] == 30
+    assert snapshots[people[8]]["queue"] == {
+        "task_id": "T2",
+        "kind": "resource_service_queue",
+        "target_id": None,
+        "wait_minutes": 0,
+    }
+    # The first of two queued tasks: the order they were added in.
+    assert snapshots[people[9]]["queue"]["task_id"] == "T3"
 
 
 def test_drawn_worlds_reach_what_they_are_for(generated_scenario: Any) -> None:
