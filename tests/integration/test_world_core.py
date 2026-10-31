@@ -1,8 +1,9 @@
 """A world's core: the sample namespace owned end to end, and real rules on tracked trees.
 
-Nothing is owned in production yet, so these own namespaces for one test. The sample's typed row is
+These own more namespaces for one test. The sample's typed row is
 native/src/state/sample_namespace.rs; the row that holds any JSON can own a real namespace, which
-runs its rules, the kernels and the saves on a tree whose every write reaches Rust.
+runs its rules, the kernels and the saves on a tree whose every write reaches Rust. The namespaces
+owned in production are in test_psychology_row.py.
 """
 
 from __future__ import annotations
@@ -77,7 +78,11 @@ def _level(world: WorldState, person: str = "a") -> float:
     return world.model_state[SAMPLE]["people"][person]["level"]
 
 
-def test_with_nothing_owned_model_state_is_a_plain_dict_and_there_is_a_core() -> None:
+def test_with_nothing_owned_model_state_is_a_plain_dict_and_there_is_a_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(state_mirror, "OWNED_NAMESPACES", {})
+    monkeypatch.setattr(state_mirror, "OWNED_FIELDS", {})
     world = WorldState("s", 1, 100)
     assert type(world.model_state) is dict
     assert world._core.owned_names() == []
@@ -142,10 +147,10 @@ def test_a_rust_write_bypasses_an_override_of_the_node(world: WorldState) -> Non
         (lambda state: state["people"]["a"].__setitem__("level", 1), "not a float"),
         (lambda state: state["people"]["a"].__setitem__("visits", 1.0), "not an int"),
         (lambda state: state["people"]["a"].__setitem__("visits", True), "not an int"),
-        (lambda state: state["people"]["a"].__setitem__("extra", 1), "no such field"),
+        (lambda state: state["people"]["a"].__setitem__("extra", 1), "no field"),
         (lambda state: state["people"].__setitem__("c", {"level": 1.0}), "other fields"),
-        (lambda state: state.__setitem__("new", 1), "no field in the row"),
-        (lambda state: state.__delitem__("total"), "no field in the row"),
+        (lambda state: state.__setitem__("new", 1), "no field"),
+        (lambda state: state.__delitem__("total"), "which fields"),
         (lambda state: state["people"].__setitem__(1, {}), "not a str"),
         (lambda state: state["notes"].append((1, 2)), "plain JSON"),
     ],
@@ -424,7 +429,9 @@ def test_worlds_on_threads_keep_their_own_state(owned: None) -> None:
 def validator() -> Iterator[Any]:
     yield register_rust_validator
     register_rust_validator(SAMPLE, None)
-    register_rust_validator(PSYCHOLOGICAL_STATE_KEY, None)
+    register_rust_validator(
+        PSYCHOLOGICAL_STATE_KEY, native.state("psychological_distress").validate
+    )
 
 
 def test_a_rust_validator_accepts_or_leaves_it_to_python(world: WorldState, validator: Any) -> None:

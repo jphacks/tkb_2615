@@ -8,8 +8,7 @@ also tells the tree's sink, which keeps the row equal to the tree. A plain conta
 when it is inserted, so a write through a name it had before the insert reaches neither. See
 docs/rust-port/lanes/p4-world-core.md for what a lane does.
 
-Nothing is owned yet, and then `world.model_state` stays a plain dict and nothing here runs in a
-tick. With SHELTERSIM_NATIVE=0 a world has no core at all.
+With SHELTERSIM_NATIVE=0 a world has no core at all, and its documents are plain dicts.
 
 A sink is sheltersim_native.NamespaceMirror, or a test's object with the same methods
 (tests/support/tracked_mirror.py). A node's _sink is None out of any tree: it then behaves as the
@@ -570,7 +569,16 @@ def detach(world: Any, name: str) -> bool:
 
 # name of a namespace -> (the module of native/src/state/, the name of its row type). A lane adds
 # its line here and nothing to core/world.py. Empty, a world's model_state stays a plain dict.
-OWNED_NAMESPACES: dict[str, tuple[str, str]] = {}
+OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
+    "psychological_distress_v1": ("psychological_distress", "ROW"),
+}
+
+# The same for a field of WorldState that is not in model_state. A whole assignment to such a field
+# is not caught: the field then holds a plain dict, the kernels say Unsupported (field_mirror_of in
+# world_core.rs) and the Python rules run on it.
+OWNED_FIELDS: dict[str, tuple[str, str]] = {
+    "metric_state": ("metric_state", "ROW"),
+}
 
 # name of a namespace -> the kernel that accepts it: kernel(world) is True only if the namespace
 # passes every rule its Python validation checks; anything else, or Unsupported, runs the rules.
@@ -623,12 +631,22 @@ def _fill_table(table: NamespaceTable, current: Any) -> None:
         dict.__setitem__(table, key, value if mirror is None else mirror.replace_root(value))
 
 
+def _attach_fields(world: Any, core: Any) -> None:
+    for name, (module, row) in OWNED_FIELDS.items():
+        mirror = core.own(name, getattr(native.state(module), row))
+        current = world.__dict__[name]
+        # Anything but a mapping stays as it is; the kernels then say Unsupported.
+        if isinstance(current, dict):
+            world.__dict__[name] = mirror.replace_root(current)
+
+
 def start_core(world: Any) -> None:
     """Give a new world its core, and own what is listed. Only with the kernels on."""
     core = native.world_core()
     world.__dict__["_core"] = core
     if OWNED_NAMESPACES:
         _attach_owned(world, core)
+    _attach_fields(world, core)
 
 
 def model_state_assigned(world: Any, value: Any) -> Any:

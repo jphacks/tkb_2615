@@ -423,9 +423,11 @@ def uses_of_draws(path: Path, label: str) -> list[tuple[str, list[Any]]]:
 
 
 def _reversed_in_place(mapping: dict[Any, Any]) -> None:
-    items = list(mapping.items())
-    mapping.clear()
-    mapping.update(reversed(items))
+    # Through dict's own methods: order is not state, so it reaches no row (core/state_mirror.py).
+    items = list(dict.items(mapping))
+    dict.clear(mapping)
+    for key, value in reversed(items):
+        dict.__setitem__(mapping, key, value)
 
 
 def reverse_order(world: WorldState) -> None:

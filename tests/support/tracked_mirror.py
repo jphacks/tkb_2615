@@ -843,6 +843,11 @@ class Session:
         if self.tracked:
             WorldState.__setattr__ = world_setattr  # type: ignore[method-assign]
             self._restore.append((WorldState, "__setattr__", original_setattr))
+            # This sink stands in for the production one, so nothing is owned and the Python rules
+            # run on the shadowed documents; a plain session of the same scenario runs the kernels.
+            for name in ("OWNED_NAMESPACES", "OWNED_FIELDS"):
+                self._restore.append((state_mirror, name, getattr(state_mirror, name)))
+                setattr(state_mirror, name, {})
         return self
 
     def __exit__(self, *_exception: Any) -> None:
