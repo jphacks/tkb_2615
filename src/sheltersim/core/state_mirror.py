@@ -763,6 +763,9 @@ def _rows_are_what_the_world_holds(world: Any, name: str) -> bool:
         # Not owned: the kernel says Unsupported itself.
         return True
     value = dict.get(table, name, _MISSING)
+    if value is _MISSING:
+        # Truly absent the kernel answers; a row left behind answers for nothing.
+        return mirror.row_json() is None
     return value is _DETACHED or mirror.holds(value)
 
 
