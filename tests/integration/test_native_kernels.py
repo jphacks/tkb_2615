@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+from support.paths import BENCHMARKS
 
 from sheltersim import native
 from sheltersim.core.engine import TraceLevel
@@ -1073,12 +1078,12 @@ def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
 ) -> None:
     from sheltersim import policies
 
-    behavior = __import__("sheltersim.policies.behavior", fromlist=["_view_state_hash"])
+    world_view = __import__("sheltersim.policies.world_view", fromlist=["_view_state_hash"])
     assert policies is not None
     document = generated_scenario.model_dump(mode="json")
     document["duration_minutes"] = 240
     kernel = native.view_state_hash
-    original = behavior._view_state_hash
+    original = world_view._view_state_hash
     compared = []
 
     def checked(*arguments):
@@ -1093,7 +1098,7 @@ def test_the_view_hash_kernel_gives_the_python_hash_at_every_tick(
         compared.append(rust)
         return rust
 
-    monkeypatch.setattr(behavior, "_view_state_hash", checked)
+    monkeypatch.setattr(world_view, "_view_state_hash", checked)
     run_scenario(ScenarioSpec.model_validate(document), tmp_path, trace_level=TraceLevel.OFF)
     assert len(compared) == 240
 
@@ -1507,3 +1512,41 @@ def test_same_json_items_rejects_counts_outside_either_list() -> None:
     assert not native.same_json_items([1], [1], 1, 1)
     assert native.same_json_items([1, 2], [1], 0, 1)
     assert not native.same_json_items((1,), [1], 0, 1)
+
+
+def test_a_rust_probability_has_the_bits_python_compared_with_its_draws(tmp_path: Path) -> None:
+    """The worked example of docs/rust-port/lanes/p0-digest.md: a probability that flips no
+    draw leaves the hashes alone, so its bits are compared at the comparison itself.
+
+    The expm1 of the parity module stands in for the lane's own function.
+    """
+    output = tmp_path / "python"
+    subprocess.run(
+        [
+            sys.executable,
+            str(BENCHMARKS / "first_difference.py"),
+            "--record",
+            "model__information__evidence-aware-rumor-v1",
+            "--output",
+            str(output),
+            "--draws",
+        ],
+        # The Python rule stays the reference after its Rust port.
+        env={**os.environ, "SHELTERSIM_LLM_MODE": "offline", "SHELTERSIM_NATIVE": "0"},
+        check=True,
+        capture_output=True,
+    )
+    python_compared_with = set()
+    with (output / "draws.jsonl").open(encoding="utf-8") as rows:
+        for line in rows:
+            row = json.loads(line)
+            if row["k"][0] == "information-forgetting-v1":
+                python_compared_with.update(use[1] for use in row["u"] if use[0] == "lt")
+    # gate_scenarios.with_rumors; the lane's input comes from the same Scenario.
+    rate = 0.002
+
+    rust = -native.rules("parity").expm1([-rate])[0]
+
+    assert python_compared_with == {rust.hex()}
+    # What the gate's hashes cannot see (docs/rust-port.md): one percent is a different value.
+    assert (rust * 1.01).hex() not in python_compared_with

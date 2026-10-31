@@ -139,7 +139,7 @@
 
 計測すると、次の一歩は状態の持ち主を移すことではなく、計算を移すことと、毎回の作り直しをやめることでした。これらの段階の計算は、状態を Rust に移さなくても下がります。
 
-- **社会の伝播（`ExpressivenessChannelOpennessPolicy`）：** 接触の抽選と式を Rust で計算します（`native/src/contacts.rs` の `social_channel_update`）。入力は毎 tick 受け渡しますが、100人分で小さいので、受け渡しの手間で得は消えません。
+- **社会の伝播（`ExpressivenessChannelOpennessPolicy`）：** 接触の抽選と式を Rust で計算します（`native/src/rules/social_propagation.rs` の `social_channel_update`）。入力は毎 tick 受け渡しますが、100人分で小さいので、受け渡しの手間で得は消えません。
 - **情報の伝播：** メッセージが1件もない間は、接触の抽選と記録を Rust で計算します（`information_contacts_without_messages`）。このとき `WorldView` を作りません。メッセージ・信念・支援の依頼の記録が1件でもあれば、これまでどおり Python で計算します。
 - **`WorldView.from_world`：** 人ごとの `AgentView` を生成された `__init__` を通さずに1つの dict で作り、同じ区域の項目を共有します。解析済みの `PersonContext` はコントローラーごとに持ち、元の記録と違えば解析し直します。監査用のハッシュは `canonical_sha256` で計算します。
 - **毎回の作り直しをやめたもの：** `selected_models`（段階ごとに1回）、心理の長期状態の `deepcopy`、資源台帳の予約IDの確認、移動の経路が物理的に通れるかの判定（入力が変わるまで）、区域の中心、`dispatch_due` のキューの並べ替え。
@@ -476,7 +476,7 @@ EventLog の比較の保証：`same_saved_records` は保存した bytes を読�
 | 噂を忘れる確率を1%増 | **検出されない** |
 | 訂正を受け入れる確率を1%減 | **検出されない** |
 
-確率のわずかな違いは、乱数との比較の結果が変わらない限りハッシュに現れません。短い Scenario では抽選の回数が少ないためです。確率の式を移すときは、ハッシュだけでなく、毎 tick のビット単位の比較テストも使います。
+確率のわずかな違いは、乱数との比較の結果が変わらない限りハッシュに現れません。短い Scenario では抽選の回数が少ないためです。確率の式を移すときは、ハッシュだけでなく、毎 tick のビット単位の比較テストも使います。この2件は `benchmarks/first_difference.py --draws` で検出できます。Rust に移した式のテストの足し方は [lanes/p0-digest.md](rust-port/lanes/p0-digest.md) にあります。
 
 ### 決定性
 

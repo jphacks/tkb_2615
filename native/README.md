@@ -35,7 +35,9 @@ Checkpoint document) and times them.
   exports `pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()>`, and Python reaches it with
   `native.rules("movement")` or `native.state("movement")`, which are `None` without the
   extension. Catch `native.Unsupported` around a call; the Python code then decides.
-  `rules/parity.rs` is the example and exposes `core` to the tests.
+  `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
+  and `rules/information.rs` hold the contact kernels, which are also at the top of the module
+  for the existing calls; what they share is in `contacts.rs`.
 - Crates lanes need are already in `Cargo.toml` (`indexmap`, `smallvec`, `rustc-hash`, `itoa`),
   so `Cargo.lock` stays quiet. `HashMap` and `FxHashMap` are for lookups only: anything iterated
   into an output goes through `IndexMap`, or is sorted.

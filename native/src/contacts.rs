@@ -1,17 +1,16 @@
-//! The per-tick contact models: sampling keyed partners and, for the social model,
-//! the bounded stress synchrony (`ExpressivenessChannelOpennessPolicy.update`,
-//! `InformationSpreadPolicy.update` while no message exists). Each returns the same
-//! floats, draws and JSON keys as the Python code: every float operation keeps its
-//! order, and anything the Python code would reject, or any value of another type,
-//! raises `Unsupported` so the caller runs that code instead.
+//! What the per-tick contact models share: sampling keyed partners and reading the last
+//! tick's contact records. The models are in `rules/social_propagation.rs` and
+//! `rules/information.rs`. Each returns the same floats, draws and JSON keys as the Python
+//! code: every float operation keeps its order, and anything the Python code would reject,
+//! or any value of another type, raises `Unsupported` so the caller runs that code instead.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyDict, PyFloat, PyInt, PyString};
 
-use crate::core::mathx::{py_fsum, py_max, py_min};
+use crate::core::mathx::py_fsum;
 use crate::core::rng::{Key, KeyedDraws};
 use crate::{write_json_string, Unsupported};
 
@@ -21,14 +20,14 @@ pub fn fsum(values: Vec<f64>) -> PyResult<f64> {
     py_fsum(&values).ok_or_else(|| Unsupported::new_err("values are not finite"))
 }
 
-fn exact_float(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+pub(crate) fn exact_float(value: &Bound<'_, PyAny>) -> PyResult<f64> {
     value
         .downcast_exact::<PyFloat>()
         .map(|number| number.value())
         .map_err(|_| Unsupported::new_err("not a float"))
 }
 
-fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
+pub(crate) fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
     value
         .downcast_exact::<PyInt>()
         .map_err(|_| Unsupported::new_err("not an int"))?
@@ -36,13 +35,15 @@ fn exact_int(value: &Bound<'_, PyAny>) -> PyResult<i64> {
         .map_err(|_| Unsupported::new_err("int out of range"))
 }
 
-fn exact_dict<'a, 'py>(value: &'a Bound<'py, PyAny>) -> PyResult<&'a Bound<'py, PyDict>> {
+pub(crate) fn exact_dict<'a, 'py>(
+    value: &'a Bound<'py, PyAny>,
+) -> PyResult<&'a Bound<'py, PyDict>> {
     value
         .downcast_exact::<PyDict>()
         .map_err(|_| Unsupported::new_err("not a dict"))
 }
 
-fn texts<'a>(values: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
+pub(crate) fn texts<'a>(values: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
     values
         .iter()
         .map(|value| {
@@ -55,7 +56,9 @@ fn texts<'a>(values: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
 
 /// The {pair key: {last_seen_minute, consecutive_minutes}} of the last tick, as
 /// non-negative ints.
-fn previous_contacts(contacts: &Bound<'_, PyDict>) -> PyResult<HashMap<String, (i64, i64)>> {
+pub(crate) fn previous_contacts(
+    contacts: &Bound<'_, PyDict>,
+) -> PyResult<HashMap<String, (i64, i64)>> {
     let py = contacts.py();
     let last_seen = intern!(py, "last_seen_minute");
     let consecutive = intern!(py, "consecutive_minutes");
@@ -82,7 +85,11 @@ fn previous_contacts(contacts: &Bound<'_, PyDict>) -> PyResult<HashMap<String, (
     Ok(previous)
 }
 
-fn contact_entry<'py>(py: Python<'py>, minute: i64, minutes: i64) -> PyResult<Bound<'py, PyDict>> {
+pub(crate) fn contact_entry<'py>(
+    py: Python<'py>,
+    minute: i64,
+    minutes: i64,
+) -> PyResult<Bound<'py, PyDict>> {
     let entry = PyDict::new(py);
     entry.set_item(intern!(py, "last_seen_minute"), minute)?;
     entry.set_item(intern!(py, "consecutive_minutes"), minutes)?;
@@ -90,16 +97,16 @@ fn contact_entry<'py>(py: Python<'py>, minute: i64, minutes: i64) -> PyResult<Bo
 }
 
 #[derive(Clone, Copy)]
-enum Basis {
+pub(crate) enum Basis {
     Family,
     SameZone,
     Nearby,
 }
 
-struct Bucket<'a> {
-    basis: Basis,
-    members: &'a [usize],
-    includes_self: bool,
+pub(crate) struct Bucket<'a> {
+    pub(crate) basis: Basis,
+    pub(crate) members: &'a [usize],
+    pub(crate) includes_self: bool,
 }
 
 impl Bucket<'_> {
@@ -109,7 +116,7 @@ impl Bucket<'_> {
 }
 
 /// Sorted person indexes of each zone (people are indexed in ID order).
-fn zone_members<'a>(zones: &[&'a str]) -> HashMap<&'a str, Vec<usize>> {
+pub(crate) fn zone_members<'a>(zones: &[&'a str]) -> HashMap<&'a str, Vec<usize>> {
     let mut members: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, &zone) in zones.iter().enumerate() {
         members.entry(zone).or_default().push(index);
@@ -118,7 +125,7 @@ fn zone_members<'a>(zones: &[&'a str]) -> HashMap<&'a str, Vec<usize>> {
 }
 
 /// The adjacent zones of `zone` that have people, in sorted order.
-fn nearby_buckets<'a>(
+pub(crate) fn nearby_buckets<'a>(
     zone: &str,
     neighbors: &'a HashMap<String, Vec<String>>,
     members: &'a HashMap<&str, Vec<usize>>,
@@ -139,7 +146,7 @@ fn nearby_buckets<'a>(
 /// `_select_contacts`: at most `maximum` partners of `me`, with the draws of
 /// `{key}` written as `["<label>",minute,"<me>",slot,attempt]`. The social model
 /// stops at a slot that used all its attempts; the information model goes on.
-fn select_contacts(
+pub(crate) fn select_contacts(
     draws: &KeyedDraws,
     key: &mut Key,
     me: usize,
@@ -195,7 +202,7 @@ fn select_contacts(
 }
 
 /// `"<id>"` as JSON for each person.
-fn quoted_ids(ids: &[&str]) -> Vec<Vec<u8>> {
+pub(crate) fn quoted_ids(ids: &[&str]) -> Vec<Vec<u8>> {
     ids.iter()
         .map(|id| {
             let mut quoted = Vec::with_capacity(id.len() + 2);
@@ -205,7 +212,7 @@ fn quoted_ids(ids: &[&str]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn pair_key(first: &[u8], second: &[u8]) -> PyResult<String> {
+pub(crate) fn pair_key(first: &[u8], second: &[u8]) -> PyResult<String> {
     let mut key = String::with_capacity(first.len() + second.len() + 3);
     key.push('[');
     key.push_str(std::str::from_utf8(first).map_err(|_| Unsupported::new_err("not UTF-8"))?);
@@ -215,325 +222,8 @@ fn pair_key(first: &[u8], second: &[u8]) -> PyResult<String> {
     Ok(key)
 }
 
-fn key_head(label: &str, minute: i64, quoted: &[u8]) -> Key {
+pub(crate) fn key_head(label: &str, minute: i64, quoted: &[u8]) -> Key {
     let mut head = Key::labelled(label);
     head.int(minute).quoted(quoted);
     head
-}
-
-/// One tick of `InformationSpreadPolicy.update` while no person holds a belief: the
-/// decayed query pressure (a copy of `query_pressure`), the new contact records and
-/// the number of contacts. `ids` are sorted; `zones` are their zones.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn information_contacts_without_messages<'py>(
-    py: Python<'py>,
-    seed: &str,
-    minute: i64,
-    maximum: i64,
-    ids: Vec<Bound<'py, PyString>>,
-    zones: Vec<Bound<'py, PyString>>,
-    neighbors: HashMap<String, Vec<String>>,
-    previous: &Bound<'py, PyDict>,
-    query_pressure: &Bound<'py, PyDict>,
-    decay: f64,
-) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>, i64)> {
-    let id_texts = texts(&ids)?;
-    let zone_texts = texts(&zones)?;
-    if id_texts.len() != zone_texts.len() {
-        return Err(Unsupported::new_err("people and zones differ in length"));
-    }
-    let pressure = query_pressure.copy()?;
-    for id in &ids {
-        let Some(value) = pressure.get_item(id)? else {
-            return Err(Unsupported::new_err("a person has no query pressure"));
-        };
-        pressure.set_item(id, py_max(0.0, exact_float(&value)? - decay))?;
-    }
-
-    let previous = previous_contacts(previous)?;
-    let draws = KeyedDraws::new(seed);
-    let quoted = quoted_ids(&id_texts);
-    let members = zone_members(&zone_texts);
-    let current = PyDict::new(py);
-    let mut attempts = 0;
-    let mut selected = Vec::new();
-    for (me, &zone) in zone_texts.iter().enumerate() {
-        let mut buckets = Vec::new();
-        let same_zone = &members[zone];
-        if same_zone.len() > 1 {
-            buckets.push(Bucket {
-                basis: Basis::SameZone,
-                members: same_zone,
-                includes_self: true,
-            });
-        }
-        for people in nearby_buckets(zone, &neighbors, &members) {
-            buckets.push(Bucket {
-                basis: Basis::Nearby,
-                members: people,
-                includes_self: false,
-            });
-        }
-        let mut head = key_head("information-contact-partner-v1", minute, &quoted[me]);
-        select_contacts(&draws, &mut head, me, &buckets, maximum, false, &mut selected);
-        for &(source, _) in &selected {
-            let key = pair_key(&quoted[me], &quoted[source])?;
-            let minutes = match previous.get(&key) {
-                Some(&(seen, count)) if seen == minute - 1 => count + 1,
-                _ => 1,
-            };
-            current.set_item(key, contact_entry(py, minute, minutes)?)?;
-            attempts += 1;
-        }
-    }
-    Ok((pressure, current, attempts))
-}
-
-/// One tick of `ExpressivenessChannelOpennessPolicy.update`. `ids` are sorted and
-/// `rows` hold `(group or None, zone, stress, stress_sensitivity, expressiveness,
-/// base stress)` for each. `floats` are the stress spread, the pair cap, the agent
-/// cap and the family, same-zone and nearby channel strengths. Returns the new
-/// stresses, the contact records, the cooldowns, the contact traces (recipient,
-/// source, basis, minutes, cooldown left and six floats), the contributing count and
-/// the total shift.
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn social_channel_update<'py>(
-    py: Python<'py>,
-    seed: &str,
-    minute: i64,
-    maximum: i64,
-    minimum_contact_minutes: i64,
-    cooldown_minutes: i64,
-    floats: [f64; 6],
-    ids: Vec<Bound<'py, PyString>>,
-    rows: &Bound<'py, PyList>,
-    neighbors: HashMap<String, Vec<String>>,
-    previous: &Bound<'py, PyDict>,
-    previous_cooldowns: &Bound<'py, PyDict>,
-) -> PyResult<(
-    Vec<f64>,
-    Bound<'py, PyDict>,
-    Bound<'py, PyDict>,
-    Vec<(usize, usize, &'static str, i64, i64, [f64; 7])>,
-    i64,
-    f64,
-)> {
-    let [spread, pair_cap, agent_cap, family_strength, zone_strength, nearby_strength] = floats;
-    let id_texts = texts(&ids)?;
-    if rows.len() != id_texts.len() {
-        return Err(Unsupported::new_err("people and rows differ in length"));
-    }
-    let mut group_values = Vec::with_capacity(rows.len());
-    let mut zone_values = Vec::with_capacity(rows.len());
-    let mut stress = Vec::with_capacity(rows.len());
-    let mut sensitivity = Vec::with_capacity(rows.len());
-    let mut expressiveness = Vec::with_capacity(rows.len());
-    let mut base = Vec::with_capacity(rows.len());
-    for row in rows.iter() {
-        let (group, zone, a, b, c, d): (
-            Option<Bound<'py, PyString>>,
-            Bound<'py, PyString>,
-            Bound<'py, PyAny>,
-            Bound<'py, PyAny>,
-            Bound<'py, PyAny>,
-            Bound<'py, PyAny>,
-        ) = row.extract()?;
-        group_values.push(group);
-        zone_values.push(zone);
-        stress.push(exact_float(&a)?);
-        sensitivity.push(exact_float(&b)?);
-        expressiveness.push(exact_float(&c)?);
-        base.push(exact_float(&d)?);
-    }
-    let zone_texts = texts(&zone_values)?;
-    let mut group_members: HashMap<&str, Vec<usize>> = HashMap::new();
-    let mut group_texts = Vec::with_capacity(rows.len());
-    for (index, group) in group_values.iter().enumerate() {
-        let text = match group {
-            Some(group) => Some(
-                group
-                    .to_str()
-                    .map_err(|_| Unsupported::new_err("not UTF-8"))?,
-            ),
-            None => None,
-        };
-        if let Some(text) = text {
-            group_members.entry(text).or_default().push(index);
-        }
-        group_texts.push(text);
-    }
-    let previous = previous_contacts(previous)?;
-    let mut cooldown_before: HashMap<String, i64> =
-        HashMap::with_capacity(previous_cooldowns.len());
-    for (key, value) in previous_cooldowns.iter() {
-        let key = key
-            .downcast_exact::<PyString>()
-            .map_err(|_| Unsupported::new_err("cooldown key is not a str"))?
-            .to_str()
-            .map_err(|_| Unsupported::new_err("not UTF-8"))?
-            .to_owned();
-        let due = exact_int(&value)?;
-        if due < 0 {
-            return Err(Unsupported::new_err("cooldown is negative"));
-        }
-        cooldown_before.insert(key, due);
-    }
-    let mut cooldowns: BTreeMap<&str, i64> = cooldown_before
-        .iter()
-        .filter(|(_, &due)| due > minute)
-        .map(|(id, &due)| (id.as_str(), due))
-        .collect();
-
-    let draws = KeyedDraws::new(seed);
-    let quoted = quoted_ids(&id_texts);
-    let members = zone_members(&zone_texts);
-    let current = PyDict::new(py);
-    let mut output = Vec::with_capacity(id_texts.len());
-    let mut traces = Vec::new();
-    let mut total_shift = 0.0;
-    let mut contributing = 0;
-    let mut selected = Vec::new();
-    for (me, &zone) in zone_texts.iter().enumerate() {
-        let mut buckets = Vec::new();
-        if let Some(group) = group_texts[me] {
-            let family = &group_members[group];
-            if family.len() > 1 {
-                buckets.push(Bucket {
-                    basis: Basis::Family,
-                    members: family,
-                    includes_self: true,
-                });
-            }
-        }
-        let same_zone = &members[zone];
-        if same_zone.len() > 1 {
-            buckets.push(Bucket {
-                basis: Basis::SameZone,
-                members: same_zone,
-                includes_self: true,
-            });
-        }
-        for people in nearby_buckets(zone, &neighbors, &members) {
-            buckets.push(Bucket {
-                basis: Basis::Nearby,
-                members: people,
-                includes_self: false,
-            });
-        }
-        let mut head = key_head("social-contact-bucket-v1", minute, &quoted[me]);
-        select_contacts(&draws, &mut head, me, &buckets, maximum, true, &mut selected);
-
-        // Contacts of at least the minimum duration, by source ID (people are indexed
-        // in ID order, and a person is a source once).
-        let mut contacts: Vec<(usize, Basis, i64)> = Vec::with_capacity(selected.len());
-        for &(source, basis) in &selected {
-            let key = pair_key(&quoted[me], &quoted[source])?;
-            let duration = match previous.get(&key) {
-                Some(&(seen, count)) if seen == minute - 1 => count + 1,
-                _ => 1,
-            };
-            current.set_item(key, contact_entry(py, minute, duration)?)?;
-            if duration >= minimum_contact_minutes {
-                contacts.push((source, basis, duration));
-            }
-        }
-        contacts.sort_unstable_by_key(|contact| contact.0);
-
-        let delta_stress = base[me];
-        let can_contribute = minute >= cooldown_before.get(id_texts[me]).copied().unwrap_or(0);
-        let eligible: &[(usize, Basis, i64)] = if can_contribute { &contacts } else { &[] };
-        let weights: Vec<f64> = eligible
-            .iter()
-            .map(|&(source, basis, _)| {
-                let channel = match basis {
-                    Basis::Family => family_strength,
-                    Basis::SameZone => zone_strength,
-                    Basis::Nearby => nearby_strength,
-                };
-                expressiveness[source] * channel * sensitivity[me]
-            })
-            .collect();
-        let weight_total =
-            py_fsum(&weights).ok_or_else(|| Unsupported::new_err("weights are not finite"))?;
-        // The Python code raises for contacts without any weight (its strict zip).
-        if !eligible.is_empty() && !(weight_total > 0.0) {
-            return Err(Unsupported::new_err("eligible contacts have no weight"));
-        }
-        let mut shift = 0.0;
-        let mut pair_shifts: Vec<f64> = Vec::new();
-        let mut raw_pair_shifts: Vec<f64> = Vec::new();
-        let mut aggregate_rate = 0.0;
-        let mut pair_cap_scale = 1.0;
-        if weight_total > 0.0 {
-            let gamma = py_min(1.0, spread * weight_total);
-            aggregate_rate = gamma;
-            let own = stress[me];
-            raw_pair_shifts = eligible
-                .iter()
-                .zip(&weights)
-                .map(|(&(source, _, _), &weight)| {
-                    gamma * weight / weight_total * (stress[source] - own)
-                })
-                .collect();
-            pair_shifts = raw_pair_shifts
-                .iter()
-                .map(|&value| py_max(-pair_cap, py_min(pair_cap, value)))
-                .collect();
-            let raw_shift = py_fsum(&pair_shifts)
-                .ok_or_else(|| Unsupported::new_err("shifts are not finite"))?;
-            shift = py_max(-agent_cap, py_min(agent_cap, raw_shift));
-            shift = py_max(-delta_stress, py_min(1.0 - delta_stress, shift));
-            pair_cap_scale = if raw_shift != 0.0 {
-                shift / raw_shift
-            } else {
-                0.0
-            };
-            for value in &mut pair_shifts {
-                *value *= pair_cap_scale;
-            }
-        }
-        output.push(py_min(1.0, py_max(0.0, delta_stress + shift)));
-        total_shift += shift;
-        if shift != 0.0 {
-            contributing += 1;
-            cooldowns.insert(id_texts[me], minute + cooldown_minutes);
-        }
-        let cooldown_left = 0.max(cooldowns.get(id_texts[me]).copied().unwrap_or(0) - minute);
-        for (index, &(source, basis, duration)) in contacts.iter().enumerate() {
-            let basis_name = match basis {
-                Basis::Family => "family",
-                Basis::SameZone => "same_zone",
-                Basis::Nearby => "nearby_zone",
-            };
-            let difference = stress[source] - stress[me];
-            let values = if index < pair_shifts.len() {
-                [
-                    difference,
-                    pair_shifts[index],
-                    weights[index],
-                    aggregate_rate,
-                    raw_pair_shifts[index],
-                    py_max(-pair_cap, py_min(pair_cap, raw_pair_shifts[index])),
-                    pair_cap_scale,
-                ]
-            } else {
-                [difference, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-            };
-            traces.push((me, source, basis_name, duration, cooldown_left, values));
-        }
-    }
-    let cooldown_dict = PyDict::new(py);
-    for (id, due) in cooldowns {
-        cooldown_dict.set_item(id, due)?;
-    }
-    Ok((
-        output,
-        current,
-        cooldown_dict,
-        traces,
-        contributing,
-        total_shift,
-    ))
 }
