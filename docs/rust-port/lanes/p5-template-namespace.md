@@ -168,7 +168,7 @@ python benchmarks/rule_shadow/summary.py 出力先
 
 ## 残っている作業（レーン A）
 
-Rust に移したのは、更新の段階の最後の手順だけです。
+Rust に移したのは、更新の段階の最後の手順だけです。下の心理の規則は、その後レーン A が移しました（[a-psychology.md](a-psychology.md)）。
 
 - `native_deltas`（Python で入力を作って `native/src/psychology.rs` を呼ぶ形）と `explain_update`、`deltas_without_traces` の本体。
 - `apply_state_deltas`（`policies/psychology.py`）。人と `body_state_v1` を書くので、人の窓（P6）のあとです。

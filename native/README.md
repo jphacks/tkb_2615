@@ -98,15 +98,14 @@ each OS, because both call the same libm.
   `core/checkpoint_cache.py` uses `canonical_json` for what a Checkpoint save encodes;
   elsewhere replacing `json` alone saved about 1% (see below).
 
-- `psychology_integrated(globals, agents)`: one minute of
-  `IntegratedDistressLifeStatePolicy` with `BodyDynamicsFormula` (simple needs and
-  stress, life-state feedback, exact mean reversion) for every agent. Every float
-  operation keeps the Python order; `max`/`min` return the first argument on a tie
-  and `sum` is CPython 3.12's compensated sum, so the results are the same floats.
-  The runner uses it through `IntegratedDistressLifeStatePolicy.native_deltas` when
-  no trace needs the per-agent parts, instead of `deltas_without_traces`.
-  A new value outside `AgentStateDelta`'s bounds raises `Unsupported`, so its Python
-  checks raise the same error; otherwise those checks are skipped.
+- `rules/psychology.rs`: each person's minute (`update_psychology`, all the built-in psychology
+  models, for a tick with no trace), the distress monitor and long-term distress
+  (`update_long_term`) and writing the new values (`apply_deltas`). They replace steps of the
+  update phase (`experiments/phases/segments.py`), read the entity rows, and read from the
+  `WorldView` only what no row holds yet. Every float operation keeps the Python order; `max`/`min`
+  return the first argument on a tie and `sum` is CPython 3.12's compensated sum, so the results
+  are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
+  anything changes, so the Python step runs and raises its own text.
 
 - `rules.social_propagation.update_social_propagation(controller, world, view, deltas, minute, rng)`:
   the update phase's step `_social_propagation` for the three social policies (contact sampling,
