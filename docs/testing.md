@@ -101,6 +101,10 @@ python -m coverage report --sort=cover
 
 `support/paths.py`（`fixtures/`のファイルのパス）と`support/isolation.py`（隔離の処理）は、fixtureを持たない部品です。テストで使う`fixtures/`のファイルが増えたら、`support/paths.py`に定数を足します。
 
+`support/tracked_mirror.py`も、fixtureを持たない部品です。Rust移植が計画する「`model_state`への書き込みを転送する入れ物」を純Pythonで試すもので、`src/`からは使いません。全テストをこの入れ物の上で動かすときは、`PYTHONPATH`に`tests`を足して`pytest -p support.tracked_mirror_plugin`を実行します。素の実行と各段階で比べるときは、`benchmarks/tracked_mirror_gate.py`を使います。使い方と結果は[rust-port/lanes/p1-tracked-mirror.md](rust-port/lanes/p1-tracked-mirror.md)にあります。
+
+`tests/unit/repo/test_tracked_write_lint.py`は、tick側のコードで、入れ物に入れた値を元の名前のまま書き換える書き方（`record = relationships[key] = {...}`のあとの`record["trust"] = x`）を見つけると失敗します。入れたあとは`record = relationships[key]`で読み直します。
+
 関数を返すfixtureは、呼ぶたびに新しいものを作るだけで状態を持ちません。そのうち`saved_timeline`、`add_toilets_program`、`demo_world_hash`、`recording_router`はsession単位にして、module単位のfixtureからも使えるようにしています。テストファイルの中のhelperがこれらを使うときは、テストが受け取ったfixtureを引数で渡します（例：`integration/test_intervention_outcomes.py`の`_main_and_child`）。
 
 ### 時刻を手で動かすテスト

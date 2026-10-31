@@ -1588,6 +1588,7 @@ def schedule_effect_program(
         "scheduled_event_ids": [],
     }
     state["programs"][program.program_id] = program_record
+    program_record = state["programs"][program.program_id]
     event_ids: list[str] = []
 
     def make_event(
@@ -2315,6 +2316,7 @@ class EffectProgramFacilityHandler:
                     "modifiers": [],
                 }
                 records[facility_id] = current
+                current = records[facility_id]
             if any(item["modifier_id"] == modifier_id for item in current["modifiers"]):
                 raise EventSuppressed("facility availability modifier is already active")
             current["modifiers"].append(
