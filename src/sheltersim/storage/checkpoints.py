@@ -194,10 +194,7 @@ class CheckpointArchive:
                 items = self.encoder.list_items(value) if self.encoder is not None else None
             return {
                 "kind": "list_v2",
-                "chunks": [
-                    self._put_slice(value, items, i)
-                    for i in range(0, len(value), self.chunk_records)
-                ],
+                "chunks": self._list_chunks(value, items),
                 "starts": list(range(0, len(value), self.chunk_records)),
                 "length": len(value),
             }
@@ -223,11 +220,29 @@ class CheckpointArchive:
             "chunk": self._put(value, None if self.encoder is None else self.encoder.encode(value)),
         }
 
+    def _list_chunks(self, value: Sequence[Any], items: list[bytes] | None) -> list[str]:
+        leading: list[str] = []
+        if items and self.encoder is not None:
+            leading = self.encoder.leading_chunks(value, items, self.chunk_records)
+        # What this writer stored before needs no slice read; the new chunks are at the end.
+        stored = 0
+        for key in leading:
+            if not self._stored(key):
+                break
+            stored += 1
+        del leading[stored:]
+        leading.extend(
+            self._put_slice(value, items, start)
+            for start in range(stored * self.chunk_records, len(value), self.chunk_records)
+        )
+        return leading
+
     def _put_slice(self, value: Sequence[Any], items: list[bytes] | None, start: int) -> str:
         count = min(self.chunk_records, len(value) - start)
         if items is None:
             return self._put(value[start : start + count])
-        if self.encoder is not None:
+        sealed = self.encoder is not None and self.encoder.append_only(value)
+        if sealed:
             key = self.encoder.chunk_key(items, start, count)
             if key is not None and self._stored(key):
                 # The same item bytes as a chunk saved before by this writer.
@@ -237,7 +252,7 @@ class CheckpointArchive:
         if len(raw) > 16_777_216 or not self._stored(key):
             # Only a new chunk reads its items (SavedItems parses them).
             key = self._put(lambda: value[start : start + count], raw)
-        if self.encoder is not None:
+        if sealed:
             self.encoder.remember_chunk(items, start, count, key)
         return key
 

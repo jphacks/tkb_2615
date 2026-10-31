@@ -889,12 +889,13 @@ _INDEX_ROWS = [
 def test_index_row_reads_a_row_as_the_python_functions_do(row: dict) -> None:
     import hashlib
 
-    from sheltersim.storage.history_index import _event_references, _identities
+    from sheltersim.storage.history_index import _TOKEN_FIELDS, _event_references, _identities
     from sheltersim.storage.projects import _private_field, canonical
 
     read = native.index_row(row)
     assert read is not None
-    encoded, payload_hash, identities, references, keys, strings = read
+    encoded, payload_hash, identities, references, keys, strings, tokens = read
+    keys = keys.split("\0")
     assert encoded == canonical(row)
     assert payload_hash == hashlib.sha256(encoded.encode()).hexdigest()
     assert set(identities) == _identities(row)
@@ -904,6 +905,7 @@ def test_index_row_reads_a_row_as_the_python_functions_do(row: dict) -> None:
     )
     if "api_key" in row:
         assert any(map(_private_field, keys))
+    assert tokens == " ".join(str(row.get(name, "")) for name in _TOKEN_FIELDS)
 
 
 @pytest.mark.parametrize(

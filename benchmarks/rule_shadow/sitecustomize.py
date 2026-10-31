@@ -148,3 +148,6 @@ if OUTPUT:
     from information_shadow import install as _install_information
 
     _install_information(OUTPUT)
+    import capture_shadow
+
+    capture_shadow.install(OUTPUT)
