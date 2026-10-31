@@ -33,7 +33,7 @@
 ## レーン H が使うもの
 
 - `rules::world_view::view_of(view) -> PyResult<Bound<RustView>>`、`RustView::data() -> &ViewData`、`RustView::key(py, index)`。`ViewData` は `agents`（`ViewAgent`、ID 順）、`zones`、`facilities`、`zone_of(agent)`、`index_of(id)`、`zone_members()`、`group_members()` を持ちます。
-- **`partial` を断るコードはありません。** Python が作った view では `ViewData::partial` が true で、更新の kernel が読む項目だけが入り、ほかは 0 や空です（`facilities` も空、`minute_index` は 0）。`needs` や `activity` も実際の値ではないので、それらを読む H は `partial` を見て自分で `Unsupported` を返す必要があります。
+- **`partial` を断るのは H の `rules/behavior.rs` だけです。** Python が作った view では `ViewData::partial` が true で、更新の kernel が読む項目だけが入り、ほかは 0 や空です（`facilities` も空、`minute_index` は 0）。`needs` や `activity` も実際の値ではないので、それらを読む H は `partial` を見て自分で `Unsupported` を返す必要があります。
 
 ## Python に残したもの
 
@@ -41,7 +41,7 @@
 
 ## 遅延の判断
 
-作るのは Python の読み手が求めたときだけにしました。更新の段階では、Run の最初の tick を除いて作りません（60 tick で、最初の tick の社会の手順が1回）。提案の段階では `propose_due` が読むので、まだ毎 tick 作ります。レーン H が移すと、これも要らなくなります。監査のハッシュは今までと同じく、view を作るときに計算します。
+作るのは Python の読み手が求めたときだけにしました。更新の段階では、Run の最初の tick を除いて作りません（60 tick で、最初の tick の社会の手順が1回）。提案の段階でも、レーン H が `propose_due` を移したので作りません（[h-behavior.md](h-behavior.md)）。監査のハッシュは今までと同じく、view を作るときに計算します。
 
 ## 計測
 
