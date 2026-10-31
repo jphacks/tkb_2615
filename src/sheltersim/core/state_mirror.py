@@ -813,7 +813,7 @@ def _attach_fields(world: Any, core: Any) -> None:
 
 
 # A namespace whose fields the Checkpoint hash tree reads apart (_WORLD_TREE in
-# core/checkpoint_cache.py) has no use for the bytes of the whole, here 8 MB of history at each save.
+# core/checkpoint_cache.py) has no use for the bytes of the whole: 8 MB of history at each save.
 _HASHED_BY_PARTS = frozenset({"body_state_v1"})
 
 

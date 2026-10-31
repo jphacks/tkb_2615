@@ -304,7 +304,7 @@ def test_no_whole_write_in_ticks(generated_scenario: Any, tmp_path: Any) -> None
     assert world.model_state[BODY_STATE_KEY]["relationships"]
 
 
-# ---- The rule against its Python base -------------------------------------------------------------
+# ---- The rule against its Python base ------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -465,7 +465,7 @@ def test_the_relationship_limit_stops_new_pairs_only(
     assert world._core.mirror(BODY_STATE_KEY).verify()
 
 
-# ---- What is left to Python ------------------------------------------------------------------------
+# ---- What is left to Python ----------------------------------------------------------------
 
 
 def _untouched(world: WorldState) -> bytes:
@@ -565,7 +565,7 @@ def test_the_frozen_payload_is_what_the_kernel_reads(generated_scenario: Any) ->
     assert world.model_state[BODY_STATE_KEY]["history"]
 
 
-# ---- Validation -----------------------------------------------------------------------------------
+# ---- Validation ----------------------------------------------------------------------------
 
 
 def _record() -> dict[str, Any]:
@@ -834,6 +834,20 @@ def test_a_relationship_written_in_each_route_is_read(generated_scenario: Any) -
     with pytest.raises(ValueError, match="relationship record is invalid"):
         validate_body_state(world)
     relationships[key]["topic_ids"].pop()
+    assert _rows_valid()(world) is True
+
+
+def test_a_no_starts_the_next_check_over(generated_scenario: Any) -> None:
+    world = _world(generated_scenario)
+    first, second = _pair(world)
+    relationships = world.model_state[BODY_STATE_KEY]["relationships"]
+    relationships[ordered_pair_key(first, second)] = _record()
+    assert _rows_valid()(world) is True
+    # The Python rule accepts this key; the kernel says no each time, and it does not pile up.
+    relationships['["é","a"]'] = _record()
+    for _ in range(3):
+        assert _rows_valid()(world) is False
+    relationships.pop('["é","a"]')
     assert _rows_valid()(world) is True
 
 

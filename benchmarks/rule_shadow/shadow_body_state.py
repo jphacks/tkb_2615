@@ -109,7 +109,8 @@ def prepare(output: str) -> None:
             recorder.differ(f"{label}: the body records")
         recorder.seen["values_compared"] += values_in(plain["agents"])
         wanted = {key: state["relationships"][key] for key in keys if key in state["relationships"]}
-        if text(plain["relationships"]) != text(wanted):
+        # The copy has only these keys, so a new one comes after others than in the tree.
+        if text(sorted(plain["relationships"].items())) != text(sorted(wanted.items())):
             recorder.differ(f"{label}: the relationships")
         recorder.seen["values_compared"] += values_in(plain["relationships"])
         added = plain["history"]

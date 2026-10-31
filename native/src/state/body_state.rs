@@ -234,7 +234,7 @@ fn rows_valid(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     let mirror = mirror_of(world, NAME)?;
     let store = entities_of(world)?;
     NamespaceMirror::with_row::<BodyRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| {
+        let accepted = EntityStore::with_rows(&store, |rows| {
             let people = &rows.agents;
             if row.schema_version != 1
                 || &*row.policy_version != POLICY_VERSION
@@ -272,7 +272,14 @@ fn rows_valid(world: &Bound<'_, PyAny>) -> PyResult<bool> {
             }
             relationships.written.clear();
             Ok(true)
-        })
+        })?;
+        if !accepted {
+            // The Python rules decide now. If they pass it, the next check starts over, and the
+            // list of written keys does not grow at each tick of such a world.
+            row.relationships.read_all = true;
+            row.relationships.written.clear();
+        }
+        Ok(accepted)
     })
 }
 

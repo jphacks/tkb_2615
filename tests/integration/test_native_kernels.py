@@ -352,7 +352,6 @@ def test_the_end_of_tick_check_agrees_with_the_plain_check_at_every_tick(
 
 def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_path) -> None:
     """Otherwise every tick would fall back to the Python rules, and only be slower."""
-    from sheltersim.core.tick_validation import PairKeys
     from sheltersim.domain.models import Activity, InitialNeedProfile, NeedState
     from sheltersim.domain.social_network import _key_is_good
 
@@ -361,7 +360,6 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
     world = run_scenario(ScenarioSpec.model_validate(document), tmp_path)
     state = world.model_state
     agents = world.agents
-    agent_ids = set(agents)
     body = state["body_state_v1"]
     assert body["relationships"]
     assert native.world_agents_valid(agents, world.zones, Activity, InitialNeedProfile, NeedState)
