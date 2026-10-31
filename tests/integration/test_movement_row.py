@@ -341,3 +341,73 @@ def test_two_queue_replans_in_one_tick_depend_on_the_order_only_through_their_ev
     assert ids == {"A001": other["A002"], "A002": other["A001"]}
     assert first == second
     assert forward.metric_state == backward.metric_state
+
+
+def _two_trips_in_one_queue(scenario: Any) -> tuple[WorldState, dict[str, float]]:
+    """The head walks to the service point and the follower to its slot, in one queue.
+
+    The head stands on the slot the follower would take, and walks off it in the next tick.
+    """
+    world = WorldState.from_scenario(scenario)
+    speeds = world.model_configs["movement_model"]["speed_m_per_minute_by_mobility"]
+    for mobility in speeds:
+        speeds[mobility] = 0.2
+    routes = world.model_configs["facility_geometry"]["routes"]
+    entrance = next(route for route in routes if route["edge_id"] == "route_corridor_toilet")
+    for agent_id in ("A001", "A002"):
+        world.agents[agent_id].zone_id = "toilet"
+        world.agents[agent_id].next_decision_at = 100
+        world.model_state[KEY]["positions"][agent_id].update(
+            zone_id="toilet", point=dict(entrance["points"][-1]), position_kind="physical"
+        )
+    queue_id = min(
+        queue_id
+        for queue_id, row in world.model_state["facility_queues_v1"]["queues"].items()
+        if row["facility_id"] == "toilet_01"
+    )
+    service = ToiletServiceManager(world, min_service_minutes=2, max_service_minutes=2)
+    service.request("A001", "toilet_01", queue_id=queue_id)
+    service.request("A002", "toilet_01", queue_id=queue_id)
+    service.arbitrate(0, CounterRNG(world.seed))
+    head = world.model_state[KEY]["journeys"]["A001"]
+    assert head["purpose"].endswith("_position")
+    head["purpose"] = head["purpose"].removesuffix("_position") + "_service"
+    # What the next tick's arbitration does for the follower, with the head still walking.
+    assert not movement.progress_physical_queue_positions(
+        world, facility_id="toilet_01", resource=False, minute=0, queue_id=queue_id
+    )
+    assert set(world.model_state[KEY]["journeys"]) == {"A001", "A002"}
+    slot = world.model_state[KEY]["journeys"]["A002"]["route_points"][-1]
+    world.model_state[KEY]["positions"]["A001"]["point"] = dict(slot)
+    world.minute_index = 1
+    return world, dict(slot)
+
+
+def test_a_slot_replanned_in_a_tick_depends_on_whether_the_one_ahead_has_walked(
+    generated_scenario_with_split_queues: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second dependence on order: _queue_slot_position reads the positions of those ahead.
+
+    The one ahead walks off the slot in the walk. In order the follower then takes that slot, and
+    in reverse it takes the next one, so this is another destination and not only another number.
+    The state is made by hand: the follower's first route was planned before the head stood there.
+    """
+    python_clear = movement._room_path_is_clear
+
+    def clear(world: WorldState, agent_id: str, *rest: Any) -> bool:
+        return agent_id != "A002" and python_clear(world, agent_id, *rest)
+
+    monkeypatch.setattr(movement, "_room_path_is_clear", clear)
+    forward, slot = _two_trips_in_one_queue(generated_scenario_with_split_queues)
+    assert update.advance_movement(forward, 1) == ()
+    backward, _ = _two_trips_in_one_queue(generated_scenario_with_split_queues)
+    undo = _reverse()
+    try:
+        assert update.advance_movement(backward, 1) == ()
+    finally:
+        undo()
+    ahead = forward.model_state[KEY]["positions"]["A001"]
+    assert ahead == backward.model_state[KEY]["positions"]["A001"]
+    assert ahead["point"] != slot
+    assert forward.model_state[KEY]["journeys"]["A002"]["route_points"][-1] == slot
+    assert backward.model_state[KEY]["journeys"]["A002"]["route_points"][-1] != slot
