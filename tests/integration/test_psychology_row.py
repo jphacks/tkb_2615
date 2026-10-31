@@ -21,6 +21,7 @@ from sheltersim.core.engine import TickEngine
 from sheltersim.core.state_mirror import NamespaceTable, TrackedDict, detach, rust_validated
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.distress_monitor import record_distress_monitor_tick
+from sheltersim.domain.models import AgentProfile, AgentState, Mobility
 from sheltersim.domain.psychological_state import (
     PSYCHOLOGICAL_STATE_KEY,
     PSYCHOLOGICAL_STATE_POLICY_VERSION,
@@ -74,7 +75,23 @@ def _mirror(world: WorldState, name: str = PSYCHOLOGICAL_STATE_KEY) -> Any:
 
 
 def _kernel() -> Any:
-    return native.rules("psychology").update_long_term
+    rule = native.rules("psychology").update_long_term
+
+    def run(controller: Any, world: WorldState, view: Any, deltas: Any, minute: Any) -> None:
+        # The kernel reads the people's stress from the rows, as the view copied it from them.
+        _people_of(world, view)
+        rule(controller, world, view, deltas, minute)
+
+    return run
+
+
+def _people_of(world: WorldState, view: Any) -> None:
+    for key, viewed in view.agents.items():
+        if key not in world.agents:
+            world.agents[key] = AgentState(
+                AgentProfile(key, None, "z", Mobility.INDEPENDENT, 0.0, 1.0, key), "z"
+            )
+        world.agents[key].stress = viewed.stress
 
 
 def _controller(

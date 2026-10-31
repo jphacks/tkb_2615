@@ -35,7 +35,7 @@ class UpdatePhase:
         final_deltas = self._social_propagation(world, view, psychology_result.deltas, minute, rng)
         self._record_psychology_trace(psychology_result, final_deltas, minute)
         self._update_long_term_psychology(world, view, final_deltas, minute)
-        apply_state_deltas(world, final_deltas)
+        self._apply_state_deltas(world, final_deltas)
         self._view_before_proposals = view
 
     def _view_after_movement(self, world: WorldState) -> WorldView:
@@ -50,12 +50,7 @@ class UpdatePhase:
         deltas_without_traces = getattr(self.psychology, "deltas_without_traces", None)
         if self.artifacts.trace_level is TraceLevel.OFF and deltas_without_traces is not None:
             # No psychology trace is recorded, so its per-agent parts are not built.
-            # The Rust kernel computes the same deltas when it is installed.
-            native_deltas = self.psychology.native_deltas(view, minute)
-            psychology_result = PsychologyUpdateResult(
-                native_deltas if native_deltas is not None else deltas_without_traces(view, minute),
-                (),
-            )
+            psychology_result = PsychologyUpdateResult(deltas_without_traces(view, minute), ())
         else:
             psychology_result = self.psychology.explain_update(view, minute)
         return psychology_result
@@ -150,6 +145,9 @@ class UpdatePhase:
             world.model_state[PSYCHOLOGICAL_STATE_KEY] = update_long_term(
                 runtime_state, minute, final_deltas
             )
+
+    def _apply_state_deltas(self, world: WorldState, final_deltas: Any) -> None:
+        apply_state_deltas(world, final_deltas)
 
     def _update_movement(self, minute: int) -> None:
         """Advance route interpolation and atomically reschedule changed paths."""
