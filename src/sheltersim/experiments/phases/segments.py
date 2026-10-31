@@ -20,6 +20,7 @@ from sheltersim import native
 SEGMENTS: dict[str, tuple[str, str]] = {
     "_update_long_term_psychology": ("psychology", "update_long_term"),
     "_sample_information_contacts": ("information", "sample_contacts"),
+    "_social_propagation": ("social_propagation", "update_social_propagation"),
 }
 
 

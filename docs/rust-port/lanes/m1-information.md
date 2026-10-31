@@ -23,7 +23,7 @@
 
 - **kernel が見る方策：** `InformationSpreadPolicy`、`HazardInformationPolicy`、`EvidenceAwareInformationPolicy` のちょうどその型だけです。派生クラス、`CounterRNG` でない乱数（`policies/information.py` の抽選）、trace のある Run は `Unsupported` で Python の手順が動きます。
 - **読むもの：** 人は `entities.rs` の行から読みます（ID、区域、`trust`、`stress`、`profile.group_id`）。世帯は `WorldView` と同じく `population_presence_v1.people` の `household_id` を優先します。この名前空間はまだ Python のものなので、誰かが信念を持つ tick にだけ dict を読みます。
-- **書き込み：** 問い合わせの圧力、カウンタ、信念の項目は値ごとに書きます（同じビットなら書きません）。接触はレーン B と同じ `refill_record_map` で詰め直すので、前の記録の節点を使い回します。**名前空間を丸ごと書くことはありません。** 接触の記録への別名を tick をまたいで持つと、新しい値が見えます（`src` にそのようなコードはありません）。
+- **書き込み：** 問い合わせの圧力、カウンタ、信念の項目は値ごとに書きます（同じビットなら書きません）。接触はレーン B が足した `refill_record_map` で詰め直すので、前の記録の節点を使い回します。**名前空間を丸ごと書くことはありません。** 接触の記録への別名を tick をまたいで持つと、新しい値が見えます（`src` にそのようなコードはありません）。
 - **Unsupported の条件：** Python の規則が解析する値（`TypedMessage`、`AgentInformationState`）が1つでも通らないとき、信念の主張が `messages` にないとき、人に信念や圧力の項目がないとき。Python の規則が実際には読まない値でも断るので、Python より広く断ります。結果は変わらず、遅くなるだけです。
 - **検証：** `validate` は `validate_information_runtime_state` のすべての規則を行で確かめ、全部通るときだけ true を返します。schema 1 の状態と、escape の要る接触のキーは Python に任せます。
 
@@ -34,7 +34,6 @@
 - 名前空間の Python の書き手：`events/handlers.py` の `InformationRumorHandler`、`InformationCorrectionHandler`、接触の適用と反応、`propose.py` からの `record_support_request`、`domain/population.py`、`domain/population_lifecycle.py`。1項目ずつ転送されます。読み手は `WorldView`（`query_pressure` を毎回読むので、切り離しはまだできません）など。イベントのレーンとともに移します。
 - `information_spread_summary`（tick の外）、`upgrade_information_runtime_state`（schema 1。行に入らないので taint し、Python の規則が丸ごと書いたときに行が戻ります）。
 - trace つきの Run の Rust 化（`TraceSink`）。
-- `Tree::clear` は今のところ未使用の警告が出ます。レーン B の変更を同じ行で取り込んだためで、マージで消えます。
 
 ## 計測
 

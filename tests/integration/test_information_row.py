@@ -10,6 +10,7 @@ import copy
 import json
 import math
 import random
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -109,20 +110,45 @@ def _controller(world: WorldState, policy: Any, neighbors: dict[str, tuple[str, 
     )
 
 
+def _view_of(world: WorldState) -> Any:
+    """What the rule reads of a view, for IDs and zones WorldView.from_world can't take."""
+    return SimpleNamespace(
+        minute_index=world.minute_index,
+        agents={
+            agent_id: SimpleNamespace(
+                id=agent_id,
+                zone_id=agent.zone_id,
+                group_id=agent.profile.group_id,
+                trust=agent.trust,
+                stress=agent.stress,
+            )
+            for agent_id, agent in sorted(world.agents.items())
+        },
+    )
+
+
 def _python_rule(
-    world: WorldState, policy: Any, neighbors: dict[str, tuple[str, ...]], seed: int
+    world: WorldState,
+    policy: Any,
+    neighbors: dict[str, tuple[str, ...]],
+    seed: int,
+    view: Any = None,
 ) -> tuple[Any, list[tuple[str, str]]]:
     rng = _Recording(seed)
     state = json.loads(json.dumps(world.model_state[KEY]))
-    view = WorldView.from_world(world, include_state_hash=False)
+    view = view or WorldView.from_world(world, include_state_hash=False)
     return policy.update(view, state, rng, zone_neighbors=neighbors), rng.made
 
 
 def _assert_same_as_python(
-    world: WorldState, policy: Any, neighbors: dict[str, tuple[str, ...]], seed: int
+    world: WorldState,
+    policy: Any,
+    neighbors: dict[str, tuple[str, ...]],
+    seed: int,
+    view: Any = None,
 ) -> Any:
     """Every draw, probability and event, and then the namespace, as the Python rule makes them."""
-    python, python_draws = _python_rule(world, policy, neighbors, seed)
+    python, python_draws = _python_rule(world, policy, neighbors, seed, view)
     controller = _controller(world, policy, neighbors)
     minute, rng = world.minute_index, CounterRNG(seed)
 
@@ -460,6 +486,71 @@ def test_random_states_have_the_python_rules_bits(generated_scenario: Any) -> No
             for record in records.values()
         )
     assert transfers > 100 and forgotten > 100
+
+
+@needs_kernels
+def test_ids_json_escapes_and_a_zone_next_to_itself_have_the_python_rules_bits(
+    generated_scenario: Any,
+) -> None:
+    """People and zones named as no Scenario names them, as keys of draws and of contacts."""
+    names = ["A1", "A2", 'A"3', "A\\4", "é5", "ß6", "A\n7", "B8", "B9", "C10", "C11", "日12"]
+    zones = ["z1", "z2", "zé", 'z"4']
+    draw = random.Random(2615)
+    transfers = 0
+    for _ in range(120):
+        world = WorldState.from_scenario(generated_scenario)
+        minute = draw.randrange(0, 50)
+        world.minute_index = minute
+        template = next(iter(world.agents.values()))
+        ids = draw.sample(names, draw.randrange(1, len(names) + 1))
+        world.agents = {
+            agent_id: replace(
+                template,
+                profile=replace(
+                    template.profile, id=agent_id, group_id=draw.choice((None, "g1", 'g"3'))
+                ),
+                needs=replace(template.needs),
+                zone_id=draw.choice(zones),
+                trust=draw.random(),
+                stress=draw.random(),
+            )
+            for agent_id in ids
+        }
+        state = create_information_runtime_state(set(ids))
+        state["messages"]["m1"] = _message("m1", "origin", "zone")
+        for agent_id in ids:
+            state["query_pressure"][agent_id] = draw.random()
+            if draw.random() < 0.5:
+                state["beliefs"][agent_id]["m1"] = _belief("m1", "heard")
+        for first in names:
+            for second in names:
+                if first != second and draw.random() < 0.3:
+                    key = json.dumps([first, second], ensure_ascii=False, separators=(",", ":"))
+                    state["contacts"][key] = {
+                        "last_seen_minute": draw.choice((max(minute - 1, 0), minute, 0)),
+                        "consecutive_minutes": draw.randrange(1, 12),
+                    }
+        world.model_state[KEY] = state
+        neighbors = {
+            zone: tuple(draw.sample(zones, draw.randrange(0, len(zones) + 1)))
+            for zone in zones
+            if draw.random() < 0.8
+        }
+        config = InformationSpreadConfig(
+            enabled=True,
+            max_contacts_per_agent=draw.randrange(0, 5),
+            minimum_contact_minutes=draw.randrange(1, 3),
+            query_pressure_decay_per_minute=draw.choice((0.0, 0.25, draw.random() / 4)),
+        )
+        python = _assert_same_as_python(
+            world,
+            draw.choice(MODELS)(config),
+            neighbors,
+            draw.randrange(0, 2**62),
+            _view_of(world),
+        )
+        transfers += sum(item.transmission_probability > 0.0 for item in python.contacts)
+    assert transfers > 50
 
 
 @needs_kernels
