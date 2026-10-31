@@ -69,8 +69,8 @@ NOT_INSERTED_INTO_STATE: dict[tuple[str, str, str], str] = {
     ("domain/staff_operations.py", "order_staff_operation", "task_id"): "a str",
     ("events/queue.py", "__deepcopy__", "copied"): "deepcopy's memo",
     ("experiments/metrics.py", "capture", "snapshot"): "a MetricSnapshot in MetricsRecorder",
-    ("experiments/runner.py", "_physically_closed_edges", "closed"): "memo of the controller",
-    ("policies/behavior.py", "_zone_environment", "view"): "memo of a parsed view",
+    ("experiments/phases/propose.py", "_physically_closed_edges", "closed"): "memo of the controller",
+    ("policies/world_view.py", "_zone_environment", "view"): "memo of a parsed view",
 }
 # Not state either: a validation memo in __dict__, a local memo of StaffState lists, and memos of
 # parsed views and of people's fields.
@@ -78,8 +78,8 @@ CHAINS_ON_MEMOS = frozenset(
     {
         "core/world.py memo = self.__dict__['_tick_memo'] = TickValidationMemo()",
         "domain/staff.py qualified = qualified_by_kind[support_kind] = [staff for sta",
-        "policies/behavior.py view = views[zone_id] = zone_environment_view(world, zone_id",
-        "policies/behavior.py entry = cache[identity] = (*entry, _fields_of_person(context",
+        "policies/world_view.py view = views[zone_id] = zone_environment_view(world, zone_id",
+        "policies/world_view.py entry = cache[identity] = (*entry, _fields_of_person(context",
     }
 )
 
