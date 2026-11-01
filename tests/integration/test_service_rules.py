@@ -286,6 +286,46 @@ def test_no_known_facility_is_recorded_as_python_records(generated_scenario: Any
     assert world.metric_state["resource_service_request_rejected_count"] >= 2.0
 
 
+def test_the_lower_load_goes_before_the_shorter_walk(generated_scenario: Any) -> None:
+    world, controller = _run(generated_scenario, 5)
+    toilets = [item for item in world.facilities.values() if "toilet" in item.kind]
+    walker, waiter = _idle_people(world, 2)
+    known = world.model_state["agent_dynamics_v1"]["agents"][walker]["known_facility_ids"]
+    for toilet in toilets:
+        if toilet.id not in known:
+            known.append(toilet.id)
+    world.model_configs.pop("facility_queues", None)
+    # The generated toilets share a zone: one moves to where the walk from here is longer.
+    near, far = toilets[0], toilets[1]
+    zones = sorted(world.zones)
+    walks = None
+    for start in zones:
+        for near_zone in zones:
+            for far_zone in zones:
+                first = controller._route(start, near_zone, walker)
+                second = controller._route(start, far_zone, walker)
+                if first and second and 0 < first.travel_minutes < second.travel_minutes:
+                    walks = (start, near_zone, far_zone)
+                    break
+            if walks:
+                break
+        if walks:
+            break
+    assert walks is not None
+    start, near.zone_id, far.zone_id = walks
+    for other in toilets[2:]:
+        other.queue_agent_ids.append(waiter)
+    world.agents[walker].zone_id = start
+    world.model_state[MOVEMENT_STATE_KEY]["positions"][walker]["zone_id"] = start
+    near.queue_agent_ids.append(waiter)
+    python_choice = ProposePhase._select_toilet(controller, walker)
+    assert python_choice == far.id
+    target, *_ = native.rules("proposals").apply_effect(
+        controller, _proposal(ActionKind.REQUEST_TOILET, walker, world)
+    )
+    assert target == far.id
+
+
 def test_seek_help_goes_to_python(generated_scenario: Any) -> None:
     world, controller = _run(generated_scenario, 5)
     agent_id = _idle_people(world, 1)[0]
