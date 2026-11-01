@@ -9,7 +9,9 @@ rule runs on the world then. `seek_help` and `seek_information` are `seek` here,
 shadow_proposals.py calls.
 
 The hooks of the LLM (`consider_support_request`, `_prioritize_support_request`) record what they
-decide, so the copy leaves them out: they are the same Python on both sides of the port.
+decide, so the copy leaves them out: they are the same Python on both sides of the port. With a
+Provider that isn't offline they can schedule events and read the tape, so a `seek` is then not
+compared beyond its result: the hashes of a tape's Run say whether it went the same.
 """
 
 from __future__ import annotations
@@ -162,6 +164,7 @@ def prepare(output: str) -> None:
         world_of: Any,
         result_text: Any = text,
         detail: Any = None,
+        hooks_run: Any = None,
     ) -> Any:
         """A stand-in for a writing kernel. python_rule(twin, *arguments, **options) is the rule."""
 
@@ -199,8 +202,11 @@ def prepare(output: str) -> None:
                 return result
             if result_text(result) != result_text(expected):
                 recorder.differ(f"{where}: returned {result!r:.200}, not {expected!r:.200}")
-            compare_after(recorder, where, world, twin, pending_before)
-            _compare_more(recorder, where, world, twin)
+            if hooks_run is not None and hooks_run(*arguments):
+                recorder.seen[f"{label}.with_provider_hooks_result_only"] += 1
+            else:
+                compare_after(recorder, where, world, twin, pending_before)
+                _compare_more(recorder, where, world, twin)
             if detail is not None:
                 detail(result, arguments, options)
             row_check(world, where)
@@ -424,6 +430,11 @@ def _is_copy(arguments: Any) -> bool:
 def seek_shadow(kernel: Any) -> Any:
     """What shadow_proposals.py runs for `seek_help` and `seek_information`."""
     compared, rule, detail = _seek[0]
+
+    def hooks_run(controller: Any, _proposal: Any) -> bool:
+        router = controller.llm_router
+        return router is not None and router.mode.value != "offline"
+
     return compared(
         "seek",
         kernel,
@@ -431,4 +442,5 @@ def seek_shadow(kernel: Any) -> Any:
         lambda controller, _proposal: controller.world,
         lambda result: text(list(result)),
         detail,
+        hooks_run,
     )
