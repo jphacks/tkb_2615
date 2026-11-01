@@ -229,9 +229,17 @@ fn create_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     Field::to_py(&row, world.py())
 }
 
+/// What `add_agent` refuses for a person about to be added, for a plan that adds one.
+pub(crate) fn check_add_agent(world: &Bound<'_, PyAny>) -> PyResult<()> {
+    policy_of(world)?;
+    awareness_of(world)?;
+    let mirror = mirror_of(world, NAME)?;
+    NamespaceMirror::with_row::<AgentDynamicsRow, _>(&mirror, |_| Ok(()))
+}
+
 /// `add_agent`: one record, forwarded neither way.
 #[pyfunction]
-fn add_agent(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn add_agent(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());
