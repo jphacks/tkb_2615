@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::ptr::{addr_of_mut, null_mut};
 
-use crate::core::tracked::{is_readable_dict_type};
+use crate::core::tracked::is_readable_dict_type;
 
 type Object = *mut ffi::PyObject;
 
