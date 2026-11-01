@@ -76,7 +76,7 @@
 
 ## 確認
 
-2026-11-02、WSL2、16コア、ほかのレーンと同時です。基準は `ee92b96`（`feature/rust-port` の先頭。#341、#342、#343 を含みます。統合の衝突は `rules/proposals.rs`、`rules/service.rs`、`native/README.md`、`docs/architecture.md` でした）。特に書かないものは `2c88633` の値です（`b809d24` からの差はテストの1ファイルだけ）。
+2026-11-02、WSL2、16コア、ほかのレーンと同時です。基準は `ee92b96`（`feature/rust-port` の先頭。#341、#342、#343 を含みます。統合の衝突は `rules/proposals.rs`、`rules/service.rs`、`native/README.md`、`docs/architecture.md` でした）。全テストと lint は最後のコミットの値です。ゲート、影、7日分、予算は `b809d24` の値で、そのあとの変更はテストの1ファイルとこの文書だけです。
 
 | `tick_budget.py`（9600分から480 tick、3回） | 基準との比 | A/A | load average |
 |---|---:|---:|---|
@@ -102,7 +102,7 @@
 
 | 確認 | 結果 |
 |---|---|
-| 全テスト | Rust あり 4,129件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,073件成功、2,062件 skip（`b809d24`。`2c88633` は `test_overlay_rules.py` だけ再実行、78件成功） |
+| 全テスト | Rust あり 4,131件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,073件成功、2,064件 skip |
 | `gate_all_paths.py --expect` | 55シナリオ、問題0件。全部の影の回も同じ |
 | `--reversed-order` | 55シナリオ、問題0件 |
 | 7日分（`--expect`） | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。一致（素の回、影の回） |
