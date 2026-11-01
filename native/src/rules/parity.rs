@@ -60,6 +60,14 @@ fn max_floats(pairs: Vec<(f64, f64)>) -> Vec<f64> {
 }
 
 #[pyfunction]
+fn is_close(pairs: Vec<(f64, f64)>) -> Vec<bool> {
+    pairs
+        .into_iter()
+        .map(|(first, second)| mathx::py_is_close(first, second))
+        .collect()
+}
+
+#[pyfunction]
 fn min_floats(pairs: Vec<(f64, f64)>) -> Vec<f64> {
     pairs
         .into_iter()
@@ -190,6 +198,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(round_digits, m)?)?;
     m.add_function(wrap_pyfunction!(round_int, m)?)?;
     m.add_function(wrap_pyfunction!(max_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(is_close, m)?)?;
     m.add_function(wrap_pyfunction!(min_floats, m)?)?;
     m.add_function(wrap_pyfunction!(sum_floats, m)?)?;
     m.add_function(wrap_pyfunction!(max_num, m)?)?;

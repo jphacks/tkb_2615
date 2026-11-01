@@ -80,6 +80,7 @@ enforces the bans in `native/clippy.toml`.
 | `math.hypot(*xs)` | `mathx::hypot` | CPython's algorithm |
 | `sum(xs)` | `mathx::py_sum`, `sum_nums` | compensated in 3.12. `sum([])` and a sum of ints are ints: `sum_nums` |
 | `math.fsum(xs)` | `mathx::py_fsum` | `None` for what is not finite |
+| `math.isclose(a, b)` | `mathx::py_is_close` | the default tolerances |
 | `max(a, b)`, `min(a, b)` of floats | `mathx::py_max`, `py_min` | first argument on a tie; a NaN compares false |
 | `max(0, x)`, any int with a float | `mathx::max_num`, `min_num` | returns the int: JSON writes `0`, not `0.0` |
 | `round(x, 8)` | `mathx::py_round` | half to even on the exact binary value |
@@ -111,6 +112,14 @@ each OS, because both call the same libm.
   return the first argument on a tie and `sum` is CPython 3.12's compensated sum, so the results
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
+
+- `rules/behavior.rs`: `propose_due(controller, view, rng)` and `observed_state(controller, view,
+  agent_id)` replace the steps `_propose_due` and `_observed_state` of the propose phase. They read
+  the snapshot of `rules/world_view.rs`, so a tick makes no Python view of the people for them, and
+  return the Python `ActionProposal`s and the snapshot dict. They run for `UtilityBehaviorPolicy`
+  and `PriorityRuleBehaviorPolicy` (the exact classes) with a `CounterRNG`. They write nothing, so
+  `Unsupported` at any point runs the Python step: a view Python made (or a partial one), another
+  class, and anything `ActionCandidate` and `ActionProposal` would turn down.
 
 - `rules/world_view.rs`: `view_after_movement(controller, world)` and
   `view_for_proposals(controller, world, minute)` replace the two steps of the phases that make a
