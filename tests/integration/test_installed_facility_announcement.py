@@ -153,13 +153,12 @@ def test_runtime_placement_failure_fails_the_event_without_changes(
     from sheltersim.events import effects
 
     monkeypatch.setattr(overlay, "installed_facility_point", lambda world, facility_id: None)
+    # Without the kernels these are the Python rules already.
+    place = overlay.place_installed_facility
+    monkeypatch.setattr(effects, "place_installed_facility", getattr(place, "__wrapped__", place))
+    apply = effects.EffectProgramStructureHandler.apply
     monkeypatch.setattr(
-        effects, "place_installed_facility", overlay.place_installed_facility.__wrapped__
-    )
-    monkeypatch.setattr(
-        effects.EffectProgramStructureHandler,
-        "apply",
-        effects.EffectProgramStructureHandler.apply.__wrapped__,
+        effects.EffectProgramStructureHandler, "apply", getattr(apply, "__wrapped__", apply)
     )
     world = timeline.advance("child", _FORK_MINUTE + 1).world
     assert not _added_toilets(world)
