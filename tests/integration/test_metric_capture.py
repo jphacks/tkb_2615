@@ -16,7 +16,7 @@ import pytest
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.world import WorldState
-from sheltersim.experiments.metrics import MetricsRecorder, MetricSnapshot
+from sheltersim.experiments.metrics import MetricSnapshot, MetricsRecorder
 from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import _IndexedMetricSink, _MetricSink

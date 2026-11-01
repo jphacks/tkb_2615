@@ -92,7 +92,7 @@ def _event_from_document(document: dict[str, Any]) -> ScheduledEvent:
 
 # native/src/rules/tick_validation.rs; benchmarks/rule_shadow and the python_rules mark replace it.
 _entity_rules_kernel = native.rules("tick_validation").entity_rules if native.available() else None
-# native/src/rules/after_tick.rs: all of validate_after_tick on a tick where nothing it compares moved.
+# native/src/rules/after_tick.rs: validate_after_tick on a tick where nothing it compares moved.
 _after_tick_kernel = native.rules("after_tick").after_tick if native.available() else None
 
 
