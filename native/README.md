@@ -239,12 +239,22 @@ each OS, because both call the same libm.
 - `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
   `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
   `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
+  `capture(world, recorder, minute)` is `MetricsRecorder.capture`, which `rules/tick.rs` calls for a
+  `_MetricSink`; it says Unsupported with nothing changed for what the Python rule raises on.
 - `rules.tick_validation`: the per-tick check (`src/rules/tick_validation.rs`):
   `entity_rules(world, requests, resource_config, initial_needs_type, needs_type)` answers for the
   entity and event rules of `WorldState.validate` at the end of a tick, reading the objects and not
   the entity rows. It has no text: it returns the zones whose capacity is still the Python rule's,
   or says Unsupported and the Python rules run. `population_dynamics(world)` is the validator of
   that namespace with no one pending. See `docs/rust-port/lanes/m5-metrics.md`.
+- `rules.after_tick`: all of `WorldState.validate_after_tick` on a tick where nothing
+  `TickValidationMemo.begin` compares has moved (`src/rules/after_tick.rs`):
+  `after_tick(world, memo, shadow=False)` returns the zones whose capacity is still the Python
+  rule's, with the memo moved on, or says Unsupported with the memo as it was and the Python check
+  runs. `Plan` is what it reads of `model_configs`, made by `core/tick_validation.py` after a check
+  passed. Validators come from `_RUST_VALIDATORS`; a rule with none is called in Python from there.
+  `install` lists what a patch of sends the tick to the Python check. `stats()` says what ran. See
+  `docs/rust-port/lanes/m6-validate.md`.
 - `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
   (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
   `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the

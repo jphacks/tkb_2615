@@ -579,6 +579,7 @@ struct PythonParts {
     geometry_model: Py<PyAny>,
     constraints_model: Py<PyAny>,
     empty_constraints: Py<PyAny>,
+    config_scope: Py<PyAny>,
 }
 
 static PYTHON: GILOnceCell<PythonParts> = GILOnceCell::new();
@@ -593,6 +594,7 @@ fn python(py: Python<'_>) -> PyResult<&'static PythonParts> {
             geometry_model: extensions.getattr("FacilityGeometry")?.unbind(),
             constraints_model: spatial.getattr("SpatialConstraints")?.unbind(),
             empty_constraints: overlay.getattr("_EMPTY_SPATIAL_CONSTRAINTS")?.unbind(),
+            config_scope: overlay.getattr("_CONFIG_SCOPE")?.unbind(),
         })
     })
 }
@@ -638,6 +640,17 @@ fn parsed<'py>(
     model: &Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = name.py();
+    // What `_parsed_config` finds in its scope, where a tick is. Anything else is its own to do.
+    let scope = functions.config_scope.bind(py).call_method0(intern!(py, "get"))?;
+    if let Ok(scope) = scope.downcast_exact::<PyDict>() {
+        if let Some(entry) = scope.get_item((name, raw.as_ptr() as usize))? {
+            if let Ok(entry) = entry.downcast_exact::<PyTuple>() {
+                if entry.get_item(0)?.is(raw) {
+                    return entry.get_item(1);
+                }
+            }
+        }
+    }
     functions
         .parsed_config
         .bind(py)

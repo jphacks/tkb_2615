@@ -92,6 +92,8 @@ def _event_from_document(document: dict[str, Any]) -> ScheduledEvent:
 
 # native/src/rules/tick_validation.rs; benchmarks/rule_shadow and the python_rules mark replace it.
 _entity_rules_kernel = native.rules("tick_validation").entity_rules if native.available() else None
+# native/src/rules/after_tick.rs: validate_after_tick on a tick where nothing it compares moved.
+_after_tick_kernel = native.rules("after_tick").after_tick if native.available() else None
 
 
 def _entity_rules_accepted(
@@ -1513,13 +1515,27 @@ class WorldState:
         # Rules bound past times by the clock, so a memo only holds going forward.
         if memo is None or memo.minute > self.minute_index:
             memo = self.__dict__["_tick_memo"] = TickValidationMemo()
-        memo.begin(self)
         try:
             with memo.config_scope():
-                self.validate(validate_event_history=False, _tick_memo=memo)
+                left_zones = None
+                if memo.steady is not None:
+                    try:
+                        left_zones = _after_tick_kernel(self, memo)
+                    except native.Unsupported:
+                        pass
+                if left_zones is None:
+                    self._validate_with_memo(memo)
+                else:
+                    for zone_id, occupancy in left_zones:
+                        self._validate_zone_capacity(zone_id, occupancy)
         except BaseException:
             del self.__dict__["_tick_memo"]
             raise
+
+    def _validate_with_memo(self, memo: TickValidationMemo) -> None:
+        """validate_after_tick's Python rules, which also make what the kernel needs next tick."""
+        memo.begin(self)
+        self.validate(validate_event_history=False, _tick_memo=memo)
         memo.commit(self)
 
     def unsettled_support_requests(self) -> Iterable[SupportRequestState]:

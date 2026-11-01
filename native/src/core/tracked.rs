@@ -61,6 +61,10 @@ pub(crate) fn id_map_type() -> *mut ffi::PyTypeObject {
     ID_MAP.load(Ordering::Acquire)
 }
 
+pub(crate) fn namespace_table_type() -> *mut ffi::PyTypeObject {
+    NAMESPACE_TABLE.load(Ordering::Acquire)
+}
+
 pub(crate) fn tracked_dict_type() -> *mut ffi::PyTypeObject {
     TRACKED_DICT.load(Ordering::Acquire)
 }
