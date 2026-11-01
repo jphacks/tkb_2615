@@ -1184,3 +1184,262 @@ def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: Wor
     _rules("service").complete(ResourceServiceManager(ours), event)
     assert _bytes(ours) == _bytes(theirs)
     assert not ours.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]["requests"]
+
+
+def _toilet(world: WorldState) -> ToiletServiceManager:
+    return ToiletServiceManager(world, min_service_minutes=2, max_service_minutes=4)
+
+
+def test_a_toilet_fifo_is_the_python_rule_s(queued: WorldState) -> None:
+    from sheltersim.core.rng import CounterRNG
+
+    kernel = _rules("toilet")
+    queue = "toilet_01-left-fifo"
+    zone = queued.facilities["toilet_01"].zone_id
+    for agent_id in ("A001", "A002"):
+        queued.agents[agent_id].zone_id = zone
+        queued.model_state["movement_v1"]["positions"][agent_id]["zone_id"] = zone
+
+    def same_request(world: WorldState, agent_id: str, **options: Any) -> None:
+        ours, theirs = _copy(world), _copy(world)
+        expected = ToiletServiceManager.request.__wrapped__(
+            _toilet(theirs), agent_id, "toilet_01", validate_state=False, **options
+        )
+        result = kernel.request(
+            _toilet(ours), agent_id, "toilet_01", validate_state=False, **options
+        )
+        assert repr(result) == repr(expected)
+        assert _bytes(ours) == _bytes(theirs)
+
+    same_request(queued, "A001", queue_id=queue)
+    same_request(queued, "A001")
+    _toilet(queued).request("A001", "toilet_01", queue_id=queue, validate_state=False)
+    _toilet(queued).request("A002", "toilet_01", queue_id=queue, validate_state=False)
+    method = ToiletServiceManager._serve_independent_head.__wrapped__
+    rng = CounterRNG(queued.seed)
+
+    def same_head(world: WorldState, minute: int) -> Any:
+        ours, theirs = _copy(world), _copy(world)
+        expected = method(_toilet(theirs), "toilet_01", queue, minute, rng)
+        result = kernel.serve_independent_head(_toilet(ours), "toilet_01", queue, minute, rng)
+        assert result == expected
+        assert _bytes(ours) == _bytes(theirs)
+        return ours, result
+
+    # Each stop: the walk, a point with no place, the Run's end, no skilled staff.
+    same_head(queued, queued.minute_index)
+    point = next(
+        item
+        for item in queued.model_configs["facility_geometry"]["service_points"]
+        if item["queue_id"] == queue
+    )
+    queued.model_state["movement_v1"]["positions"]["A001"]["point"] = dict(point["point_m"])
+    full = _copy(queued)
+    full.facilities["toilet_01"].working_units = 0
+    assert same_head(full, full.minute_index)[1] is None
+    late = _copy(queued)
+    late.minute_index = late.duration_minutes - 1
+    assert same_head(late, late.minute_index)[1] is None
+    skilled = _copy(queued)
+    for item in skilled.model_configs["facility_geometry"]["service_points"]:
+        if item["queue_id"] == queue:
+            item["access"] = {
+                "accessibility": "accessible",
+                "required_access_tags": [],
+                "required_staff_skills": ["no_such_skill"],
+            }
+    assert same_head(skilled, skilled.minute_index)[1] is None
+    # With skilled staff here the service starts and holds the person.
+    staffed = _copy(skilled)
+    member = next(iter(staffed.staff.values()))
+    member.zone_id = zone
+    member.skills = [*member.skills, "no_such_skill"]
+    served, started = same_head(staffed, staffed.minute_index)
+    assert started is not None
+    # And the completion lets them go.
+    event = served.event_queue.find(started)
+    assert event.payload["staff_id"] == member.id
+    served.minute_index = event.due_minute
+    from sheltersim.events.handlers import ToiletServiceCompletionHandler
+
+    ours, theirs = _copy(served), _copy(served)
+    handler = ToiletServiceCompletionHandler()
+    ToiletServiceCompletionHandler.apply.__wrapped__(handler, theirs, event)
+    kernel.complete(handler, ours, event)
+    assert _bytes(ours) == _bytes(theirs)
+    assert ours.staff[member.id].active_task_id is None
+
+
+# ---- Next to a coefficient or a limit ------------------------------------------------------------
+
+
+def _new_toilet(world: WorldState, facility_id: str = "extra") -> str:
+    from sheltersim.domain.models import FacilityState
+
+    world.facilities[facility_id] = FacilityState(
+        id=facility_id, kind="toilet", zone_id="toilet", capacity=1, working_units=1
+    )
+    return facility_id
+
+
+def _same_point(world: WorldState, facility_id: str) -> Any:
+    point = _rules().installed_facility_point(world, facility_id)
+    assert point == geometry_overlay.installed_facility_point.__wrapped__(world, facility_id)
+    return point
+
+
+@pytest.mark.parametrize("distance", [0.5999, 0.6, 0.6001, 0.603])
+def test_the_separation_of_a_placed_facility_is_the_python_rule_s(
+    world: WorldState, distance: float
+) -> None:
+    from sheltersim.contracts.extensions import Point2D
+    from sheltersim.region.facility import facility_grid_point
+
+    facility_id = _new_toilet(world)
+    geometry = world.model_configs["facility_geometry"]
+    zone = next(item for item in geometry["zones"] if item["zone_id"] == "toilet")
+    polygon = tuple(Point2D.model_validate(point) for point in zone["polygon"])
+    others = [
+        key
+        for key, item in world.facilities.items()
+        if key != facility_id and item.zone_id == "toilet" and key in geometry["facility_points"]
+    ]
+    slot = facility_grid_point(polygon, 0, len(others) + 1)
+    # Everyone else this far from the first slot, on the side away from the zone's middle.
+    for key in others:
+        geometry["facility_points"][key] = {"x": slot.x, "y": slot.y + distance}
+    point = _same_point(world, facility_id)
+    # 0.6 itself is what the floats make of it, and only the comparison above speaks for it.
+    if distance != 0.6:
+        assert (point == slot) is (distance > 0.6)
+
+
+def test_the_search_of_a_grid_ends_where_the_python_rule_s_does(world: WorldState) -> None:
+    from sheltersim.contracts.extensions import Point2D
+    from sheltersim.region.facility import facility_grid_point
+
+    facility_id = _new_toilet(world)
+    geometry = world.model_configs["facility_geometry"]
+    zone = next(item for item in geometry["zones"] if item["zone_id"] == "toilet")
+    polygon = tuple(Point2D.model_validate(point) for point in zone["polygon"])
+    others = sum(
+        key != facility_id and item.zone_id == "toilet" and key in geometry["facility_points"]
+        for key, item in world.facilities.items()
+    )
+    xs = [point.x for point in polygon]
+    ys = [point.y for point in polygon]
+    state = world.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]
+    # Free only near a slot of the given grid: each room blocks one side of it.
+    for count, found in ((others + 16, True), (others + 17, False)):
+        slot = facility_grid_point(polygon, count - 1, count)
+        gap = 0.001
+        sides = (
+            (min(xs) - 1, min(ys) - 1, slot.x - gap, max(ys) + 1),
+            (slot.x + gap, min(ys) - 1, max(xs) + 1, max(ys) + 1),
+            (slot.x - gap, min(ys) - 1, slot.x + gap, slot.y - gap),
+            (slot.x - gap, slot.y + gap, slot.x + gap, max(ys) + 1),
+        )
+        state["temporary_rooms"].clear()
+        for index, (left, top, right, bottom) in enumerate(sides):
+            state["temporary_rooms"][f"block{index}"] = {
+                "active": True,
+                "polygon_m": [
+                    {"x": left, "y": top},
+                    {"x": right, "y": top},
+                    {"x": right, "y": bottom},
+                    {"x": left, "y": bottom},
+                ],
+            }
+        point = _same_point(world, facility_id)
+        assert (point is not None) is found
+
+
+def test_a_wall_s_clearance_is_the_python_rule_s(world: WorldState) -> None:
+    from sheltersim.contracts.spatial import SpatialConstraints
+
+    toilet = next(key for key, item in world.facilities.items() if item.kind == "toilet")
+    zone_id = world.facilities[toilet].zone_id
+    raw = world.model_configs["spatial_constraints"]
+    walls = SpatialConstraints.model_validate(raw).walls
+    rule = geometry_overlay.validate_geometry_change.__wrapped__
+    kernel = _rules().validate_geometry_change
+    accepted = 0
+    for wall in walls:
+        dx, dy = wall.end.x - wall.start.x, wall.end.y - wall.start.y
+        length = (dx * dx + dy * dy) ** 0.5
+        if length == 0:
+            continue
+        nx, ny = -dy / length, dx / length
+        for fraction in (0.25, 0.5, 0.75):
+            for side in (1, -1):
+                for clearance in (0.499, 0.503):
+                    point = {
+                        "x": wall.start.x + dx * fraction + nx * side * clearance,
+                        "y": wall.start.y + dy * fraction + ny * side * clearance,
+                    }
+                    parameters = {"point_m": point}
+                    try:
+                        rule(world, "move_facility", toilet, parameters, None)
+                    except ValueError:
+                        with pytest.raises(native.Unsupported):
+                            kernel(world, "move_facility", toilet, parameters, None)
+                        continue
+                    kernel(world, "move_facility", toilet, parameters, None)
+                    accepted += clearance == 0.503
+    assert accepted, f"no point of {zone_id} beside a wall to compare"
+
+
+def test_a_full_overlay_history_drops_its_oldest_record(world: WorldState) -> None:
+    state = world.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]
+    state["history"].extend(
+        {
+            "transition_id": f"old{index}",
+            "op": "set_partition",
+            "target_id": ROOM_ZONE,
+            "status": "applied",
+            "causation_id": None,
+            "event_id": f"old{index}",
+            "source_ids": [],
+            "minute": 0,
+        }
+        for index in range(20_000)
+    )
+    event = _event(world, "set_partition", ROOM_ZONE, {"polygon_m": _corner(world, ROOM_ZONE)}, 50)
+    _same(
+        world,
+        _rules().apply_geometry_change,
+        geometry_overlay.apply_geometry_change.__wrapped__,
+        event,
+    )
+
+
+@pytest.mark.parametrize(("blocked", "found"), [(255, True), (256, False)])
+def test_a_bed_s_routes_end_where_the_python_rule_s_do(
+    world: WorldState, blocked: int, found: bool
+) -> None:
+    room = _room_record(world, "room", people=400, beds=1)
+    free = room["bed_points_m"][0]
+    corner = dict(room["polygon_m"][0])
+    corner = {"x": corner["x"] + 0.2, "y": corner["y"] + 0.2}
+    # Beds no route reaches, each one try, ahead of the bed that has a route.
+    room["bed_points_m"] = [corner] * blocked + [free]
+    room["sleeping_capacity"] = len(room["bed_points_m"])
+    world.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]["temporary_rooms"]["room"] = room
+    world.model_configs["spatial_constraints"].setdefault("obstacles", []).append(
+        {
+            "id": "around-the-corner",
+            "polygon": [
+                {"x": corner["x"] - 0.05, "y": corner["y"] - 0.05},
+                {"x": corner["x"] + 0.05, "y": corner["y"] - 0.05},
+                {"x": corner["x"] + 0.05, "y": corner["y"] + 0.05},
+                {"x": corner["x"] - 0.05, "y": corner["y"] + 0.05},
+            ],
+            "source_ids": [],
+        }
+    )
+    agent_id = _person_in_room_zone(world)
+    rule = geometry_overlay.reserve_sleep_bed.__wrapped__
+    kernel = _rules().reserve_sleep_bed
+    ours, theirs = deepcopy(world), deepcopy(world)
+    assert json.dumps(_plain(kernel(ours, agent_id))) == json.dumps(_plain(rule(theirs, agent_id)))
+    assert (rule(deepcopy(world), agent_id) is not None) is found

@@ -17,6 +17,7 @@ SHELTERSIM_DISPATCH_COUNT_ONLY=1 only writes `overlay.stats()`, for a plain run.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import os
@@ -30,6 +31,7 @@ SPACES_MODULE = "sheltersim.domain.temporary_spaces"
 QUEUES_MODULE = "sheltersim.domain.facility_queues"
 QUEUEING_MODULE = "sheltersim.domain.queueing"
 SERVICE_MODULE = "sheltersim.domain.resource_service"
+TOILET_MODULE = "sheltersim.domain.facilities"
 QUEUES_KEY = "facility_queues_v1"
 OVERLAY_KEY = "geometry_overlay_v1"
 
@@ -89,10 +91,29 @@ QUEUE_WRITERS = (
     "mark_stall",
     "record_queue_transition",
 )
-# (kernel, method of ResourceServiceManager)
+# (rules module, kernel, module of the manager, its class, its method)
 SERVICE_WRITERS = (
-    ("serve_independent_head", "_serve_independent_head"),
-    ("record_independent_stall", "_record_independent_queue_stall"),
+    (
+        "service",
+        "serve_independent_head",
+        SERVICE_MODULE,
+        "ResourceServiceManager",
+        "_serve_independent_head",
+    ),
+    (
+        "service",
+        "record_independent_stall",
+        SERVICE_MODULE,
+        "ResourceServiceManager",
+        "_record_independent_queue_stall",
+    ),
+    (
+        "toilet",
+        "serve_independent_head",
+        TOILET_MODULE,
+        "ToiletServiceManager",
+        "_serve_independent_head",
+    ),
 )
 VALIDATORS = (
     ("overlay", "validate_spaces", SPACES_MODULE, "validate_temporary_spaces_state"),
@@ -325,19 +346,25 @@ def prepare(output: str) -> None:
 
         return run
 
-    def service_writer(label: str, kernel: Any, method: str) -> Any:
+    def service_writer(label: str, kernel: Any, module: str, class_name: str, method: str) -> Any:
         def run(manager: Any, *arguments: Any, **options: Any) -> Any:
             if inside[0] or _on_copy(manager):
                 raise unsupported("a shadow's Python rule")
             recorder.seen[f"{label}.calls"] += 1
-            manager_class = _rule(SERVICE_MODULE, "ResourceServiceManager")
+            manager_class = _rule(module, class_name)
+
+            def on_the_copy(world: Any) -> Any:
+                stand_in = copy.copy(manager)
+                stand_in.world = world
+                return stand_in
+
             try:
                 on_copies(
                     label,
                     kernel,
                     _unwrapped(getattr(manager_class, method)),
                     manager,
-                    manager_class,
+                    on_the_copy,
                     arguments,
                     options,
                 )
@@ -392,10 +419,18 @@ def prepare(output: str) -> None:
         setattr(
             queue_rules, kernel_name, queue_writer(kernel_name, getattr(queue_rules, kernel_name))
         )
-    service = native.rules("service")
-    for kernel_name, method in SERVICE_WRITERS:
+    for rules_module, kernel_name, module, class_name, method in SERVICE_WRITERS:
+        rules = native.rules(rules_module)
         setattr(
-            service, kernel_name, service_writer(kernel_name, getattr(service, kernel_name), method)
+            rules,
+            kernel_name,
+            service_writer(
+                f"{rules_module}.{kernel_name}",
+                getattr(rules, kernel_name),
+                module,
+                class_name,
+                method,
+            ),
         )
     for module, kernel_name, rule_module, rule_name in VALIDATORS:
         rules = native.rules(module)
