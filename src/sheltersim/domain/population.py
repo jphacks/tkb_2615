@@ -7,6 +7,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from sheltersim import native
 from sheltersim.contracts.extensions import PersonTraits
 from sheltersim.contracts.population import (
     DynamicArrivalPersonContext,
@@ -18,6 +19,7 @@ from sheltersim.contracts.presence import (
     PresenceState,
     PresenceTransition,
 )
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import (
     add_agent as add_agent_dynamics,
@@ -77,6 +79,13 @@ def create_population_dynamics_state(world: WorldState) -> dict[str, Any]:
         "arrivals": [],
         "departures": [],
     }
+
+
+# The state with no one pending: native/src/rules/tick_validation.rs.
+register_rust_validator(
+    POPULATION_DYNAMICS_STATE_KEY,
+    native.rules("tick_validation").population_dynamics if native.available() else None,
+)
 
 
 def validate_population_dynamics_state(world: WorldState) -> None:

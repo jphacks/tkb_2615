@@ -458,6 +458,32 @@ struct Slot {
     row: Option<Arc<EventRow>>,
 }
 
+/// A pending event as `QueueStore::pending_events` found it.
+pub(crate) struct PendingEvent<'py> {
+    pub(crate) event_id: Arc<str>,
+    pub(crate) due_minute: i64,
+    pub(crate) sequence: i64,
+    pub(crate) source: PendingSource<'py>,
+}
+
+pub(crate) enum PendingSource<'py> {
+    Row(Arc<EventRow>),
+    Object(Bound<'py, PyAny>),
+}
+
+impl PendingEvent<'_> {
+    /// `event.kind is EventKind.COMPLETION`.
+    pub(crate) fn is_completion(&self) -> PyResult<bool> {
+        match &self.source {
+            PendingSource::Row(row) => Ok(row.kind == EventKind::Completion),
+            PendingSource::Object(object) => {
+                let py = object.py();
+                Ok(object.getattr(intern!(py, "kind"))?.is(models(py)?.kinds[1].bind(py)))
+            }
+        }
+    }
+}
+
 /// The queue behind `sheltersim.events.queue.EventQueue`. It mirrors the Python queue's structures
 /// one for one, a repeated identity from the constructor included, so that `validate` can refuse it
 /// the same way. Slots live by serial number, which stays when an event is replaced.
@@ -603,6 +629,29 @@ impl QueueStore {
             slot.row = Some(row.clone());
         }
         Ok(Some(row))
+    }
+
+    /// The pending events in queue order as they are held, turning no object into a row: reading
+    /// the whole of an event costs more than the few fields a check needs. Ok(None) if an object
+    /// is not a plain `ScheduledEvent`.
+    pub(crate) fn pending_events<'py>(&self, py: Python<'py>) -> PyResult<Option<Vec<PendingEvent<'py>>>> {
+        let class = models(py)?.event.bind(py);
+        let mut events = Vec::with_capacity(self.ordered.len());
+        for (key, serial) in &self.ordered {
+            let slot = &self.slots[serial];
+            let source = match &slot.row {
+                Some(row) => PendingSource::Row(row.clone()),
+                None => {
+                    let object = self.objects[serial].bind(py);
+                    if !object.get_type().is(class) {
+                        return Ok(None);
+                    }
+                    PendingSource::Object(object.clone())
+                }
+            };
+            events.push(PendingEvent { event_id: slot.event_id.clone(), due_minute: key.0, sequence: key.2, source });
+        }
+        Ok(Some(events))
     }
 
     /// Whether this event is pending.

@@ -452,31 +452,50 @@ fn kind_wait(workers: &[Worker], kind: &str, sample: i64) -> PyResult<KindWait> 
     Ok(KindWait { kind: kind.to_owned(), qualified, reasons })
 }
 
-/// `_support_wait_snapshot` in `experiments/metrics.py`: `support_waited_minutes` and
-/// `support_wait_reason_codes` of each request, and who waits with no qualified staff at all.
-/// Unsupported as soon as a pending request has a qualified free worker, whose routes are read.
-#[pyfunction]
-fn wait_snapshot<'py>(
+/// What the metrics read of one open request.
+pub(crate) struct OpenWait<'py> {
+    pub(crate) agent: Arc<str>,
+    pub(crate) id: Bound<'py, PyAny>,
+    pub(crate) waited: i64,
+    /// The index of its kind in `OpenWaits::waits`, or its one reason.
+    reason: Result<usize, &'static str>,
+}
+
+/// The requests of `_support_wait_snapshot`, in the order given.
+pub(crate) struct OpenWaits<'py> {
+    pub(crate) requests: Vec<OpenWait<'py>>,
+    waits: Vec<KindWait>,
+}
+
+impl OpenWaits<'_> {
+    pub(crate) fn reasons_of(&self, request: &OpenWait<'_>) -> Vec<&'static str> {
+        match request.reason {
+            Ok(kind) => self.waits[kind].reasons.clone(),
+            Err(reason) => vec![reason],
+        }
+    }
+
+    pub(crate) fn has_no_qualified_staff(&self, request: &OpenWait<'_>) -> bool {
+        matches!(request.reason, Ok(kind) if !self.waits[kind].qualified)
+    }
+}
+
+/// `support_waited_minutes` and `support_wait_reason_codes` of each request, or with `only_open`
+/// of each one that is pending or assigned. Unsupported as soon as a pending request has a
+/// qualified free worker, whose routes are read.
+pub(crate) fn open_waits<'py>(
     world: &Bound<'py, PyAny>,
-    active_support: &Bound<'py, PyAny>,
-    sample_minute: &Bound<'py, PyAny>,
-) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyList>)> {
+    list: &Bound<'py, PyList>,
+    sample: i64,
+    only_open: bool,
+) -> PyResult<OpenWaits<'py>> {
     let py = world.py();
-    let sample = exact_int(sample_minute)?;
-    let list = active_support.downcast_exact::<PyList>().map_err(|_| Unsupported::new_err("the requests are not a list"))?;
     let table = table_of(world)?;
     let kinds = CareKinds::of(&table)?;
     let store = entities_of(world)?;
-    // (agent, request, the object's ID, its minutes, the index of its kind, or its one reason).
-    struct Row<'py> {
-        agent: Arc<str>,
-        id: Bound<'py, PyAny>,
-        waited: i64,
-        reason: Result<usize, &'static str>,
-    }
     let mut waits: Vec<KindWait> = Vec::new();
     let mut workers: Option<Vec<Worker>> = None;
-    let mut output: Vec<Row<'py>> = Vec::with_capacity(list.len());
+    let mut requests: Vec<OpenWait<'py>> = Vec::with_capacity(list.len());
     let id_name = intern!(py, "id");
     for request in list.iter() {
         let id_object = attribute(&request, id_name)?;
@@ -500,6 +519,9 @@ fn wait_snapshot<'py>(
             Ok((request.agent_id.clone(), request.status, moving, waited.max(0)))
         })?;
         let (agent, status, moving, waited) = read;
+        if only_open && !matches!(status, RequestStatus::Pending | RequestStatus::Assigned) {
+            continue;
+        }
         let reason = match status {
             RequestStatus::Assigned => Err(if moving { "resident_travel" } else { "support_in_progress" }),
             RequestStatus::Pending => {
@@ -521,8 +543,24 @@ fn wait_snapshot<'py>(
             }
             _ => Err("request_closed"),
         };
-        output.push(Row { agent, id: id_object, waited, reason });
+        requests.push(OpenWait { agent, id: id_object, waited, reason });
     }
+    Ok(OpenWaits { requests, waits })
+}
+
+/// `_support_wait_snapshot` in `experiments/metrics.py`, for the snapshots `rules/metrics.rs`
+/// leaves to the Python rule.
+#[pyfunction]
+fn wait_snapshot<'py>(
+    world: &Bound<'py, PyAny>,
+    active_support: &Bound<'py, PyAny>,
+    sample_minute: &Bound<'py, PyAny>,
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyList>)> {
+    let py = world.py();
+    let sample = exact_int(sample_minute)?;
+    let list = active_support.downcast_exact::<PyList>().map_err(|_| Unsupported::new_err("the requests are not a list"))?;
+    let open = open_waits(world, list, sample, false)?;
+    let output = &open.requests;
     // `sorted(active_support, key=agent_id)`, stable.
     let mut order: Vec<usize> = (0..output.len()).collect();
     order.sort_by(|first, second| output[*first].agent.as_bytes().cmp(output[*second].agent.as_bytes()));
@@ -532,16 +570,12 @@ fn wait_snapshot<'py>(
         let detail = PyDict::new(py);
         detail.set_item(intern!(py, "request_id"), &row.id)?;
         detail.set_item(intern!(py, "waited_minutes"), row.waited)?;
-        let reasons = match row.reason {
-            Ok(kind) => PyList::new(py, &waits[kind].reasons)?,
-            Err(reason) => PyList::new(py, [reason])?,
-        };
-        detail.set_item(intern!(py, "reason_codes"), reasons)?;
+        detail.set_item(intern!(py, "reason_codes"), PyList::new(py, open.reasons_of(row))?)?;
         details.set_item(&*row.agent, detail)?;
     }
     let mut no_qualified: Vec<&str> = output
         .iter()
-        .filter(|row| matches!(row.reason, Ok(kind) if !waits[kind].qualified))
+        .filter(|row| open.has_no_qualified_staff(row))
         .map(|row| &*row.agent)
         .collect();
     no_qualified.sort_unstable();
