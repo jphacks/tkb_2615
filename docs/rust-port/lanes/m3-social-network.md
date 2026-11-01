@@ -74,6 +74,8 @@ Rust が `social_network_v1` を型付きの行で持ち、書き手を一緒に
 | 7日分に `rule_shadow` | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。`--expect` と一致、違い0件 |
 | `tracked_mirror_gate.py` | **動かしていません。** `state_mirror.py` は登録の1行だけです |
 
+レーン F をマージした `f10f749` で動かし直したもの：両モードの全テスト（Rust あり 3332件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2047件成功、1291件 skip）、ゲートに `rule_shadow`（55シナリオ問題0件、違い0件）、7日分（ハッシュ一致）。**逆順のゲート、7日分の `rule_shadow`、`tick_budget.py` は `3788de1` の値です。**
+
 `rule_shadow`（上段は3変種の合計なので、ゲート1回分はおよそ3分の1。下段は7日分）：
 
 | | ゲート×3 | 7日分 |
