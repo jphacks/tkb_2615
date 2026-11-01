@@ -86,6 +86,17 @@ class ProposePhase:
         *,
         observed_state: dict[str, Any] | None = None,
     ) -> None:
+        target_id, next_decision_at, committed = self._apply_effect(proposal)
+        self._record_outcome(
+            proposal,
+            target_id=target_id,
+            next_decision_at=next_decision_at,
+            committed=committed,
+            observed_state=observed_state,
+        )
+
+    def _apply_effect(self, proposal: Any) -> tuple[str | None, int, bool]:
+        """What the decision does to the world: its target, next decision, and whether it committed."""
         agent = self.world.agents[proposal.agent_id]
         prior_activity = agent.activity
         agent.next_decision_at = proposal.next_decision_at
@@ -449,22 +460,16 @@ class ProposePhase:
                                 + 1.0
                             )
 
-        self._record_outcome(
-            proposal,
-            target_id=target_id,
-            next_decision_at=agent.next_decision_at,
-            committed=(
-                target_id is not None
-                or proposal.action in {ActionKind.WAIT, ActionKind.REST, ActionKind.SLEEP}
-                or agent.activity is not prior_activity
-            )
-            and not (
-                proposal.action in {ActionKind.SEEK_HELP, ActionKind.SEEK_INFORMATION}
-                and target_id in self.world.support_requests
-                and self.world.support_requests[target_id].status is SupportRequestStatus.UNRESOLVED
-            ),
-            observed_state=observed_state,
+        committed = (
+            target_id is not None
+            or proposal.action in {ActionKind.WAIT, ActionKind.REST, ActionKind.SLEEP}
+            or agent.activity is not prior_activity
+        ) and not (
+            proposal.action in {ActionKind.SEEK_HELP, ActionKind.SEEK_INFORMATION}
+            and target_id in self.world.support_requests
+            and self.world.support_requests[target_id].status is SupportRequestStatus.UNRESOLVED
         )
+        return target_id, agent.next_decision_at, committed
 
     def _record_outcome(
         self,
