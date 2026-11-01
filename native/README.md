@@ -119,10 +119,17 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
+  a Rust function (`social_interaction`, `agent_travel_complete`) runs it when the registered handler
+  is that class with its `apply` as defined; anything else, and any refused event, calls
+  `controller._dispatch_one_event`. Unsupported only before the first change. `rules/travel_completion.rs`
+  is the walk's handler; what a walk leads to is still `handler._after_arrival` (M4, the services). No borrow is held
+  across a Python call. `use_python_entries(True)` makes it call each rule through its Python entry,
+  for `benchmarks/rule_shadow`, and `stats()` says what ran and why anything was refused.
 - `rules/decisions.rs`: `propose_rows(controller, view, rng)`, `observed_row(controller, view,
   agent_id)` and `record_outcome(controller, proposal, *, target_id, next_decision_at, committed,
   observed_state)` replace the steps `_propose_due`, `_observed_state` and `_record_outcome`. A
-  `ProposalRow` answers what `_apply_proposal`'s Python body reads and makes the `ActionProposal`
+  `ProposalRow` answers what `_apply_effect`'s Python body reads and makes the `ActionProposal`
   for anything else. `record_outcome` appends the `_IndexedMetricSink` record as JSON bytes
   (`decision_sink` in a sink's own class says what it may do), then calls `commit_action` and
   `remember_decision`. Unsupported comes before anything is appended; after that, a rule that
@@ -171,8 +178,9 @@ each OS, because both call the same libm.
   before any change.
 
 - `rules.social_interaction.apply(handler, world, event)`: `SocialInteractionHandler.apply` for a
-  social action that goes through. A suppressed or failed event and the other types of interaction
-  give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
+  social action, which raises the rule's `EventSuppressed` text for one that no longer applies. A
+  failed event and the other types of interaction give `Unsupported`, and the Python rule runs
+  (`docs/rust-port/lanes/m3-social-network.md`, `m3-dispatch.md`).
 
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`).
 - `rules.movement`: the movement rules of a tick (`src/rules/movement.rs`, with the floor plan and
@@ -221,6 +229,24 @@ each OS, because both call the same libm.
   check of a tick; the replay of a save stays in Python. `rules.resources.apply_operation(world,
   event, operation)`, `metric_values(world, *, tick_memo=None)` and `reservation_id_was_used(world,
   id)` are `kernel_first` (`docs/rust-port/lanes/m4-resources.md`).
+
+- `state.resource_service.ROW`, `validate`: Rust owns `resource_service_v1`
+  (`src/state/resource_service.rs`): typed, with the two histories as lists of records. `validate`
+  answers for the check of a tick; a save still reads the histories in Python.
+  `rules.service` (`src/rules/service.rs`): `facilities_to_serve(manager)`, `serve_head(manager,
+  facility_id, resource_id, minute)`, `complete(manager, event)`, `request(manager, agent_id,
+  facility_id, *, minute=None, validate_state=None, queue_id=None)` and
+  `record_request_outcome(manager, *, ...)`, each `kernel_first` on `ResourceServiceManager`.
+  `serve_head` is one pass of `arbitrate`'s loop after the positions; it returns the started event's
+  ID, or None to stop. An independent FIFO gives `Unsupported` before any write.
+- `rules.proposals.apply_effect(controller, proposal)`: `_apply_effect` (`src/rules/proposals.rs`),
+  which returns `(target_id, next_decision_at, committed)`. `seek_help`, `seek_information`, a bed in
+  a temporary room and a trip of no minutes give `Unsupported` before any write.
+- `rules.travel`: `route(controller, origin_zone_id, destination_zone_id, agent_id)` and
+  `schedule_travel(controller, *, ...)`: `_route` and `_schedule_travel` (`src/rules/travel.rs`).
+  Edge capacities and another route policy give `Unsupported`. The graph as rows stays on the
+  controller as `_route_rows` while `space.graph` is the same object. See
+  `docs/rust-port/lanes/m4-service.md`.
 
 - `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
   relationships typed, the history as the canonical bytes of each item. `rules.body_state.

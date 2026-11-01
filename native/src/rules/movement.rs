@@ -1166,14 +1166,14 @@ fn advance_movement<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) 
 
 // ---- start_movement, finish_movement -----------------------------------------------------------
 
-fn optional_str(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Arc<str>>> {
+pub(crate) fn optional_str(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Arc<str>>> {
     match value {
         Some(value) if !value.is_none() => Ok(Some(Arc::from(exact_str(value)?))),
         _ => Ok(None),
     }
 }
 
-fn str_tuple(value: &Bound<'_, PyAny>) -> PyResult<Vec<Arc<str>>> {
+pub(crate) fn str_tuple(value: &Bound<'_, PyAny>) -> PyResult<Vec<Arc<str>>> {
     value
         .downcast_exact::<PyTuple>()
         .map_err(|_| Unsupported::new_err("not a tuple"))?
@@ -1183,7 +1183,7 @@ fn str_tuple(value: &Bound<'_, PyAny>) -> PyResult<Vec<Arc<str>>> {
 }
 
 /// The points of a route: `Point2D` itself, so `model_dump` would give the same two floats.
-fn route_points_of(value: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<Pt>> {
+pub(crate) fn route_points_of(value: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<Pt>> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -1430,33 +1430,59 @@ fn route_with_movement_time<'py>(
     route: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = world.py();
+    let class: Bound<'py, PyType> = route.get_type();
+    let edge_ids = attribute(route, intern!(py, "edge_ids"))?;
+    let zone_ids = attribute(route, intern!(py, "zone_ids"))?;
+    let configs = attribute(world, intern!(py, "model_configs"))?;
+    let configs = exact_dict(&configs)?;
+    if !configs.contains(intern!(py, "movement_model"))? && !configs.contains(intern!(py, "facility_geometry"))? {
+        return Ok(route.clone());
+    }
+    if class.name()?.to_str()? != "ZoneRoute" {
+        return unsupported("the route is not a ZoneRoute");
+    }
+    let edges = edge_ids.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("not a tuple"))?;
+    let zones = zone_ids.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("not a tuple"))?;
+    let declared = exact_int(&attribute(route, intern!(py, "travel_minutes"))?)?;
+    let zone_items: Vec<Bound<'py, PyAny>> = zones.iter().collect();
+    let zone_texts = zone_items.iter().map(exact_str).collect::<PyResult<Vec<_>>>()?;
+    let edge_items: Vec<Bound<'py, PyAny>> = edges.iter().collect();
+    let edge_texts = edge_items.iter().map(exact_str).collect::<PyResult<Vec<_>>>()?;
+    let minutes = movement_minutes(world, exact_str(agent_id)?, &zone_texts, &edge_texts, declared)?;
+    if edges.is_empty() {
+        return Ok(route.clone());
+    }
+    class.call1((
+        attribute(route, intern!(py, "origin_zone_id"))?,
+        attribute(route, intern!(py, "destination_zone_id"))?,
+        zones,
+        edges,
+        minutes,
+    ))
+}
+
+/// The minutes `route_with_movement_time` gives a route of these zones and edges.
+pub(crate) fn movement_minutes(
+    world: &Bound<'_, PyAny>,
+    agent_id: &str,
+    zones: &[&str],
+    edges: &[&str],
+    declared: i64,
+) -> PyResult<i64> {
+    let py = world.py();
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let configs = exact_dict(&configs)?;
     let raw_model = configs.get_item(intern!(py, "movement_model"))?;
     if raw_model.is_none() && !configs.contains(intern!(py, "facility_geometry"))? {
-        return Ok(route.clone());
+        return Ok(declared);
     }
     let model = movement_model(raw_model)?;
-    let class: Bound<'py, PyType> = route.get_type();
-    if class.name()?.to_str()? != "ZoneRoute" {
-        return unsupported("the route is not a ZoneRoute");
-    }
-    let edge_ids = attribute(route, intern!(py, "edge_ids"))?;
-    let edges = edge_ids.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("not a tuple"))?;
-    let zone_ids = attribute(route, intern!(py, "zone_ids"))?;
-    let zones = zone_ids.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("not a tuple"))?;
-    let declared = exact_int(&attribute(route, intern!(py, "travel_minutes"))?)?;
     if declared.abs() >= EXACT_INT {
         return unsupported("the route's minutes are too large");
     }
-    let agent_id = exact_str(agent_id)?;
     let geo = Geo::of(world)?;
     let store = entities_of(world)?;
-    let zone_items: Vec<Bound<'py, PyAny>> = zones.iter().collect();
-    let mut wanted: Vec<(&str, i64)> = Vec::with_capacity(zone_items.len());
-    for zone in &zone_items {
-        wanted.push((exact_str(zone)?, 0));
-    }
+    let mut wanted: Vec<(&str, i64)> = zones.iter().map(|zone| (*zone, 0)).collect();
     let speed = EntityStore::with_rows(&store, |rows| {
         let Some(agent) = rows.agents.get(agent_id) else {
             return unsupported("no such agent");
@@ -1476,8 +1502,8 @@ fn route_with_movement_time<'py>(
     })?;
     let mut lengths = Vec::new();
     if let Some(layout) = &geo.layout {
-        for edge in edges.iter() {
-            if let Some(found) = layout.routes.get(exact_str(&edge)?) {
+        for edge in edges {
+            if let Some(found) = layout.routes.get(*edge) {
                 lengths.push(polyline_length(&found.points).ok_or_else(|| Unsupported::new_err("not a plain sum"))?);
             }
         }
@@ -1502,19 +1528,12 @@ fn route_with_movement_time<'py>(
     let crowding = py_min(model.maximum_slowdown, 1.0 + model.density_slowdown * py_max(0.0, density.unwrap_or(0.0) - 0.5));
     let duration = py_max(declared as f64, physical) * (base / speed) * crowding;
     if edges.is_empty() {
-        return Ok(route.clone());
+        return Ok(declared);
     }
     if !duration.is_finite() || duration.abs() >= EXACT_INT as f64 {
         return unsupported("the duration is too large");
     }
-    let minutes = (duration.ceil() as i64).max(1);
-    class.call1((
-        attribute(route, intern!(py, "origin_zone_id"))?,
-        attribute(route, intern!(py, "destination_zone_id"))?,
-        zones,
-        edges,
-        minutes,
-    ))
+    Ok((duration.ceil() as i64).max(1))
 }
 
 // ---- validate ----------------------------------------------------------------------------------

@@ -390,7 +390,7 @@ class WorldState:
                     _tick_memo.resource_config = resource_config
             if RESOURCE_LEDGER_KEY not in self.model_state:
                 raise StateInvariantError("WorldState v6 requires a resource ledger")
-            if not rust_validated(self, "resource_service_v1"):
+            if validate_event_history or not rust_validated(self, "resource_service_v1"):
                 service_state = self.model_state.get("resource_service_v1")
                 if (
                     not isinstance(service_state, dict)

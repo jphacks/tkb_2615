@@ -58,6 +58,7 @@ HEAP_WRITES = frozenset({"heappush", "heappop", "heapify", "heapreplace", "heapp
 # longer finds fails the test below, as in tests/unit/repo/test_source_manifest.py.
 NOT_INSERTED_INTO_STATE: dict[tuple[str, str, str], str] = {
     ("contracts/policies.py", "selected_models", "selection"): "memo of parsed objects",
+    ("events/handlers.py", "settle", "record"): "a frozen record, and the log is not a tree",
     ("core/checkpoint_cache.py", "_leaf", "raw"): "encoder memo; bytes",
     ("core/checkpoint_cache.py", "_tree_node", "node"): "encoder memo; a str",
     ("domain/geometry_overlay.py", "_parsed_config", "parsed"): "memo of parsed objects",

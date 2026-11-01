@@ -460,7 +460,11 @@ def reverse_order(world: WorldState) -> None:
 # phase: (module, class, method). A method with an after_event callback changes it after each
 # event too. Name the new place when a rule moves; ReversedOrder fails if one is missing.
 WITHIN_PHASE = (
-    ("sheltersim.events.handlers", "EventDispatcher", "dispatch_due"),
+    ("sheltersim.events.handlers", "EventDispatcher", "dispatch_one"),
+    # With the Rust kernels the phase is rules/dispatch.rs, which calls these two between events.
+    # Its Rust functions read people by ID, and hold no order across them.
+    ("sheltersim.experiments.runner", "OfflineSimulationController", "_run_dispatch_phase"),
+    ("sheltersim.events.handlers", "AgentTravelCompletionHandler", "_after_arrival"),
     ("sheltersim.experiments.phases.propose", "ProposePhase", "_apply_proposal"),
     ("sheltersim.policies.world_view", "WorldView", "from_world"),
     ("sheltersim.policies.world_view", "WorldView", "after_state_update"),

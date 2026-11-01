@@ -83,10 +83,27 @@ PORTED_NAMES = frozenset(
         # policies/information.py: rules/information.rs
         "_transmission_probability",
         "_sender_sharing_factor",
+        # experiments/phases/dispatch.py, the rules it calls: rules/dispatch.rs. An event type's
+        # handler is read at each event, and a patch of a class's `apply` shows there.
+        "_dispatch_due_events",
+        "_record_applied_outcomes",
+        "_refresh_space_after_geometry_change",
+        "_interrupt_trips_on_closed_routes",
+        "_consider_social_contact_events",
+        "effect_event_guard_or_suppress",
+        "should_apply_effect_guard",
+        "record_social_event",
+        "observe_event",
+        "record_applied_action_completion",
+        "learn_facility",
         # domain/resources.py: rules/resources.rs, state/resource_ledger.rs
         "apply_resource_operation",
         "resource_metric_values",
         "_validate_audit_record",
+        # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
+        "reserve_sleep_bed",
+        "release_sleep_bed",
+        "capture_social_state_context",
     }
 )
 
@@ -104,6 +121,14 @@ PORTED_METHODS = frozenset(
         ("InformationSpreadPolicy", "update"),
         ("HazardInformationPolicy", "update"),
         ("EvidenceAwareInformationPolicy", "update"),
+        ("EventDispatcher", "dispatch_due"),
+        ("EventDispatcher", "settle"),
+        ("ResourceServiceManager", "_serve_head"),
+        ("ResourceServiceManager", "_facilities_to_serve"),
+        ("ResourceServiceManager", "complete"),
+        ("ResourceServiceManager", "request"),
+        ("ResourceServiceManager", "record_request_outcome"),
+        ("ShortestTravelTimePolicy", "route"),
     }
 )
 

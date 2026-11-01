@@ -97,7 +97,7 @@ fn record_proposal(
 
 /// `agent_knows_facility`.
 #[pyfunction]
-fn agent_knows_facility(
+pub(crate) fn agent_knows_facility(
     world: &Bound<'_, PyAny>,
     agent_id: &Bound<'_, PyAny>,
     facility_id: &Bound<'_, PyAny>,
@@ -298,7 +298,15 @@ fn learn_facility(
     if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());
     }
-    let (agent_id, facility_id) = (exact_str(agent_id)?, exact_str(facility_id)?);
+    learn_facility_of(world, exact_str(agent_id)?, exact_str(facility_id)?)
+}
+
+/// The rule, for IDs a row holds.
+pub(crate) fn learn_facility_of(world: &Bound<'_, PyAny>, agent_id: &str, facility_id: &str) -> PyResult<()> {
+    let py = world.py();
+    if namespace_is_absent(world, intern!(py, NAME))? {
+        return Ok(());
+    }
     let store = entities_of(world)?;
     let zone = EntityStore::with_rows(&store, |rows| {
         Ok(rows.facilities.get(facility_id).map(|facility| facility.zone_id.clone()))
