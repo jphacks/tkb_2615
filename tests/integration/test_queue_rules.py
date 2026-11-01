@@ -515,6 +515,34 @@ def test_a_head_with_no_route_holds_the_queue_and_a_follower_only_those_behind(
     assert _metric(world) == 1.0
 
 
+@pytest.mark.parametrize("phase", ["position", "service"])
+def test_a_walk_s_minutes_turn_over_where_python_s_do(generated_scenario: Any, phase: str) -> None:
+    """A speed that puts the walk just under 5 minutes: 1% more length would make it 6."""
+    world = _world(generated_scenario)
+    toilet = _facility(world, "toilet")
+    person = _people(world, 1)[0]
+    _line_up(world, toilet, [person])
+    agent = world.agents[person]
+    if phase == "position":
+        path = movement.facility_queue_slot_route(world, person, toilet)[1]
+        name = "progress_physical_queue_positions"
+    else:
+        path = movement.facility_approach_route(world, person, toilet)[1]
+        name = "progress_physical_queue_head_to_service"
+    length = math.fsum(movement._distance(a, b) for a, b in zip(path, path[1:]))
+    config = world.model_configs["movement_model"]
+    density = movement._max_route_density(world, (agent.zone_id,), movement._geometry(world))
+    crowding = min(
+        config["maximum_density_slowdown"],
+        1.0 + config["density_slowdown_per_person_m2"] * max(0.0, density - 0.5),
+    )
+    speeds = config["speed_m_per_minute_by_mobility"]
+    speeds[agent.profile.mobility.value] = length * crowding / 4.99
+    assert _same_after(world, name, toilet, resource=False, minute=world.minute_index) is True
+    journey = world.model_state[KEY]["journeys"][person]
+    assert journey["due_minute"] - journey["started_minute"] == 5
+
+
 def test_a_walk_past_the_end_of_the_run_is_counted_and_not_started(generated_scenario: Any) -> None:
     world = _world(generated_scenario)
     toilet = _facility(world, "toilet")
