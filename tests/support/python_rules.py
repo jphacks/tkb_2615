@@ -69,6 +69,10 @@ PORTED_NAMES = frozenset(
         "apply_resource_operation",
         "resource_metric_values",
         "_validate_audit_record",
+        # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
+        "reserve_sleep_bed",
+        "release_sleep_bed",
+        "capture_social_state_context",
     }
 )
 
@@ -86,6 +90,12 @@ PORTED_METHODS = frozenset(
         ("InformationSpreadPolicy", "update"),
         ("HazardInformationPolicy", "update"),
         ("EvidenceAwareInformationPolicy", "update"),
+        ("ResourceServiceManager", "_serve_head"),
+        ("ResourceServiceManager", "_facilities_to_serve"),
+        ("ResourceServiceManager", "complete"),
+        ("ResourceServiceManager", "request"),
+        ("ResourceServiceManager", "record_request_outcome"),
+        ("ShortestTravelTimePolicy", "route"),
     }
 )
 

@@ -1,4 +1,4 @@
-"""Compare every kernel of native/src/rules/service.rs with its Python rule at each call.
+"""Compare every kernel of rules/service.rs and rules/travel.rs with its Python rule at each call.
 
 The Python rule runs first on a copy of everything it writes: plain copies of the two namespaces
 (the histories share their old records), the people, the facilities, the staff, the tasks, the
@@ -30,7 +30,15 @@ QUEUE_LISTS = (
     "resource_active_agent_ids",
 )
 # Every kernel a Python rule below can reach: on a copy, the rule itself has to run.
-GUARDED = ("movement", "queues", "resources", "staff_dynamics", "service")
+GUARDED = (
+    "movement",
+    "queues",
+    "resources",
+    "staff_dynamics",
+    "agent_dynamics",
+    "service",
+    "travel",
+)
 
 
 def _plain(value: Any) -> Any:
@@ -103,6 +111,36 @@ class _ServiceTwin(_Twin):
 
 def _document(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def manager_stand_in(manager: Any, twin: Any) -> Any:
+    """The manager on the copy: the rule's own methods, with the copy as its world."""
+    stand_in = type(manager).__new__(type(manager))
+    stand_in.world = twin
+    stand_in.config = manager.config
+    return stand_in
+
+
+def controller_stand_in(controller: Any, twin: Any) -> Any:
+    """The controller on the copy, with the Python steps: its base class has no kernels."""
+    from sheltersim.experiments.phases.propose import ProposePhase
+
+    class StandIn(ProposePhase):
+        pass
+
+    stand_in = StandIn()
+    stand_in.__dict__.update(controller.__dict__)
+    stand_in.world = twin
+    if controller.resource_service is not None:
+        stand_in.resource_service = manager_stand_in(controller.resource_service, twin)
+    return stand_in
+
+
+def compare_after(
+    recorder: Recorder, where: str, world: Any, twin: Any, pending_before: int
+) -> None:
+    """What the kernel left in the world against what the Python rule left in its copy."""
+    _compare(recorder, where, world, twin, pending_before)
 
 
 def _compare(recorder: Recorder, where: str, world: Any, twin: Any, pending_before: int) -> None:
@@ -242,9 +280,7 @@ def prepare(output: str) -> None:
             world = manager.world
             twin = _ServiceTwin(world)
             pending_before = len(world.event_queue.pending())
-            stand_in = manager_class().__new__(manager_class())
-            stand_in.world = twin
-            stand_in.config = manager.config
+            stand_in = manager_stand_in(manager, twin)
             error = None
             expected = None
             try:
@@ -311,6 +347,64 @@ def prepare(output: str) -> None:
         return result
 
     rules.facilities_to_serve = facilities_to_serve
+
+    travel = native.rules("travel")
+    schedule_kernel = travel.schedule_travel
+
+    def schedule_travel(controller: Any, **options: Any) -> Any:
+        if on_copy(controller):
+            raise unsupported("a shadow's copy")
+        recorder.seen["schedule_travel.calls"] += 1
+        world = controller.world
+        twin = _ServiceTwin(world)
+        pending_before = len(world.event_queue.pending())
+        stand_in = controller_stand_in(controller, twin)
+        error = None
+        expected = None
+        try:
+            expected = stand_in._schedule_travel(**options)
+        except Exception as raised:  # noqa: BLE001 - only compared with what the kernel does
+            error = raised
+        try:
+            result = schedule_kernel(controller, **options)
+        except unsupported as reason:
+            recorder.reasons[f"schedule_travel: {reason}"] += 1
+            raise
+        recorder.seen["schedule_travel.kernel_ran"] += 1
+        recorder.seen[f"schedule_travel.{options['purpose']}.{result}"] += 1
+        where = f"schedule_travel {options!r:.200} at {world.minute_index}"
+        if error is not None:
+            recorder.differ(f"{where}: the kernel took what Python turned down: {error!r:.300}")
+            return result
+        if result != expected:
+            recorder.differ(f"{where}: returned {result!r}, not {expected!r}")
+        _compare(recorder, where, world, twin, pending_before)
+        row_check(world, where)
+        return result
+
+    travel.schedule_travel = schedule_travel
+    route_kernel = travel.route
+
+    def route(controller: Any, *arguments: Any) -> Any:
+        if on_copy(controller):
+            raise unsupported("a shadow's copy")
+        recorder.seen["route.calls"] += 1
+        # Reads only, without edge capacities, which the kernel refuses.
+        stand_in = controller_stand_in(controller, controller.world)
+        try:
+            result = route_kernel(controller, *arguments)
+        except unsupported as reason:
+            recorder.reasons[f"route: {reason}"] += 1
+            raise
+        recorder.seen["route.kernel_ran"] += 1
+        expected = stand_in._route(*arguments)
+        recorder.seen[f"route.{'none' if expected is None else 'found'}"] += 1
+        if repr(result) != repr(expected):
+            recorder.differ(f"route {arguments!r}: {result!r:.300} not {expected!r:.300}")
+        recorder.seen["route.values_compared"] += 5
+        return result
+
+    travel.route = route
 
     state = native.state("resource_service")
     validate_kernel = state.validate

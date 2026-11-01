@@ -12,7 +12,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from shadow_kit import Recorder, text, values_in
+from shadow_service import _ServiceTwin, compare_after, controller_stand_in
 
+TRIPS = {"request_toilet", "fetch_water", "collect_meal"}
 OVERLAY = "geometry_overlay_v1"
 ROW_CHECK_EVERY = 500
 
@@ -27,7 +29,9 @@ class _Twin:
             _world=world,
             model_state=table,
             id_counters=dict(world.id_counters),
-            agents={key: SimpleNamespace(**vars(item), id=item.id) for key, item in world.agents.items()},
+            agents={
+                key: SimpleNamespace(**vars(item), id=item.id) for key, item in world.agents.items()
+            },
             scheduled=[],
         )
 
@@ -56,12 +60,46 @@ def prepare(output: str) -> None:
     unsupported = native.Unsupported
     kernel = rules.apply_effect
 
+    def trip(controller: Any, proposal: Any, action: str) -> Any:
+        """The Python step first, on a copy of all that a trip or its refusal writes."""
+        world = controller.world
+        twin = _ServiceTwin(world)
+        pending_before = len(world.event_queue.pending())
+        stand_in = controller_stand_in(controller, twin)
+        error = None
+        expected = None
+        try:
+            expected = stand_in._apply_effect(proposal)
+        except Exception as raised:  # noqa: BLE001 - only compared with what the kernel does
+            error = raised
+        try:
+            result = kernel(controller, proposal)
+        except unsupported as reason:
+            recorder.reasons[f"{action}: {reason}"] += 1
+            raise
+        recorder.seen["kernel_ran"] += 1
+        recorder.seen[f"action.{action}"] += 1
+        recorder.seen[f"action.{action}.{'moves' if result[0] else 'stays'}"] += 1
+        where = f"{action} of {proposal.agent_id} at {world.minute_index}"
+        if error is not None:
+            recorder.differ(f"{where}: the kernel took what Python turned down: {error!r:.300}")
+            return result
+        if text(list(result)) != text(list(expected)):
+            recorder.differ(f"{where}: returned {result!r:.100}, not {expected!r:.100}")
+        for key, agent in world.agents.items():
+            if agent.next_decision_at != twin.__dict__["agents"][key].next_decision_at:
+                recorder.differ(f"{where}: {key}'s next decision")
+        compare_after(recorder, where, world, twin, pending_before)
+        return result
+
     def apply_effect(controller: Any, proposal: Any) -> Any:
         from sheltersim.experiments.phases import propose
 
         world = controller.world
         action = proposal.action.value
         recorder.seen["calls"] += 1
+        if action in TRIPS:
+            return trip(controller, proposal, action)
         twin = _Twin(world)
         pending_before = len(world.event_queue.pending())
         try:

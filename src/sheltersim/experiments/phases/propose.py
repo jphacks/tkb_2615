@@ -96,7 +96,7 @@ class ProposePhase:
         )
 
     def _apply_effect(self, proposal: Any) -> tuple[str | None, int, bool]:
-        """What the decision does to the world: its target, next decision, and whether it committed."""
+        """What the decision does to the world: target, next decision, whether it committed."""
         agent = self.world.agents[proposal.agent_id]
         prior_activity = agent.activity
         agent.next_decision_at = proposal.next_decision_at

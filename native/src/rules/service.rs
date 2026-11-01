@@ -152,14 +152,14 @@ impl<'py> Manager<'py> {
 }
 
 /// `metric_state[name] = metric_state.get(name, 0.0) + 1.0`.
-fn add_one(metrics: &Bound<'_, NamespaceMirror>, name: &str) -> PyResult<()> {
+pub(crate) fn add_one(metrics: &Bound<'_, NamespaceMirror>, name: &str) -> PyResult<()> {
     NamespaceMirror::with_row_tree::<MetricRow, _>(metrics, |row, tree| {
         let count = row.get(name).copied().unwrap_or(0.0) + 1.0;
         map_set(row, tree, name, count)
     })
 }
 
-fn metrics_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, NamespaceMirror>> {
+pub(crate) fn metrics_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, NamespaceMirror>> {
     let metrics = field_mirror_of(world, intern!(world.py(), "metric_state"))?;
     NamespaceMirror::with_row::<MetricRow, _>(&metrics, |_| Ok(()))?;
     Ok(metrics)
@@ -282,7 +282,7 @@ fn service_capacity(world: &Bound<'_, PyAny>, table: &Bound<'_, PyAny>, facility
     Ok(if placed { configured.min(1) } else { configured })
 }
 
-fn active_task_class(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+pub(crate) fn active_task_class(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     static CLASS: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
     Ok(CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> { Ok(py.import("sheltersim.domain.models")?.getattr("ActiveTask")?.unbind()) })?.bind(py))
 }
@@ -375,7 +375,7 @@ fn operation_payload(warehouse_id: &Arc<str>, resource_id: &Arc<str>, reservatio
 }
 
 /// A person's activity and target, on the row and the object.
-fn set_agent<'py>(
+pub(crate) fn set_agent<'py>(
     world: &Bound<'py, PyAny>,
     store: &Bound<'py, EntityStore>,
     agent_id: &Bound<'py, PyAny>,
@@ -879,7 +879,7 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
 // ---- request ------------------------------------------------------------------------------------
 
 /// `record_request_outcome`, on the row and the tree.
-fn append_outcome(
+pub(crate) fn append_outcome(
     py: Python<'_>,
     mirror: &Bound<'_, NamespaceMirror>,
     record: RequestRecord,

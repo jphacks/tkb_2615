@@ -1,12 +1,13 @@
 //! `_apply_effect` (`experiments/phases/propose.py`): what a decision does to the world before it is
-//! recorded, for the decisions that start no trip and ask no service.
+//! recorded.
 //!
 //! One call plans with nothing changed and then writes. What it doesn't take goes to the Python step
 //! before any write, which is also how a bad value gets its error text
 //! (docs/rust-port/lanes/m4-service.md):
-//! - the actions with a trip, a queue or a request: `request_toilet`, `fetch_water`, `collect_meal`,
-//!   `seek_help`, `seek_information`;
+//! - `seek_help` and `seek_information`, which go through `domain/staff.py` and the care receipts;
+//! - a trip that takes no time, which asks the toilet or the water queue at once;
 //! - `sleep` where a temporary room exists, since a bed can then be reserved;
+//! - an independent FIFO (`facility_queues_v1`);
 //! - anything that isn't plainly what the Python step accepts.
 
 use std::sync::{Arc, LazyLock};
@@ -21,14 +22,20 @@ use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{raw_dict_get, NamespaceMirror};
 use crate::rules::movement::{mirror_held, KEY};
-use crate::rules::movement_geometry::{usable, Geo};
+use crate::rules::movement_geometry::{usable, Geo, Pt};
+use crate::rules::service::{add_one, append_outcome, metrics_of};
 use crate::rules::social_dialogue::context_value;
+use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_travel, PlannedTrip, Route, Selected, Trip};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::movement::MovementRow;
+use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
 
 
 const OVERLAY_KEY: &str = "geometry_overlay_v1";
+const QUEUES_KEY: &str = "facility_queues_v1";
+const REJECTED_METRIC: &str = "resource_service_request_rejected_count";
+const TRAVEL_REJECTED_DETAIL: &str = "travel could not be scheduled within current limits";
 /// `interaction_minutes` where the config has none.
 const DEFAULT_INTERACTION_MINUTES: i64 = 5;
 /// The schedule's priority of a person's own social action.
@@ -92,6 +99,123 @@ enum Effect {
     /// `wait`, `rest`, or `sleep` without a bed: the activity to take, with no target.
     Still(Activity),
     Social(Interaction),
+    Toilet,
+    Resource(&'static str, &'static str),
+}
+
+/// What a trip action does, planned.
+struct TripEffect {
+    trip: Option<PlannedTrip>,
+    facility_id: Option<Arc<str>>,
+    /// The request's record: `(outcome, reason, detail)`.
+    outcome: Option<(&'static str, &'static str, Option<&'static str>)>,
+    rejected: bool,
+}
+
+/// A trip within the facility's zone, or to it.
+fn plan_facility_trip<'py>(
+    world: &Bound<'py, PyAny>,
+    writer: &EventWriter<'py>,
+    agent_id: &Arc<str>,
+    route: Route,
+    points: Vec<Pt>,
+    purpose: &'static str,
+    facility_id: &Arc<str>,
+    minute: i64,
+) -> PyResult<Option<PlannedTrip>> {
+    plan_travel(
+        world,
+        writer,
+        Trip {
+            agent_id: agent_id.clone(),
+            route,
+            points,
+            purpose,
+            facility_id: Some(facility_id.clone()),
+            minute,
+            causation_id: None,
+            support_request_id: None,
+            support_staff_id: None,
+        },
+    )
+}
+
+/// The `request_toilet` branch, changing nothing.
+fn plan_toilet<'py>(
+    controller: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    writer: &EventWriter<'py>,
+    agent_object: &Bound<'py, PyAny>,
+    agent_id: &Arc<str>,
+    zone_id: &Arc<str>,
+    minute: i64,
+) -> PyResult<TripEffect> {
+    let graph = rows_of(controller)?;
+    let mut effect = TripEffect { trip: None, facility_id: None, outcome: None, rejected: false };
+    let Selected::Found(facility_id, route) = select_toilet(world, &graph, agent_object)? else {
+        return Ok(effect);
+    };
+    effect.trip = if route.destination == *zone_id {
+        match approach_route(world, agent_id, &facility_id)? {
+            None => None,
+            Some((local, _)) if local.minutes <= 0 => return unsupported("the toilet's queue at once"),
+            Some((local, points)) => plan_facility_trip(world, writer, agent_id, local, points, "toilet_request", &facility_id, minute)?,
+        }
+    } else {
+        plan_facility_trip(world, writer, agent_id, route, Vec::new(), "toilet_request", &facility_id, minute)?
+    };
+    effect.facility_id = Some(facility_id);
+    Ok(effect)
+}
+
+/// The `fetch_water` and `collect_meal` branch, changing nothing.
+fn plan_resource<'py>(
+    controller: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    writer: &EventWriter<'py>,
+    agent_object: &Bound<'py, PyAny>,
+    agent_id: &Arc<str>,
+    zone_id: &Arc<str>,
+    kind: &str,
+    minute: i64,
+) -> PyResult<TripEffect> {
+    let graph = rows_of(controller)?;
+    let mut effect = TripEffect { trip: None, facility_id: None, outcome: None, rejected: false };
+    match select_resource(world, &graph, agent_object, kind)? {
+        Selected::NoFacility => {
+            effect.outcome = Some(("rejected", "no_facility", None));
+            effect.rejected = true;
+        }
+        Selected::NoRoute(facility_id) => {
+            effect.facility_id = Some(facility_id);
+            effect.outcome = Some(("rejected", "no_route", None));
+            effect.rejected = true;
+        }
+        Selected::Found(facility_id, route) => {
+            if route.destination == *zone_id {
+                match approach_route(world, agent_id, &facility_id)? {
+                    None => effect.outcome = Some(("rejected", "room_route_blocked", None)),
+                    Some((local, _)) if local.minutes <= 0 => return unsupported("the service's queue at once"),
+                    Some((local, points)) => {
+                        effect.trip = plan_facility_trip(world, writer, agent_id, local, points, "resource_request", &facility_id, minute)?;
+                        if effect.trip.is_some() {
+                            effect.outcome = Some(("travel_scheduled", "in_room_route_available", None));
+                        }
+                    }
+                }
+            } else {
+                effect.trip = plan_facility_trip(world, writer, agent_id, route, Vec::new(), "resource_request", &facility_id, minute)?;
+                if effect.trip.is_some() {
+                    effect.outcome = Some(("travel_scheduled", "route_available", None));
+                } else {
+                    effect.outcome = Some(("rejected", "travel_rejected", Some(TRAVEL_REJECTED_DETAIL)));
+                    effect.rejected = true;
+                }
+            }
+            effect.facility_id = Some(facility_id);
+        }
+    }
+    Ok(effect)
 }
 
 /// `release_sleep_bed`, not done yet: the reservations to delete from, if the person has one.
@@ -182,7 +306,10 @@ fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny
         "socialize" => Effect::Social(SOCIALIZE),
         "care_family" => Effect::Social(CARE_FAMILY),
         "help_others" => Effect::Social(HELP_OTHERS),
-        _ => return unsupported("an action with a trip or a request"),
+        "request_toilet" => Effect::Toilet,
+        "fetch_water" => Effect::Resource("water_station", "fetch_water"),
+        "collect_meal" => Effect::Resource("meal_distribution", "collect_meal"),
+        _ => return unsupported("an action through the staff service"),
     };
     let world = attribute(controller, intern!(py, "world"))?;
     let agent_object = attribute(proposal, intern!(py, "agent_id"))?;
@@ -277,6 +404,29 @@ fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny
         }
     }
 
+    let mut trip_effect = None;
+    if matches!(effect, Effect::Toilet | Effect::Resource(..)) {
+        if table.contains(QUEUES_KEY)? {
+            return unsupported("an independent FIFO may be here");
+        }
+        let writer = EventWriter::of(&world)?;
+        let minute = exact_int(&attribute(&world, intern!(py, "minute_index"))?)?;
+        let agent_arc: Arc<str> = Arc::from(agent_id);
+        let planned = match &effect {
+            Effect::Toilet => plan_toilet(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, minute)?,
+            Effect::Resource(kind, _) => {
+                if attribute(controller, intern!(py, "resource_service"))?.is_none() {
+                    return unsupported("no resource service");
+                }
+                plan_resource(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, kind, minute)?
+            }
+            _ => return unsupported("not a trip"),
+        };
+        let held = if planned.outcome.is_some() { Some(service_mirror(&world)?) } else { None };
+        let metrics = if planned.rejected { Some(metrics_of(&world)?) } else { None };
+        trip_effect = Some((planned, writer, held, metrics, minute));
+    }
+
     // Write. Nothing below refuses.
     if let Some(reservations) = bed {
         // Through the map's own method: the map may be a tree's.
@@ -304,7 +454,7 @@ fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny
             raw_setattr(&agent, intern!(py, "target_id"), py.None().as_ptr())?;
         }
     }
-    let target = match social {
+    let mut target = match social {
         Some((event, writer, participant_id, _)) => {
             writer.allocate_sequence()?;
             writer.schedule(event)?;
@@ -312,6 +462,34 @@ fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny
         }
         None => py.None().into_bound(py),
     };
+    if let Some((planned, writer, held, metrics, minute)) = trip_effect {
+        let facility_id = planned.facility_id;
+        if let Some(trip) = planned.trip {
+            write_travel(&world, &writer, trip)?;
+            if let Some(facility_id) = &facility_id {
+                target = PyString::new(py, facility_id).into_any();
+            }
+        }
+        if let (Some((outcome, reason, detail)), Some(held), Effect::Resource(_, action)) = (planned.outcome, &held, &effect) {
+            append_outcome(
+                py,
+                held,
+                RequestRecord {
+                    minute,
+                    agent_id: Arc::from(agent_id),
+                    action: Arc::from(*action),
+                    outcome: Arc::from(outcome),
+                    reason: Arc::from(reason),
+                    facility_id,
+                    origin_zone_id: zone_id.clone(),
+                    detail: detail.map(Arc::from),
+                },
+            )?;
+        }
+        if let Some(metrics) = &metrics {
+            add_one(metrics, REJECTED_METRIC)?;
+        }
+    }
     let committed = still.is_some() || !target.is_none();
     PyTuple::new(py, [target, next.into_pyobject(py)?.into_any(), PyBool::new(py, committed).to_owned().into_any()])
 }
