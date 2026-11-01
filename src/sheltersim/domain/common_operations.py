@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from sheltersim import native
 from sheltersim.contracts.operations import (
     MAX_SHARED_OPERATION_HISTORY,
     SHARED_OPERATIONS_KEY,
@@ -21,10 +22,15 @@ from sheltersim.contracts.operations import (
     StaffSupportContinuityReceipt,
 )
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import rust_accepts
 from sheltersim.core.tick_validation import saved_json
 from sheltersim.core.world import WorldState
 from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.events.models import EventStatus
+
+# What accepts a tick's state with no replay of the history, in native/src/state/shared_operations.rs.
+_TICK_VALID = native.state("shared_operations").validate_tick if native.available() else None
 
 _CARE_TRANSITIONS = {
     None: {"requested"},
@@ -53,6 +59,15 @@ def validate_shared_operations_state(
 ) -> None:
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
     if state is None:
+        return
+    if (
+        not validate_event_history
+        and history_memo is None
+        and _TICK_VALID is not None
+        and rust_accepts(world, SHARED_OPERATIONS_KEY, _TICK_VALID)
+    ):
+        if tick_memo is not None:
+            tick_memo.operations_passed_in_rust()
         return
     if tick_memo is not None:
         history = state.get("history") if isinstance(state, dict) else None
@@ -264,6 +279,7 @@ def _staff_operations_json(world: WorldState) -> bytes | None:
     return saved_json(operations.get("history", ()) if isinstance(operations, dict) else ())
 
 
+@kernel_first("common_operations", "record_shared_operation")
 def record_shared_operation(world: WorldState, record: OperationHistoryRecord) -> None:
     """Append a receipt only after its matching state-changing event is applied."""
     state = world.model_state.get(SHARED_OPERATIONS_KEY)

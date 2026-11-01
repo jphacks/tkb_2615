@@ -239,6 +239,10 @@ class TickValidationMemo:
         )
         return self._operations_unchanged
 
+    def operations_passed_in_rust(self) -> None:
+        """The kernel accepted the state: what's remembered stays what last passed here."""
+        self._operations_unchanged = True
+
     def _remember_operations(self, state: dict[str, Any]) -> None:
         if self._operations_unchanged:
             return
