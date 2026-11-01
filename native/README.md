@@ -47,10 +47,16 @@ Checkpoint document) and times them.
   or from Rust, so a check that read a namespace need not read it again
   (`state_mirror.namespace_stamp`, `field_stamp`; `core/tick_validation.py`).
 - `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
-  `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`. The
-  rules of the first three and `model_configs` are Python's (`docs/rust-port/lanes/m6-population.md`).
+  `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`
+  (`docs/rust-port/lanes/m6-population.md`).
 - `src/state/facility_queues.rs`: the typed row of `facility_queues_v1`. The rules read it and write
   through the tree (`docs/rust-port/lanes/m6-overlay.md`).
+- `src/rules/population.rs`, `src/rules/population_lifecycle.rs`: the rules of `domain/population.py`
+  and `domain/population_lifecycle.py`, each behind `kernel_first`. A kernel plans, refuses before
+  its first write what the Python rule raises on, then writes with the rule's operations on the
+  tracked containers, which forward them to the rows. `rules/population.rs` also reads what admission
+  needs of `temporary_spaces.py` and `geometry_overlay.py`
+  (`docs/rust-port/lanes/m6-population-rules.md`).
 - `src/core/row.rs`: typed rows. `state_row!` writes `from_py`, `to_py`, `write_json`, the handling
   of forwarded writes and mirrored setters from a record's list of fields, and any `Field` is a
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
@@ -133,10 +139,13 @@ each OS, because both call the same libm.
   was. `state/effect_program.rs` is the row of `effect_program_v1`.
 
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
-  a Rust function (`social_interaction`, `agent_travel_complete`) runs it when the registered handler
+  a Rust function (`social_interaction`, `agent_travel_complete`, `toilet_service_complete`,
+  `resource_service_complete`, `support_request_timeout`, `staff_support_complete`) runs it when the registered handler
   is that class with its `apply` as defined; anything else, and any refused event, calls
   `controller._dispatch_one_event`. Unsupported only before the first change. `rules/travel_completion.rs`
-  is the walk's handler; what a walk leads to is still `handler._after_arrival` (M4, the services). No borrow is held
+  is the walk's handler, with `_after_arrival`'s kernel, and `rules/toilet.rs`, `rules/support.rs` and
+  `rules/care_receipts.rs` the toilet's service, the support requests and the care receipts
+  (`docs/rust-port/lanes/m6-handlers.md`). No borrow is held
   across a Python call. `use_python_entries(True)` makes it call each rule through its Python entry,
   for `benchmarks/rule_shadow`, and `stats()` says what ran and why anything was refused.
 - `rules/decisions.rs`: `propose_rows(controller, view, rng)`, `observed_row(controller, view,

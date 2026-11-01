@@ -12,10 +12,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from shadow_handlers import seek_shadow
 from shadow_kit import Recorder, text, values_in
 from shadow_service import _ServiceTwin, compare_after, controller_stand_in
 
 TRIPS = {"request_toilet", "fetch_water", "collect_meal"}
+SEEKS = {"seek_help", "seek_information"}
 OVERLAY = "geometry_overlay_v1"
 ROW_CHECK_EVERY = 500
 
@@ -60,6 +62,8 @@ def prepare(output: str) -> None:
     recorder = Recorder(output, "proposals")
     unsupported = native.Unsupported
     kernel = rules.apply_effect
+    # shadow_handlers.py's comparison: it sorts before this file, so it has prepared.
+    seek = seek_shadow(kernel)
 
     def trip(controller: Any, proposal: Any, action: str) -> Any:
         """The Python step first, on a copy of all that a trip or its refusal writes."""
@@ -111,6 +115,9 @@ def prepare(output: str) -> None:
         )
         if action in TRIPS or walks_to_bed:
             return trip(controller, proposal, action)
+        if action in SEEKS:
+            recorder.seen[f"action.{action}"] += 1
+            return seek(controller, proposal)
         twin = _Twin(world)
         pending_before = len(world.event_queue.pending())
         try:

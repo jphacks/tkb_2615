@@ -23,6 +23,7 @@ from sheltersim.contracts.operations import (
 )
 from sheltersim.contracts.population import population_context_people
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.common_operations import record_shared_operation
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
@@ -326,6 +327,7 @@ def make_staff_support_continuity_record(
     )
 
 
+@kernel_first("care_receipts", "append_transition")
 def append_applied_care_transition(
     world: WorldState,
     *,
@@ -337,10 +339,10 @@ def append_applied_care_transition(
     staff_id: str | None = None,
     causation_id: str | None = None,
     source_ids: tuple[str, ...] = (),
-) -> CareTransitionReceipt | None:
+) -> None:
     """Append and project a care transition after its backing operation has applied."""
     if SHARED_OPERATIONS_KEY not in world.model_state:
-        return None
+        return
     event_record, receipt = make_care_transition_record(
         world,
         request_id=request_id,
@@ -354,7 +356,6 @@ def append_applied_care_transition(
     )
     world.event_log.append(event_record)
     record_shared_operation(world, receipt)
-    return receipt
 
 
 @lru_cache(maxsize=1)

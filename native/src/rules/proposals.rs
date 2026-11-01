@@ -4,7 +4,7 @@
 //! One call plans with nothing changed and then writes. What it doesn't take goes to the Python step
 //! before any write, which is also how a bad value gets its error text
 //! (docs/rust-port/lanes/m4-service.md):
-//! - `seek_help` and `seek_information`, which go through `domain/staff.py` and the care receipts;
+//! - a request of a Run's last minute, which `StaffService.request` closes at once;
 //! - a trip that takes no time, which asks the toilet or the water queue at once;
 //! - a person at a facility with an independent FIFO, who queues at once;
 //! - anything that isn't plainly what the Python step accepts.
@@ -12,26 +12,31 @@
 use std::sync::{Arc, LazyLock};
 
 use indexmap::IndexMap;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyString, PyTuple};
 
-use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::raw_dict_get;
+use crate::rules::care_receipts::{plan_transition, source_ids_of, write_transition, Transition};
 use crate::rules::facility_queues::has_independent;
 use crate::rules::movement::KEY;
 use crate::rules::movement_geometry::Pt;
 use crate::rules::overlay;
 use crate::rules::service::{add_one, append_outcome, metrics_of};
 use crate::rules::social_dialogue::context_value;
+use crate::rules::support::{add_rejected, household_of, plan_request, support_kind_of, write_request, PlannedRequest};
 use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_travel, PlannedTrip, Route, Selected, Trip};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
 
 
+const SHARED_OPERATIONS: &str = "shared_operations_v1";
+const INFORMATION: &str = "information_spread_v1";
 const OVERLAY_KEY: &str = "geometry_overlay_v1";
 const REJECTED_METRIC: &str = "resource_service_request_rejected_count";
 const TRAVEL_REJECTED_DETAIL: &str = "travel could not be scheduled within current limits";
@@ -327,6 +332,129 @@ fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: 
     Ok(())
 }
 
+/// The `seek_help` and `seek_information` branch of `_apply_effect`. What the LLM's hooks and the
+/// information policy do goes through their Python, where the step calls them, with no borrow held.
+fn apply_seek<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>, seek_help: bool) -> PyResult<Bound<'py, PyTuple>> {
+    let py = controller.py();
+    let world = attribute(controller, intern!(py, "world"))?;
+    let agent_object = attribute(proposal, intern!(py, "agent_id"))?;
+    let agent_id = exact_str(&agent_object)?;
+    let next = exact_int(&attribute(proposal, intern!(py, "next_decision_at"))?)?;
+    let store = entities_of(&world)?;
+    let table_object = attribute(&world, intern!(py, "model_state"))?;
+    let table = exact_dict(&table_object)?;
+    let agents = attribute(&world, intern!(py, "agents"))?;
+    let Some(agent) = raw_dict_get(&agents, &agent_object)? else {
+        return unsupported("no such agent");
+    };
+    let service_object = attribute(controller, intern!(py, "staff_service"))?;
+    let minute = exact_int(&attribute(&world, intern!(py, "minute_index"))?)?;
+    let writer = EventWriter::of(&world)?;
+    let metrics = metrics_of(&world)?;
+    let bed = held_bed(table, &agent_object)?;
+    let planned = plan_request(&service_object, &world, &writer, agent_id, minute)?;
+    let mut care = None;
+    let mut pressure_due = false;
+    if let PlannedRequest::Opens { request_id, event, .. } = &planned {
+        if seek_help && !namespace_is_absent(&world, intern!(py, SHARED_OPERATIONS))? {
+            let transition = Transition {
+                request_id: request_id.clone(),
+                agent_id: Arc::from(agent_id),
+                household_id: household_of(&world, agent_id)?,
+                support_kind: support_kind_of(&world, &writer, agent_id)?,
+                status: "requested",
+                staff_id: None,
+                causation_id: None,
+                source_ids: source_ids_of(&world, agent_id)?,
+                outcome: None,
+            };
+            care = Some(plan_transition(&world, &writer, transition, event.sequence + 1)?);
+        } else if seek_help && table.contains(intern!(py, SHARED_OPERATIONS))? {
+            return unsupported("the namespace is None");
+        }
+        let policy = attribute(controller, intern!(py, "information_policy"))?;
+        if !policy.is_none() {
+            pressure_due = !seek_help || query_pressure_is_high(table, &policy, agent_id)?;
+        }
+    }
+
+    // Write. Nothing below refuses.
+    if let Some(reservations) = bed {
+        reservations.del_item(&agent_object)?;
+    }
+    EntityStore::with_rows(&store, |rows| {
+        let Some(row) = rows.agents.get_mut(agent_id) else {
+            return unsupported("the rows have no such agent");
+        };
+        row.next_decision_at = next;
+        Ok(())
+    })?;
+    raw_setattr(&agent, intern!(py, "next_decision_at"), next.into_pyobject(py)?.as_ptr())?;
+    let PlannedRequest::Opens { request_id, timeout_minute, event } = planned else {
+        add_rejected(&metrics)?;
+        return PyTuple::new(py, [py.None().into_bound(py), next.into_pyobject(py)?.into_any(), PyBool::new(py, false).to_owned().into_any()]);
+    };
+    write_request(&world, &writer, agent_id, minute, &request_id, timeout_minute, event)?;
+    if let Some(care) = care {
+        write_transition(&world, &writer, care)?;
+    }
+    let request_text = PyString::new(py, &request_id);
+    let after = (|| -> PyResult<()> {
+        if pressure_due {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item(intern!(py, "agent_id"), &agent_object)?;
+            kwargs.set_item(intern!(py, "request_id"), &request_text)?;
+            kwargs.set_item(intern!(py, "minute"), minute)?;
+            let state = table.get_item(intern!(py, INFORMATION))?.ok_or_else(|| PyRuntimeError::new_err("no information state"))?;
+            attribute(controller, intern!(py, "information_policy"))?.call_method(intern!(py, "record_support_request"), (state,), Some(&kwargs))?;
+        }
+        if !attribute(controller, intern!(py, "llm_router"))?.is_none() {
+            controller.call_method1(intern!(py, "_prioritize_support_request"), (&request_text, proposal))?;
+        }
+        let social = attribute(controller, intern!(py, "social_policy"))?;
+        if !social.is_none() {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item(intern!(py, "agent_id"), &agent_object)?;
+            kwargs.set_item(intern!(py, "request_id"), &request_text)?;
+            social.call_method(intern!(py, "consider_support_request"), (&world,), Some(&kwargs))?;
+        }
+        Ok(())
+    })();
+    match after {
+        Ok(()) => {}
+        // `except ValueError` of the step, around all of the above.
+        Err(error) if error.is_instance_of::<PyValueError>(py) => add_rejected(&metrics_of(&world)?)?,
+        Err(error) => return Err(error),
+    }
+    // The person now seeks help: their activity has changed unless they were already, which the
+    // service does not let them.
+    let next_now = EntityStore::with_rows(&entities_of(&world)?, |rows| Ok(rows.agents.get(agent_id).map(|row| row.next_decision_at)))?;
+    let next_now = next_now.ok_or_else(|| PyRuntimeError::new_err("the person has gone"))?;
+    PyTuple::new(py, [request_text.into_any(), next_now.into_pyobject(py)?.into_any(), PyBool::new(py, true).to_owned().into_any()])
+}
+
+/// `model_state[INFORMATION]["query_pressure"][agent] >= policy.config.query_threshold`.
+fn query_pressure_is_high(table: &Bound<'_, PyDict>, policy: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<bool> {
+    let py = table.py();
+    let threshold = exact_float(&attribute(&attribute(policy, intern!(py, "config"))?, intern!(py, "query_threshold"))?)?;
+    let Some(state) = table.get_item(intern!(py, INFORMATION))? else {
+        return unsupported("no information state");
+    };
+    let Some(state) = as_readable_dict(&state) else {
+        return unsupported("the information state is for the Python rule");
+    };
+    let Some(pressures) = state.get_item(intern!(py, "query_pressure"))? else {
+        return unsupported("no query pressure");
+    };
+    let Some(pressures) = as_readable_dict(&pressures) else {
+        return unsupported("the query pressure is for the Python rule");
+    };
+    let Some(pressure) = pressures.get_item(agent_id)? else {
+        return unsupported("the person has no query pressure");
+    };
+    Ok(exact_float(&pressure)? >= threshold)
+}
+
 /// `_apply_effect`: the target, the next decision, and whether the decision committed.
 #[pyfunction]
 fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
@@ -344,7 +472,8 @@ fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny
         "request_toilet" => Effect::Toilet,
         "fetch_water" => Effect::Resource("water_station", "fetch_water"),
         "collect_meal" => Effect::Resource("meal_distribution", "collect_meal"),
-        _ => return unsupported("an action through the staff service"),
+        "seek_help" | "seek_information" => return apply_seek(controller, proposal, action == "seek_help"),
+        _ => return unsupported("an action unknown here"),
     };
     let world = attribute(controller, intern!(py, "world"))?;
     let agent_object = attribute(proposal, intern!(py, "agent_id"))?;
