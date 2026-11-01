@@ -30,6 +30,7 @@ use crate::state::events::{EventRow, EventStatus};
 
 /// What the indexes and a Rust rule read of one record. Holds no Python handle.
 struct Entry {
+    event_id: Arc<str>,
     /// The bytes until Python asks for them; then they are in `Handles::bytes`.
     written: Option<Box<[u8]>>,
     event_type: u32,
@@ -79,7 +80,7 @@ pub struct EventStore {
     unencoded: usize,
     type_names: Vec<String>,
     type_ids: HashMap<String, u32>,
-    by_id: HashMap<String, usize>,
+    by_id: HashMap<Arc<str>, usize>,
     sequences: HashSet<i64>,
     max_sequence: i64,
     by_minute: BTreeMap<i64, Vec<usize>>,
@@ -179,7 +180,7 @@ impl EventStore {
 
     /// 0, or 1 for a realized ID, 2 for a realized sequence.
     fn add(&mut self, fields: Fields, handles: Handles, written: Option<Box<[u8]>>) -> u8 {
-        if self.by_id.contains_key(&fields.event_id) {
+        if self.by_id.contains_key(fields.event_id.as_str()) {
             return 1;
         }
         if self.sequences.contains(&fields.sequence) {
@@ -245,14 +246,16 @@ impl EventStore {
         if written.is_none() && handles.bytes.is_none() {
             self.unencoded += 1;
         }
+        let event_id: Arc<str> = Arc::from(fields.event_id);
         self.entries.push(Entry {
+            event_id: event_id.clone(),
             written,
             event_type: type_id,
             applied: fields.applied,
             minute: fields.minute,
         });
         self.handles.push(handles);
-        self.by_id.insert(fields.event_id, index);
+        self.by_id.insert(event_id, index);
         self.sequences.insert(fields.sequence);
         self.max_sequence = self.max_sequence.max(fields.sequence);
         self.by_minute.entry(fields.minute).or_default().push(index);
@@ -304,7 +307,7 @@ impl EventStore {
     /// Append one EventLogRecord: 0, or 1 for a realized ID, 2 for a realized sequence.
     fn append(&mut self, py: Python<'_>, record: &Bound<'_, PyAny>) -> PyResult<u8> {
         let fields = fields_of_record(record)?;
-        if self.by_id.contains_key(&fields.event_id) {
+        if self.by_id.contains_key(fields.event_id.as_str()) {
             return Ok(1);
         }
         if self.sequences.contains(&fields.sequence) {
@@ -519,9 +522,13 @@ impl EventStore {
     }
 
     fn event_ids<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut ids: Vec<(&String, &usize)> = self.by_id.iter().collect();
-        ids.sort_unstable_by_key(|(_, index)| **index);
-        PyList::new(py, ids.into_iter().map(|(id, _)| id.as_str()))
+        PyList::new(py, self.entries.iter().map(|entry| &*entry.event_id))
+    }
+
+    /// The event IDs of `at_minute(minute)`, making no record object.
+    fn event_ids_at_minute<'py>(&self, py: Python<'py>, minute: i64) -> PyResult<Bound<'py, PyList>> {
+        let indices = self.by_minute.get(&minute).map_or(&[][..], Vec::as_slice);
+        PyList::new(py, indices.iter().map(|index| &*self.entries[*index].event_id))
     }
 
     fn recent(&mut self, py: Python<'_>, limit: usize) -> PyResult<Vec<Py<PyAny>>> {
@@ -604,6 +611,7 @@ impl EventStore {
                 .entries
                 .iter()
                 .map(|entry| Entry {
+                    event_id: entry.event_id.clone(),
                     written: entry.written.clone(),
                     event_type: entry.event_type,
                     applied: entry.applied,
@@ -654,8 +662,37 @@ impl EventStore {
     }
 }
 
+/// How the log holds an event a rule asks about (`EventStore::applied_outcome`).
+pub(crate) enum AppliedOutcome {
+    /// Not realized, or realized but not applied.
+    No,
+    /// Applied, and the record holds this very object.
+    ThisEvent,
+    /// Applied, in a record that has no object yet or holds another one of the same ID.
+    AnotherObject,
+}
+
 /// What a Rust rule does with the log: no Python record is made or read.
 impl EventStore {
+    /// `record = log.find(event_id)`, `record.status is APPLIED` and `record.event is event`.
+    pub(crate) fn applied_outcome(&self, event_id: &str, event: &Bound<'_, PyAny>) -> PyResult<AppliedOutcome> {
+        let py = event.py();
+        let Some(index) = self.by_id.get(event_id).copied() else {
+            return Ok(AppliedOutcome::No);
+        };
+        if !self.entries[index].applied {
+            return Ok(AppliedOutcome::No);
+        }
+        let Some(record) = &self.handles[index].record else {
+            return Ok(AppliedOutcome::AnotherObject);
+        };
+        Ok(if record.bind(py).getattr(intern!(py, "event"))?.is(event) {
+            AppliedOutcome::ThisEvent
+        } else {
+            AppliedOutcome::AnotherObject
+        })
+    }
+
     /// `EventLog.append` of an outcome of `event`: 0, or 1 for a realized ID, 2 for a
     /// realized sequence, with nothing changed. `crate::state::events::EventWriter::record`
     /// raises the errors `EventLog.append` raises.

@@ -365,6 +365,10 @@ class _PythonEventLog:
     def at_minute(self, minute: int) -> tuple[EventLogRecord, ...]:
         return tuple(self._by_minute.get(minute, ()))
 
+    def event_ids_at_minute(self, minute: int) -> list[str]:
+        """The event IDs of at_minute(minute)."""
+        return [record.event.event_id for record in self._by_minute.get(minute, ())]
+
     def event_types(self) -> frozenset[str]:
         """The event types of the realized records."""
         return frozenset(self._by_type)
@@ -632,6 +636,10 @@ class _NativeEventLog:
 
     def at_minute(self, minute: int) -> tuple[EventLogRecord, ...]:
         return tuple(self._store.at_minute(minute))
+
+    def event_ids_at_minute(self, minute: int) -> list[str]:
+        """The event IDs of at_minute(minute), making no record object."""
+        return self._store.event_ids_at_minute(minute)
 
     def event_types(self) -> frozenset[str]:
         """The event types of the realized records."""

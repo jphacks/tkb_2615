@@ -80,7 +80,7 @@ impl EventStatus {
 }
 
 /// `models._STABLE_ID`.
-fn is_stable_id(value: &str) -> bool {
+pub(crate) fn is_stable_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 64
@@ -830,6 +830,11 @@ fn duplicate_error(py: Python<'_>, message: String) -> PyErr {
     }
 }
 
+/// The largest event counter a rule starts from, so that adding its few sequences to it cannot leave
+/// an i64, as Python's int can. A rule's planning stage adds to it without a check. Beyond this is
+/// Python's, whose int goes on.
+const MAX_RULE_COUNTER: i64 = 1 << 62;
+
 /// A world's queue, log and event counter, for one step of a rule. Holds no borrow of them, and
 /// asks for each after any Python callback as a rule asks for `core_of`: a rule that calls back into
 /// Python makes a new writer.
@@ -862,8 +867,9 @@ impl<'py> EventWriter<'py> {
             .downcast_into_exact::<PyDict>()
             .map_err(|_| Unsupported::new_err("id_counters is not a plain dict"))?;
         if let Some(counter) = counters.get_item(intern!(py, "event"))? {
-            if counter.downcast_exact::<PyInt>().map_or(true, |number| number.extract::<i64>().is_err()) {
-                return Err(Unsupported::new_err("the event counter is not an int"));
+            match counter.downcast_exact::<PyInt>().map(|number| number.extract::<i64>()) {
+                Ok(Ok(number)) if number <= MAX_RULE_COUNTER => {}
+                _ => return Err(Unsupported::new_err("the event counter is not an int a rule can add to")),
             }
         }
         let duration = world
@@ -900,6 +906,9 @@ impl<'py> EventWriter<'py> {
     /// `WorldState.schedule_event`, with its errors.
     pub(crate) fn schedule(&self, row: EventRow) -> PyResult<()> {
         let py = self.counters.py();
+        let Some(after) = row.sequence.checked_add(1) else {
+            return Err(Unsupported::new_err("the counter after this sequence does not fit an i64"));
+        };
         if row.due_minute >= self.duration {
             return Err(PyValueError::new_err(format!("event '{}' is outside the scenario", row.event_id)));
         }
@@ -918,11 +927,11 @@ impl<'py> EventWriter<'py> {
             2 => return Err(duplicate_error(py, format!("duplicate event sequence {sequence}"))),
             _ => {}
         }
-        let next = self.counter()?.max(sequence + 1);
+        let next = self.counter()?.max(after);
         self.counters.set_item(intern!(py, "event"), next)
     }
 
-    /// `EventLog.append` of an outcome, with its errors. Python makes the record when it reads it.
+    /// `EventLogRecord(...)` and `EventLog.append` of an outcome, with their errors. Python makes the record when it reads it.
     pub(crate) fn record(
         &self,
         event: &EventRow,
@@ -931,6 +940,10 @@ impl<'py> EventWriter<'py> {
         detail: Option<&str>,
     ) -> PyResult<()> {
         let py = self.counters.py();
+        // EventLogRecord refuses this before EventLog.append sees it, and the log could not restore it.
+        if realized_minute < 0 {
+            return Err(PyValueError::new_err("realized_minute must be a non-negative integer"));
+        }
         match self.log.borrow_mut().append_row(event, realized_minute, status, detail)? {
             1 => Err(duplicate_error(py, format!("event '{}' already realized", event.event_id))),
             2 => Err(duplicate_error(py, format!("event sequence {} already realized", event.sequence))),

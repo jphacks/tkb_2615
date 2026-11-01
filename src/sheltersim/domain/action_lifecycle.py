@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from collections.abc import Callable, Mapping
+from functools import wraps
+from typing import Any, TypeVar
 
+from sheltersim import native
 from sheltersim.contracts.operations import ActionLifecycleReceipt
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import AgentState
@@ -35,6 +38,53 @@ _INTERRUPTED_ACTIONS = {
     "resource_service_cancel": {"fetch_water", "collect_meal"},
     "support_request_timeout": {"seek_help", "seek_information"},
 }
+
+
+Rule = TypeVar("Rule", bound=Callable[..., Any])
+
+
+def _kernel_first(name: str) -> Callable[[Rule], Rule]:
+    """Try native/src/rules/action_lifecycle.rs's kernel on a store of open actions.
+
+    A kernel says Unsupported before it changes anything. The Python rule then runs on the store's
+    plain dict, which holds the actions from then on. A plain dict given by a caller stays with the
+    Python rule. `__wrapped__` is the Python rule. Like core.kernels.kernel_first, but for rules
+    with a store to hand over.
+    """
+
+    def decorate(python_rule: Rule) -> Rule:
+        if not native.available():
+            return python_rule
+        rules = native.rules("action_lifecycle")
+        kernel = getattr(rules, name)
+        store = rules.ActiveActions
+        unsupported = native.Unsupported
+
+        @wraps(python_rule)
+        def run(*arguments: Any, active_actions: Any, **options: Any) -> Any:
+            if type(active_actions) is not store:
+                return python_rule(*arguments, active_actions=active_actions, **options)
+            try:
+                return kernel(*arguments, active_actions=active_actions, **options)
+            except unsupported:
+                plain = active_actions.as_plain()
+                return python_rule(*arguments, active_actions=plain, **options)
+
+        return run  # type: ignore[return-value]
+
+    return decorate
+
+
+def active_action_store(world: WorldState) -> Any:
+    """What a controller keeps of the open actions: Rust rows, or a dict without the kernels."""
+    index = active_action_index(world)
+    if not native.available():
+        return index
+    # A restored record's needs are a frozen payload's.
+    for record in index.values():
+        if isinstance(record["start_needs"], Mapping):
+            record["start_needs"] = dict(record["start_needs"])
+    return native.rules("action_lifecycle").ActiveActions(index)
 
 
 def active_action_index(world: WorldState) -> dict[str, dict[str, Any]]:
@@ -77,6 +127,7 @@ def active_action_index(world: WorldState) -> dict[str, dict[str, Any]]:
     return active
 
 
+@_kernel_first("record_action_proposal")
 def record_action_proposal(
     world: WorldState,
     proposal: Any,
@@ -144,6 +195,7 @@ def record_action_proposal(
     active_actions[agent_id] = record
 
 
+@_kernel_first("record_applied_action_completion")
 def record_applied_action_completion(
     world: WorldState,
     event: ScheduledEvent,
@@ -207,6 +259,7 @@ def record_applied_action_completion(
     active_actions.pop(agent_id, None)
 
 
+@_kernel_first("record_applied_population_exit")
 def record_applied_population_exit(
     world: WorldState,
     event: ScheduledEvent,
@@ -262,6 +315,7 @@ def record_applied_population_exit(
         )
 
 
+@_kernel_first("finalize_active_actions")
 def finalize_active_actions(
     world: WorldState,
     minute: int,

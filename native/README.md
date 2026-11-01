@@ -192,6 +192,13 @@ each OS, because both call the same libm.
   gets a `ScheduledEvent` when it first reads the event. An order outside i64 moves that queue to
   Python (`_LargeOrderEventQueue`), and `EventWriter::of` then says `Unsupported`.
 
+- `state.agent_dynamics.ROW` and `rules.agent_dynamics`: Rust owns `agent_dynamics_v1` and every
+  writer but `remove_agent` and `population_lifecycle.py`, which forward one record each
+  (`docs/rust-port/lanes/f-action-lifecycle.md`). `rules.action_lifecycle`: the lifecycle receipts.
+  `ActiveActions` holds a controller's open actions as rows, gives a Python rule a plain dict
+  (`as_plain`) and reads it back when it fits; it is not saved. A receipt is an `EventRow` appended
+  through `EventWriter`, with no Python object until Python reads the record.
+
 - `EventStore` (stage B1): the realized EventLog behind `sheltersim.events.queue.EventLog`.
   Each record is its canonical JSON bytes, its Python object, or both; the indexes
   (ID, sequence, minute, type, provenance keys, care requests, support kinds, facility
