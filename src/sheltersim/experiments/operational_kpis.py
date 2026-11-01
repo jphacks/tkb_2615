@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.metrics import MetricSnapshot
 
@@ -42,6 +43,7 @@ OPERATIONAL_KPI_FIELDS = (
 )
 
 
+@kernel_first("metrics", "kpi_values")
 def operational_kpi_values(world: WorldState, snapshot: MetricSnapshot) -> dict[str, Any]:
     """Return detached aggregate measurements without changing simulation state."""
     if world.schema_version != 6 or "resource_service_v1" not in world.model_state:

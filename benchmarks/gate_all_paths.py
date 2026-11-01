@@ -34,6 +34,8 @@ TICK_SIDE = (
     "sheltersim/domain/",
     "sheltersim/events/",
     "sheltersim/policies/",
+    "sheltersim/experiments/metrics.py",
+    "sheltersim/experiments/operational_kpis.py",
     "sheltersim/experiments/runner.py",
     "sheltersim/experiments/phases/",
 )

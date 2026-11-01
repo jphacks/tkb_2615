@@ -56,6 +56,83 @@ def _support_wait_snapshot(
     return details, no_qualified
 
 
+@kernel_first("metrics", "snapshot_fields")
+def _snapshot_fields(
+    world: WorldState, unsettled: list[Any], sample_minute: int
+) -> tuple[Any, ...]:
+    """The fields of the minute's MetricSnapshot, in the order of the dataclass."""
+    toilets = [
+        facility for facility in world.facilities.values() if "toilet" in facility.kind.casefold()
+    ]
+    queued_ids = sorted(agent_id for facility in toilets for agent_id in facility.queue_agent_ids)
+    active_ids = sorted(agent_id for facility in toilets for agent_id in facility.active_agent_ids)
+    stresses = [agent.stress for agent in world.agents.values()]
+    high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
+    active_support = [
+        request
+        for request in unsettled
+        if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
+    ]
+    active_support_agent_ids = sorted(request.agent_id for request in active_support)
+    staff_task_ids = sorted(
+        task_id for staff in world.staff.values() for task_id in staff.work_queue
+    )
+    busy_staff_ids = sorted(
+        staff.id
+        for staff in world.staff.values()
+        if any(
+            world.active_tasks[task_id].start_minute
+            <= sample_minute
+            < world.active_tasks[task_id].due_minute
+            for task_id in staff.work_queue
+        )
+    )
+    support_wait_details, no_qualified_support_ids = _support_wait_snapshot(
+        world, active_support, sample_minute
+    )
+    wait_count = world.metric_state.get("toilet_wait_count", 0.0)
+    wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
+    wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
+    source_events = sorted(world.event_log.event_ids_at_minute(sample_minute))
+    source_ids = {
+        "toilet_queue_agents": queued_ids,
+        "toilet_active_agents": active_ids,
+        "high_stress_agents": high_stress_ids,
+        "staff_tasks": staff_task_ids,
+        "busy_staff": busy_staff_ids,
+        "unresolved_support_agents": active_support_agent_ids,
+        "support_requests_without_qualified_staff": no_qualified_support_ids,
+        "support_wait_by_agent": support_wait_details,
+        "support_wait_exposure_semantics": (
+            "per-minute observed request exposure by blocker; reason totals may overlap "
+            "and are not exclusive causal attribution"
+        ),
+        "realized_events": source_events,
+    }
+    return (
+        sample_minute,
+        len(queued_ids),
+        len(active_ids),
+        sum(facility.working_units for facility in toilets),
+        wait_count,
+        wait_total,
+        wait_total / wait_count if wait_count else 0.0,
+        wait_max,
+        sum(stresses) / len(stresses) if stresses else 0.0,
+        len(high_stress_ids),
+        len(staff_task_ids),
+        len(busy_staff_ids),
+        len(busy_staff_ids) / len(world.staff) if world.staff else 0.0,
+        len(active_support_agent_ids),
+        _source_ids_json(source_ids),
+        len(no_qualified_support_ids),
+        world.metric_state.get("support_no_qualified_worker_request_minutes", 0.0),
+        world.metric_state.get("support_fairness_promoted_assignment_count", 0.0),
+        world.metric_state.get("support_wait_staff_busy_request_minutes", 0.0),
+        world.metric_state.get("support_wait_staff_off_shift_request_minutes", 0.0),
+    )
+
+
 @dataclass(frozen=True)
 class MetricSnapshot:
     """Aggregated metrics captured without mutating simulation state."""
@@ -87,89 +164,8 @@ class MetricSnapshot:
         sample_minute = world.minute_index if minute is None else minute
         if sample_minute != world.minute_index:
             raise ValueError("metric minute must match WorldState")
-        toilets = [
-            facility
-            for facility in world.facilities.values()
-            if "toilet" in facility.kind.casefold()
-        ]
-        queued_ids = sorted(
-            agent_id for facility in toilets for agent_id in facility.queue_agent_ids
-        )
-        active_ids = sorted(
-            agent_id for facility in toilets for agent_id in facility.active_agent_ids
-        )
-        stresses = [agent.stress for agent in world.agents.values()]
-        high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
-        active_support = [
-            request
-            for request in world.unsettled_support_requests()
-            if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
-        ]
-        active_support_agent_ids = sorted(request.agent_id for request in active_support)
-        staff_task_ids = sorted(
-            task_id for staff in world.staff.values() for task_id in staff.work_queue
-        )
-        busy_staff_ids = sorted(
-            staff.id
-            for staff in world.staff.values()
-            if any(
-                world.active_tasks[task_id].start_minute
-                <= sample_minute
-                < world.active_tasks[task_id].due_minute
-                for task_id in staff.work_queue
-            )
-        )
-        support_wait_details, no_qualified_support_ids = _support_wait_snapshot(
-            world, active_support, sample_minute
-        )
-        wait_count = world.metric_state.get("toilet_wait_count", 0.0)
-        wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
-        wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
-        source_events = sorted(world.event_log.event_ids_at_minute(sample_minute))
-        source_ids = {
-            "toilet_queue_agents": queued_ids,
-            "toilet_active_agents": active_ids,
-            "high_stress_agents": high_stress_ids,
-            "staff_tasks": staff_task_ids,
-            "busy_staff": busy_staff_ids,
-            "unresolved_support_agents": active_support_agent_ids,
-            "support_requests_without_qualified_staff": no_qualified_support_ids,
-            "support_wait_by_agent": support_wait_details,
-            "support_wait_exposure_semantics": (
-                "per-minute observed request exposure by blocker; reason totals may overlap "
-                "and are not exclusive causal attribution"
-            ),
-            "realized_events": source_events,
-        }
         return cls(
-            minute_index=sample_minute,
-            toilet_queue_length=len(queued_ids),
-            toilet_active_users=len(active_ids),
-            toilet_working_units=sum(facility.working_units for facility in toilets),
-            toilet_wait_count=wait_count,
-            toilet_wait_total_minutes=wait_total,
-            toilet_wait_mean_minutes=wait_total / wait_count if wait_count else 0.0,
-            toilet_wait_max_minutes=wait_max,
-            stress_mean=sum(stresses) / len(stresses) if stresses else 0.0,
-            stress_high_count=len(high_stress_ids),
-            staff_assigned_task_count=len(staff_task_ids),
-            staff_busy_count=len(busy_staff_ids),
-            staff_load_ratio=len(busy_staff_ids) / len(world.staff) if world.staff else 0.0,
-            unresolved_support_request_count=len(active_support_agent_ids),
-            support_no_qualified_worker_count=len(no_qualified_support_ids),
-            support_no_qualified_worker_request_minutes=world.metric_state.get(
-                "support_no_qualified_worker_request_minutes", 0.0
-            ),
-            support_fairness_promoted_assignment_count=world.metric_state.get(
-                "support_fairness_promoted_assignment_count", 0.0
-            ),
-            support_wait_staff_busy_request_minutes=world.metric_state.get(
-                "support_wait_staff_busy_request_minutes", 0.0
-            ),
-            support_wait_staff_off_shift_request_minutes=world.metric_state.get(
-                "support_wait_staff_off_shift_request_minutes", 0.0
-            ),
-            source_ids_json=_source_ids_json(source_ids),
+            *_snapshot_fields(world, list(world.unsettled_support_requests()), sample_minute)
         )
 
     def csv_row(self) -> dict[str, Any]:

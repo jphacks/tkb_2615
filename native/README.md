@@ -194,6 +194,15 @@ each OS, because both call the same libm.
   `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
   `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
   Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
+  `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
+  `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
+- `rules.tick_validation`: the per-tick check (`src/rules/tick_validation.rs`):
+  `entity_rules(world, requests, resource_config, initial_needs_type, needs_type)` answers for the
+  entity and event rules of `WorldState.validate` at the end of a tick, reading the objects and not
+  the entity rows. It has no text: it returns the zones whose capacity is still the Python rule's,
+  or says Unsupported and the Python rules run. `population_dynamics(world)` is the validator of
+  that namespace with no one pending. See `docs/rust-port/lanes/m5-metrics.md`.
 - `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
   (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
   `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
