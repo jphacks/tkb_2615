@@ -285,7 +285,7 @@ fn stale_stall<'py>(
 /// `prepare_facility_queue`.
 #[pyfunction]
 #[pyo3(signature = (world, facility_id, *, resource, minute))]
-fn prepare_facility_queue<'py>(
+pub(crate) fn prepare_facility_queue<'py>(
     world: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource: &Bound<'py, PyAny>,
@@ -617,7 +617,7 @@ fn slot_route(
 /// `progress_physical_queue_positions`, for a facility's own queue.
 #[pyfunction]
 #[pyo3(signature = (world, facility_id, *, resource, minute, queue_id=None))]
-fn progress_physical_queue_positions<'py>(
+pub(crate) fn progress_physical_queue_positions<'py>(
     world: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource: &Bound<'py, PyAny>,
@@ -697,7 +697,7 @@ fn progress_physical_queue_positions<'py>(
 /// `progress_physical_queue_head_to_service`, for a facility's own queue.
 #[pyfunction]
 #[pyo3(signature = (world, facility_id, *, resource, minute, queue_id=None))]
-fn progress_physical_queue_head_to_service<'py>(
+pub(crate) fn progress_physical_queue_head_to_service<'py>(
     world: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource: &Bound<'py, PyAny>,

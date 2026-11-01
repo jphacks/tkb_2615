@@ -22,7 +22,7 @@
 
 ### 基本の作り
 
-- **Python から見たとき：** 名前空間の移植を始めた時点から、Rust が状態を持ちます。まだ移していない Python のコードは、`model_state` には双方向に追跡するミラー、エンティティには窓口のクラスを通して動かし続けます。名前空間ごとに少しずつ移し、先に直列の前段の PR を入れます。tick の駆動は最後まで Python に置きます。
+- **Python から見たとき：** 名前空間の移植を始めた時点から、Rust が状態を持ちます。まだ移していない Python のコードは、`model_state` には双方向に追跡するミラー、エンティティには窓口のクラスを通して動かし続けます。名前空間ごとに少しずつ移し、先に直列の前段の PR を入れます。tick の駆動は M6 で Rust に移しました（[lanes/m6-driver.md](lanes/m6-driver.md)）。`TickEngine.step` は Python のままで、hook があるときは Python の経路が動きます。
 - **採らなかった案：**
   - dict 風の PyO3 の view：`isinstance(dict|Mapping)` が520か所、`json.dumps` があり、abi3 では dict を継承できません。
   - 名前空間の貸し出しと返却（check-out/check-in）：境界を越えるたびに名前空間の大きさに比例します。`_update_movement` は `advance_movement` の間も `state` を持っています。
@@ -148,7 +148,7 @@
 
 保存：名前空間ごとの正準 bytes と検証の省略を、名前空間を持つたびに入れます。`capture` は約12秒の見積もりで、手順3の終わりの全体は約50〜75秒です。
 
-**driver：** 各段階は、Rust か Python の部分の並びとして `experiments/phases/*.py` に書きます。dispatch は M3 で移します。Rust は `event_type -> Rust の関数 | PyHandler` の表を持ち、PyHandler には、必要になったときに作る `ScheduledEvent` と世界を渡します。コールバックをまたいで `PyRefMut` を持ちません。
+**driver：** 段階の順序は `rules/tick.rs` にあります（[lanes/m6-driver.md](lanes/m6-driver.md)）。Python の経路の各段階は、Rust か Python の部分の並びとして `experiments/phases/*.py` に残します。dispatch は M3 で移します。Rust は `event_type -> Rust の関数 | PyHandler` の表を持ち、PyHandler には、必要になったときに作る `ScheduledEvent` と世界を渡します。コールバックをまたいで `PyRefMut` を持ちません。
 
 ## レーン
 

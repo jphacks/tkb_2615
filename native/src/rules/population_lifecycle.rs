@@ -1168,7 +1168,7 @@ fn returns_inner<'py>(world: &Bound<'py, PyAny>, minute: i64) -> PyResult<Bound<
 }
 
 #[pyfunction]
-fn admit_pending_returns<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn admit_pending_returns<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     returns_inner(world, exact_int(minute)?)
 }
 

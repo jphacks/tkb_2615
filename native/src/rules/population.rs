@@ -1283,7 +1283,7 @@ fn admit_inner<'py>(world: &Bound<'py, PyAny>, minute: i64) -> PyResult<Bound<'p
 }
 
 #[pyfunction]
-fn admit_pending_arrivals<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn admit_pending_arrivals<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let minute = exact_int(minute)?;
     admit_inner(world, minute)
 }
