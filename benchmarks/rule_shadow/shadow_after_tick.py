@@ -4,8 +4,9 @@ The kernel answers yes or Unsupported, so at each yes the Python rules run too, 
 and must pass. The memo it leaves is compared with what `commit` would leave, worked out beside it
 from the same start. Every PROBE_EVERY-th yes also breaks a restored copy, one rule at a time, and
 the kernel must turn each down, when this is the only shadow: the others stand in for the kernels
-this one calls, and would report the break. rules/metrics.rs's capture runs only in the driver, which shadows
-keep off: the hashes, first_difference.py and tests/integration/test_metric_capture.py compare it.
+this one calls, and would report the break. rules/metrics.rs's capture runs only in the driver,
+which shadows keep off: the hashes, first_difference.py and tests/integration/test_metric_capture.py
+compare it.
 """
 
 from __future__ import annotations

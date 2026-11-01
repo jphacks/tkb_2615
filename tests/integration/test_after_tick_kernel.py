@@ -541,6 +541,15 @@ def test_a_new_request_is_read_and_held(documents) -> None:
     assert not _takes(world, memo)
 
 
+def test_a_change_of_people_is_the_python_check_s_whatever_else_would_see_it(documents) -> None:
+    # The other kernels see this too today. A settled request depends on the set of IDs, though,
+    # so the kernel must not rely on them.
+    world, memo = _primed(documents[0])
+    del world.agents[next(iter(world.agents))]
+    with pytest.raises(native.Unsupported, match="the people changed"):
+        _kernel(world, memo)
+
+
 def test_the_memo_moves_on_to_the_minute_it_checked(documents) -> None:
     world, memo = _primed(documents[0])
     world.__dict__["minute_index"] += 1
