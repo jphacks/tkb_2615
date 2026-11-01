@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 
 _NEEDS = ("toilet_urgency", "hunger", "fatigue", "hydration_need")
@@ -30,6 +31,7 @@ _INTERACTION_LINES = {
 }
 
 
+@kernel_first("social_dialogue", "capture_context")
 def capture_social_state_context(
     world: WorldState, participant_ids: tuple[str, ...] | list[str]
 ) -> dict[str, Any]:
@@ -67,6 +69,7 @@ def capture_social_state_context(
     return context
 
 
+@kernel_first("social_dialogue", "validate_context")
 def validate_social_state_context(
     context: Any, participant_ids: tuple[str, ...] | list[str], due_minute: int
 ) -> None:

@@ -404,6 +404,25 @@ impl<'py> Tree<'py> {
             None => Ok(()),
         }
     }
+
+    /// items.append(value) on a list of scalars, which leaves the table of nodes as it is.
+    pub(crate) fn list_append<T: Scalar>(&self, value: &T) -> PyResult<()> {
+        match &self.node {
+            Some(node) => raw_list_append(node, &value.to_py(self.py)?),
+            None => Ok(()),
+        }
+    }
+
+    /// del items[0] on a non-empty list of scalars, which leaves the table of nodes as it is.
+    pub(crate) fn list_remove_first(&self) -> PyResult<()> {
+        if let Some(node) = &self.node {
+            // SAFETY: node is a live list; the slice's item is an atom, released here.
+            if unsafe { ffi::PyList_SetSlice(node.as_ptr(), 0, 1, null_mut()) } != 0 {
+                return Err(PyErr::fetch(self.py));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The state of one owned namespace in one world, and the sink of its tracked nodes.

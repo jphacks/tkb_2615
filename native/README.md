@@ -153,6 +153,22 @@ each OS, because both call the same libm.
   Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
   draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
+- `state.social_network.ROW`, `validate`: Rust owns `social_network_v1`
+  (`src/state/social_network.rs`). The row lists the records written since the last check, whichever
+  way they were written, so the check of a tick reads those and not all of them. `RecordWatch` no
+  longer serves this namespace.
+
+- `rules.social_network.observe_event(world, event, minute)`: what an applied event records, with the
+  body's trust copied (`domain/social_network.py`). `rules/social_propagation.rs` records its observed
+  contacts through the same code, with no Python call. `rules.social_dialogue.capture_context`,
+  `validate_context`: the state context of a social event, read from the rows. Each is
+  `kernel_first`: what the Python rule would refuse, or a value of another type, gives `Unsupported`
+  before any change.
+
+- `rules.social_interaction.apply(handler, world, event)`: `SocialInteractionHandler.apply` for a
+  social action that goes through. A suppressed or failed event and the other types of interaction
+  give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
+
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
   Python rules write one record at a time through the forwarded writes, and M4 moves them.
 
@@ -171,7 +187,7 @@ each OS, because both call the same libm.
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
 
-- `social_relationships_valid`, `body_relationships_valid`, `body_agents_valid`,
+- `body_relationships_valid`, `body_agents_valid`,
   `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
   acceptance of the large loops of validation, read where Python keeps the state. The
   namespaces Rust owns have their `validate` in `state/` instead, which reads the row
