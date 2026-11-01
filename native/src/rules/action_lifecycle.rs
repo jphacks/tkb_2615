@@ -27,7 +27,7 @@ use crate::core::value::V;
 use crate::core::world_core::raw_dict_get;
 use crate::eventlog::{AppliedOutcome, EventStore};
 use crate::state::entities::{entities_of, Activity, EntityStore};
-use crate::state::events::{is_stable_id, EventKind, EventRow, EventStatus, EventWriter};
+use crate::state::events::{is_stable_id, EventKind, EventRef, EventRow, EventStatus, EventWriter};
 use crate::Unsupported;
 
 const SOURCE_ID: &str = "ASM-ACTION-LIFECYCLE-V1";
@@ -579,7 +579,7 @@ fn event_ends(event_type: &str, action: &str) -> Option<&'static str> {
     }
 }
 
-fn ends_any_action(event_type: &str) -> bool {
+pub(crate) fn ends_any_action(event_type: &str) -> bool {
     matches!(
         event_type,
         "toilet_service_complete"
@@ -592,22 +592,18 @@ fn ends_any_action(event_type: &str) -> bool {
     )
 }
 
-/// `payload.get(key)` when `isinstance(value, str)`; Unsupported for a subclass of str.
-fn payload_str(payload: &Bound<'_, PyAny>, key: &Bound<'_, PyString>) -> PyResult<Option<String>> {
-    let value = payload.call_method1(intern!(payload.py(), "get"), (key,))?;
-    if value.downcast::<PyString>().is_err() {
-        return Ok(None);
-    }
-    exact_str(&value).map(|text| Some(text.to_owned()))
-}
-
 /// Whether the log holds this event applied, as the Python rules ask. The event must be the object
-/// the record holds: another object of the same values is the Python rule's to compare.
+/// the record holds, or one whose row is what the record's bytes say: a value a row cannot tell
+/// from another (`1` and `1.0`) is the Python rule's to compare.
 fn is_applied(writer: &EventWriter<'_>, event_id: &str, event: &Bound<'_, PyAny>) -> PyResult<bool> {
     match writer.log().borrow().applied_outcome(event_id, event)? {
         AppliedOutcome::No => Ok(false),
         AppliedOutcome::ThisEvent => Ok(true),
         AppliedOutcome::AnotherObject => unsupported("the record holds another object of the event"),
+        AppliedOutcome::SavedRow(saved) => match EventRow::from_event(event)? {
+            Some(row) if row == saved => Ok(true),
+            _ => unsupported("the record is of another row of the event"),
+        },
     }
 }
 
@@ -622,58 +618,72 @@ fn record_applied_action_completion(
 ) -> PyResult<()> {
     let py = world.py();
     let event_type = attribute(event, intern!(py, "event_type"))?;
-    let event_type = exact_str(&event_type)?;
     // Nothing below changes anything for another type of event.
+    if !ends_any_action(exact_str(&event_type)?) {
+        return Ok(());
+    }
+    store_of(active_actions)?;
+    let event_id = attribute(event, intern!(py, "event_id"))?;
+    let writer = EventWriter::of(world)?;
+    if !is_applied(&writer, exact_str(&event_id)?, event)? {
+        return Ok(());
+    }
+    complete_for_event(world, &writer, active_actions, EventRef::Object(event), exact_int(minute)?)
+}
+
+/// `record_applied_action_completion` of an event the caller knows the log holds applied. Says
+/// Unsupported before any change.
+pub(crate) fn complete_for_event(
+    world: &Bound<'_, PyAny>,
+    writer: &EventWriter<'_>,
+    active_actions: &Bound<'_, PyAny>,
+    event: EventRef<'_, '_>,
+    minute: i64,
+) -> PyResult<()> {
+    let py = world.py();
+    let event_type = event.event_type()?;
+    let event_type = &*event_type;
     if !ends_any_action(event_type) {
         return Ok(());
     }
-    let active = store_of(active_actions)?;
-    let event_id = attribute(event, intern!(py, "event_id"))?;
-    let event_id = exact_str(&event_id)?;
-    let writer = EventWriter::of(world)?;
-    if !is_applied(&writer, event_id, event)? {
+    // A plain dict of open actions is the Python rule's.
+    let Ok(active) = active_actions.downcast::<ActiveActions>() else {
+        return unsupported("active_actions is not the store");
+    };
+    let Some(agent_id) = (match event.text("agent_id")? {
+        Some(id) => Some(id),
+        None => event.text("sender_agent_id")?,
+    }) else {
         return Ok(());
-    }
-    let minute = exact_int(minute)?;
-    let payload = attribute(event, intern!(py, "payload"))?;
-    let agent_id = match payload_str(&payload, intern!(py, "agent_id"))? {
-        Some(id) => id,
-        None => match payload_str(&payload, intern!(py, "sender_agent_id"))? {
-            Some(id) => id,
-            None => return Ok(()),
-        },
     };
     let mut this = active.try_borrow_mut()?;
     this.into_rows(py)?;
-    let Some(current) = this.rows.get(agent_id.as_str()) else {
+    let Some(current) = this.rows.get(&*agent_id) else {
         return Ok(());
     };
     let support = matches!(event_type, "staff_support_complete" | "support_request_timeout");
-    let keys: &[&Bound<'_, PyString>] = if support {
-        &[intern!(py, "request_id"), intern!(py, "staff_id")]
+    let keys: &[&str] = if support {
+        &["request_id", "staff_id"]
     } else {
-        &[
-            intern!(py, "facility_id"),
-            intern!(py, "participant_agent_id"),
-            intern!(py, "staff_id"),
-            intern!(py, "request_id"),
-        ]
+        &["facility_id", "participant_agent_id", "staff_id", "request_id"]
     };
     let mut observed = None;
     for key in keys {
-        observed = payload_str(&payload, key)?;
+        observed = event.text(key)?;
         if observed.is_some() {
             break;
         }
     }
-    if let (Some(expected), Some(observed)) = (&current.target_id, &observed) {
-        if **expected != **observed {
+    if let (Some(expected), Some(observed)) = (&current.target_id, observed) {
+        if **expected != *observed {
             return Ok(());
         }
     }
-    if exact_int(&attribute(event, intern!(py, "due_minute"))?)? < current.start_minute {
+    if event.due_minute()? < current.start_minute {
         return Ok(());
     }
+    let event_id = event.event_id()?;
+    let event_id = &*event_id;
     let Some(status) = event_ends(event_type, &current.action) else {
         return Ok(());
     };
@@ -691,8 +701,8 @@ fn record_applied_action_completion(
         sequence,
         agent.as_ref().map(|agent| &agent.needs),
     )?;
-    commit(&writer, vec![planned])?;
-    this.rows.shift_remove(agent_id.as_str());
+    commit(writer, vec![planned])?;
+    this.rows.shift_remove(&*agent_id);
     Ok(())
 }
 

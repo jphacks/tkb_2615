@@ -126,6 +126,7 @@ def prepare(output: str) -> None:
 
     def apply(handler: Any, world: Any, event: Any) -> Any:
         from sheltersim.events.handlers import SocialInteractionHandler
+        from sheltersim.events.models import EventSuppressed
 
         payload = event.payload
         kind = payload.get("interaction_type") or "plain"
@@ -158,6 +159,17 @@ def prepare(output: str) -> None:
         except unsupported as reason:
             detail = f"{reason}" if python_error is None else f"Python raises: {reason}"
             recorder.reasons[f"apply: {kind}: {detail}"] += 1
+            raise
+        except EventSuppressed as suppressed:
+            # The text is the event's `detail`, and nothing may have changed.
+            recorder.seen[f"apply.suppressed.{kind}"] += 1
+            if type(python_error) is not EventSuppressed or str(python_error) != str(suppressed):
+                recorder.differ(f"apply: suppressed {suppressed}, and Python: {python_error}")
+            else:
+                recorder.seen["apply.texts_compared"] += 1
+            for id_ in copies:
+                if _written(_person_copy(world.agents[id_])) != _written(copies[id_]):
+                    recorder.differ(f"apply: a suppressed event changed {id_}")
             raise
         recorder.seen[f"apply.kernel_ran.{kind}"] += 1
         if python_error is not None:

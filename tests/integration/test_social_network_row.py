@@ -632,21 +632,28 @@ def test_a_1_percent_change_of_the_transfer_shows_in_the_action(world: Any) -> N
     assert _values(world, ids) != _values(other, ids)
 
 
-def test_a_suppressed_action_is_python_s_to_say_with_nothing_written(world: Any) -> None:
+def _says_what_python_says(world: Any, event: Any) -> str:
+    """The kernel and the Python rule suppress with one text."""
+    with pytest.raises(EventSuppressed) as by_kernel:
+        _apply_kernel(world, event)
+    with pytest.raises(EventSuppressed) as by_python:
+        SocialInteractionHandler.apply.__wrapped__(SocialInteractionHandler(), world, event)
+    assert str(by_kernel.value) == str(by_python.value)
+    return str(by_kernel.value)
+
+
+def test_a_suppressed_action_says_python_s_text_with_nothing_written(world: Any) -> None:
     ids = _people(world)
     zone = _colocate(world, ids)
     event = _action(world, "reassurance_exchange", *ids)
     others = [name for name in world.zones if name != zone]
     world.agents[ids[1]].zone_id = others[0]
     before = _values(world, ids)
-    with pytest.raises(native.Unsupported):
-        _apply_kernel(world, event)
+    assert "no longer co-located" in _says_what_python_says(world, event)
     assert _values(world, ids) == before
-    with pytest.raises(EventSuppressed, match="no longer co-located"):
-        SocialInteractionHandler().apply(world, event)
 
 
-def test_a_helper_who_needs_more_than_the_target_is_suppressed_by_python(world: Any) -> None:
+def test_a_helper_who_needs_more_than_the_target_is_suppressed(world: Any) -> None:
     ids = _people(world)
     _colocate(world, ids)
     world.agents[ids[0]].stress = 0.9
@@ -654,13 +661,12 @@ def test_a_helper_who_needs_more_than_the_target_is_suppressed_by_python(world: 
     for name in ("toilet_urgency", "hunger", "fatigue", "hydration_need"):
         setattr(world.agents[ids[1]].needs, name, 0.1)
     event = _action(world, "voluntary_support", *ids)
-    with pytest.raises(native.Unsupported):
-        _apply_kernel(world, event)
-    with pytest.raises(EventSuppressed, match="higher immediate need"):
-        SocialInteractionHandler().apply(world, event)
+    before = _values(world, ids)
+    assert "higher immediate need" in _says_what_python_says(world, event)
+    assert _values(world, ids) == before
 
 
-def test_a_different_household_is_suppressed_by_python(world: Any) -> None:
+def test_a_different_household_is_suppressed(world: Any) -> None:
     ids = _people(world)
     _colocate(world, ids)
     presence = world.model_state.get("population_presence_v1")
@@ -671,10 +677,7 @@ def test_a_different_household_is_suppressed_by_python(world: Any) -> None:
         world.agents[ids[0]].profile.group_id = "h1"
         world.agents[ids[1]].profile.group_id = "h2"
     event = _action(world, "family_care", *ids)
-    with pytest.raises(native.Unsupported):
-        _apply_kernel(world, event)
-    with pytest.raises(EventSuppressed, match="same household"):
-        SocialInteractionHandler().apply(world, event)
+    assert "same household" in _says_what_python_says(world, event)
 
 
 @pytest.mark.parametrize(

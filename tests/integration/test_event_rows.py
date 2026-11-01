@@ -306,6 +306,51 @@ def test_a_rule_records_an_outcome_python_reads_and_saves_as_its_own() -> None:
         state.schedule_row(world, event)
 
 
+def test_settling_records_the_event_it_was_given_wherever_it_is_now() -> None:
+    state = _state()
+    world = _world()
+    # A handler took it off the queue itself: the outcome is still recorded.
+    gone = _event("gone", 600, due=0)
+    world.schedule_event(gone)
+    world.event_queue.remove("gone")
+    assert state.settle_event(world, gone, 0, "suppressed", "why")
+    assert world.event_log.find("gone").detail == "why"
+    assert world.event_log.items_bytes(0, 1) == [
+        _python_bytes(EventLogRecord(gone, 0, EventStatus.SUPPRESSED, "why"))
+    ]
+    # Another event of the ID is pending: what was due is recorded, as the dispatcher does.
+    due = _event("moved", 601, due=0)
+    world.schedule_event(due)
+    world.event_queue.replace("moved", _event("moved", 601, due=5, note=1))
+    assert state.settle_event(world, due, 0, "applied")
+    assert world.event_queue.find("moved") is None
+    assert world.event_log.find("moved").event == due
+
+
+def test_settling_leaves_a_record_a_handler_wrote_for_the_dispatcher_to_compare() -> None:
+    state = _state()
+    world = _world()
+    event = _event("own", 602, due=0)
+    world.schedule_event(event)
+    world.event_log.append(EventLogRecord(event, 0, EventStatus.APPLIED))
+    assert not state.settle_event(world, event, 0, "failed", "no")
+    assert world.event_queue.find("own") is None
+    assert len(world.event_log) == 1
+    with pytest.raises(ValueError, match="transactional event record disagrees"):
+        EventDispatcher().settle(world, event, 0, EventStatus.FAILED, "no")
+
+
+def test_settling_says_the_log_s_errors_after_taking_the_event_off_as_python_does() -> None:
+    state = _state()
+    world = _world()
+    world.event_log.append(EventLogRecord(_event("first", 603, due=0), 0, EventStatus.APPLIED))
+    event = _event("second", 603, due=0)
+    with pytest.raises(DuplicateEventError, match="event sequence 603 already realized"):
+        state.settle_event(world, event, 0, "applied")
+    with pytest.raises(DuplicateEventError, match="event sequence 603 already realized"):
+        world.event_log.append(EventLogRecord(event, 0, EventStatus.APPLIED))
+
+
 @pytest.mark.parametrize(
     ("event_type", "payload", "status"),
     [

@@ -151,7 +151,11 @@ def _install(output: str) -> None:
     atexit.register(report)
 
 
-if OUTPUT:
+if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
+    # A plain run that only says what the dispatch loop's direct calls did (shadow_dispatch.py).
+    Path(OUTPUT).mkdir(parents=True, exist_ok=True)
+    importlib.import_module("shadow_dispatch").prepare(OUTPUT)
+elif OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):
         if shadow.stem != "shadow_kit":

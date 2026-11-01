@@ -857,8 +857,7 @@ def test_a_committed_flag_that_is_not_a_bool_is_left_to_python(world) -> None:
 
 
 @needs_kernels
-def test_another_object_of_an_event_is_left_to_the_python_rule(world) -> None:
-    store = _store(world)
+def _open_fetch(world, store) -> str:
     agent_id = _agent_id(world)
     record_action_proposal(
         world,
@@ -867,17 +866,34 @@ def test_another_object_of_an_event_is_left_to_the_python_rule(world) -> None:
         committed=True,
         active_actions=store,
     )
-    event = _applied(
-        world, _event("e-1", "resource_service_complete", 900, 2, agent_id=agent_id), 2
-    )
+    return agent_id
+
+
+@needs_kernels
+def test_another_object_of_the_same_row_is_the_event_the_log_holds(world) -> None:
+    store = _store(world)
+    agent_id = _open_fetch(world, store)
+    _applied(world, _event("e-1", "resource_service_complete", 900, 2, agent_id=agent_id), 2)
     copied = _event("e-1", "resource_service_complete", 900, 2, agent_id=agent_id)
+    native.rules("action_lifecycle").record_applied_action_completion(
+        world, copied, 2, active_actions=store
+    )
+    assert agent_id not in store
+
+
+@needs_kernels
+def test_a_record_a_row_cannot_tell_from_the_event_is_left_to_the_python_rule(world) -> None:
+    store = _store(world)
+    agent_id = _open_fetch(world, store)
+    _applied(world, _event("e-1", "resource_service_complete", 900, 2, agent_id=agent_id, n=1), 2)
+    # Python's `==` takes 1 and 1.0 as equal, which a row does not.
+    copied = _event("e-1", "resource_service_complete", 900, 2, agent_id=agent_id, n=1.0)
     with pytest.raises(native.Unsupported):
         native.rules("action_lifecycle").record_applied_action_completion(
             world, copied, 2, active_actions=store
         )
     record_applied_action_completion(world, copied, 2, active_actions=store)
     assert agent_id not in store
-    assert event.event_id == copied.event_id
 
 
 @needs_kernels

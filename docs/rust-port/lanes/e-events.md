@@ -30,7 +30,7 @@ let Some(row) = EventRow::new(id, kind, due, priority, sequence, event_type,
 writer.allocate_sequence()?;      // WorldState.allocate_event_sequence
 writer.schedule(row)?;            // WorldState.schedule_event（同じエラー）
 writer.record(&row, minute, EventStatus::Applied, None)?;  // EventLog.append（同じエラー）
-writer.settle(event_id, minute, status, detail)?;          // 列から外して記録する
+writer.settle(&row, minute, status, detail)?;              // 列にあれば外して記録する。ハンドラーが書いた記録があれば false（M3 の dispatch で変更）
 ~~~
 
 - **Python のオブジェクトは作りません。** ハンドラーや Python の読み手が読むときに、列なら `row.to_py`、ログなら `record_from_bytes` が作ります。作った列のオブジェクトは持ち続けるので、同じオブジェクトが返ります。
@@ -65,7 +65,7 @@ byte 列は、厳密な型（素の JSON のスカラー、タプル、mapping p
 ## 確かめていないこと
 
 - Windows と macOS では動かしていません。
-- Rust の窓口で予定した実例は情報の接触だけです（7日分の Run にメッセージはありません）。`settle` と `record` は本番の経路では使っていません。テストと影の比較だけです。
+- Rust の窓口で予定した実例は情報の接触だけです（7日分の Run にメッセージはありません）。`settle` は M3 の dispatch が最初の利用者です（[m3-dispatch.md](m3-dispatch.md)）。
 
 ## 残っているもの
 

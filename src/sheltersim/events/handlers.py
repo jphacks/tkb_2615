@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
+from sheltersim import native
 from sheltersim.contracts.operations import NumericStateChange
 from sheltersim.core.kernels import kernel_first
 from sheltersim.core.rng import CounterRNG
@@ -120,88 +121,110 @@ class EventDispatcher:
         """Apply due events in order; observe each committed outcome before the next."""
         outcomes: list[EventLogRecord] = []
         for event in world.event_queue.due(minute):
-            current = world.event_queue.find(event.event_id)
-            if current is None:
-                # A preceding event in this same due batch may cancel this
-                # snapshot entry (departure, shift interruption, or replacement).
-                # The cancellation path already emitted the single audit record.
-                continue
-            if current is not event and current.to_dict() != event.to_dict():
-                # A preceding due event may have replaced this item with a new schedule.
-                continue
-            handler = self.handlers.get(event.event_type)
-            additional_records: tuple[EventLogRecord, ...] = ()
-            if handler is None:
-                status = EventStatus.FAILED
-                detail = f"no handler registered for event type {event.event_type!r}"
-            else:
-                try:
-                    effect_event_guard_or_suppress(world, event)
-                    additional_records = handler.apply(world, event) or ()
-                except EventSuppressed as exc:
-                    status = EventStatus.SUPPRESSED
-                    detail = str(exc)
-                except EventApplicationError as exc:
-                    status = EventStatus.FAILED
-                    detail = str(exc)
-                else:
-                    status = EventStatus.APPLIED
-                    detail = None
-                    if event.event_type in {
-                        "information_contact_update",
-                        "social_interaction",
-                        "information_correction",
-                        "proximity_contact_update",
-                    }:
-                        from sheltersim.domain.body_state import record_social_event
-                        from sheltersim.domain.social_network import (
-                            SOCIAL_NETWORK_STATE_KEY,
-                            observe_event,
-                        )
-
-                        record_social_event(world, event, minute)
-                        if SOCIAL_NETWORK_STATE_KEY in world.model_state:
-                            observe_event(world, event, minute)
-
-            if world.event_queue.find(event.event_id) is not None:
-                world.event_queue.remove(event.event_id)
-            record = world.event_log.find(event.event_id)
-            if record is not None:
-                if (
-                    record.event is not event and record.event.to_dict() != event.to_dict()
-                ) or record.status is not status:
-                    raise ValueError(
-                        "transactional event record disagrees with its dispatch result"
-                    )
-            else:
-                record = EventLogRecord(
-                    event=event,
-                    realized_minute=minute,
-                    status=status,
-                    detail=detail,
-                )
-                world.event_log.append(record)
-            event_outcomes = [record]
-            outcomes.append(record)
-            for additional in additional_records:
-                existing = world.event_log.find(additional.event.event_id)
-                if existing is not None:
-                    if (
-                        existing.event.to_dict() != additional.event.to_dict()
-                        or existing.status is not additional.status
-                    ):
-                        raise ValueError(
-                            "transactional follow-up record disagrees with dispatch result"
-                        )
-                    outcomes.append(existing)
-                    event_outcomes.append(existing)
-                else:
-                    world.event_log.append(additional)
-                    outcomes.append(additional)
-                    event_outcomes.append(additional)
-            if after_event is not None:
-                after_event(tuple(event_outcomes))
+            outcomes.extend(self.dispatch_one(world, event, minute, after_event=after_event))
         return tuple(outcomes)
+
+    def dispatch_one(
+        self,
+        world: WorldState,
+        event: ScheduledEvent,
+        minute: int,
+        *,
+        after_event: Callable[[tuple[EventLogRecord, ...]], None] | None = None,
+    ) -> list[EventLogRecord]:
+        """Apply one event of a due snapshot; its outcomes, or none if it left the queue meanwhile.
+
+        native/src/rules/dispatch.rs calls this for each event it has no Rust function for.
+        """
+        current = world.event_queue.find(event.event_id)
+        if current is None:
+            # A preceding event in this same due batch may cancel this
+            # snapshot entry (departure, shift interruption, or replacement).
+            # The cancellation path already emitted the single audit record.
+            return []
+        if current is not event and current.to_dict() != event.to_dict():
+            # A preceding due event may have replaced this item with a new schedule.
+            return []
+        handler = self.handlers.get(event.event_type)
+        additional_records: tuple[EventLogRecord, ...] = ()
+        if handler is None:
+            status = EventStatus.FAILED
+            detail = f"no handler registered for event type {event.event_type!r}"
+        else:
+            try:
+                effect_event_guard_or_suppress(world, event)
+                additional_records = handler.apply(world, event) or ()
+            except EventSuppressed as exc:
+                status = EventStatus.SUPPRESSED
+                detail = str(exc)
+            except EventApplicationError as exc:
+                status = EventStatus.FAILED
+                detail = str(exc)
+            else:
+                status = EventStatus.APPLIED
+                detail = None
+                if event.event_type in {
+                    "information_contact_update",
+                    "social_interaction",
+                    "information_correction",
+                    "proximity_contact_update",
+                }:
+                    from sheltersim.domain.body_state import record_social_event
+                    from sheltersim.domain.social_network import (
+                        SOCIAL_NETWORK_STATE_KEY,
+                        observe_event,
+                    )
+
+                    record_social_event(world, event, minute)
+                    if SOCIAL_NETWORK_STATE_KEY in world.model_state:
+                        observe_event(world, event, minute)
+
+        record = self.settle(world, event, minute, status, detail)
+        event_outcomes = [record]
+        for additional in additional_records:
+            existing = world.event_log.find(additional.event.event_id)
+            if existing is not None:
+                if (
+                    existing.event.to_dict() != additional.event.to_dict()
+                    or existing.status is not additional.status
+                ):
+                    raise ValueError(
+                        "transactional follow-up record disagrees with dispatch result"
+                    )
+                event_outcomes.append(existing)
+            else:
+                world.event_log.append(additional)
+                event_outcomes.append(additional)
+        if after_event is not None:
+            after_event(tuple(event_outcomes))
+        return event_outcomes
+
+    def settle(
+        self,
+        world: WorldState,
+        event: ScheduledEvent,
+        minute: int,
+        status: EventStatus,
+        detail: str | None,
+    ) -> EventLogRecord:
+        """Take a handled event off the queue and record its outcome, unless its handler did."""
+        if world.event_queue.find(event.event_id) is not None:
+            world.event_queue.remove(event.event_id)
+        record = world.event_log.find(event.event_id)
+        if record is not None:
+            if (
+                record.event is not event and record.event.to_dict() != event.to_dict()
+            ) or record.status is not status:
+                raise ValueError("transactional event record disagrees with its dispatch result")
+            return record
+        record = EventLogRecord(
+            event=event,
+            realized_minute=minute,
+            status=status,
+            detail=detail,
+        )
+        world.event_log.append(record)
+        return record
 
 
 @dataclass(frozen=True)
@@ -1858,6 +1881,7 @@ class AgentTravelCompletionHandler:
     resource_service: ResourceServiceManager | None = None
     validate_request_state: bool = True
 
+    @kernel_first("travel_completion", "apply")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         agent_id = event.payload.get("agent_id")
         task_id = event.payload.get("task_id")
@@ -2128,6 +2152,21 @@ class AgentTravelCompletionHandler:
             from sheltersim.domain.population_lifecycle import complete_presence_relocation
 
             complete_presence_relocation(world, event)
+        self._after_arrival(
+            world, event, agent_id, purpose, facility_id, destination_zone_id, origin_zone_id
+        )
+
+    def _after_arrival(
+        self,
+        world: WorldState,
+        event: ScheduledEvent,
+        agent_id: str,
+        purpose: str,
+        facility_id: Any,
+        destination_zone_id: str,
+        origin_zone_id: Any,
+    ) -> None:
+        """What a walk to a service leads to. rules/travel_completion.rs calls it until M4."""
         if (
             purpose in {"toilet_request", "resource_request"}
             and "facility_geometry" in world.model_configs
@@ -2175,6 +2214,7 @@ class AgentTravelCompletionHandler:
                 )
             except ValueError as exc:
                 # Arrival has completed; failed admission leaves the Agent idle at the facility.
+                facility = world.facilities[facility_id]
                 resource_id = ResourceServiceManager.resource_for_facility(facility.kind)
                 action = "fetch_water" if resource_id == "water_ml" else "collect_meal"
                 self.resource_service.record_request_outcome(
@@ -3236,3 +3276,13 @@ class SupportRequestTimeoutHandler:
             raise EventApplicationError(str(exc)) from exc
         if not changed:
             raise EventSuppressed("support request is no longer pending")
+
+
+# The event types with a Rust function in rules/dispatch.rs. A patch of `apply` shows here, and the
+# handler then goes to Python.
+if native.available():
+    native.rules("dispatch").install_table(
+        (SocialInteractionHandler, SocialInteractionHandler.apply),
+        (AgentTravelCompletionHandler, AgentTravelCompletionHandler.apply),
+        EventDispatcher,
+    )
