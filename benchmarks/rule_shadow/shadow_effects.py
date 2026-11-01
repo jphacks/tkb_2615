@@ -85,9 +85,11 @@ def _handler_shadow(recorder: Recorder, label: str, kernel: Any, rule: Any) -> A
             result = kernel(handler, kernel_world, event)
         except unsupported as reason:
             recorder.reasons[f"{label}: {reason}"] += 1
-            # The Python rule then runs on the real world, as in a plain run.
+            # The Python rule then runs on the real world, as in a plain run. A wrong result the
+            # world's validation turns down comes here too, and no hash would ever see it.
             if expected[0] == "applied":
                 recorder.seen[f"{label}.refused_a_success"] += 1
+                recorder.differ(f"{label} {op}: refused what the Python rule applied: {reason}")
             raise
         except Exception as raised:  # noqa: BLE001 - only compared with the rule's
             actual = (type(raised).__name__, str(raised))
