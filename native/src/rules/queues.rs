@@ -8,7 +8,6 @@
 //! the order of the people served is the order of those calls, as in the Python rules.
 //!
 //! What goes to Python, before anything is written:
-//! - an independent FIFO (`queue_id`, `facility_queues_v1`), which no 7-day Run has;
 //! - a person who gives up on the queue (`_abandon_and_retry`, 4 times in 7 days): that writes a
 //!   return walk, and the whole call is the Python rule's then;
 //! - anything not plainly what the Python rule accepts.
@@ -27,18 +26,19 @@ use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, uns
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{field_mirror_of, raw_dict_get, NamespaceMirror};
+use crate::rules::facility_queues::{independent_heads, point_of, with_queues};
 use crate::rules::movement::{
-    approach, is_queue_trip, mirror_held, mobility_text, plan_start, position_point, queue_slot, refused, room_minutes,
+    approach_point, is_queue_trip, mirror_held, mobility_text, plan_start, position_point, queue_slot_in, refused, room_minutes,
     write_tree, Changes, Scene, EXACT_INT, KEY, MOVEMENT_SOURCE_ID, POLICY_VERSION,
 };
 use crate::rules::movement_geometry::{distance, polyline_length, usable, Geo, Pt};
 use crate::state::entities::{entities_of, raw_setattr, Activity, Entities, EntityStore, FacilityRow, NeedRow};
 use crate::state::events::{EventKind, EventRow, EventWriter};
+use crate::state::facility_queues::QueueRequest;
 use crate::state::metric_state::MetricRow;
 use crate::state::movement::{Journey, MovementRow, Point};
 use crate::Unsupported;
 
-const QUEUES_KEY: &str = "facility_queues_v1";
 const SERVICE_KEY: &str = "resource_service_v1";
 const BLOCKED_METRIC: &str = "physical_queue_route_blocked_count";
 /// `NeedWeightedPhysicalQueuePolicy`: abandon limits and the need that stays in line.
@@ -68,11 +68,50 @@ fn plain_minute(value: &Bound<'_, PyAny>) -> PyResult<i64> {
     Ok(minute)
 }
 
-fn given_queue_id(queue_id: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-    if queue_id.is_some_and(|queue_id| !queue_id.is_none()) {
-        return unsupported("an independent FIFO");
+/// The independent FIFO a call is about, read when the call starts.
+pub(crate) struct Fifo {
+    queue_id: Arc<str>,
+    service_point_id: Arc<str>,
+    members: Vec<Arc<str>>,
+    signed_point: Option<Pt>,
+    requests: Vec<QueueRequest>,
+    queued_request_ids: Vec<Arc<str>>,
+}
+
+impl Fifo {
+    /// None for a world without the namespace. A queue it doesn't have is the Python rule's error.
+    pub(crate) fn read(world: &Bound<'_, PyAny>, geo: &Geo, queue_id: &str) -> PyResult<Option<Self>> {
+        let signed_point = point_of(geo, queue_id).map(|point| point.point);
+        with_queues(world, |row| {
+            let Some(queue) = row.queues.get(queue_id) else {
+                return unsupported("no such queue");
+            };
+            let members = crate::rules::facility_queues::members_of(row, queue_id)?;
+            Ok(Self {
+                queue_id: Arc::from(queue_id),
+                service_point_id: queue.service_point_id.clone(),
+                members,
+                signed_point,
+                requests: row.requests.values().filter(|request| &*request.queue_id == queue_id).cloned().collect(),
+                queued_request_ids: queue.queued_request_ids.clone(),
+            })
+        })
     }
-    Ok(())
+
+    pub(crate) fn slot_view(&self) -> (&[Arc<str>], Option<Pt>) {
+        (&self.members, self.signed_point)
+    }
+}
+
+/// The FIFO of a kernel's `queue_id`. A queue ID without the namespace goes to Python.
+fn fifo_of(world: &Bound<'_, PyAny>, geo: &Geo, queue_id: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Fifo>> {
+    let Some(queue_id) = queue_id.filter(|queue_id| !queue_id.is_none()) else {
+        return Ok(None);
+    };
+    match Fifo::read(world, geo, exact_str(queue_id)?)? {
+        Some(fifo) => Ok(Some(fifo)),
+        None => unsupported("a queue ID without the queues"),
+    }
 }
 
 fn members(facility: &FacilityRow, resource: bool) -> &Vec<Arc<str>> {
@@ -237,14 +276,22 @@ fn abandons(policy: &Policy, service: Service, need: f64, waited: i64) -> bool {
 
 /// `movement_v1`'s queue trips to this facility, as `_queue_trips` of a facility's own queue.
 fn queue_trips<'a>(row: &'a MovementRow, facility_id: &'a str) -> impl Iterator<Item = (&'a Arc<str>, &'a Journey)> {
-    row.journeys
-        .iter()
-        .filter(move |(_, journey)| journey.facility_id.as_deref() == Some(facility_id) && is_queue_trip(&journey.purpose))
+    fifo_trips(row, facility_id, None)
+}
+
+/// `_queue_trips`.
+fn fifo_trips<'a>(row: &'a MovementRow, facility_id: &'a str, queue_id: Option<&'a str>) -> impl Iterator<Item = (&'a Arc<str>, &'a Journey)> {
+    row.journeys.iter().filter(move |(_, journey)| {
+        journey.facility_id.as_deref() == Some(facility_id)
+            && queue_id.is_none_or(|queue| journey.queue_id.as_deref() == Some(queue))
+            && is_queue_trip(&journey.purpose)
+    })
 }
 
 /// `_drop_stale_resource_stall` once the queue is in its new order: whether to delete the record,
 /// and the map it is in.
 fn stale_stall<'py>(
+    world: &Bound<'py, PyAny>,
     table: &Bound<'py, PyDict>,
     facility_id: &str,
     new_order: &[Arc<str>],
@@ -268,9 +315,6 @@ fn stale_stall<'py>(
     if record.is_none() {
         return Ok(None);
     }
-    if table.contains(QUEUES_KEY)? {
-        return unsupported("an independent FIFO may hold the head");
-    }
     let Some(record) = as_readable_dict(&record) else {
         return unsupported("a stall record is not a dict");
     };
@@ -278,7 +322,10 @@ fn stale_stall<'py>(
         return unsupported("a stall record has no agent");
     };
     let agent_id = exact_str(&agent_id)?;
-    let is_head = new_order.first().is_some_and(|head| &**head == agent_id);
+    let is_head = match independent_heads(world, facility_id)? {
+        Some(heads) => heads.iter().any(|head| &**head == agent_id),
+        None => new_order.first().is_some_and(|head| &**head == agent_id),
+    };
     Ok(if is_head { None } else { Some(stalls.clone()) })
 }
 
@@ -364,7 +411,7 @@ fn prepare_facility_queue<'py>(
         let new_order: Vec<Arc<str>> = ranked.into_iter().map(|entry| entry.3).collect();
         Ok((queue.clone(), new_order))
     })?;
-    let stale = if resource { stale_stall(table, facility_name, &new_order)? } else { None };
+    let stale = if resource { stale_stall(world, table, facility_name, &new_order)? } else { None };
     if new_order != current {
         let facilities = attribute(world, intern!(py, "facilities"))?;
         let Some(facility) = raw_dict_get(&facilities, facility_id)? else {
@@ -381,6 +428,75 @@ fn prepare_facility_queue<'py>(
         stalls.del_item(facility_id)?;
     }
     Ok(())
+}
+
+/// `prepare_independent_facility_queue`: whoever gives up goes to the Python rule, and otherwise
+/// nothing changes, since an independent FIFO keeps its order.
+#[pyfunction]
+#[pyo3(signature = (world, queue_id, *, minute, resource))]
+fn prepare_independent_facility_queue<'py>(
+    world: &Bound<'py, PyAny>,
+    queue_id: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+    resource: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = world.py();
+    let queue_name = exact_str(queue_id)?;
+    exact_bool(resource)?;
+    let minute = plain_minute(minute)?;
+    let found = with_queues(world, |row| {
+        let Some(queue) = row.queues.get(queue_name) else {
+            return Ok(None);
+        };
+        let requests = queue
+            .queued_request_ids
+            .iter()
+            .filter_map(|id| row.requests.get(&**id))
+            .map(|request| (request.agent_id.clone(), request.queue_task_id.clone()))
+            .collect::<Vec<_>>();
+        Ok(Some((queue.facility_id.clone(), requests)))
+    })?;
+    let Some((facility_id, requests)) = found.flatten() else {
+        return Ok(());
+    };
+    let model_state = attribute(world, intern!(py, "model_state"))?;
+    if exact_dict(&model_state)?.contains(KEY)? {
+        let mirror = mirror_held(world)?;
+        let moving = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
+            Ok(row.journeys.values().any(|journey| journey.queue_id.as_deref() == Some(queue_name) && is_queue_trip(&journey.purpose)))
+        })?;
+        if moving {
+            return Ok(());
+        }
+    }
+    if requests.is_empty() {
+        return Ok(());
+    }
+    let policy = policy_of(world)?;
+    let store = entities_of(world)?;
+    EntityStore::with_rows(&store, |rows| {
+        let Some(facility) = rows.facilities.get(&*facility_id) else {
+            return unsupported("no such facility");
+        };
+        let service = service_of(&facility.kind)?;
+        for (agent_id, task_id) in &requests {
+            let Some(task) = rows.active_tasks.get(task_id) else {
+                continue;
+            };
+            let waited = minute.checked_sub(task.start_minute).ok_or_else(|| Unsupported::new_err("a start out of range"))?.max(0);
+            let need = match policy {
+                Policy::Strict => 0.0,
+                Policy::NeedWeighted { .. } => match rows.agents.get(agent_id) {
+                    Some(agent) => need_of(&agent.needs, service)?,
+                    None => return unsupported("no such agent"),
+                },
+            };
+            if abandons(&policy, service, need, waited) {
+                return unsupported("someone gives up on the queue");
+            }
+        }
+        Ok(())
+    })
 }
 
 // ---- progress_physical_queue_positions and _head_to_service --------------------------------------
@@ -423,6 +539,7 @@ fn plan_trip(
     route: Route,
     minute: i64,
     phase: &'static str,
+    fifo: Option<&Fifo>,
 ) -> PyResult<Plan> {
     let due = minute.checked_add(route.minutes).ok_or_else(|| Unsupported::new_err("a due minute out of range"))?;
     if route.minutes <= 0 || due >= writer.duration() {
@@ -438,12 +555,35 @@ fn plan_trip(
         return unsupported("a facility with an empty ID");
     }
     let task_kind = if resource { "resource_service_queue" } else { "toilet_queue" };
-    let Some((_, task)) = rows.active_tasks.iter().find(|(_, task)| {
-        task.agent_id.as_deref() == Some(&*route.agent_id)
-            && task.resource_id.as_deref() == Some(facility_id)
-            && &*task.kind == task_kind
-    }) else {
+    // `request_for_agent`, whose task and place in the queue a trip names.
+    let queue_request = match fifo {
+        Some(fifo) => match fifo.requests.iter().find(|request| request.agent_id == route.agent_id) {
+            Some(request) => Some((fifo, request)),
+            None => return unsupported("a person of the queue has no request"),
+        },
+        None => None,
+    };
+    let task = match queue_request {
+        Some((_, request)) => rows.active_tasks.get(&*request.queue_task_id),
+        None => rows
+            .active_tasks
+            .iter()
+            .find(|(_, task)| {
+                task.agent_id.as_deref() == Some(&*route.agent_id)
+                    && task.resource_id.as_deref() == Some(facility_id)
+                    && &*task.kind == task_kind
+            })
+            .map(|(_, task)| task),
+    };
+    let Some(task) = task else {
         return unsupported("a queue reservation has no matching task");
+    };
+    let fifo_position = match queue_request {
+        Some((fifo, request)) => match fifo.queued_request_ids.iter().position(|id| *id == request.request_id) {
+            Some(place) => place,
+            None => return unsupported("a request of the walk is not queued"),
+        },
+        None => route.index,
     };
     if route.path.iter().any(|point| !usable(point.x, point.y)) {
         return unsupported("a route point is not a usable point");
@@ -453,12 +593,16 @@ fn plan_trip(
     let purpose: Arc<str> = Arc::from(format!("{}_queue_{phase}", if resource { "resource" } else { "toilet" }));
     let zone = facility.zone_id.clone();
     let zone_ids = vec![zone.clone(), zone.clone()];
-    let mut payload = IndexMap::with_capacity(10);
+    let mut payload = IndexMap::with_capacity(12);
     payload.insert(Arc::from("agent_id"), V::Str(route.agent_id.clone()));
     payload.insert(Arc::from("task_id"), V::Str(task.id.clone()));
     payload.insert(Arc::from("purpose"), V::Str(purpose.clone()));
     payload.insert(Arc::from("destination_zone_id"), V::Str(zone.clone()));
     payload.insert(Arc::from("facility_id"), text(facility_id));
+    if let Some((fifo, request)) = queue_request {
+        payload.insert(Arc::from("queue_id"), V::Str(fifo.queue_id.clone()));
+        payload.insert(Arc::from("request_id"), V::Str(request.request_id.clone()));
+    }
     payload.insert(Arc::from("origin_zone_id"), V::Str(zone.clone()));
     payload.insert(Arc::from("route_zone_ids"), V::List(vec![V::Str(zone.clone()), V::Str(zone.clone())]));
     payload.insert(Arc::from("route_edge_ids"), V::List(Vec::new()));
@@ -470,7 +614,7 @@ fn plan_trip(
     provenance.insert(Arc::from("policy_version"), text(POLICY_VERSION));
     provenance.insert(Arc::from("queue_phase"), text(phase));
     provenance.insert(Arc::from("queue_requested_at"), V::Int(task.start_minute));
-    provenance.insert(Arc::from("fifo_position"), V::Int(route.index as i64));
+    provenance.insert(Arc::from("fifo_position"), V::Int(fifo_position as i64));
     let Some(event) = EventRow::new(
         event_id.clone(),
         EventKind::Completion,
@@ -501,7 +645,7 @@ fn plan_trip(
         route_points: route.path.iter().map(|point| Point { x: point.x, y: point.y }).collect(),
         started_minute: minute,
         due_minute: due,
-        queue_id: None,
+        queue_id: fifo.map(|fifo| fifo.queue_id.clone()),
         support_request_id: None,
         support_staff_id: None,
     };
@@ -588,8 +732,9 @@ fn slot_route(
     agent_id: &str,
     facility: &FacilityRow,
     facility_id: &str,
+    fifo: Option<&Fifo>,
 ) -> PyResult<Option<(i64, Arc<[Pt]>)>> {
-    let Some(destination) = queue_slot(geo, row, rows, agent_id, facility_id)? else {
+    let Some(destination) = queue_slot_in(geo, row, rows, agent_id, facility_id, fifo.map(Fifo::slot_view))? else {
         return Ok(None);
     };
     let Some(agent) = rows.agents.get(agent_id) else {
@@ -614,7 +759,7 @@ fn slot_route(
     Ok(Some((minutes, path)))
 }
 
-/// `progress_physical_queue_positions`, for a facility's own queue.
+/// `progress_physical_queue_positions`.
 #[pyfunction]
 #[pyo3(signature = (world, facility_id, *, resource, minute, queue_id=None))]
 fn progress_physical_queue_positions<'py>(
@@ -624,7 +769,6 @@ fn progress_physical_queue_positions<'py>(
     minute: &Bound<'py, PyAny>,
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<bool> {
-    given_queue_id(queue_id)?;
     if no_geometry(world)? {
         return Ok(false);
     }
@@ -635,6 +779,9 @@ fn progress_physical_queue_positions<'py>(
     if geo.layout.is_none() {
         return unsupported("no floor plan");
     }
+    let fifo = fifo_of(world, &geo, queue_id)?;
+    let queue_name = fifo.as_ref().map(|fifo| &*fifo.queue_id);
+    let service_point = fifo.as_ref().map(|fifo| &*fifo.service_point_id);
     let mirror = mirror_held(world)?;
     let writer = EventWriter::of(world)?;
     let scene = Scene::of(world)?;
@@ -646,12 +793,15 @@ fn progress_physical_queue_positions<'py>(
             let Some(facility) = rows.facilities.get(facility_name) else {
                 return Ok((true, Plan::Nothing));
             };
-            let queue = members(facility, resource);
+            let queue: &[Arc<str>] = match &fifo {
+                Some(fifo) => &fifo.members,
+                None => members(facility, resource),
+            };
             let head = queue.first();
             let head_walks = |row: &MovementRow| {
-                head.is_some_and(|head| queue_trips(row, facility_name).any(|(id, _)| id == head))
+                head.is_some_and(|head| fifo_trips(row, facility_name, queue_name).any(|(id, _)| id == head))
             };
-            if queue_trips(row, facility_name).any(|(_, journey)| journey.purpose.ends_with("_position")) {
+            if fifo_trips(row, facility_name, queue_name).any(|(_, journey)| journey.purpose.ends_with("_position")) {
                 return Ok((head_walks(row), Plan::Nothing));
             }
             for (index, agent_id) in queue.iter().enumerate() {
@@ -659,12 +809,12 @@ fn progress_physical_queue_positions<'py>(
                     if head_walks(row) {
                         continue;
                     }
-                    let route = approach(&geo, row, rows, raw_model.clone(), agent_id, facility_name)?;
+                    let route = approach_point(&geo, row, rows, raw_model.clone(), agent_id, facility_name, service_point)?;
                     if route.is_some_and(|(minutes, path)| minutes <= 0 || path.len() < 2) {
                         continue;
                     }
                 }
-                let target = queue_slot(&geo, row, rows, agent_id, facility_name)?;
+                let target = queue_slot_in(&geo, row, rows, agent_id, facility_name, fifo.as_ref().map(Fifo::slot_view))?;
                 let current = position_point(row.positions.get(&**agent_id));
                 if current.is_some_and(|point| !usable(point.x, point.y)) {
                     return unsupported("a position is not a usable point");
@@ -674,7 +824,7 @@ fn progress_physical_queue_positions<'py>(
                         continue;
                     }
                 }
-                let route = slot_route(&geo, row, rows, raw_model.clone(), agent_id, facility, facility_name)?;
+                let route = slot_route(&geo, row, rows, raw_model.clone(), agent_id, facility, facility_name, fifo.as_ref())?;
                 let Some((minutes, path)) = route.filter(|(_, path)| !path.is_empty()) else {
                     if index > 0 {
                         return Ok((false, Plan::Blocked));
@@ -684,7 +834,7 @@ fn progress_physical_queue_positions<'py>(
                 // `list.index`, which a person listed twice would make another place.
                 let place = queue.iter().position(|other| other == agent_id).unwrap_or(index);
                 let route = Route { agent_id: agent_id.clone(), index: place, minutes, path };
-                let plan = plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "position")?;
+                let plan = plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "position", fifo.as_ref())?;
                 return Ok((index == 0, plan));
             }
             Ok((false, Plan::Nothing))
@@ -694,7 +844,7 @@ fn progress_physical_queue_positions<'py>(
     Ok(result)
 }
 
-/// `progress_physical_queue_head_to_service`, for a facility's own queue.
+/// `progress_physical_queue_head_to_service`.
 #[pyfunction]
 #[pyo3(signature = (world, facility_id, *, resource, minute, queue_id=None))]
 fn progress_physical_queue_head_to_service<'py>(
@@ -704,8 +854,11 @@ fn progress_physical_queue_head_to_service<'py>(
     minute: &Bound<'py, PyAny>,
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<bool> {
-    given_queue_id(queue_id)?;
-    head_to_service(world, facility_id, exact_bool(resource)?, plain_minute(minute)?)
+    let queue_name = match queue_id {
+        Some(queue) if !queue.is_none() => Some(exact_str(queue)?),
+        _ => None,
+    };
+    head_to_service(world, facility_id, exact_bool(resource)?, plain_minute(minute)?, queue_name)
 }
 
 /// That rule: false has written nothing, and Unsupported changes nothing.
@@ -714,6 +867,7 @@ pub(crate) fn head_to_service<'py>(
     facility_id: &Bound<'py, PyAny>,
     resource: bool,
     minute: i64,
+    queue_id: Option<&str>,
 ) -> PyResult<bool> {
     if no_geometry(world)? {
         return Ok(false);
@@ -724,6 +878,15 @@ pub(crate) fn head_to_service<'py>(
     if geo.layout.is_none() {
         return unsupported("no floor plan");
     }
+    let fifo = match queue_id {
+        Some(queue) => match Fifo::read(world, &geo, queue)? {
+            Some(fifo) => Some(fifo),
+            None => return unsupported("a queue ID without the queues"),
+        },
+        None => None,
+    };
+    let queue_name = fifo.as_ref().map(|fifo| &*fifo.queue_id);
+    let service_point = fifo.as_ref().map(|fifo| &*fifo.service_point_id);
     let mirror = mirror_held(world)?;
     let writer = EventWriter::of(world)?;
     let scene = Scene::of(world)?;
@@ -735,20 +898,24 @@ pub(crate) fn head_to_service<'py>(
             let Some(facility) = rows.facilities.get(facility_name) else {
                 return Ok((true, Plan::Nothing));
             };
-            let Some(agent_id) = members(facility, resource).first() else {
+            let queue: &[Arc<str>] = match &fifo {
+                Some(fifo) => &fifo.members,
+                None => members(facility, resource),
+            };
+            let Some(agent_id) = queue.first() else {
                 return Ok((false, Plan::Nothing));
             };
-            if queue_trips(row, facility_name).any(|(id, _)| id == agent_id) {
+            if fifo_trips(row, facility_name, queue_name).any(|(id, _)| id == agent_id) {
                 return Ok((true, Plan::Nothing));
             }
-            let Some((minutes, path)) = approach(&geo, row, rows, raw_model, agent_id, facility_name)? else {
+            let Some((minutes, path)) = approach_point(&geo, row, rows, raw_model, agent_id, facility_name, service_point)? else {
                 return Ok((true, Plan::Blocked));
             };
             if minutes <= 0 || path.len() < 2 {
                 return Ok((false, Plan::Nothing));
             }
             let route = Route { agent_id: agent_id.clone(), index: 0, minutes, path };
-            Ok((true, plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "service")?))
+            Ok((true, plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "service", fifo.as_ref())?))
         })
     })?;
     write_plan(world, &mirror, &store, &writer, facility_id, plan)?;
@@ -757,6 +924,7 @@ pub(crate) fn head_to_service<'py>(
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare_facility_queue, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_independent_facility_queue, m)?)?;
     m.add_function(wrap_pyfunction!(progress_physical_queue_positions, m)?)?;
     m.add_function(wrap_pyfunction!(progress_physical_queue_head_to_service, m)?)?;
     Ok(())

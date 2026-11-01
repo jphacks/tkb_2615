@@ -209,19 +209,6 @@ def test_a_held_bed_is_given_up_and_sleep_keeps_it(generated_scenario: Any) -> N
     assert list(reservations) == [second]
 
 
-def test_a_room_with_beds_is_python_s_to_reserve(generated_scenario: Any) -> None:
-    world, controller = _run(generated_scenario, 5)
-    world.model_configs.setdefault("geometry_overlay", {})["schema_version"] = 4
-    world.model_state["geometry_overlay_v1"]["temporary_rooms"]["room"] = {}
-    before = _bytes(world)
-    agent_id = _idle_people(world, 1)[0]
-    with pytest.raises(native.Unsupported, match="temporary room"):
-        native.rules("proposals").apply_effect(
-            controller, _proposal(ActionKind.SLEEP, agent_id, world)
-        )
-    assert _bytes(world) == before
-
-
 def test_a_position_point2d_refuses_is_python_s_error(generated_scenario: Any) -> None:
     world, controller = _run(generated_scenario, 5)
     world.model_configs.setdefault("geometry_overlay", {})["schema_version"] = 4

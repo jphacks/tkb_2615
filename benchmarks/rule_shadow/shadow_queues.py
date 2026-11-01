@@ -18,6 +18,7 @@ from shadow_movement import _Twin
 
 KEY = "movement_v1"
 SERVICE_KEY = "resource_service_v1"
+QUEUES_KEY = "facility_queues_v1"
 ROW_CHECK_EVERY = 25
 QUEUE_LISTS = (
     "queue_agent_ids",
@@ -43,6 +44,9 @@ class _QueueTwin(_Twin):
         service = world.model_state.get(SERVICE_KEY)
         if isinstance(service, dict):
             table[SERVICE_KEY] = {"stall_state": json.loads(json.dumps(service["stall_state"]))}
+        queues = world.model_state.get(QUEUES_KEY)
+        if queues is not None:
+            table[QUEUES_KEY] = json.loads(json.dumps(queues))
         self.__dict__.update(
             metric_state=dict(world.metric_state),
             id_counters=dict(world.id_counters),
