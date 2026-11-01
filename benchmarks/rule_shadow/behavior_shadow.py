@@ -1,11 +1,11 @@
 """Compare the proposals of rules/behavior.rs with Python's at every call: see sitecustomize.py.
 
-Each `_propose_due` runs the Python rule on the same view, then the kernel of rules/decisions.rs, and
-compares every field of every proposal bit by bit: its type, a float's hex, the order of each dict's
-keys, the key of the draw, and what a row answers without its object. The same for each
-`_observed_state`. The rows go on, so shadow_decisions.py sees the real path. The view is compared by
-world_view_shadow.py. Results are in DIR/behavior, with what the runs reached: a branch no scenario
-takes is not compared.
+Each `_propose_due` runs the Python rule on the same view, then the kernel of rules/decisions.rs,
+and compares every field of every proposal bit by bit: its type, a float's hex, the order of each
+dict's keys, the key of the draw, and what a row answers without its object. The same for each
+`_observed_state`. The rows go on, so shadow_decisions.py sees the real path. The view is compared
+by world_view_shadow.py. Results are in DIR/behavior, with what the runs reached: a branch no
+scenario takes is not compared.
 """
 
 from __future__ import annotations

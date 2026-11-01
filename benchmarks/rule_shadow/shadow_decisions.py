@@ -2,8 +2,8 @@
 
 Rust calls `commit_action` and `remember_decision` itself, so shadow_action_lifecycle.py and
 shadow_agent_dynamics.py see only what they leave to Python. Here each call runs the Python rules
-first, with the sink's method putting back what it appended, and the two other rules on the same kind
-of twins as those shadows. Then the kernel runs on the real world. They must give:
+first, with the sink's method putting back what it appended, and the two other rules on the same
+kind of twins as those shadows. Then the kernel runs on the real world. They must give:
 
 - the same row in `sink.observations`, compared bit by bit with the keys in their order, and the
   same row the index reads;
