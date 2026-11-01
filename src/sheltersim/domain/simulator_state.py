@@ -343,7 +343,9 @@ def validate_simulator_extensions(
             tick_memo=tick_memo,
             history_memo=history_memo,
         )
-    if not rust_validated(world, "population_dynamics_v1"):
+    if (tick_memo is None or not tick_memo.dynamics_unchanged) and not rust_validated(
+        world, "population_dynamics_v1"
+    ):
         validate_population_dynamics_state(world)
     if (tick_memo is None or not tick_memo.lifecycle_unchanged) and not rust_validated(
         world, "population_lifecycle_v1"
