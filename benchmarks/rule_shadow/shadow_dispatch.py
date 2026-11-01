@@ -53,6 +53,7 @@ def _capture_after_arrival(handler_class: Any) -> None:
         return original(self, world, event, *rest)
 
     after_arrival.captures = True  # type: ignore[attr-defined]
+    after_arrival.__wrapped__ = original.__wrapped__  # type: ignore[attr-defined]
     handler_class._after_arrival = after_arrival
 
 

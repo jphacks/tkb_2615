@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.facility_queues import (
@@ -79,6 +80,7 @@ class ToiletServiceManager:
         self.min_service_minutes = min_service_minutes
         self.max_service_minutes = max_service_minutes
 
+    @kernel_first("toilet", "request")
     def request(
         self,
         agent_id: str,
@@ -189,9 +191,7 @@ class ToiletServiceManager:
         if minute != world.minute_index:
             raise ValueError("facility arbitration minute must match WorldState")
         started: list[ScheduledEvent] = []
-        for facility in sorted(world.facilities.values(), key=lambda item: item.id):
-            if "toilet" not in facility.kind.casefold():
-                continue
+        for facility in self._facilities_to_serve():
             if facility_has_independent_queues(world, facility.id):
                 started.extend(self._arbitrate_independent_facility(facility, minute, rng))
                 continue
@@ -286,6 +286,15 @@ class ToiletServiceManager:
         if validate_state:
             world.validate()
         return tuple(started)
+
+    @kernel_first("toilet", "facilities_to_serve")
+    def _facilities_to_serve(self) -> list[Any]:
+        """The toilet facilities in ID order."""
+        return [
+            facility
+            for facility in sorted(self.world.facilities.values(), key=lambda item: item.id)
+            if "toilet" in facility.kind.casefold()
+        ]
 
     def _arbitrate_independent_facility(
         self, facility: object, minute: int, rng: KeyedRandom

@@ -27,7 +27,7 @@ use crate::rules::resources::{apply_planned, Operation};
 use crate::rules::social_network::mapping_get;
 use crate::rules::staff_dynamics::{is_available, is_available_now, staff_status};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
-use crate::state::events::{is_stable_id, EventKind, EventRow, EventStatus, EventWriter};
+use crate::state::events::{is_stable_id, EventKind, EventRef, EventRow, EventStatus, EventWriter};
 use crate::state::metric_state::MetricRow;
 use crate::state::resource_ledger::{held_mirror as ledger_mirror, resource_index, LedgerRow};
 use crate::state::resource_service::{held_mirror, RequestRecord, ServiceRow, Stall, StallRecord};
@@ -690,36 +690,28 @@ fn serve_head<'py>(
 /// `ResourceServiceManager.complete`.
 #[pyfunction]
 fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    complete_event(manager, EventRef::Object(event))
+}
+
+/// `complete` of an event's row or object.
+pub(crate) fn complete_event<'py>(manager: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<()> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
     let world = &manager.world;
-    let payload = attribute(event, intern!(py, "payload"))?;
-    let field = |name: &Bound<'py, PyString>| -> PyResult<Bound<'py, PyAny>> {
-        mapping_get(&payload, name)?.ok_or_else(|| Unsupported::new_err("the payload lacks a field"))
-    };
     // `_assert_service_event_matches_task`. Anything it would refuse goes to it.
-    if payload.len()? != 7 {
+    if event.payload_len()? != 7 {
         return unsupported("the payload has other fields");
     }
-    let (facility_object, agent_object, task_object, resource_object, reservation_object, quantity_object, staff_object) = (
-        field(intern!(py, "facility_id"))?,
-        field(intern!(py, "agent_id"))?,
-        field(intern!(py, "task_id"))?,
-        field(intern!(py, "resource_id"))?,
-        field(intern!(py, "reservation_id"))?,
-        field(intern!(py, "quantity"))?,
-        field(intern!(py, "staff_id"))?,
-    );
-    let task_id = exact_str(&task_object)?;
-    let (facility_id, agent_id, resource_id, staff_id) =
-        (exact_str(&facility_object)?, exact_str(&agent_object)?, exact_str(&resource_object)?, exact_str(&staff_object)?);
-    let quantity = exact_int(&quantity_object)?;
-    let kind_object = attribute(&attribute(event, intern!(py, "kind"))?, intern!(py, "_value_"))?;
-    let type_object = attribute(event, intern!(py, "event_type"))?;
-    if exact_str(&kind_object)? != "completion"
-        || exact_str(&type_object)? != "resource_service_complete"
-        || exact_str(&reservation_object)? != task_id
-    {
+    let lacks = || Unsupported::new_err("the payload lacks a field");
+    let facility_arc = event.text("facility_id")?.ok_or_else(lacks)?;
+    let agent_arc = event.text("agent_id")?.ok_or_else(lacks)?;
+    let task_arc = event.text("task_id")?.ok_or_else(lacks)?;
+    let resource_given = event.text("resource_id")?.ok_or_else(lacks)?;
+    let reservation = event.text("reservation_id")?.ok_or_else(lacks)?;
+    let staff_arc = event.text("staff_id")?.ok_or_else(lacks)?;
+    let quantity = event.int("quantity")?.ok_or_else(lacks)?;
+    let (facility_id, agent_id, task_id, resource_id, staff_id) = (&*facility_arc, &*agent_arc, &*task_arc, &*resource_given, &*staff_arc);
+    if !event.is_completion()? || &*event.event_type()? != "resource_service_complete" || *reservation != *task_id {
         return unsupported("the event does not match");
     }
     let Some(index) = resource_index(resource_id) else {
@@ -729,9 +721,8 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
     if !is_stable_id(task_id) || !is_stable_id(agent_id) {
         return unsupported("an ID is for the Python rule to judge");
     }
-    let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
-    let event_id_object = attribute(event, intern!(py, "event_id"))?;
-    let event_id: Arc<str> = Arc::from(exact_str(&event_id_object)?);
+    let due = event.due_minute()?;
+    let event_id = event.event_id()?;
     if !is_stable_id(&event_id) {
         return unsupported("an ID is for the Python rule to judge");
     }
@@ -796,7 +787,6 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
     }
 
     let source = Source::of(&manager)?;
-    let (task_arc, agent_arc): (Arc<str>, Arc<str>) = (Arc::from(task_id), Arc::from(agent_id));
     let resource_arc = if is_water { NAMES.water.clone() } else { NAMES.food.clone() };
     let audit = audit_row(
         &writer,
@@ -809,17 +799,19 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
     )?;
     let reservation_ids = service_list(&manager.table, intern!(py, "active_reservation_ids"))?;
     let facilities = attribute(world, intern!(py, "facilities"))?;
-    let Some(facility) = raw_dict_get(&facilities, &facility_object)? else {
+    let Some(facility) = raw_dict_get(&facilities, PyString::new(py, facility_id).as_any())? else {
         return unsupported("a row has no object");
     };
     let staff_map = attribute(world, intern!(py, "staff"))?;
-    let Some(staff) = raw_dict_get(&staff_map, &staff_object)? else {
+    let Some(staff) = raw_dict_get(&staff_map, PyString::new(py, staff_id).as_any())? else {
         return unsupported("a row has no object");
     };
     let agents = attribute(world, intern!(py, "agents"))?;
-    let Some(agent) = raw_dict_get(&agents, &agent_object)? else {
+    let agent_object = PyString::new(py, agent_id);
+    let Some(agent) = raw_dict_get(&agents, agent_object.as_any())? else {
         return unsupported("a row has no object");
     };
+    let task_object = PyString::new(py, task_id);
     let active_tasks = attribute(world, intern!(py, "active_tasks"))?;
     let needs = attribute(&agent, intern!(py, "needs"))?;
 
@@ -872,7 +864,7 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
     raw_setattr(&staff, intern!(py, "active_task_id"), py.None().as_ptr())?;
     raw_setattr(&staff, intern!(py, "busy_until"), 0_i64.into_pyobject(py)?.as_ptr())?;
     active_tasks.del_item(&task_object)?;
-    set_agent(world, &store, &agent_object, Activity::Idle, None)?;
+    set_agent(world, &store, agent_object.as_any(), Activity::Idle, None)?;
     add_one(&metrics, "resource_service_completed_count")
 }
 
@@ -926,6 +918,16 @@ fn record_request_outcome<'py>(
         detail: optional(detail)?,
     };
     append_outcome(py, &mirror, record)
+}
+
+/// `ResourceServiceManager.request`, without the world's whole validation.
+pub(crate) fn queue_up<'py>(
+    manager: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = manager.py();
+    request(manager, agent_id, facility_id, None, Some(PyBool::new(py, false).as_any()), None)
 }
 
 /// `ResourceServiceManager.request`, without the world's whole validation.

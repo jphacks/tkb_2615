@@ -25,9 +25,12 @@ use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::action_lifecycle::{complete_for_event, ends_any_action};
 use crate::rules::agent_dynamics::learn_facility_of;
 use crate::rules::body_state::record_social_event;
+use crate::rules::care_receipts::{record_transition, PlannedTransition};
+use crate::rules::movement::finish_movement;
 use crate::rules::social_interaction::apply_event;
 use crate::rules::social_network::observe_event;
-use crate::rules::travel_completion;
+use crate::rules::travel::schedule_return;
+use crate::rules::{service, support, toilet, travel_completion};
 use crate::state::entities::{entities_of, Activity, EntityStore};
 use crate::state::events::{DueEvent, DueState, EventRef, EventRow, EventStatus, EventWriter};
 use crate::state::movement::MovementRow;
@@ -35,6 +38,10 @@ use crate::Unsupported;
 
 const SOCIAL_INTERACTION: &str = "social_interaction";
 const AGENT_TRAVEL_COMPLETE: &str = "agent_travel_complete";
+const TOILET_COMPLETE: &str = "toilet_service_complete";
+const RESOURCE_COMPLETE: &str = "resource_service_complete";
+const SUPPORT_TIMEOUT: &str = "support_request_timeout";
+const SUPPORT_COMPLETE: &str = "staff_support_complete";
 const MOVEMENT: &str = "movement_v1";
 const SOCIAL_NETWORK: &str = "social_network_v1";
 
@@ -42,6 +49,12 @@ const SOCIAL_NETWORK: &str = "social_network_v1";
 struct Table {
     social: (Py<PyType>, Py<PyAny>),
     travel: (Py<PyType>, Py<PyAny>),
+    toilet: (Py<PyType>, Py<PyAny>),
+    resource: (Py<PyType>, Py<PyAny>),
+    timeout: (Py<PyType>, Py<PyAny>),
+    support: (Py<PyType>, Py<PyAny>),
+    /// `AgentTravelCompletionHandler._after_arrival` as defined.
+    after_arrival: Py<PyAny>,
     dispatcher: Py<PyType>,
     suppressed: Py<PyType>,
     failed: Py<PyType>,
@@ -50,6 +63,8 @@ struct Table {
 
 static TABLE: GILOnceCell<Table> = GILOnceCell::new();
 static PHASE_MODULE: GILOnceCell<Py<PyModule>> = GILOnceCell::new();
+/// `DispatchPhase._schedule_return_to_initial_zone`, as `phases/dispatch.py` defines it.
+static RETURN_RULE: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
 
 /// Each call goes through the Python entry of its rule, for benchmarks/rule_shadow, which replaces
 /// those. Then the same kernels run, and a shadow sees each call.
@@ -83,6 +98,23 @@ counters!(
     travel_ran,
     travel_failed,
     travel_refused,
+    toilet_ran,
+    toilet_refused,
+    toilet_return_ran,
+    toilet_return_python,
+    resource_ran,
+    resource_refused,
+    timeout_ran,
+    timeout_suppressed,
+    timeout_refused,
+    support_ran,
+    support_refused,
+    finished_direct,
+    finished_python,
+    interrupted_ran,
+    interrupted_refused,
+    started_ran,
+    started_refused,
     record_social_ran,
     record_social_refused,
     observe_ran,
@@ -273,7 +305,9 @@ impl<'py> Phase<'_, 'py> {
                 Err(error) => self.expected_outcome(error).map(Some),
             };
         }
-        match travel_completion::apply_event(handler, self.world, event, object) {
+        let table = self.table;
+        let direct = handler.get_type().getattr(intern!(py, "_after_arrival"))?.is(table.after_arrival.bind(py));
+        match travel_completion::apply_event(handler, self.world, event, object, direct) {
             Ok(()) => {
                 count(&COUNTS.travel_ran);
                 Ok(Some((EventStatus::Applied, None)))
@@ -288,6 +322,128 @@ impl<'py> Phase<'_, 'py> {
                 count(&COUNTS.travel_failed);
                 Ok(Some(done))
             }
+        }
+    }
+
+    /// `toilet_service_complete`: the release, then the walk home, each of which may go to Python.
+    fn toilet(
+        &self,
+        handler: &Bound<'py, PyAny>,
+        event: EventRef<'_, 'py>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Handled> {
+        let py = self.py();
+        let after = attribute(handler, intern!(py, "after_complete"))?;
+        // The controller's own step, or else the handler is for Python to run.
+        let goes_home = !after.is_none()
+            && match (after.getattr(intern!(py, "__self__")), after.getattr(intern!(py, "__func__")), RETURN_RULE.get(py)) {
+                (Ok(owner), Ok(rule), Some(known)) if owner.is(self.controller) && rule.is(known.bind(py)) => true,
+                _ => return Ok(None),
+            };
+        if !self.direct {
+            return match handler.call_method1(intern!(py, "apply"), (self.world, object()?)) {
+                Ok(_) => Ok(Some((EventStatus::Applied, None))),
+                Err(error) => self.expected_outcome(error).map(Some),
+            };
+        }
+        match toilet::complete_event(self.world, event) {
+            Ok(()) => count(&COUNTS.toilet_ran),
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                refused(py, TOILET_COMPLETE, &COUNTS.toilet_refused, &error);
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+        if goes_home {
+            match schedule_return(self.controller, self.world, event) {
+                Ok(()) => count(&COUNTS.toilet_return_ran),
+                Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                    count(&COUNTS.toilet_return_python);
+                    if let Err(error) = after.call1((self.world, object()?)) {
+                        return self.expected_outcome(error).map(Some);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(Some((EventStatus::Applied, None)))
+    }
+
+    fn resource(
+        &self,
+        handler: &Bound<'py, PyAny>,
+        event: EventRef<'_, 'py>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Handled> {
+        let py = self.py();
+        if !self.direct {
+            return match handler.call_method1(intern!(py, "apply"), (self.world, object()?)) {
+                Ok(_) => Ok(Some((EventStatus::Applied, None))),
+                Err(error) => self.expected_outcome(error).map(Some),
+            };
+        }
+        if exact_int(&attribute(self.world, intern!(py, "schema_version"))?).ok() != Some(6) {
+            return Ok(None);
+        }
+        match service::complete_event(&attribute(handler, intern!(py, "service"))?, event) {
+            Ok(()) => {
+                count(&COUNTS.resource_ran);
+                Ok(Some((EventStatus::Applied, None)))
+            }
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                refused(py, RESOURCE_COMPLETE, &COUNTS.resource_refused, &error);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn timeout(
+        &self,
+        handler: &Bound<'py, PyAny>,
+        event: EventRef<'_, 'py>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Handled> {
+        let py = self.py();
+        if !self.direct {
+            return match handler.call_method1(intern!(py, "apply"), (self.world, object()?)) {
+                Ok(_) => Ok(Some((EventStatus::Applied, None))),
+                Err(error) => self.expected_outcome(error).map(Some),
+            };
+        }
+        let cooldown = exact_int(&attribute(handler, intern!(py, "cooldown_minutes"))?)?;
+        match support::timeout_event(self.world, event, cooldown) {
+            Ok(None) => {
+                count(&COUNTS.timeout_ran);
+                Ok(Some((EventStatus::Applied, None)))
+            }
+            Ok(Some(text)) => {
+                count(&COUNTS.timeout_ran);
+                count(&COUNTS.timeout_suppressed);
+                Ok(Some((EventStatus::Suppressed, Some(text.to_owned()))))
+            }
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                refused(py, SUPPORT_TIMEOUT, &COUNTS.timeout_refused, &error);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `staff_support_complete`. The receipt's record follows the event's own, once that is settled.
+    fn support(&self, handler: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<Option<Option<PlannedTransition>>> {
+        let py = self.py();
+        let writer = EventWriter::of(self.world)?;
+        match support::complete_support_event(handler, self.world, &writer, event) {
+            Ok(planned) => {
+                count(&COUNTS.support_ran);
+                Ok(Some(planned))
+            }
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                refused(py, SUPPORT_COMPLETE, &COUNTS.support_refused, &error);
+                Ok(None)
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -407,6 +563,11 @@ impl<'py> Phase<'_, 'py> {
         let handler = match &*event_type {
             SOCIAL_INTERACTION => self.table_handler(SOCIAL_INTERACTION, &table.social)?,
             AGENT_TRAVEL_COMPLETE => self.table_handler(AGENT_TRAVEL_COMPLETE, &table.travel)?,
+            TOILET_COMPLETE => self.table_handler(TOILET_COMPLETE, &table.toilet)?,
+            RESOURCE_COMPLETE => self.table_handler(RESOURCE_COMPLETE, &table.resource)?,
+            SUPPORT_TIMEOUT => self.table_handler(SUPPORT_TIMEOUT, &table.timeout)?,
+            // In Python it returns a record, for the dispatcher to append: only the direct call.
+            SUPPORT_COMPLETE if self.direct => self.table_handler(SUPPORT_COMPLETE, &table.support)?,
             _ => None,
         };
         drop(writer);
@@ -415,10 +576,20 @@ impl<'py> Phase<'_, 'py> {
             Some(handler) if !reference.has_provenance("effect_program_v1")? => handler,
             _ => return self.dispatch_in_python(&object()?, outcomes),
         };
-        let done = if &*event_type == SOCIAL_INTERACTION {
-            self.social(&handler, &object()?)?
-        } else {
-            self.travel(&handler, reference, &object)?
+        let mut receipt = None;
+        let done = match &*event_type {
+            SUPPORT_COMPLETE => match self.support(&handler, reference)? {
+                Some(planned) => {
+                    receipt = planned;
+                    Some((EventStatus::Applied, None))
+                }
+                None => None,
+            },
+            SOCIAL_INTERACTION => self.social(&handler, &object()?)?,
+            TOILET_COMPLETE => self.toilet(&handler, reference, &object)?,
+            RESOURCE_COMPLETE => self.resource(&handler, reference, &object)?,
+            SUPPORT_TIMEOUT => self.timeout(&handler, reference, &object)?,
+            _ => self.travel(&handler, reference, &object)?,
         };
         let Some((status, detail)) = done else {
             return self.dispatch_in_python(&object()?, outcomes);
@@ -427,6 +598,10 @@ impl<'py> Phase<'_, 'py> {
         // Before the slot goes, so that a record Python compares has the queue's object.
         let event = due.object.as_ref().map(|object| object.bind(py).clone());
         self.settle(&due, &object, status, detail.as_deref())?;
+        if let Some(receipt) = receipt {
+            // `dispatch_one` appends the handler's record, then `after_event` projects it.
+            record_transition(self.world, &EventWriter::of(self.world)?, receipt)?;
+        }
         outcomes.push(Outcome { event_type, applied: status == EventStatus::Applied, row: due.row.clone(), event });
         Ok(())
     }
@@ -488,13 +663,41 @@ impl<'py> Phase<'_, 'py> {
                 Err(error) => return Err(error),
             };
             if staff_travel {
-                self.controller
-                    .call_method1(intern!(py, "_record_staff_support_started"), (world, outcome.event(py)?))?;
+                let done = self.direct
+                    && match support::record_started(world, outcome.reference()) {
+                        Ok(()) => {
+                            count(&COUNTS.started_ran);
+                            true
+                        }
+                        Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                            refused(py, "_record_staff_support_started", &COUNTS.started_refused, &error);
+                            false
+                        }
+                        Err(error) => return Err(error),
+                    };
+                if !done {
+                    self.controller
+                        .call_method1(intern!(py, "_record_staff_support_started"), (world, outcome.event(py)?))?;
+                }
             }
         }
-        if &*event_type == "support_request_timeout" {
-            self.controller
-                .call_method1(intern!(py, "_record_request_interrupted"), (world, outcome.event(py)?))?;
+        if &*event_type == SUPPORT_TIMEOUT {
+            let done = self.direct
+                && match support::record_interrupted(world, outcome.reference()) {
+                    Ok(()) => {
+                        count(&COUNTS.interrupted_ran);
+                        true
+                    }
+                    Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                        refused(py, "_record_request_interrupted", &COUNTS.interrupted_refused, &error);
+                        false
+                    }
+                    Err(error) => return Err(error),
+                };
+            if !done {
+                self.controller
+                    .call_method1(intern!(py, "_record_request_interrupted"), (world, outcome.event(py)?))?;
+            }
         }
         Ok(())
     }
@@ -560,7 +763,6 @@ impl<'py> Phase<'_, 'py> {
     }
 
     fn stopped_journeys(&self) -> PyResult<()> {
-        let py = self.py();
         let mirror = mirror_of(self.world, MOVEMENT)?;
         let mut ids: Vec<Arc<str>> =
             NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| Ok(row.journeys.iter().map(|(id, _)| id.clone()).collect()))?;
@@ -585,9 +787,28 @@ impl<'py> Phase<'_, 'py> {
                 })
             })?;
             if stopped {
-                self.controller.call_method1(intern!(py, "_finish_stopped_journey"), (&*id,))?;
+                self.finish_journey(&id, purpose.as_deref())?;
             }
         }
+        Ok(())
+    }
+
+    /// `_finish_stopped_journey`. A bed's position is read from the overlay in Python.
+    fn finish_journey(&self, id: &Arc<str>, purpose: Option<&str>) -> PyResult<()> {
+        let py = self.py();
+        let key = PyString::new(py, id);
+        if self.direct && purpose != Some("sleep_bed") {
+            match finish_movement(self.world, key.as_any()) {
+                Ok(()) => {
+                    count(&COUNTS.finished_direct);
+                    return Ok(());
+                }
+                Err(error) if error.is_instance_of::<Unsupported>(py) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        count(&COUNTS.finished_python);
+        self.controller.call_method1(intern!(py, "_finish_stopped_journey"), (key,))?;
         Ok(())
     }
 
@@ -683,10 +904,16 @@ fn run_phase<'py>(
 
 /// What `events/handlers.py` gives once: the handlers the table stands for, as defined.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn install_table<'py>(
     py: Python<'py>,
     social: (Bound<'py, PyType>, Bound<'py, PyAny>),
     travel: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    toilet: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    resource: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    timeout: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    support: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    after_arrival: Bound<'py, PyAny>,
     dispatcher: Bound<'py, PyType>,
 ) -> PyResult<()> {
     let models = py.import("sheltersim.events.models")?;
@@ -694,6 +921,11 @@ fn install_table<'py>(
     let table = Table {
         social: (social.0.unbind(), social.1.unbind()),
         travel: (travel.0.unbind(), travel.1.unbind()),
+        toilet: (toilet.0.unbind(), toilet.1.unbind()),
+        resource: (resource.0.unbind(), resource.1.unbind()),
+        timeout: (timeout.0.unbind(), timeout.1.unbind()),
+        support: (support.0.unbind(), support.1.unbind()),
+        after_arrival: after_arrival.unbind(),
         dispatcher: dispatcher.unbind(),
         suppressed: models.getattr("EventSuppressed")?.downcast_into::<PyType>()?.unbind(),
         failed: models.getattr("EventApplicationError")?.downcast_into::<PyType>()?.unbind(),
@@ -706,6 +938,13 @@ fn install_table<'py>(
     // A second import of the module, as `importlib.reload` makes, keeps the first table: the
     // classes then differ from the handlers', which go to Python.
     let _ = TABLE.set(py, table);
+    Ok(())
+}
+
+/// What `phases/dispatch.py` gives once: its step that a toilet's completion leads to.
+#[pyfunction]
+fn install_return_rule(py: Python<'_>, rule: Bound<'_, PyAny>) -> PyResult<()> {
+    let _ = RETURN_RULE.set(py, rule.unbind());
     Ok(())
 }
 
@@ -724,12 +963,20 @@ fn stats<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDic
             reasons.set_item(reason, *times)?;
         }
     }
-    Ok((counts_of(py)?, reasons))
+    let counts = counts_of(py)?;
+    let (ran, arrivals_refused, arrival_reasons) = travel_completion::arrival_counts();
+    counts.set_item("arrival_ran", ran)?;
+    counts.set_item("arrival_refused", arrivals_refused)?;
+    for (reason, times) in arrival_reasons {
+        reasons.set_item(format!("_after_arrival: {reason}"), times)?;
+    }
+    Ok((counts, reasons))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_phase, m)?)?;
     m.add_function(wrap_pyfunction!(install_table, m)?)?;
+    m.add_function(wrap_pyfunction!(install_return_rule, m)?)?;
     m.add_function(wrap_pyfunction!(use_python_entries, m)?)?;
     m.add_function(wrap_pyfunction!(stats, m)?)?;
     Ok(())

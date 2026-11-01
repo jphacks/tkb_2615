@@ -218,30 +218,29 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
     let (record_type, event_type) = (exact_str(&record_type)?, exact_str(&event_type)?);
     let changes = state_changes(world, &field(intern!(py, "state_changes"))?)?;
 
-    let mut document: IndexMap<Arc<str>, V> = IndexMap::with_capacity(15);
-    let mut put = |name: &str, value: V| {
-        document.insert(Arc::from(name), value);
+    let record = CareRecord {
+        record_type: Arc::from(record_type),
+        schema,
+        event_type: Arc::from(event_type),
+        event_id,
+        request_id,
+        agent_id,
+        household_id,
+        support_kind,
+        status_text,
+        status,
+        minute,
+        staff_id,
+        observation,
+        changes,
+        causation_id,
+        sources,
     };
-    put("record_type", V::Str(Arc::from(record_type)));
-    put("schema_version", V::Int(schema));
-    put("event_type", V::Str(Arc::from(event_type)));
-    put("event_id", V::Str(event_id.clone()));
-    put("request_id", V::Str(request_id.clone()));
-    put("agent_id", V::Str(agent_id.clone()));
-    put("household_id", text_value(&household_id));
-    put("support_kind", V::Str(support_kind.clone()));
-    put("status", V::Str(status_text.clone()));
-    put("minute", V::Int(minute));
-    put("staff_id", text_value(&staff_id));
-    put("outcome_observation", V::Str(observation));
-    put("state_changes", changes);
-    put("causation_id", text_value(&causation_id));
-    put("source_ids", V::List(sources.iter().map(|source| V::Str(source.clone())).collect()));
-    let document = V::Map(document);
+    let document = record.document();
 
     // The event of the receipt: applied at this minute, of this type, with this payload.
     let log = world.getattr(intern!(py, "event_log"))?;
-    let event_record = log.call_method1(intern!(py, "find"), (&*event_id,))?;
+    let event_record = log.call_method1(intern!(py, "find"), (&*record.event_id,))?;
     if event_record.is_none() {
         return unsupported("the receipt has no event");
     }
@@ -255,56 +254,128 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
     let Some(row) = EventRow::from_event(&event)? else {
         return unsupported("the receipt's event has no row");
     };
-    if &*row.event_type != event_type
+    if *row.event_type != *record.event_type
         || row.payload != document
-        || row.causation_id != causation_id
-        || !row.source_id.as_ref().is_none_or(|source| sources.contains(source))
+        || row.causation_id != record.causation_id
+        || !row.source_id.as_ref().is_none_or(|source| record.sources.contains(source))
     {
         return unsupported("the receipt does not match its event");
     }
 
-    // The plan on the row.
-    let first_request = if status == CareStatus::Requested {
-        writer.log().borrow().first_care_request_event_of(&request_id).map(Arc::<str>::from)
+    let plan = plan_record(&writer, &mirror, &record)?;
+    write_record(py, &mirror, &record, &document, plan)
+}
+
+/// What `record_shared_operation` holds of a care receipt, as `model_dump(mode="json")` gives it.
+pub(crate) struct CareRecord {
+    pub(crate) record_type: Arc<str>,
+    pub(crate) schema: i64,
+    pub(crate) event_type: Arc<str>,
+    pub(crate) event_id: Arc<str>,
+    pub(crate) request_id: Arc<str>,
+    pub(crate) agent_id: Arc<str>,
+    pub(crate) household_id: Option<Arc<str>>,
+    pub(crate) support_kind: Arc<str>,
+    pub(crate) status_text: Arc<str>,
+    pub(crate) status: CareStatus,
+    pub(crate) minute: i64,
+    pub(crate) staff_id: Option<Arc<str>>,
+    pub(crate) observation: Arc<str>,
+    pub(crate) changes: V,
+    pub(crate) causation_id: Option<Arc<str>>,
+    pub(crate) sources: Vec<Arc<str>>,
+}
+
+impl CareRecord {
+    pub(crate) fn document(&self) -> V {
+        let mut document: IndexMap<Arc<str>, V> = IndexMap::with_capacity(15);
+        let mut put = |name: &str, value: V| {
+            document.insert(Arc::from(name), value);
+        };
+        put("record_type", V::Str(self.record_type.clone()));
+        put("schema_version", V::Int(self.schema));
+        put("event_type", V::Str(self.event_type.clone()));
+        put("event_id", V::Str(self.event_id.clone()));
+        put("request_id", V::Str(self.request_id.clone()));
+        put("agent_id", V::Str(self.agent_id.clone()));
+        put("household_id", text_value(&self.household_id));
+        put("support_kind", V::Str(self.support_kind.clone()));
+        put("status", V::Str(self.status_text.clone()));
+        put("minute", V::Int(self.minute));
+        put("staff_id", text_value(&self.staff_id));
+        put("outcome_observation", V::Str(self.observation.clone()));
+        put("state_changes", self.changes.clone());
+        put("causation_id", text_value(&self.causation_id));
+        put("source_ids", V::List(self.sources.iter().map(|source| V::Str(source.clone())).collect()));
+        V::Map(document)
+    }
+}
+
+/// What `plan_record` found: the request's first minute, and whether the history is full.
+pub(crate) struct PlannedRecord {
+    created_minute: i64,
+    overflow: bool,
+}
+
+/// The checks of `record_shared_operation` on the row. Unsupported for what fails one; nothing changes.
+pub(crate) fn plan_record(
+    writer: &EventWriter<'_>,
+    mirror: &Bound<'_, NamespaceMirror>,
+    record: &CareRecord,
+) -> PyResult<PlannedRecord> {
+    let (event_id, request_id, minute) = (&record.event_id, &record.request_id, record.minute);
+    let first_request = if record.status == CareStatus::Requested {
+        writer.log().borrow().first_care_request_event_of(request_id).map(Arc::<str>::from)
     } else {
         None
     };
-    let plan = NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(mirror, |row| {
         if !row.header_is_valid() {
             return unsupported("the state is not one the contract takes");
         }
         let Some(mut recent) = row.history.recent_verified(minute) else {
             return unsupported("a recent receipt was not checked here");
         };
-        if recent.any(|item| item.event_id.as_deref() == Some(&*event_id)) {
+        if recent.any(|item| item.event_id.as_deref() == Some(&**event_id)) {
             return unsupported("the event already has a receipt");
         }
-        let prior = row.support_requests.map.get(&request_id);
-        if !transition_is_allowed(prior.map(|head| head.status), status) {
+        let prior = row.support_requests.map.get(request_id);
+        if !transition_is_allowed(prior.map(|head| head.status), record.status) {
             return unsupported("the transition is out of order");
         }
         if let Some(prior) = prior {
-            if prior.agent_id != agent_id || prior.household_id != household_id || prior.support_kind != support_kind {
+            if prior.agent_id != record.agent_id
+                || prior.household_id != record.household_id
+                || prior.support_kind != record.support_kind
+            {
                 return unsupported("the request's identity changed");
             }
         } else {
-            if first_request.as_ref().is_some_and(|first| *first != event_id) {
+            if first_request.as_ref().is_some_and(|first| first != event_id) {
                 return unsupported("the request ID was used before");
             }
             if row.support_requests.map.len() >= MAX_REQUESTS {
                 return unsupported("too many requests");
             }
         }
-        let created = prior.map_or(minute, |head| head.created_minute);
-        if minute < created {
+        let created_minute = prior.map_or(minute, |head| head.created_minute);
+        if minute < created_minute {
             return unsupported("the update precedes the creation");
         }
-        let overflow = row.history.items.len() + 1 > MAX_HISTORY;
-        Ok((created, overflow))
-    })?;
-    let (created_minute, overflow) = plan;
+        Ok(PlannedRecord { created_minute, overflow: row.history.items.len() + 1 > MAX_HISTORY })
+    })
+}
 
-    // The writes. Nothing below fails on a valid state.
+/// The writes of `record_shared_operation`. Nothing here fails on a valid state.
+pub(crate) fn write_record(
+    py: Python<'_>,
+    mirror: &Bound<'_, NamespaceMirror>,
+    record: &CareRecord,
+    document: &V,
+    plan: PlannedRecord,
+) -> PyResult<()> {
+    let PlannedRecord { created_minute, overflow } = plan;
+    let (event_id, request_id, minute) = (&record.event_id, &record.request_id, record.minute);
     let mut encoder = Encoder { out: Vec::with_capacity(512) };
     document.write_json(&mut encoder)?;
     let receipt = Receipt {
@@ -315,27 +386,27 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
         bytes: encoder.out.into_boxed_slice(),
     };
     let tree_document = document.to_py(py)?;
-    let new_head = status.is_open().then(|| CareHead {
+    let new_head = record.status.is_open().then(|| CareHead {
         request_id: request_id.clone(),
-        agent_id: agent_id.clone(),
-        household_id: household_id.clone(),
-        support_kind: support_kind.clone(),
-        status,
+        agent_id: record.agent_id.clone(),
+        household_id: record.household_id.clone(),
+        support_kind: record.support_kind.clone(),
+        status: record.status,
         created_minute,
         updated_minute: minute,
         latest_event_id: event_id.clone(),
     });
     let head_document = new_head.as_ref().map(|head| Field::to_py(head, py)).transpose()?;
-    NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(mirror, |row| {
         match new_head {
-            Some(head) => match row.support_requests.map.get_mut(&request_id) {
+            Some(head) => match row.support_requests.map.get_mut(request_id) {
                 Some(slot) => *slot = head,
                 None => {
                     row.support_requests.map.insert(request_id.clone(), head);
                 }
             },
             None => {
-                row.support_requests.map.shift_remove(&request_id);
+                row.support_requests.map.shift_remove(request_id);
             }
         }
         row.history.items.push_back(receipt);
@@ -346,13 +417,13 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
         Ok(())
     })?;
     match &head_document {
-        Some(head) => NamespaceMirror::write_through(&mirror, &["support_requests"], &request_id, head)?,
-        None => NamespaceMirror::remove_through(&mirror, &["support_requests"], &request_id)?,
+        Some(head) => NamespaceMirror::write_through(mirror, &["support_requests"], request_id, head)?,
+        None => NamespaceMirror::remove_through(mirror, &["support_requests"], request_id)?,
     }
-    NamespaceMirror::append_through(&mirror, &["history"], &tree_document)?;
+    NamespaceMirror::append_through(mirror, &["history"], &tree_document)?;
     if overflow {
-        NamespaceMirror::write_through(&mirror, &[], "history_truncated", PyBool::new(py, true).as_any())?;
-        NamespaceMirror::drop_oldest_through(&mirror, &["history"], 1)?;
+        NamespaceMirror::write_through(mirror, &[], "history_truncated", PyBool::new(py, true).as_any())?;
+        NamespaceMirror::drop_oldest_through(mirror, &["history"], 1)?;
     }
     Ok(())
 }

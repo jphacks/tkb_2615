@@ -757,6 +757,11 @@ impl EventStore {
         Ok(self.add(fields, Handles::default(), Some(written.into_boxed_slice())))
     }
 
+    /// The support kinds with applied completion records for one person.
+    pub(crate) fn completed_kinds(&self, agent_id: &str) -> &[String] {
+        self.completed_support_kinds.get(agent_id).map_or(&[], Vec::as_slice)
+    }
+
     /// The event of a request's first care record, if it has one.
     pub(crate) fn first_care_request_event_of(&self, request_id: &str) -> Option<&str> {
         self.first_care_request.get(request_id).map(String::as_str)

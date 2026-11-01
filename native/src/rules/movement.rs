@@ -1311,7 +1311,7 @@ pub(crate) fn plan_start(
 
 /// `finish_movement`.
 #[pyfunction]
-fn finish_movement<'py>(world: &Bound<'py, PyAny>, agent_id: &Bound<'py, PyAny>) -> PyResult<()> {
+pub(crate) fn finish_movement<'py>(world: &Bound<'py, PyAny>, agent_id: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     if !exact_dict(&table)?.contains(KEY)? {
