@@ -39,6 +39,7 @@ use crate::state::entities::{entities_of, EntityStore};
 use crate::state::social_propagation::{ContactRecord, SocialRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }

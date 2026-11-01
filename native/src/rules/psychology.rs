@@ -37,6 +37,7 @@ const MONITOR_SUFFIXES: [&str; 5] =
     [":current_run", ":longest_run", ":episodes", ":recovered_run_total", ":recovered_run_count"];
 const MINUTES_PER_DAY: i64 = 1440;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }

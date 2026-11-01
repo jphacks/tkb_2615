@@ -26,7 +26,36 @@ mod validation;
 // The `state` and `rules` modules, found by build.rs.
 include!(concat!(env!("OUT_DIR"), "/lanes.rs"));
 
-create_exception!(sheltersim_native, Unsupported, PyException);
+mod exception {
+    use super::*;
+    create_exception!(sheltersim_native, Unsupported, PyException);
+}
+
+/// The exception of a kernel that leaves a value to Python. A type of its own so that building one
+/// says where (`core/census.rs`), at every site, without each site saying so.
+pub(crate) struct Unsupported;
+
+impl Unsupported {
+    #[track_caller]
+    #[inline]
+    pub(crate) fn new_err<A>(reason: A) -> PyErr
+    where
+        A: AsRef<str> + pyo3::PyErrArguments + Send + Sync + 'static,
+    {
+        core::census::raised(reason.as_ref());
+        exception::Unsupported::new_err(reason)
+    }
+}
+
+// SAFETY: the type object is that of the exception above, which is what this type stands for.
+unsafe impl pyo3::PyTypeInfo for Unsupported {
+    const NAME: &'static str = "Unsupported";
+    const MODULE: Option<&'static str> = Some("sheltersim_native");
+
+    fn type_object_raw(py: Python<'_>) -> *mut pyo3::ffi::PyTypeObject {
+        exception::Unsupported::type_object_raw(py)
+    }
+}
 
 // Deeper values are left to the json module, which raises RecursionError itself.
 pub(crate) const MAX_DEPTH: usize = 512;
@@ -263,6 +292,9 @@ fn float_json(value: f64) -> PyResult<String> {
 #[pymodule]
 fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("Unsupported", module.py().get_type::<Unsupported>())?;
+    module.add_function(wrap_pyfunction!(core::census::census_switch, module)?)?;
+    module.add_function(wrap_pyfunction!(core::census::census_caught, module)?)?;
+    module.add_function(wrap_pyfunction!(core::census::census_take, module)?)?;
     module.add_function(wrap_pyfunction!(core::tracked::install_tracked_types, module)?)?;
     module.add_function(wrap_pyfunction!(core::tracked::install_id_map_type, module)?)?;
     module.add_class::<core::world_core::WorldCore>()?;

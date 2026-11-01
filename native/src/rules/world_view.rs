@@ -36,6 +36,7 @@ use crate::state::information::{InformationRow, NAME as INFORMATION};
 use crate::state::psychological_distress::{DistressRow, NAME as DISTRESS};
 use crate::{write_json_string, Encoder, Unsupported};
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }

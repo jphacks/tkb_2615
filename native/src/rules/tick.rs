@@ -21,6 +21,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
 
+use crate::core::census;
 use crate::core::row::{attribute, exact_int, unsupported};
 use crate::core::world_core::raw_dict_get;
 use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
@@ -57,6 +58,7 @@ static KERNELS_REFUSED: AtomicU64 = AtomicU64::new(0);
 static REFUSALS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new());
 static KERNEL_REASONS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
+#[track_caller]
 fn refuse<T>(reason: &'static str) -> PyResult<T> {
     if let Ok(mut refusals) = REFUSALS.lock() {
         *refusals.entry(reason).or_default() += 1;
@@ -65,8 +67,9 @@ fn refuse<T>(reason: &'static str) -> PyResult<T> {
 }
 
 /// Whether a kernel said Unsupported, which leaves the step to its Python rule.
-fn refused(py: Python<'_>, error: &PyErr) -> bool {
+fn refused(py: Python<'_>, error: &PyErr, kernel: &str) -> bool {
     if error.is_instance_of::<Unsupported>(py) {
+        census::caught(py, kernel, error);
         KERNELS_REFUSED.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut reasons) = KERNEL_REASONS.lock() {
             *reasons.entry(error.value(py).to_string()).or_default() += 1;
@@ -81,7 +84,7 @@ fn refused(py: Python<'_>, error: &PyErr) -> bool {
 macro_rules! or_rule {
     ($py:expr, $kernel:expr, $rule:expr) => {
         match $kernel {
-            Err(error) if refused($py, &error) => $rule,
+            Err(error) if refused($py, &error, concat!("or_rule ", stringify!($kernel))) => $rule,
             other => other,
         }
     };
@@ -89,6 +92,7 @@ macro_rules! or_rule {
 
 /// `getattr(holder, name).__wrapped__`: the Python rule behind `kernel_first`.
 fn rule_of<'py>(holder: &Bound<'py, PyAny>, name: &Bound<'py, PyString>) -> PyResult<Bound<'py, PyAny>> {
+    census::called_back(&name.to_string_lossy());
     holder.getattr(name)?.getattr(intern!(holder.py(), "__wrapped__"))
 }
 

@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 OUTPUT = os.environ.get("SHELTERSIM_RULE_SHADOW")
+# Not a shadow: it counts refusals (refusal_census.py), and needs no comparison to run.
+CENSUS_OUTPUT = os.environ.get("SHELTERSIM_REFUSAL_CENSUS")
 
 
 def _floats(value: Any) -> int:
@@ -150,6 +152,9 @@ def _install(output: str) -> None:
 
     atexit.register(report)
 
+
+if CENSUS_OUTPUT:
+    importlib.import_module("refusal_census").install(CENSUS_OUTPUT)
 
 if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
     # A plain run that only says what the dispatch loop's direct calls did (shadow_dispatch.py).
