@@ -457,7 +457,7 @@ fn query_pressure_is_high(table: &Bound<'_, PyDict>, policy: &Bound<'_, PyAny>, 
 
 /// `_apply_effect`: the target, the next decision, and whether the decision committed.
 #[pyfunction]
-fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let py = controller.py();
     let action = attribute(proposal, intern!(py, "action"))?;
     let action = attribute(&action, intern!(py, "_value_"))?;

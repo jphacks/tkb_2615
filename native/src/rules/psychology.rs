@@ -343,7 +343,7 @@ fn write_long_term<'py>(
 
 /// `_update_long_term_psychology` of the update phase (experiments/phases/segments.py).
 #[pyfunction]
-fn update_long_term<'py>(
+pub(crate) fn update_long_term<'py>(
     controller: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     _view: &Bound<'py, PyAny>,
@@ -1083,7 +1083,7 @@ fn new_delta<'py>(
 /// `_psychology_update` of the update phase, on a tick that records no psychology trace. A trace
 /// stays with Python's `explain_update`: this kernel writes no trace document.
 #[pyfunction]
-fn update_psychology<'py>(
+pub(crate) fn update_psychology<'py>(
     controller: &Bound<'py, PyAny>,
     view: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
@@ -1264,7 +1264,7 @@ fn body_mirror<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, Nam
 /// path, before anything changes; anything else is Python's to accept or to refuse in its own
 /// words. A value with the bits of the row is not written again.
 #[pyfunction]
-fn apply_deltas<'py>(
+pub(crate) fn apply_deltas<'py>(
     _controller: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     deltas: &Bound<'py, PyAny>,

@@ -157,6 +157,7 @@ if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
     importlib.import_module("shadow_dispatch").prepare(OUTPUT)
     importlib.import_module("shadow_effects").prepare(OUTPUT)
     importlib.import_module("shadow_overlay").prepare(OUTPUT)
+    importlib.import_module("shadow_tick").count_ticks(OUTPUT)
 elif OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):

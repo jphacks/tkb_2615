@@ -1132,7 +1132,7 @@ fn queue_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, QueueStore>> 
 
 /// `advance_movement`.
 #[pyfunction]
-fn advance_movement<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn advance_movement<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let py = world.py();
     let minute = exact_int(minute)?;
     if minute.abs() >= EXACT_INT {

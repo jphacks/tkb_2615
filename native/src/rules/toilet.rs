@@ -206,7 +206,7 @@ fn request<'py>(
 
 /// `arbitrate`'s facilities with anyone queued, in ID order. Those with none do nothing there.
 #[pyfunction]
-fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
+pub(crate) fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
     let py = manager.py();
     let world = attribute(manager, intern!(py, "world"))?;
     // An independent queue of a facility whose list says nothing has its say in the Python rule.
@@ -239,7 +239,7 @@ fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, 
 
 /// `arbitrate`'s condition of a shared queue: someone in it and a free place.
 #[pyfunction]
-fn has_room<'py>(manager: &Bound<'py, PyAny>, facility_id: &Bound<'py, PyAny>) -> PyResult<bool> {
+pub(crate) fn has_room<'py>(manager: &Bound<'py, PyAny>, facility_id: &Bound<'py, PyAny>) -> PyResult<bool> {
     let py = manager.py();
     let world = attribute(manager, intern!(py, "world"))?;
     let table = attribute(&world, intern!(py, "model_state"))?;
@@ -263,7 +263,7 @@ fn has_room<'py>(manager: &Bound<'py, PyAny>, facility_id: &Bound<'py, PyAny>) -
 /// The rest of a pass of `arbitrate`'s loop: the head starts its service, and this says the started
 /// event's ID, or None when the service could not finish before the Run ends.
 #[pyfunction]
-fn start_head<'py>(
+pub(crate) fn start_head<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,

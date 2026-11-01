@@ -23,7 +23,7 @@ from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.world import WorldState
 from sheltersim.experiments.benchmark import build_benchmark_scenario, environment_manifest
-from sheltersim.experiments.runner import OfflineSimulationController, run_scenario
+from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.experiments.timeline import TimelineStore, _IndexedMetricSink
 from sheltersim.inspection import frames as inspection_frames
@@ -128,8 +128,6 @@ def main() -> None:
         def measured(*values, **kwargs):
             nonlocal last
             key = label or f"{owner.__name__}.{name}"
-            if name == "__call__":
-                key = "phase." + values[1].value
             wall, cpu = time.perf_counter(), time.thread_time()
             try:
                 return original(*values, **kwargs)
@@ -163,13 +161,32 @@ def main() -> None:
 
         setattr(owner, name, measured)
 
+    # A patch of a controller's step would send each tick past the Rust driver (rules/tick.rs), so
+    # the phases are timed between them: this is what a Run does.
+    build_engine = TickEngine.__init__
+
+    def engine_with_phase_times(engine, *values, **kwargs):
+        build_engine(engine, *values, **kwargs)
+        marks = {}
+
+        def phase_time(phase, before):
+            if before:
+                marks["wall"], marks["cpu"] = time.perf_counter(), time.thread_time()
+                return
+            row = totals.setdefault(
+                "phase." + phase.value, {"calls": 0, "wall_seconds": 0.0, "thread_seconds": 0.0}
+            )
+            row["calls"] += 1
+            row["wall_seconds"] += time.perf_counter() - marks["wall"]
+            row["thread_seconds"] += time.thread_time() - marks["cpu"]
+
+        engine.phase_observer = phase_time
+
+    TickEngine.__init__ = engine_with_phase_times
     for owner, name in (
         (TickEngine, "step"),
         (WorldState, "validate_after_tick"),
-        (OfflineSimulationController, "__call__"),
         (_IndexedMetricSink, "record_decision"),
-        # With the Rust kernels this records a decision, and record_decision doesn't run.
-        (OfflineSimulationController, "_record_outcome"),
         (_IndexedMetricSink, "record_social_decision"),
         (_IndexedMetricSink, "capture_metric"),
         (TimelineStore, "record"),

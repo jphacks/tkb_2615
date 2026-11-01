@@ -138,6 +138,12 @@ each OS, because both call the same libm.
   modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
   was. `state/effect_program.rs` is the row of `effect_program_v1`.
 
+- `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,
+  through `controller.run_tick` (`experiments/phases/driver.py`). Unsupported before anything changes
+  for a tick that a hook watches or changes (a trace, a Provider that can be called, a shadow, a patched
+  step or rule in the table of `install`). After that a kernel's Unsupported runs that step's Python rule.
+  `python_path_only(True)` sends every tick to `phase_handler`; `stats()` says what ran.
+
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
   a Rust function (`social_interaction`, `agent_travel_complete`, `toilet_service_complete`,
   `resource_service_complete`, `support_request_timeout`, `staff_support_complete`) runs it when the registered handler

@@ -649,7 +649,7 @@ fn with_plan<'py>(
 
 /// `_sample_information_contacts` of the sample phase (experiments/phases/segments.py).
 #[pyfunction]
-fn sample_contacts<'py>(
+pub(crate) fn sample_contacts<'py>(
     controller: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
     rng: &Bound<'py, PyAny>,
