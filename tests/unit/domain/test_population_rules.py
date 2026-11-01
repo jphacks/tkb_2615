@@ -23,13 +23,25 @@ from sheltersim.domain.population_lifecycle import (
     PopulationPresenceCommand,
     initialize_population_lifecycle_state,
 )
+from sheltersim.events.effects import (
+    EffectProgram,
+    EffectProgramGeometryHandler,
+    SupportMode,
+    TargetSelector,
+    TimedAction,
+    schedule_effect_program,
+)
+from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventApplicationError, EventKind, ScheduledEvent
+from sheltersim.experiments.scenario import ScenarioSpec
 
 pytestmark = pytest.mark.skipif(not native.available(), reason="the kernels are the subject")
 
 
 def _document(world: WorldState) -> str:
-    return world._canonical_text(world._canonical_data())
+    # A digest: pytest's report of two long documents that differ takes minutes.
+    text = world._canonical_text(world._canonical_data())
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _event(event_id: str = "arrival-event", minute: int = 0, **payload: Any) -> ScheduledEvent:
@@ -333,6 +345,22 @@ def test_a_retry_is_the_rule_s_event(world, provenance: dict[str, Any]) -> None:
     assert dict(retry.payload["nested"])["a"] == (1, 2.5)
 
 
+def test_the_last_retry_runs_and_the_next_is_the_rule_s_to_refuse(world) -> None:
+    _same_as_rule(
+        population,
+        "population",
+        "schedule_population_retry",
+        world,
+        _retry_event(population_retry={"count": 1439}),
+    )
+    before = _document(world)
+    with pytest.raises(native.Unsupported):
+        native.rules("population").schedule_population_retry(
+            world, _retry_event(population_retry={"count": 1440})
+        )
+    assert _document(world) == before
+
+
 def test_a_retry_at_the_end_of_the_scenario_is_refused(world) -> None:
     world.minute_index = world.duration_minutes - 1
     before = _document(world)
@@ -489,6 +517,109 @@ def test_a_command_the_rule_refuses_is_refused_with_nothing_changed(world, field
         population_lifecycle._apply_presence_action(
             world, candidate, event, typed, typed.selected_ids()
         )
+
+
+def _world_with_a_room(scenario: Any) -> WorldState:
+    """Everyone full but one surveyed room in the quiet area."""
+    document = scenario.model_dump(mode="json")
+    for zone in document["zones"]:
+        if zone["id"] in {"medical", "quiet"}:
+            zone["capacity"] = 0
+    made = WorldState.from_scenario(ScenarioSpec.model_validate(document))
+    room = TimedAction(
+        effect_id="room",
+        op="temporary_room_geometry",
+        target_selector=TargetSelector(kind="zone", target_id="quiet"),
+        start_minute=1,
+        end_minute=20,
+        parameters={
+            "schema_version": 1,
+            "room_id": "room",
+            "zone_id": "quiet",
+            "polygon_m": [
+                {"x": 8.0, "y": 2.4},
+                {"x": 9.3, "y": 2.4},
+                {"x": 9.3, "y": 4.4},
+                {"x": 8.0, "y": 4.4},
+            ],
+            "people_capacity": 4,
+            "sleeping_capacity": 0,
+            "bed_points_m": [],
+            "route_edge_ids": ["route_corridor_quiet", "route_quiet_corridor"],
+            "source_ids": ["ASM-TEST-ROOM"],
+        },
+        units="metre_2d",
+        source_id="ASM-TEST-ROOM",
+        policy_dependencies=["geometry_overlay_v1"],
+        reversible=False,
+    )
+    schedule_effect_program(
+        made,
+        EffectProgram(
+            program_id="room-program",
+            narrative="A surveyed room.",
+            source_text="room",
+            simulation_start_minute=1,
+            effects=[room],
+            assumptions=[],
+            support_mode=SupportMode.NATIVE,
+            compiler_provenance={"compiler_kind": "offline_rule", "compiler_version": "test-v1"},
+        ),
+    )
+    made.minute_index = 1
+    dispatcher = EventDispatcher({"effect_program_geometry": EffectProgramGeometryHandler()})
+    assert dispatcher.dispatch_due(made, 1)[0].status.value == "applied"
+    return made
+
+
+def _arrive_in_room(world: WorldState, count: int) -> None:
+    arrived = _same_as_rule(
+        population,
+        "population",
+        "queue_arrivals",
+        world,
+        event=_event(minute=1),
+        zone_id="medical",
+        count=count,
+        admission_zone_ids=("quiet",),
+    )
+    assert arrived == count
+
+
+def test_people_given_a_room_in_one_event_stand_apart(generated_scenario) -> None:
+    world = _world_with_a_room(generated_scenario)
+    _arrive_in_room(world, 3)
+    admissions = world.model_state["geometry_overlay_v1"]["room_admissions"]
+    assert len(admissions) == 3
+
+
+def test_a_room_admission_keeps_half_a_metre_from_who_is_there(generated_scenario) -> None:
+    probe = _world_with_a_room(generated_scenario)
+    _arrive_in_room(probe, 1)
+    (person,) = probe.model_state["geometry_overlay_v1"]["room_admissions"]
+    point = probe.model_state["movement_v1"]["positions"][person]["point"]
+
+    world = _world_with_a_room(generated_scenario)
+    resident = next(iter(world.agents))
+    world.model_state["geometry_overlay_v1"]["room_admissions"][resident] = {
+        "agent_id": resident,
+        "room_id": "room",
+        "admitted_minute": 1,
+        "event_id": "earlier",
+        "source_ids": ["ASM-TEST-ROOM"],
+    }
+    # Just past the rule's distance, so the same point is still free.
+    world.model_state["movement_v1"]["positions"][resident]["point"] = {
+        "x": point["x"] + 0.501,
+        "y": point["y"],
+    }
+    _arrive_in_room(world, 1)
+    new = next(
+        key
+        for key in world.model_state["geometry_overlay_v1"]["room_admissions"]
+        if key != resident
+    )
+    assert world.model_state["movement_v1"]["positions"][new]["point"] == point
 
 
 def test_a_full_presence_history_drops_its_oldest_as_the_rule_does(world) -> None:

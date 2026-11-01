@@ -47,8 +47,14 @@ Checkpoint document) and times them.
   or from Rust, so a check that read a namespace need not read it again
   (`state_mirror.namespace_stamp`, `field_stamp`; `core/tick_validation.py`).
 - `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
-  `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`. Their
-  rules are Python's (`docs/rust-port/lanes/m6-population.md`).
+  `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`
+  (`docs/rust-port/lanes/m6-population.md`).
+- `src/rules/population.rs`, `src/rules/population_lifecycle.rs`: the rules of `domain/population.py`
+  and `domain/population_lifecycle.py`, each behind `kernel_first`. A kernel plans, refuses before
+  its first write what the Python rule raises on, then writes with the rule's operations on the
+  tracked containers, which forward them to the rows. `rules/population.rs` also reads what admission
+  needs of `temporary_spaces.py` and `geometry_overlay.py`
+  (`docs/rust-port/lanes/m6-population-rules.md`).
 - `src/core/row.rs`: typed rows. `state_row!` writes `from_py`, `to_py`, `write_json`, the handling
   of forwarded writes and mirrored setters from a record's list of fields, and any `Field` is a
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
