@@ -825,6 +825,28 @@ impl QueueStore {
         Ok(Some(events))
     }
 
+    /// Whether a pending event's provenance has this key, without a copy of anything. Ok(None) if
+    /// an object is not a plain `ScheduledEvent`.
+    pub(crate) fn any_pending_has_provenance(&self, py: Python<'_>, key: &Bound<'_, PyString>) -> PyResult<Option<bool>> {
+        let class = models(py)?.event.bind(py);
+        for (_, serial) in &self.ordered {
+            let found = match &self.slots[serial].row {
+                Some(row) => matches!(&row.provenance, V::Map(provenance) if provenance.contains_key(key.to_str()?)),
+                None => {
+                    let object = self.objects[serial].bind(py);
+                    if !object.get_type().is(class) {
+                        return Ok(None);
+                    }
+                    object.getattr(intern!(py, "provenance"))?.contains(key)?
+                }
+            };
+            if found {
+                return Ok(Some(true));
+            }
+        }
+        Ok(Some(false))
+    }
+
     /// Whether this event is pending.
     pub(crate) fn has_event(&self, event_id: &str) -> bool {
         self.by_id.contains_key(event_id)

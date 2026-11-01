@@ -48,9 +48,9 @@
 
 ### 表現
 
-- **型付きの行：** `agents`、`psychological_distress_v1`、`social_propagation_v1`、`agent_dynamics_v1`、`staff_dynamics_v1`、`facility_queues_v1`。`staff_operations_v1`、`movement_v1`、`information_spread_v1` も型付きにします（自由な形の部分は V）。`social_network_v1.relationships`、`body_state_v1.agents/relationships` も同じです。
+- **型付きの行：** `agents`、`psychological_distress_v1`、`social_propagation_v1`、`agent_dynamics_v1`、`staff_dynamics_v1`、`facility_queues_v1`。`staff_operations_v1`、`movement_v1`、`information_spread_v1`、`effect_program_v1` も型付きにします（自由な形の部分は V）。`social_network_v1.relationships`、`body_state_v1.agents/relationships` も同じです。
 - **追記専用の正準 bytes と、規則が読む項目の索引：** `shared_operations_v1.history`、`body_state_v1.history`、`resource_ledger_v1.audit`、`resource_service_v1.request_history`、`queue_stall_history`（21 MB のうち約18 MB）。`care_receipt_for_request` は 1 tick に140回呼ばれるので、索引が要ります。
-- **V の木と、世代ごとの解析済みキャッシュ：** `geometry_overlay_v1`、`effect_program_v1`、`operational_events_v1`、`infrastructure_v1`、`zone_environment_v1`、`temporary_spaces_v1`、`population_*`、`llm`、実行時の名前空間、`model_configs`。
+- **V の木と、世代ごとの解析済みキャッシュ：** `geometry_overlay_v1`、`operational_events_v1`、`infrastructure_v1`、`zone_environment_v1`、`temporary_spaces_v1`、`population_*`、`llm`、実行時の名前空間、`model_configs`。
 - **P1 の結果を受けた表現の変更：**
   - 履歴は先頭を切り詰められる必要があります（`shared_operations_v1` は追記のたびに `del [:-N]` を呼びます）。
   - `population_presence_v1.history` は毎回丸ごと置き換えるので、V のままにします。

@@ -119,6 +119,12 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
+  `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
+  handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
+  modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
+  was. `state/effect_program.rs` is the row of `effect_program_v1`.
+
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
   a Rust function (`social_interaction`, `agent_travel_complete`) runs it when the registered handler
   is that class with its `apply` as defined; anything else, and any refused event, calls

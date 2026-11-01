@@ -626,13 +626,9 @@ class WorldState:
         except ValueError as exc:
             raise StateInvariantError(f"invalid zone environment state: {exc}") from exc
         try:
-            from sheltersim.events.effects import (
-                EFFECT_PROGRAM_STATE_KEY,
-                validate_effect_program_state,
-            )
+            from sheltersim.events.effects import validate_effect_program_state
 
-            if not rust_validated(self, EFFECT_PROGRAM_STATE_KEY):
-                validate_effect_program_state(self, validate_event_history=validate_event_history)
+            validate_effect_program_state(self, validate_event_history=validate_event_history)
         except ValueError as exc:
             raise StateInvariantError(f"invalid EffectProgram state: {exc}") from exc
         # What the kernel accepted is not read again; it leaves the zones it doesn't decide.
