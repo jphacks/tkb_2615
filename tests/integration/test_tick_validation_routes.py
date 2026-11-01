@@ -1,12 +1,12 @@
 """A state broken by any way of writing stops the tick with the Python rule's error.
 
 The per-tick check takes the word of a Rust row for psychological_distress_v1,
-information_spread_v1 and staff_dynamics_v1, and the Python rules of those namespaces no longer
-have Rust checks of their own in front of them. So each way of writing has to end in one of three
-places: a row that cannot hold the value, a kernel that says no, or a row the kernels do not trust
-any more; and then the Python rule speaks. docs/rust-port/lanes/t-tick-validation.md lists what
-proves what. Without the kernels the rules always run, so all of this holds in both modes, apart
-from the writes past a TrackedDict at the end.
+information_spread_v1, staff_dynamics_v1 and agent_dynamics_v1, and the Python rules of those
+namespaces no longer have Rust checks of their own in front of them. So each way of writing has to
+end in one of three places: a row that cannot hold the value, a kernel that says no, or a row the
+kernels do not trust any more; and then the Python rule speaks.
+docs/rust-port/lanes/t-tick-validation.md lists what proves what. Without the kernels the rules
+always run, so all of this holds in both modes, apart from the writes past a TrackedDict at the end.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from sheltersim.experiments.scenario import ScenarioSpec
 PSYCHOLOGY = "psychological_distress_v1"
 INFORMATION = "information_spread_v1"
 STAFF = "staff_dynamics_v1"
-OWNED = (PSYCHOLOGY, INFORMATION, STAFF)
+MEMORY = "agent_dynamics_v1"
+OWNED = (PSYCHOLOGY, INFORMATION, STAFF, MEMORY)
 
 PSYCHOLOGY_RANGE = (
     "invalid psychological distress state: long_term_distress must be finite and between 0 and 1"
@@ -107,6 +108,10 @@ def _staff_record(namespace: dict) -> dict:
     return _first(namespace["staff"])
 
 
+def _memory_record(namespace: dict) -> dict:
+    return _first(namespace["agents"])
+
+
 # name -> namespace, the dict holding the value, its key, the value, the error, its cause or None.
 BROKEN = {
     "distress out of range": (PSYCHOLOGY, _distress_record, "long_term_distress", 2.0),
@@ -116,6 +121,10 @@ BROKEN = {
     "pressure of the wrong type": (INFORMATION, _pressures, "A001", "x"),
     "staff fatigue out of range": (STAFF, _staff_record, "fatigue", 2.0),
     "staff fatigue of the wrong type": (STAFF, _staff_record, "fatigue", "x"),
+    "memory minute out of range": (MEMORY, _memory_record, "decision_due_minute", -1),
+    "memory minute of the wrong type": (MEMORY, _memory_record, "last_decision_minute", 1.5),
+    "memory of a facility not there": (MEMORY, _memory_record, "known_facility_ids", ["nowhere"]),
+    "memory schema": (MEMORY, _whole_namespace, "schema_version", 99),
 }
 ERRORS = {
     "distress out of range": PSYCHOLOGY_RANGE,
@@ -125,6 +134,10 @@ ERRORS = {
     "pressure of the wrong type": PRESSURE_RANGE,
     "staff fatigue out of range": EXTENSION,
     "staff fatigue of the wrong type": EXTENSION,
+    "memory minute out of range": EXTENSION,
+    "memory minute of the wrong type": EXTENSION,
+    "memory of a facility not there": EXTENSION,
+    "memory schema": EXTENSION,
 }
 
 

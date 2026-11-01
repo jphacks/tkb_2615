@@ -9,7 +9,7 @@ from sheltersim.contracts.policies import selected_models, selected_models_scope
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import WorldState
-from sheltersim.domain.action_lifecycle import active_action_index
+from sheltersim.domain.action_lifecycle import active_action_store
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.geometry_overlay import geometry_config_scope
 from sheltersim.domain.infrastructure import INFRASTRUCTURE_EVENT_TYPES
@@ -115,7 +115,7 @@ class OfflineSimulationController(
         self.world = world
         self._person_contexts: dict[str, Any] = {}
         self._closed_edges: dict[str, tuple[Any, set[str]]] = {}
-        self.active_actions = active_action_index(world)
+        self.active_actions = active_action_store(world)
         # The update phase's view, from which the next phase's view is made.
         self._view_before_proposals: WorldView | None = None
         # What rules/world_view.rs keeps between views.

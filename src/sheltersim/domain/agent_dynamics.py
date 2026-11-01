@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from sheltersim import native
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.facility_awareness import FacilityAwarenessConfig
 from sheltersim.policies.behavior import ActionProposal
@@ -37,6 +39,7 @@ ORIENTATION_FACILITY_KINDS = frozenset(
 )
 
 
+@kernel_first("agent_dynamics", "canonical_config")
 def canonical_agent_dynamics_config(raw: Any) -> dict[str, Any]:
     """Select the facility-awareness version; a missing config keeps v1 histories exact."""
     if raw is None:
@@ -74,6 +77,7 @@ def _initial_known_facility_ids(world: WorldState, zone_id: str) -> list[str]:
     )
 
 
+@kernel_first("agent_dynamics", "create_state")
 def create_agent_dynamics_state(world: WorldState) -> dict[str, Any]:
     """Create bounded decision memory without changing legacy Agent encodings."""
     return {
@@ -105,8 +109,7 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
         or set(state["agents"]) != set(world.agents)
     ):
         raise ValueError("agent_dynamics_v1 has an invalid exact schema")
-    valid = native.agent_dynamics_valid(state["agents"], world.facilities)
-    for agent_id, record in () if valid else state["agents"].items():
+    for agent_id, record in state["agents"].items():
         if (
             not isinstance(record, dict)
             or set(record)
@@ -130,6 +133,7 @@ def validate_agent_dynamics_state(world: WorldState) -> None:
             raise ValueError(f"agent_dynamics_v1 decision minute for {agent_id!r} is invalid")
 
 
+@kernel_first("agent_dynamics", "record_proposal")
 def record_proposal(world: WorldState, proposal: ActionProposal, *, target_id: str | None) -> None:
     """Persist the selected need-led intention while retaining full trace in artifacts."""
     state = _state(world)
@@ -143,6 +147,7 @@ def record_proposal(world: WorldState, proposal: ActionProposal, *, target_id: s
     record["decision_reason"] = proposal.trigger
 
 
+@kernel_first("agent_dynamics", "agent_knows_facility")
 def agent_knows_facility(world: WorldState, agent_id: str, facility_id: str) -> bool:
     """Apply explicit awareness only when the Scenario selected that model."""
     if not {"facility_awareness", "agent_dynamics"}.intersection(world.model_configs):
@@ -156,6 +161,7 @@ def agent_knows_facility(world: WorldState, agent_id: str, facility_id: str) -> 
     return record is not None and facility_id in record["known_facility_ids"]
 
 
+@kernel_first("agent_dynamics", "learn_facility")
 def learn_facility(world: WorldState, agent_id: str, facility_id: str) -> None:
     """Record a facility and visible co-located facilities after actual arrival."""
     state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
@@ -179,6 +185,7 @@ def learn_facility(world: WorldState, agent_id: str, facility_id: str) -> None:
     record["known_facility_ids"] = sorted(set(record["known_facility_ids"]) | discovered_ids)
 
 
+@kernel_first("agent_dynamics", "announce_installed_facility")
 def announce_installed_facility(world: WorldState, facility_id: str) -> None:
     """Tell present Agents about a shared facility installed during the Run (v3 only).
 
@@ -201,6 +208,7 @@ def announce_installed_facility(world: WorldState, facility_id: str) -> None:
             record["known_facility_ids"] = sorted((*record["known_facility_ids"], facility_id))
 
 
+@kernel_first("agent_dynamics", "add_agent")
 def add_agent(world: WorldState, agent_id: str) -> None:
     """Initialize memory for a dynamically admitted Agent."""
     state = world.model_state.get(AGENT_DYNAMICS_STATE_KEY)
@@ -237,3 +245,7 @@ def _new_agent_dynamics_record(world: WorldState, agent_id: str) -> dict[str, An
         "decision_due_minute": agent.next_decision_at,
         "decision_reason": None,
     }
+
+
+if native.available():
+    register_rust_validator(AGENT_DYNAMICS_STATE_KEY, native.state("agent_dynamics").validate)

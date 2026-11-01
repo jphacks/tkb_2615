@@ -320,6 +320,14 @@ member_field!(Activity, ACTIVITIES, activity, activity_values, [Idle, Moving, Qu
 member_field!(Mobility, MOBILITIES, mobility, mobility_values, [Independent, Assisted, Wheelchair]);
 member_field!(RequestStatus, STATUSES, status, status_values, [Pending, Assigned, Resolved, Unresolved]);
 
+impl Activity {
+    /// The member's `.value`.
+    pub(crate) fn text(self) -> PyResult<&'static str> {
+        let values = &installed().map_err(|misfit| PyRuntimeError::new_err(misfit.0))?.activity_values;
+        Ok(&values[self as usize])
+    }
+}
+
 // ---- Rows ------------------------------------------------------------------------------------
 
 /// A document holds this field only in WorldState v6.

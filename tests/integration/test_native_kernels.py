@@ -305,34 +305,6 @@ def test_the_body_agent_check_judges_every_record_as_python_does(
     )
 
 
-def test_the_agent_dynamics_check_judges_every_record_as_python_does(
-    generated_scenario, monkeypatch
-) -> None:
-    from sheltersim.domain.agent_dynamics import validate_agent_dynamics_state
-
-    world = _world_with_extensions(generated_scenario)
-    agents = world.model_state["agent_dynamics_v1"]["agents"]
-    agent_id = next(iter(agents))
-    facility = next(iter(world.facilities))
-    _same_outcomes(
-        world,
-        validate_agent_dynamics_state,
-        "agent_dynamics_valid",
-        monkeypatch,
-        agents[agent_id],
-        [
-            {"known_facility_ids": [facility]},
-            {"known_facility_ids": [facility, facility]},
-            {"known_facility_ids": ["nowhere"]},
-            {"known_facility_ids": (facility,)},
-            {"known_facility_ids": "text"},
-        ]
-        + [{"last_decision_minute": value} for value in (None, 0, 3, -1, True, 1.0, 10**30)]
-        + [{"decision_due_minute": value} for value in (0, 3, -1, True, 1.0, 10**30)],
-        lambda record: agents.__setitem__(agent_id, record),
-    )
-
-
 def test_the_position_check_judges_every_record_as_python_does(
     generated_scenario, monkeypatch
 ) -> None:
@@ -468,7 +440,6 @@ def test_the_rust_checks_accept_the_state_of_a_real_run(generated_scenario, tmp_
         lambda key: _pair_key_is_good(key, agents=agents),
     )
     assert native.body_agents_valid(body["agents"])
-    assert native.agent_dynamics_valid(state["agent_dynamics_v1"]["agents"], world.facilities)
     assert native.movement_positions_valid(
         state["movement_v1"]["positions"], world.zones, world.zone_edges
     )
