@@ -20,8 +20,9 @@ from sheltersim import native
 SEGMENTS: dict[str, tuple[str, str]] = {
     "_view_after_movement": ("world_view", "view_after_movement"),
     "_view_for_proposals": ("world_view", "view_for_proposals"),
-    "_propose_due": ("behavior", "propose_due"),
-    "_observed_state": ("behavior", "observed_state"),
+    "_propose_due": ("decisions", "propose_rows"),
+    "_observed_state": ("decisions", "observed_row"),
+    "_record_outcome": ("decisions", "record_outcome"),
     "_psychology_update": ("psychology", "update_psychology"),
     "_update_long_term_psychology": ("psychology", "update_long_term"),
     "_apply_state_deltas": ("psychology", "apply_deltas"),

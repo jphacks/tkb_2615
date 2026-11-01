@@ -530,7 +530,7 @@ class HistoryIndex:
         branch: str,
         checkpoint: Any,
         *,
-        observations: list[dict[str, Any]] | None = None,
+        observations: list[dict[str, Any] | bytes] | None = None,
         rebuild: bool = False,
         inherit_from: str | None = None,
     ) -> None:
@@ -841,6 +841,9 @@ class HistoryIndex:
                 for record in history[first:]:
                     records.put(kind, {**record, "minute": record[field]})
             for row in observations or []:
+                # rules/decisions.rs writes a decision's row as JSON.
+                if type(row) is bytes:
+                    row = json.loads(row)
                 records.put(row.get("record_kind", "actions"), row)
             db.execute(
                 "INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?)",

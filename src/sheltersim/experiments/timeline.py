@@ -29,6 +29,8 @@ class TimelineError(StorageError):
 
 class _MetricSink:
     trace_level = TraceLevel.OFF
+    # What rules/decisions.rs may do instead of calling record_decision; it reads its own class's.
+    decision_sink = "silent"
 
     def __init__(self, metrics: MetricsRecorder) -> None:
         self.metrics = metrics
@@ -47,10 +49,13 @@ class _MetricSink:
 
 
 class _IndexedMetricSink(_MetricSink):
+    decision_sink = "indexed"
+
     def __init__(self, metrics: MetricsRecorder, world: Any) -> None:
         super().__init__(metrics)
         self.world = world
-        self.observations: list[dict[str, Any]] = []
+        # Dicts, and the JSON of the rows rules/decisions.rs writes instead.
+        self.observations: list[dict[str, Any] | bytes] = []
         from sheltersim.contracts.policies import model_catalog
 
         self.policy_sources = {
@@ -330,7 +335,7 @@ class TimelineStore:
         *,
         fork_minute: int = 0,
         router: LLMRouter | None = None,
-        observations: list[dict[str, Any]] | None = None,
+        observations: list[dict[str, Any] | bytes] | None = None,
         history_cache: CheckpointHistoryCache | None = None,
         inherit_index_from: str | None = None,
         indexer: Any = None,

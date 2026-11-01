@@ -113,10 +113,18 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/decisions.rs`: `propose_rows(controller, view, rng)`, `observed_row(controller, view,
+  agent_id)` and `record_outcome(controller, proposal, *, target_id, next_decision_at, committed,
+  observed_state)` replace the steps `_propose_due`, `_observed_state` and `_record_outcome`. A
+  `ProposalRow` answers what `_apply_proposal`'s Python body reads and makes the `ActionProposal`
+  for anything else. `record_outcome` appends the `_IndexedMetricSink` record as JSON bytes
+  (`decision_sink` in a sink's own class says what it may do), then calls `commit_action` and
+  `remember_decision`. Unsupported comes before anything is appended; after that, a rule that
+  refuses runs in Python on its own. A trace or a sink of another class is Unsupported.
 - `rules/behavior.rs`: `propose_due(controller, view, rng)` and `observed_state(controller, view,
-  agent_id)` replace the steps `_propose_due` and `_observed_state` of the propose phase. They read
-  the snapshot of `rules/world_view.rs`, so a tick makes no Python view of the people for them, and
-  return the Python `ActionProposal`s and the snapshot dict. They run for `UtilityBehaviorPolicy`
+  agent_id)` compute the proposals and the snapshot `rules/decisions.rs` keeps as rows, here as the
+  Python `ActionProposal`s and the snapshot dict. They read the snapshot of `rules/world_view.rs`, so
+  a tick makes no Python view of the people for them. They run for `UtilityBehaviorPolicy`
   and `PriorityRuleBehaviorPolicy` (the exact classes) with a `CounterRNG`. They write nothing, so
   `Unsupported` at any point runs the Python step: a view Python made (or a partial one), another
   class, and anything `ActionCandidate` and `ActionProposal` would turn down.
@@ -160,8 +168,22 @@ each OS, because both call the same libm.
   social action that goes through. A suppressed or failed event and the other types of interaction
   give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
 
-- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
-  Python rules write one record at a time through the forwarded writes, and M4 moves them.
+- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`).
+- `rules.movement`: the movement rules of a tick (`src/rules/movement.rs`, with the floor plan and
+  its geometry in `src/rules/movement_geometry.rs`): `advance_movement(world, minute)`,
+  `start_movement`, `finish_movement`, `route_with_movement_time`, `route_is_physically_clear`,
+  `plan_in_room_route`, `queue_slot_position`, `facility_approach_route`, and `validate(world)` for
+  `register_rust_validator`. `domain/movement.py` calls them through `kernel_first`.
+  `advance_movement` says Unsupported for a tick in which a queue trip must replan or a person is
+  placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
+  See `docs/rust-port/lanes/m4-movement.md`.
+- `rules.queues`: a facility's physical queue (`src/rules/queues.rs`):
+  `prepare_facility_queue(world, facility_id, *, resource, minute)`,
+  `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
+  arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
+  `kernel_first`. Each plans and then writes, in one call.
+  An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
+  See `docs/rust-port/lanes/m4-queues.md`.
 
 - `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
   (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each

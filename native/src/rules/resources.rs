@@ -269,7 +269,7 @@ fn apply_operation<'py>(
             NamespaceMirror::write_through(&mirror, &path, &new.reservation_id, &Field::to_py(new, py)?)?;
         }
         ReservationChange::Remove => {
-            NamespaceMirror::delete_through(&mirror, &path, reservation_id.unwrap_or_default())?;
+            NamespaceMirror::remove_through(&mirror, &path, reservation_id.unwrap_or_default())?;
         }
         ReservationChange::Reduce(_) | ReservationChange::None => {}
     }

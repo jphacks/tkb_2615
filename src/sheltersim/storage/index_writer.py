@@ -230,7 +230,7 @@ class BackgroundIndexer:
         # The wall and thread seconds of each ingest answered so far.
         self.ingest_seconds: list[tuple[float, float]] = []
 
-    def submit(self, checkpoint: Any, observations: list[dict[str, Any]]) -> None:
+    def submit(self, checkpoint: Any, observations: list[dict[str, Any] | bytes]) -> None:
         """Send one saved Checkpoint and the observations recorded since the last save."""
         while self._pending >= self.max_pending:
             self._receive()

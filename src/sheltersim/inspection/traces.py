@@ -74,6 +74,9 @@ _SENSITIVE_FIELDS = (
 class RunArtifactWriter:
     """Write the requested JSON/JSONL/CSV records without entering simulation state."""
 
+    # rules/decisions.rs does nothing for a decision when this class would write nothing.
+    decision_sink = "artifacts"
+
     def __init__(
         self,
         scenario: ScenarioSpec,

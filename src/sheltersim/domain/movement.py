@@ -14,6 +14,8 @@ from sheltersim.contracts.api import AgentPosition
 from sheltersim.contracts.extensions import FacilityGeometry, Point2D, point_in_polygon
 from sheltersim.contracts.spatial import SpatialConstraints
 from sheltersim.core.context import ContextScope
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.facility_queues import FACILITY_QUEUES_STATE_KEY
 from sheltersim.domain.models import Activity
@@ -95,6 +97,7 @@ def canonical_movement_config(raw: Any) -> dict[str, Any]:
     return config
 
 
+@kernel_first("movement", "route_with_movement_time")
 def route_with_movement_time(world: WorldState, agent_id: str, route: ZoneRoute) -> ZoneRoute:
     """Apply accessibility speed and measured occupancy density to declared edge time."""
     if (
@@ -328,6 +331,7 @@ def validate_movement_runtime_state(world: WorldState) -> None:
             # replans queue trips against the current wall/obstacle set.
 
 
+@kernel_first("movement", "start_movement")
 def start_movement(
     world: WorldState,
     *,
@@ -393,6 +397,7 @@ def start_movement(
     )
 
 
+@kernel_first("movement", "advance_movement")
 def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
     """Interpolate active journeys for this minute; return any route to replan."""
     state = _state(world)
@@ -614,6 +619,7 @@ def _current_journey_edge(world: WorldState, journey: dict[str, Any], minute: in
     return edge_ids[-1]
 
 
+@kernel_first("movement", "finish_movement")
 def finish_movement(world: WorldState, agent_id: str) -> None:
     """Remove a completed journey and set its final location."""
     if MOVEMENT_STATE_KEY not in world.model_state:
@@ -852,6 +858,7 @@ def _zone_center(geometry: FacilityGeometry | None, zone_id: str) -> Point2D | N
     return None
 
 
+@kernel_first("movement", "queue_slot_position")
 def _queue_slot_position(
     world: WorldState,
     geometry: FacilityGeometry,
@@ -987,6 +994,7 @@ def facility_queue_slot_route(
     return route, path
 
 
+@kernel_first("queues", "progress_physical_queue_positions")
 def progress_physical_queue_positions(
     world: WorldState,
     facility_id: str,
@@ -1074,6 +1082,7 @@ def progress_physical_queue_positions(
     return False
 
 
+@kernel_first("queues", "progress_physical_queue_head_to_service")
 def progress_physical_queue_head_to_service(
     world: WorldState,
     facility_id: str,
@@ -1498,6 +1507,7 @@ def _route_point(
     return points[-1]
 
 
+@kernel_first("movement", "route_is_physically_clear")
 def route_is_physically_clear(
     world: WorldState, edge_id: str, *, mobility: str = "independent"
 ) -> bool:
@@ -1584,6 +1594,7 @@ def _remembered_room_routes(world: WorldState) -> dict[Any, Any] | None:
     return memo["routes"]
 
 
+@kernel_first("movement", "plan_in_room_route")
 def plan_in_room_route(
     world: WorldState,
     *,
@@ -1746,6 +1757,7 @@ def in_room_travel_minutes(world: WorldState, agent_id: str, path: tuple[Point2D
     return max(1, math.ceil(distance / speed * crowding))
 
 
+@kernel_first("movement", "facility_approach_route")
 def facility_approach_route(
     world: WorldState,
     agent_id: str,
@@ -2047,3 +2059,7 @@ def _position_record(
         "progress": progress,
         "position_kind": position_kind,
     }
+
+
+if native.available():
+    register_rust_validator(MOVEMENT_STATE_KEY, native.rules("movement").validate)
