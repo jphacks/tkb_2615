@@ -137,6 +137,16 @@ def _duplicate_queue_entry(world: WorldState) -> None:
     _set(facility, name, [*entries, entries[0]])
 
 
+def _someone_queued_looks_elsewhere(world: WorldState) -> None:
+    facility = next(f for f in world.facilities.values() if f.queue_agent_ids)
+    _set(world.agents[facility.queue_agent_ids[0]], "target_id", "elsewhere")
+
+
+def _someone_served_looks_elsewhere(world: WorldState) -> None:
+    facility = next(f for f in world.facilities.values() if f.active_agent_ids)
+    _set(world.agents[facility.active_agent_ids[0]], "target_id", "elsewhere")
+
+
 def _task_without_entry(world: WorldState) -> None:
     facility = _resource_active(world)
     _set(facility, "resource_active_agent_ids", [])
@@ -192,6 +202,8 @@ BREAKS = {
         _facility(w), "working_units", _facility(w).capacity + 1
     ),
     "duplicate entry": _duplicate_queue_entry,
+    "queued target": _someone_queued_looks_elsewhere,
+    "served target": _someone_served_looks_elsewhere,
     "resource slot lost": _task_without_entry,
     "edge minutes": lambda w: _set(_edge(w), "travel_minutes", 0),
     "edge zone": lambda w: _set(_edge(w), "to_zone_id", "nowhere"),
