@@ -55,16 +55,17 @@ Rust が `body_state_v1` を持ち、毎 tick と毎イベントの書き手が�
 
 ## 確認の結果
 
-2026-11-01、WSL2、16コア、`08d922a`。ほかのレーンが同時に動いていました。
+2026-11-01、WSL2、16コア、`eef13e7`（レーン F を取り込んだあと）。ほかのレーンが同時に動いていました。**7日分の `rule_shadow` だけは1つ前の `08d922a` の結果です**（レーン F の取り込み前）。
 
 | 確認 | 結果 |
 |---|---|
-| `tick_budget.py`（9600分から480 tick、3回） | 基準との比 **1.038**（1.038、0.977、1.087）。A/A 1.043（1.043、0.944、1.083）。状態は3つとも一致。load average 17〜10 |
-| 同じ（マージ前の `ec455ac`、基準 `41bde2f`、load average 10） | **0.951**（0.920、0.951、1.025）。A/A 0.979 |
+| `tick_budget.py`（9600分から480 tick、3回、基準 `3aefc03`） | 基準との比 **1.007**（0.977、1.007、1.042）。A/A 1.009（0.998、1.010、1.009）。状態は3つとも一致。load average 約 3〜4 |
+| 同じ（`08d922a`、基準 `de98462`、load average 10〜17） | 1.038（1.038、0.977、1.087）。A/A 1.043 |
+| 同じ（`ec455ac`、基準 `41bde2f`、load average 約 10） | 0.951（0.920、0.951、1.025）。A/A 0.979 |
 | `gate_all_paths.py --expect`（`rule_shadow` の回） | 55個すべて一致 |
 | `--reversed-order` | 55個すべて一致 |
-| 7日分のハッシュ（`rule_shadow` の回と素の回） | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。`--expect` と一致 |
-| テスト | Rust あり 3205件通過・6件 skip。`SHELTERSIM_NATIVE=0` 2002件通過・1209件 skip |
+| 7日分のハッシュ（素の回は `eef13e7`、`rule_shadow` の回は `08d922a`） | どちらも world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。`--expect` と一致 |
+| テスト | Rust あり 3350件通過・6件 skip。`SHELTERSIM_NATIVE=0` 2047件通過・1309件 skip |
 | `ruff`、`cargo clippy` | 問題なし |
 | `tracked_mirror_gate.py` | **動かしていません**（コーディネーターがまとめて動かします） |
 
@@ -125,7 +126,7 @@ Rust が `body_state_v1` を持ち、毎 tick と毎イベントの書き手が�
 - **検証の設定と履歴の規則**：`validate_body_state` に残ります。人口の状態と `model_configs` を読むからです。
 - **`watch.rs` の `list_field`、`topics_valid`**：本体だけが使っていましたが、`social_network_v1` のレーンと同じファイルなので残しました。そのレーンが `watch.rs` をやめるときに消せます。
 - **保存：** Python の経路のままです（`_WORLD_TREE` の名前空間）。全体の bytes は作らないようにしました（履歴だけで 8 MB）。`relationships` と `agents` の bytes、履歴の項目の bytes を保存が使えば、`HistoryPins` と符号化を省けるはずです。測っていません。
-- **`AgentView` と `WorldView`：** 本体の値を木から読みます。行から読めば木を切り離す道が開きます。
+- **`AgentView`、`WorldView`、`rules/action_lifecycle.rs` の `body_needs`：** 本体の値を木から読みます。行から読めば木を切り離す道が開きます。
 - **Python の読み手：** `action_lifecycle`、`staff_operations`、`social_dialogue`、`social_network`、`inspection/frames` は木を読みます。切り離しはできません。
 
 ## やめた確認
