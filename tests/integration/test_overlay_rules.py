@@ -1457,3 +1457,47 @@ def test_a_bed_s_routes_end_where_the_python_rule_s_do(
     ours, theirs = deepcopy(world), deepcopy(world)
     assert json.dumps(_plain(kernel(ours, agent_id))) == json.dumps(_plain(rule(theirs, agent_id)))
     assert (rule(deepcopy(world), agent_id) is not None) is found
+
+
+@pytest.mark.parametrize(("free", "found"), [(250, True), (256, False)])
+def test_a_room_inspects_the_points_the_python_rule_does(
+    world: WorldState, free: int, found: bool
+) -> None:
+    """Only the `free`-th point of the grid and later ones can be walked to."""
+    room_id = _room_world(world, people=2, beds=0)
+    geometry = world.model_configs["facility_geometry"]
+    zone = next(item for item in geometry["zones"] if item["zone_id"] == ROOM_ZONE)
+    # A hall wider than a generated zone, whose grid has more points than the rule looks at.
+    x0, side = geometry["width_m"], 20.0
+    geometry["width_m"] = x0 + side
+    y0, geometry["height_m"] = 0.0, max(geometry["height_m"], side)
+    zone["polygon"] = [
+        {"x": x0, "y": y0},
+        {"x": x0 + side, "y": y0},
+        {"x": x0 + side, "y": y0 + side},
+        {"x": x0, "y": y0 + side},
+    ]
+    state = world.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]
+    state["temporary_rooms"][room_id]["polygon_m"] = deepcopy(zone["polygon"])
+    rows = 0
+    y = y0 + 0.375
+    while y < y0 + side:
+        rows += 1
+        y += 0.75
+    columns, partial = divmod(free, rows)
+    # An L around the first columns and the top of the next one.
+    left, top, bottom = x0 - 1, y0 - 1, y0 + side + 1
+    wall_x = x0 + 0.75 * columns
+    step_y = y0 + 0.75 * partial
+    corners = [(left, top), (wall_x + 0.75, top), (wall_x + 0.75, step_y), (wall_x, step_y)]
+    corners += [(wall_x, bottom), (left, bottom)]
+    world.model_configs["spatial_constraints"].setdefault("obstacles", []).append(
+        {
+            "id": "all-but-the-last",
+            "polygon": [{"x": x, "y": y} for x, y in corners],
+            "source_ids": [],
+        }
+    )
+    point = _rules().room_admission_point(world, room_id)
+    assert point == geometry_overlay.room_admission_point.__wrapped__(world, room_id)
+    assert (point is not None) is found
