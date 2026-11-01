@@ -994,6 +994,7 @@ def facility_queue_slot_route(
     return route, path
 
 
+@kernel_first("queues", "progress_physical_queue_positions")
 def progress_physical_queue_positions(
     world: WorldState,
     facility_id: str,
@@ -1081,6 +1082,7 @@ def progress_physical_queue_positions(
     return False
 
 
+@kernel_first("queues", "progress_physical_queue_head_to_service")
 def progress_physical_queue_head_to_service(
     world: WorldState,
     facility_id: str,

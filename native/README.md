@@ -177,6 +177,13 @@ each OS, because both call the same libm.
   `advance_movement` says Unsupported for a tick in which a queue trip must replan or a person is
   placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
   See `docs/rust-port/lanes/m4-movement.md`.
+- `rules.queues`: a facility's physical queue (`src/rules/queues.rs`):
+  `prepare_facility_queue(world, facility_id, *, resource, minute)`,
+  `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
+  arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
+  `kernel_first`. Each plans and then writes, in one call.
+  An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
+  See `docs/rust-port/lanes/m4-queues.md`.
 
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
   `validate(world)` accepts a world where no staff member has a task; an active record reads the
