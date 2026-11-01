@@ -869,6 +869,7 @@ def _open_fetch(world, store) -> str:
     return agent_id
 
 
+@needs_kernels
 def test_another_object_of_the_same_row_is_the_event_the_log_holds(world) -> None:
     store = _store(world)
     agent_id = _open_fetch(world, store)
@@ -880,6 +881,7 @@ def test_another_object_of_the_same_row_is_the_event_the_log_holds(world) -> Non
     assert agent_id not in store
 
 
+@needs_kernels
 def test_a_record_a_row_cannot_tell_from_the_event_is_left_to_the_python_rule(world) -> None:
     store = _store(world)
     agent_id = _open_fetch(world, store)

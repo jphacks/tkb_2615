@@ -90,14 +90,20 @@ def prepare(output: str) -> None:
         before = len(world.event_log)
         counter = world.id_counters.get("event", 0)
         due = {event.event_id: event for event in world.event_queue.due(minute)}
+        skipped = module.stats()[0]["events_skipped"]
         try:
             result = run_phase(controller, world, minute)
         except unsupported as reason:
             recorder.reasons[f"phase: {reason}"] += 1
             raise
+        except Exception as raised:
+            # What the phase raises is the Python phase's too: the hashes of the run say so.
+            recorder.seen[f"phase.raised.{type(raised).__name__}"] += 1
+            raise
         recorder.seen["phase.kernel_ran"] += 1
         recorder.seen["phase.due_events"] += len(due)
-        _compare_records(recorder, world, minute, before, due)
+        cancelled = module.stats()[0]["events_skipped"] - skipped
+        _compare_records(recorder, world, minute, before, due, cancelled)
         if world.id_counters.get("event", 0) < counter:
             recorder.differ(f"minute {minute}: the event counter went back")
         return result
@@ -192,7 +198,7 @@ def _canonical(record: Any) -> bytes:
 
 
 def _compare_records(
-    recorder: Recorder, world: Any, minute: int, before: int, due: dict[str, Any]
+    recorder: Recorder, world: Any, minute: int, before: int, due: dict[str, Any], cancelled: int
 ) -> None:
     from sheltersim.events.models import EventLogRecord, EventStatus
 
@@ -211,7 +217,12 @@ def _compare_records(
             recorder.differ(f"minute {minute} {event.event_id}: {record.status} {record.detail}")
     order = [record.event.event_id for record in new if record.event.event_id in due]
     if order != [event_id for event_id in due if event_id in set(order)]:
-        recorder.differ(f"minute {minute}: records out of the queue's order: {order} {list(due)}")
+        # A handler that cancels a later due event records it before its own outcome, in Python
+        # too, and the loop then skips it. Any other record out of order is a difference.
+        if cancelled:
+            recorder.seen["phase.records_of_cancelled_events_first"] += 1
+        else:
+            recorder.differ(f"minute {minute}: records out of order: {order} {list(due)}")
     pending = {event.event_id for event in world.event_queue.pending()}
     for event_id in due:
         if event_id in pending and event_id not in set(order):
