@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.care_receipts import care_receipt_for_request
 from sheltersim.domain.models import (
@@ -164,6 +165,7 @@ class StaffService:
             world.validate()
         return SupportRequestReceipt(request_id, agent_id, request_minute)
 
+    @kernel_first("staff", "assign_pending")
     def assign_pending(self, minute: int, *, validate_state: bool = True) -> tuple[str, ...]:
         """Start FIFO requests on idle staff whose skills include ``support``."""
         world = self.world
@@ -450,6 +452,7 @@ def support_required_skills(world: WorldState, request_id: str) -> set[str]:
     return _CARE_SKILL_ALTERNATIVES.get(_support_kind(world, request_id), {"support"})
 
 
+@kernel_first("staff", "wait_reason_codes")
 def support_wait_reason_codes(
     world: WorldState,
     request_id: str,
@@ -618,6 +621,7 @@ def _support_route_wait_reasons(
     return reasons, route_is_feasible
 
 
+@kernel_first("staff", "waited_minutes")
 def support_waited_minutes(world: WorldState, request_id: str, *, minute: int | None = None) -> int:
     """Return elapsed wait, stopping at service start once a resident arrives."""
     request = world.support_requests.get(request_id)

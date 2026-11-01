@@ -45,7 +45,7 @@ const FLOAT_EXACT_INT: u64 = 1 << 53;
 
 /// `state["staff_status"]` of `operational_events_v1`, or None without that namespace: the input
 /// of `staff_is_available` in `domain/operational.py`.
-fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+pub(crate) fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     let Some(state) = exact_dict(&table)?.get_item(intern!(py, "operational_events_v1"))? else {
@@ -64,7 +64,7 @@ fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, Py
 }
 
 /// `staff_is_available`.
-fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyString>) -> PyResult<bool> {
+pub(crate) fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyString>) -> PyResult<bool> {
     let Some(status) = status else {
         return Ok(true);
     };
@@ -83,7 +83,7 @@ fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyString>) -> 
 }
 
 /// `_on_shift`. A config of the oldest schema has no windows, and the Python rule raises.
-fn on_shift(config: &ConfigRow, id: &str, minute: i64) -> PyResult<bool> {
+pub(crate) fn on_shift(config: &ConfigRow, id: &str, minute: i64) -> PyResult<bool> {
     let Some(windows) = &config.shift_windows_by_staff.0 else {
         return unsupported("the config has no shift windows");
     };
