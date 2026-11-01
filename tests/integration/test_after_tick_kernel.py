@@ -170,7 +170,9 @@ BREAKS: dict[str, Callable[[WorldState], Any]] = {
     "a config written": lambda w: _set_item(w.model_configs, "probe", {}),
     "a person's key added past the map": lambda w: dict.__setitem__(w.agents, "new", None),
     "a zone's key removed past the map": lambda w: dict.pop(w.zones, next(iter(w.zones))),
-    "a facility moved": lambda w: setattr(next(iter(w.facilities.values())), "zone_id", "elsewhere"),
+    "a facility moved": lambda w: setattr(
+        next(iter(w.facilities.values())), "zone_id", "elsewhere"
+    ),
     "the presence state written": lambda w: _set_item(
         w.model_state["population_presence_v1"], "probe", 1
     ),

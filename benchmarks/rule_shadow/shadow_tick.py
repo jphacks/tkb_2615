@@ -60,6 +60,9 @@ def count_ticks(output: str) -> None:
         counts, reasons = module.stats()
         recorder.seen.update(counts)
         recorder.reasons.update(reasons)
+        checks, refusals = native.rules("after_tick").stats()
+        recorder.seen["after_tick_ran"] += checks
+        recorder.reasons.update({f"after_tick: {key}": n for key, n in refusals.items()})
 
     # After Recorder's own: atexit runs the last registered first.
     atexit.register(report_counts)

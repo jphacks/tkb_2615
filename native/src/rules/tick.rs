@@ -23,7 +23,7 @@ use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
 
 use crate::core::row::{attribute, exact_int, unsupported};
 use crate::core::world_core::raw_dict_get;
-use crate::rules::{decisions, dispatch, information, movement, proposals, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
+use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
@@ -44,6 +44,7 @@ struct Table {
     arbitrate: Py<PyModule>,
     update: Py<PyModule>,
     facilities: Py<PyModule>,
+    metrics_recorder: Py<PyType>,
     clock_error: Py<PyType>,
 }
 
@@ -349,11 +350,29 @@ impl<'py> Tick<'_, 'py> {
 
     fn metrics(&self) -> PyResult<()> {
         let py = self.py();
-        let options = PyDict::new(py);
-        options.set_item(intern!(py, "minute"), self.minute)?;
-        self.controller
-            .getattr(intern!(py, "artifacts"))?
-            .call_method(intern!(py, "capture_metric"), (self.world,), Some(&options))?;
+        let artifacts = self.controller.getattr(intern!(py, "artifacts"))?;
+        // `_MetricSink.capture_metric` is only `MetricsRecorder.capture`. Anything else is the sink's.
+        let sink = artifacts.get_type();
+        let recorder = sink.getattr(intern!(py, "capture_metric_as_defined")).ok().filter(|defined| {
+            sink.getattr(intern!(py, "capture_metric")).is_ok_and(|now| now.is(defined))
+        });
+        let own = artifacts.getattr(intern!(py, "__dict__"))?;
+        let recorder = match recorder {
+            Some(_) if raw_dict_get(&own, intern!(py, "capture_metric").as_any())?.is_none() => {
+                raw_dict_get(&own, intern!(py, "metrics").as_any())?
+                    .filter(|recorder| recorder.get_type().is(self.table.metrics_recorder.bind(py)))
+            }
+            _ => None,
+        };
+        let by_sink = || {
+            let options = PyDict::new(py);
+            options.set_item(intern!(py, "minute"), self.minute)?;
+            artifacts.call_method(intern!(py, "capture_metric"), (self.world,), Some(&options)).map(|_| ())
+        };
+        match &recorder {
+            Some(recorder) => or_rule!(py, metrics::capture(self.world, recorder, self.minute), by_sink())?,
+            None => by_sink()?,
+        }
         // `_finalize_actions_at_end` reads it again, and acts at the Run's last minute.
         let duration = self.world.getattr(intern!(py, "duration_minutes"))?;
         if exact_int(&duration).map_or(true, |duration| self.minute_value + 1 >= duration) {
@@ -475,6 +494,7 @@ fn install<'py>(
     rules: Vec<(Bound<'py, PyAny>, Bound<'py, PyString>)>,
     phases: Vec<Bound<'py, PyAny>>,
     modules: (Bound<'py, PyModule>, Bound<'py, PyModule>, Bound<'py, PyModule>),
+    metrics_recorder: Bound<'py, PyType>,
     clock_error: Bound<'py, PyType>,
 ) -> PyResult<()> {
     let mut defined_steps = Vec::with_capacity(steps.len());
@@ -498,6 +518,7 @@ fn install<'py>(
         arbitrate: modules.0.unbind(),
         update: modules.1.unbind(),
         facilities: modules.2.unbind(),
+        metrics_recorder: metrics_recorder.unbind(),
         clock_error: clock_error.unbind(),
     };
     let _ = TABLE.set(py, table);

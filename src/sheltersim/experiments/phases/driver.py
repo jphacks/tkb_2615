@@ -15,6 +15,7 @@ from sheltersim.core.engine import TICK_PHASE_ORDER, TickExecutionError
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import WorldState
 from sheltersim.domain import facilities, population_lifecycle, resource_service, staff
+from sheltersim.experiments import metrics
 from sheltersim.experiments.phases import arbitrate, dispatch, update
 
 # The controller's steps the driver calls no entry of, or that it stands for. A patch of one sends
@@ -72,6 +73,9 @@ DRIVEN_RULES = (
     (resource_service, "progress_physical_queue_positions"),
     (resource_service, "facility_has_independent_queues"),
     (staff.StaffService, "assign_pending"),
+    (metrics.MetricsRecorder, "capture"),
+    (metrics, "_snapshot_fields"),
+    (metrics, "resource_metric_values"),
 )
 
 
@@ -91,6 +95,7 @@ def install_driver(controller: type) -> None:
         list(DRIVEN_RULES),
         list(TICK_PHASE_ORDER),
         (arbitrate, update, facilities),
+        metrics.MetricsRecorder,
         TickExecutionError,
     )
     run_kernel = rules.run_tick
