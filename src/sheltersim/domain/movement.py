@@ -534,6 +534,7 @@ def advance_movement(world: WorldState, minute: int) -> tuple[str, ...]:
     return tuple(replan)
 
 
+@kernel_first("queues", "shared_passage_edge_loads")
 def shared_passage_edge_loads(world: WorldState, minute: int | None = None) -> dict[str, int]:
     """Count active people and staff against the same configured passage capacities.
 
@@ -994,6 +995,7 @@ def facility_queue_slot_route(
     return route, path
 
 
+@kernel_first("queues", "progress_physical_queue_positions")
 def progress_physical_queue_positions(
     world: WorldState,
     facility_id: str,
@@ -1081,6 +1083,7 @@ def progress_physical_queue_positions(
     return False
 
 
+@kernel_first("queues", "progress_physical_queue_head_to_service")
 def progress_physical_queue_head_to_service(
     world: WorldState,
     facility_id: str,
@@ -1197,6 +1200,7 @@ def agent_is_at_facility_service_point(
     return route is not None and (route[0].travel_minutes <= 0 or len(route[1]) < 2)
 
 
+@kernel_first("queues", "physical_service_capacity")
 def physical_service_capacity(
     world: WorldState, facility_id: str, configured: int, queue_id: str | None = None
 ) -> int:
