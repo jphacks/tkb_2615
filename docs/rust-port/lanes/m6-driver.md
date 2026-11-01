@@ -98,7 +98,7 @@ driver が1 tick に通る入口と、その費用です（`cProfile`、µs/tick
 | **`first_difference.py --both`：55シナリオすべて、driver と `SHELTERSIM_NATIVE=0`** | 段階の前後の digest 220,892か所、違い0件。最終のハッシュも同じ |
 | `tracked_mirror_gate.py` | **動かしていません。** `core/state_mirror.py` は変えていません |
 | `ruff`、`cargo clippy`（`disallowed_methods`） | 問題なし |
-| 7日分に `rule_shadow`（`shadow_dispatch`、`shadow_queues`、`shadow_service`、`shadow_tick`。Python の経路） | 同じハッシュ、違い0件 |
+| 7日分に `rule_shadow`（`shadow_dispatch`、`shadow_queues`、`shadow_service`、`shadow_tick` だけ。Python の経路） | 同じハッシュ、違い0件。段階 10,080回、`prepare_facility_queue` 19,832回、`serve_head` 12,185回。比べた値は列 30,076,049、サービス 33,388,147。断りは `someone gives up on the queue` 4回 |
 
 **最初の版の `investigate_performance.py` は driver を動かしていませんでした。** `__call__` と `_record_outcome` を包んでいたので、すべての tick が断られ、Python の経路でハッシュが一致するだけでした。プロファイルの回数で分かったので直しました。下の回数がその確認です。
 
