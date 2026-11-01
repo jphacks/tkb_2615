@@ -43,6 +43,12 @@ Checkpoint document) and times them.
   namespace; `docs/rust-port/lanes/p4-world-core.md` explains the mechanism. Rows hold no Python handles.
   A `Row`'s `apply` runs no Python code and no `PyRefMut` is held across a callback. Read the
   world's core again after any callback (`core_of`), since a copy-and-swap may have moved it.
+  `NamespaceMirror.generation_of(tree)` changes with every write that reaches a tree, from Python
+  or from Rust, so a check that read a namespace need not read it again
+  (`state_mirror.namespace_stamp`, `field_stamp`; `core/tick_validation.py`).
+- `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
+  `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`. Their
+  rules are Python's (`docs/rust-port/lanes/m6-population.md`).
 - `src/core/row.rs`: typed rows. `state_row!` writes `from_py`, `to_py`, `write_json`, the handling
   of forwarded writes and mirrored setters from a record's list of fields, and any `Field` is a
   `Row`. `src/state/psychological_distress.rs`, `src/state/metric_state.rs` and
@@ -112,6 +118,12 @@ each OS, because both call the same libm.
   return the first argument on a tie and `sum` is CPython 3.12's compensated sum, so the results
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
+
+- `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
+  `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
+  handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
+  modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
+  was. `state/effect_program.rs` is the row of `effect_program_v1`.
 
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
   a Rust function (`social_interaction`, `agent_travel_complete`, `toilet_service_complete`,

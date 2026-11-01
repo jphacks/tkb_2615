@@ -13,16 +13,20 @@ unchanged since they last passed (core/save_validation.py).
 Each saving rests on one of these arguments:
 
 - Config checks read only model_configs, and the zone environment's also the zone IDs. They
-  are skipped while those equal what they were when the checks last passed. Equality does not
-  tell 1 from True or 1.0; no tick writes model_configs, and the next full validation checks
-  the values.
+  are skipped while no write reached model_configs (its mirror's generation, which needs no
+  reading of 124 KB of JSON), or, after a write or for a world whose configs no mirror follows,
+  while they equal what they were when the checks last passed. Equality does not tell 1 from True
+  or 1.0; no tick writes model_configs, and the next full validation checks the values.
 - A settled support request (resolved or unresolved) depends only on its own fields,
   which SupportRequestState reports writing, on the set of Agent IDs, and on the clock
   only through "not after the current minute". It is checked again when written or
   when the Agent IDs change. The scans of unsettled requests during a tick use the same
   reports (WorldState.unsettled_support_requests).
-- The population presence and lifecycle states and the geometry overlay are skipped
-  when their canonical JSON and everything else their rules read are unchanged.
+- The population presence, lifecycle and dynamics states and the geometry overlay are skipped
+  when everything their rules read is unchanged: their own state by its mirror's generation, or,
+  with no mirror, by its canonical JSON. A write of the same value counts as a change. The
+  generation does not see dict.__setitem__ on a node of the tree, which the JSON did; the next
+  full validation reads it, as for the rows' own checks (docs/rust-port/lanes/t-tick-validation.md).
 - The newest shared operations record is skipped while it and the rest of the state
   are unchanged; new records are checked as they arrive.
 - used_reservation_ids is append-only, so only its new tail is checked in full; the
@@ -36,12 +40,14 @@ from typing import TYPE_CHECKING, Any
 
 from sheltersim import native
 from sheltersim.core.context import ContextScope
+from sheltersim.core.state_mirror import field_stamp, namespace_stamp, same_stamp
 
 if TYPE_CHECKING:
     from sheltersim.core.world import WorldState
 
 _PRESENCE_KEY = "population_presence_v1"
 _LIFECYCLE_KEY = "population_lifecycle_v1"
+_DYNAMICS_KEY = "population_dynamics_v1"
 _OVERLAY_KEY = "geometry_overlay_v1"
 _OPERATIONS_KEY = "shared_operations_v1"
 
@@ -52,10 +58,12 @@ class TickValidationMemo:
     def __init__(self) -> None:
         self.minute = -1
         self._configs: dict[str, Any] | None = None
+        self._configs_stamp: tuple[Any, int] | None = None
         self._agent_ids: frozenset[str] = frozenset()
         self._zone_ids: frozenset[str] = frozenset()
         self._facility_zones: dict[str, str] = {}
-        self._saved_json: dict[str, bytes | None] = {}
+        # The state of each namespace at the last check: its stamp, or its JSON without a mirror.
+        self._seen: dict[str, Any] = {}
         self._presence_is_self_contained = False
         # Results of the config checks, valid while configs_unchanged.
         self.psychology_model: str | None = None
@@ -72,6 +80,7 @@ class TickValidationMemo:
         self.zones_unchanged = False
         self.presence_unchanged = False
         self.lifecycle_unchanged = False
+        self.dynamics_unchanged = False
         self.overlay_unchanged = False
         # Support requests: every value of the dict, in order, then which to recheck.
         self._requests = native.values_snapshot()
@@ -94,22 +103,29 @@ class TickValidationMemo:
 
     def begin(self, world: WorldState) -> None:
         """Compare what the skipped checks read with the state that last passed."""
-        self.configs_unchanged = world.model_configs == self._configs
+        configs_stamp = field_stamp(world, "model_configs")
+        self.configs_unchanged = (
+            same_stamp(configs_stamp, self._configs_stamp) or world.model_configs == self._configs
+        )
+        self._configs_stamp = configs_stamp
         if not self.configs_unchanged:
             self.geometry_scope.clear()
             self.environment_config_passed = False
         self.agents_unchanged = world.agents.keys() == self._agent_ids
         zones_unchanged = self.zones_unchanged = world.zones.keys() == self._zone_ids
         model_state = world.model_state
-        previous = self._saved_json
+        previous = self._seen
         current = {
-            key: saved_json(model_state.get(key))
-            for key in (_PRESENCE_KEY, _LIFECYCLE_KEY, _OVERLAY_KEY)
+            key: _state_seen(world, key)
+            for key in (_PRESENCE_KEY, _LIFECYCLE_KEY, _DYNAMICS_KEY, _OVERLAY_KEY)
         }
-        self._saved_json = current
+        self._seen = current
 
         def same(key: str) -> bool:
-            return current[key] is not None and current[key] == previous.get(key)
+            now, before = current[key], previous.get(key)
+            if isinstance(now, tuple) or isinstance(before, tuple):
+                return same_stamp(now, before)
+            return now is not None and now == before
 
         presence = model_state.get(_PRESENCE_KEY)
         if not same(_PRESENCE_KEY):
@@ -129,6 +145,15 @@ class TickValidationMemo:
             # A pending relocation is compared with the tasks and the event queue.
             and isinstance(lifecycle, dict)
             and not lifecycle.get("pending_relocations")
+        )
+        dynamics = model_state.get(_DYNAMICS_KEY)
+        self.dynamics_unchanged = (
+            self.agents_unchanged
+            and zones_unchanged
+            and same(_DYNAMICS_KEY)
+            # A pending arrival is compared with the event queue, the clock and the presence.
+            and isinstance(dynamics, dict)
+            and not dynamics.get("pending_arrivals")
         )
         overlay = model_state.get(_OVERLAY_KEY)
         facility_zones = {key: item.zone_id for key, item in world.facilities.items()}
@@ -270,6 +295,11 @@ def saved_json(value: Any) -> bytes | None:
     except ValueError:
         # For example a str that cannot be encoded; the rules decide about it.
         return None
+
+
+def _state_seen(world: WorldState, key: str) -> Any:
+    stamp = namespace_stamp(world, key)
+    return stamp if stamp is not None else saved_json(world.model_state.get(key))
 
 
 def _operations_header_json(state: dict[str, Any]) -> bytes | None:

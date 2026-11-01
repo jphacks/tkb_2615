@@ -37,6 +37,7 @@ from sheltersim.contracts.operations import (
     TemporaryRoomGeometry,
 )
 from sheltersim.contracts.population import DynamicArrivalPersonContext
+from sheltersim.core.kernels import kernel_first
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_POLICY,
     ZONE_ENVIRONMENT_STATE_KEY,
@@ -691,6 +692,24 @@ DEFAULT_PRIMITIVE_REGISTRY = PrimitiveRegistry(
             "Temporarily set an assumed zone temperature in degrees Celsius.",
         ),
     ]
+)
+
+# What native/src/rules/effects.rs asks to validate an event's parameters, by operator. The pydantic
+# contracts stay here at the boundary of a typed command.
+_PARAMETER_MODELS: Mapping[str, type[BaseModel]] = MappingProxyType(
+    {
+        "add_temporary_space": _TemporarySpaceParameters,
+        "facility_repair": FacilityRepairParameters,
+        "modify_demand_rate": DemandRateParameters,
+        "set_ambient_noise": AmbientNoiseParameters,
+        "set_lighting": LightingParameters,
+        "set_privacy": PrivacyParameters,
+        "set_staff_role": _StaffRoleParameters,
+        "set_temperature": TemperatureParameters,
+        "set_ventilation": VentilationParameters,
+        "staff_handoff": StaffHandoffParameters,
+        "staff_task_order": StaffTaskOrderParameters,
+    }
 )
 
 EFFECT_PROGRAM_STATE_KEY = "effect_program_v1"
@@ -1955,6 +1974,7 @@ def schedule_effect_program(
     return ScheduledEffectProgram(program.program_id, program_hash, tuple(event_ids))
 
 
+@kernel_first("effects", "should_apply_guard")
 def should_apply_effect_guard(world: WorldState, event: ScheduledEvent) -> bool:
     """Evaluate a compiled guard against fixed state fields; no dynamic evaluation."""
     marker = event.provenance.get("effect_program_v1")
@@ -2063,6 +2083,7 @@ def _evaluate_guard_node(world: WorldState, event: ScheduledEvent, guard: GuardE
     return actual <= expected
 
 
+@kernel_first("effects", "has_active_modifier")
 def has_active_facility_modifier(world: WorldState, facility_id: str) -> bool:
     state = world.model_state.get(EFFECT_PROGRAM_STATE_KEY)
     if not isinstance(state, dict):
@@ -2071,6 +2092,7 @@ def has_active_facility_modifier(world: WorldState, facility_id: str) -> bool:
     return isinstance(record, dict) and bool(record.get("modifiers"))
 
 
+@kernel_first("effects", "has_pending_modifier")
 def has_pending_facility_modifier(world: WorldState, facility_id: str) -> bool:
     return any(
         event.event_type in {"effect_program_apply", "effect_program_expire"}
@@ -2085,6 +2107,7 @@ class EffectProgramGeometryHandler:
     def __init__(self, *, expire: bool = False) -> None:
         self.expire = expire
 
+    @kernel_first("effects", "geometry")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.geometry_overlay import apply_geometry_change
@@ -2143,6 +2166,7 @@ class EffectProgramTemporarySpaceHandler:
     def __init__(self, *, expire: bool = False) -> None:
         self.expire = expire
 
+    @kernel_first("effects", "temporary_space")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
 
@@ -2255,6 +2279,7 @@ class EffectProgramFacilityHandler:
     def __init__(self, *, expire: bool = False) -> None:
         self.expire = expire
 
+    @kernel_first("effects", "facility")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
 
@@ -2361,6 +2386,7 @@ class EffectProgramFacilityHandler:
 class EffectProgramStructureHandler:
     """Apply typed structural primitives using existing WorldState domain records."""
 
+    @kernel_first("effects", "structure")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[Any, ...] | None:
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.models import FacilityState, StaffState
@@ -2785,6 +2811,7 @@ class EffectProgramEnvironmentHandler:
     def __init__(self, *, expire: bool = False) -> None:
         self.expire = expire
 
+    @kernel_first("effects", "environment")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
 
@@ -2873,16 +2900,8 @@ class EffectProgramEnvironmentHandler:
         if modifier_id in modifiers:
             raise EventSuppressed("zone environment modifier is already active")
         assert isinstance(marker, Mapping)
-        parameter_model = {
-            "set_ambient_noise": AmbientNoiseParameters,
-            "modify_demand_rate": DemandRateParameters,
-            "set_ventilation": VentilationParameters,
-            "set_lighting": LightingParameters,
-            "set_privacy": PrivacyParameters,
-            "set_temperature": TemperatureParameters,
-        }[op]
         try:
-            parameters = parameter_model.model_validate(event.payload["parameters"])
+            parameters = _PARAMETER_MODELS[op].model_validate(event.payload["parameters"])
         except ValueError as exc:
             raise EventApplicationError(f"zone environment parameters are invalid: {exc}") from exc
         if (
@@ -2940,6 +2959,63 @@ class EffectProgramEnvironmentHandler:
         }
 
 
+# The event type of an operator's event, by the phase in its marker.
+EFFECT_EVENT_TYPES: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "start": {
+            "set_facility_availability": "effect_program_apply",
+            "facility_outage": "effect_program_apply",
+            "facility_repair": "effect_program_structure",
+            "staff_handoff": "effect_program_structure",
+            "staff_task_order": "effect_program_structure",
+            "set_staff_role": "effect_program_structure",
+            "deliver_resource": "resource_delivery",
+            "modify_supply_schedule": "delivery_delayed",
+            "set_staff_availability": "staff_unavailable",
+            "water_outage": "water_outage",
+            "add_staff": "effect_program_structure",
+            "add_toilet": "effect_program_structure",
+            "set_ambient_noise": "effect_program_environment",
+            "modify_demand_rate": "effect_program_environment",
+            "set_ventilation": "effect_program_environment",
+            "set_lighting": "effect_program_environment",
+            "set_privacy": "effect_program_environment",
+            "set_temperature": "effect_program_environment",
+            "add_evacuees": "effect_program_population",
+            "depart_evacuees": "effect_program_population",
+            "population_presence": "effect_program_population",
+            "add_temporary_space": "effect_program_temporary_space",
+            "move_facility": "effect_program_geometry",
+            "transfer_equipment": "effect_program_geometry",
+            "set_partition": "effect_program_geometry",
+            "set_route_access": "effect_program_geometry",
+            "temporary_room_geometry": "effect_program_geometry",
+        },
+        "expiry": {
+            "set_facility_availability": "effect_program_expire",
+            "facility_outage": "effect_program_expire",
+            "water_outage": "water_restored",
+            "set_ambient_noise": "effect_program_environment_expire",
+            "modify_demand_rate": "effect_program_environment_expire",
+            "set_ventilation": "effect_program_environment_expire",
+            "set_lighting": "effect_program_environment_expire",
+            "set_privacy": "effect_program_environment_expire",
+            "set_temperature": "effect_program_environment_expire",
+            "add_temporary_space": "effect_program_temporary_space_expire",
+            "set_partition": "effect_program_geometry_expire",
+            "set_route_access": "effect_program_geometry_expire",
+            "temporary_room_geometry": "effect_program_geometry_expire",
+        },
+        "derived": {
+            "modify_supply_schedule": "resource_delivery",
+            "set_staff_availability": "staff_restored",
+            "add_evacuees": "population_approach_complete",
+        },
+    }
+)
+
+
+@kernel_first("effects", "validate_state")
 def validate_effect_program_state(
     world: WorldState,
     *,
@@ -3108,57 +3184,7 @@ def validate_effect_program_state(
         if marker.get("phase") == "derived" and event.causation_id not in by_id:
             raise ValueError("derived EffectProgram event lacks a known causal parent")
         op = marker["op"]
-        expected_event_type = {
-            "start": {
-                "set_facility_availability": "effect_program_apply",
-                "facility_outage": "effect_program_apply",
-                "facility_repair": "effect_program_structure",
-                "staff_handoff": "effect_program_structure",
-                "staff_task_order": "effect_program_structure",
-                "set_staff_role": "effect_program_structure",
-                "deliver_resource": "resource_delivery",
-                "modify_supply_schedule": "delivery_delayed",
-                "set_staff_availability": "staff_unavailable",
-                "water_outage": "water_outage",
-                "add_staff": "effect_program_structure",
-                "add_toilet": "effect_program_structure",
-                "set_ambient_noise": "effect_program_environment",
-                "modify_demand_rate": "effect_program_environment",
-                "set_ventilation": "effect_program_environment",
-                "set_lighting": "effect_program_environment",
-                "set_privacy": "effect_program_environment",
-                "set_temperature": "effect_program_environment",
-                "add_evacuees": "effect_program_population",
-                "depart_evacuees": "effect_program_population",
-                "population_presence": "effect_program_population",
-                "add_temporary_space": "effect_program_temporary_space",
-                "move_facility": "effect_program_geometry",
-                "transfer_equipment": "effect_program_geometry",
-                "set_partition": "effect_program_geometry",
-                "set_route_access": "effect_program_geometry",
-                "temporary_room_geometry": "effect_program_geometry",
-            },
-            "expiry": {
-                "set_facility_availability": "effect_program_expire",
-                "facility_outage": "effect_program_expire",
-                "water_outage": "water_restored",
-                "set_ambient_noise": "effect_program_environment_expire",
-                "modify_demand_rate": "effect_program_environment_expire",
-                "set_ventilation": "effect_program_environment_expire",
-                "set_lighting": "effect_program_environment_expire",
-                "set_privacy": "effect_program_environment_expire",
-                "set_temperature": "effect_program_environment_expire",
-                "add_temporary_space": "effect_program_temporary_space_expire",
-                "set_partition": "effect_program_geometry_expire",
-                "set_route_access": "effect_program_geometry_expire",
-                "temporary_room_geometry": "effect_program_geometry_expire",
-            },
-            "derived": {
-                "modify_supply_schedule": "resource_delivery",
-                "set_staff_availability": "staff_restored",
-                "add_evacuees": "population_approach_complete",
-            },
-        }[marker["phase"]].get(op)
+        expected_event_type = EFFECT_EVENT_TYPES[marker["phase"]].get(op)
         if event.event_type != expected_event_type:
             raise ValueError("EffectProgram event type does not match its registered operator")
     for facility_id, record in state["active_facility_modifiers"].items():

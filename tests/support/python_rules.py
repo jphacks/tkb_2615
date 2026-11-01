@@ -17,6 +17,11 @@ import pytest
 # Names that mean a ported function wherever they are patched.
 PORTED_NAMES = frozenset(
     {
+        # events/effects.py: rules/effects.rs, through `kernel_first`.
+        "should_apply_effect_guard",
+        "has_active_facility_modifier",
+        "has_pending_facility_modifier",
+        "validate_effect_program_state",
         # domain/movement.py: rules/movement.rs. Inside `advance_movement` a patch reaches only
         # its Python rule, `advance_movement.__wrapped__`, which a test calls by that name.
         "advance_movement",

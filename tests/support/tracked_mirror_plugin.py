@@ -33,6 +33,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_psychology_row.py",
         "test_staff_dynamics_row.py",
         "test_staff_rules.py",
+        "test_population_row.py",
         "test_psychology_update.py",
         "test_information_row.py",
         "test_capture_rows.py",
@@ -49,6 +50,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_body_state_row.py",
         "test_social_network_row.py",
         "test_world_view_row.py",
+        "test_effect_kernels.py",
         "test_behavior_row.py",
         "test_tick_validation_routes.py",
     }

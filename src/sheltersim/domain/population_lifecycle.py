@@ -1146,7 +1146,9 @@ def _set_presence(
         source_ids=tuple(sorted(set(source_ids + (event.source_id,)))),
         state_snapshot_hash=snapshot_hash,
     )
-    presence["history"] = [*presence["history"], transition.model_dump(mode="json")][-20_000:]
+    # In place: a new list would be converted again, record by record, at every transition.
+    presence["history"].append(transition.model_dump(mode="json"))
+    del presence["history"][:-20_000]
 
 
 def _presence_state(world: WorldState) -> dict[str, Any] | None:

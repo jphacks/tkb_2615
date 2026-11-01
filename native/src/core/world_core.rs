@@ -438,6 +438,9 @@ pub struct NamespaceMirror {
     forwards: u64,
     whole_writes: u64,
     rebuilds: u64,
+    /// Changes with every write to the tree or the row's tree, from Python or from Rust: while it
+    /// and the root stand, the namespace is what it was. See `generation_of`.
+    generation: u64,
 }
 
 /// A new empty tracked container of the class given, without its Python `__new__`.
@@ -687,6 +690,7 @@ impl NamespaceMirror {
         let mut this = slf.try_borrow_mut()?;
         let this = &mut *this;
         this.forwards += 1;
+        this.generation += 1;
         let Some(row) = this.row.as_mut() else {
             return Ok(());
         };
@@ -715,13 +719,18 @@ impl NamespaceMirror {
         }
         this.detached = false;
         this.root = Some(root.clone().unbind());
+        this.generation += 1;
         drop(this);
         Ok(root.unbind())
     }
 
     fn drop_root(slf: &Bound<'_, Self>) -> PyResult<()> {
         let py = slf.py();
-        let old = slf.try_borrow_mut()?.root.take();
+        let old = {
+            let mut this = slf.try_borrow_mut()?;
+            this.generation += 1;
+            this.root.take()
+        };
         if let Some(old) = old {
             Self::release_value(slf, old.bind(py), py.None().bind(py))?;
         }
@@ -752,6 +761,7 @@ impl NamespaceMirror {
     /// `del node[key]` at this path of the tree from Rust, after the row dropped it, if the tree
     /// has it: no override runs and nothing is forwarded.
     pub(crate) fn remove_through<'py>(slf: &Bound<'py, Self>, path: &[&str], key: &str) -> PyResult<()> {
+        slf.try_borrow_mut()?.generation += 1;
         let py = slf.py();
         let Some(mut node) = slf.try_borrow()?.root.as_ref().map(|root| root.bind(py).clone()) else {
             return Ok(());
@@ -794,6 +804,7 @@ impl NamespaceMirror {
         path: &[&str],
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
+        slf.try_borrow_mut()?.generation += 1;
         let Some(list) = Self::list_at(slf, path)? else {
             return Ok(());
         };
@@ -804,6 +815,7 @@ impl NamespaceMirror {
 
     /// del items[:count] in the tree from Rust, after the row dropped them. See `write_through`.
     pub(crate) fn drop_oldest_through(slf: &Bound<'_, Self>, path: &[&str], count: usize) -> PyResult<()> {
+        slf.try_borrow_mut()?.generation += 1;
         let py = slf.py();
         let Some(list) = Self::list_at(slf, path)? else {
             return Ok(());
@@ -834,6 +846,7 @@ impl NamespaceMirror {
         key: &Bound<'py, PyAny>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
+        slf.try_borrow_mut()?.generation += 1;
         let py = slf.py();
         let old = raw_dict_get(node, key)?;
         if old.as_ref().is_some_and(|old| old.is(value)) {
@@ -860,6 +873,7 @@ impl NamespaceMirror {
         names: [&Bound<'py, PyString>; N],
         entries: impl Iterator<Item = PyResult<(Bound<'py, PyString>, [Bound<'py, PyAny>; N])>>,
     ) -> PyResult<()> {
+        slf.try_borrow_mut()?.generation += 1;
         let py = slf.py();
         let Some(root) = slf.try_borrow()?.root.as_ref().map(|root| root.bind(py).clone()) else {
             return Ok(());
@@ -930,6 +944,8 @@ impl NamespaceMirror {
     ) -> PyResult<R> {
         let py = slf.py();
         let mut this = slf.try_borrow_mut()?;
+        // What f writes through `Tree` does not pass the counted paths.
+        this.generation += 1;
         let tree = Tree { py, node: this.root.as_ref().map(|root| root.bind(py).clone()) };
         let row = this
             .row
@@ -983,6 +999,7 @@ impl NamespaceMirror {
                 let mut this = slf.try_borrow_mut()?;
                 this.row = None;
                 this.taint = Some(misfit.0);
+                this.generation += 1;
                 Ok(())
             }
         }
@@ -1049,6 +1066,7 @@ impl NamespaceMirror {
                         let mut this = slf.try_borrow_mut()?;
                         this.row = None;
                         this.taint = Some(misfit.0);
+                        this.generation += 1;
                         Ok(())
                     }
                 }
@@ -1126,6 +1144,7 @@ impl NamespaceMirror {
         this.root = Some(root.clone().unbind());
         this.detached = false;
         this.rebuilds += 1;
+        this.generation += 1;
         Ok(root.unbind())
     }
 
@@ -1179,6 +1198,14 @@ impl NamespaceMirror {
     /// Whether value is the tree of this mirror. A field of the world assigned whole is not.
     fn holds(&self, value: &Bound<'_, PyAny>) -> bool {
         self.root_is(value)
+    }
+
+    /// A number that stays the same while nothing writes to the tree, if value is the tree, else
+    /// None. So a check can tell it read this very state without comparing it. Both this and
+    /// `holds` miss `dict.__setitem__` on a node, which passes the tree's overrides
+    /// (docs/rust-port/lanes/t-tick-validation.md).
+    fn generation_of(&self, value: &Bound<'_, PyAny>) -> Option<u64> {
+        self.root_is(value).then_some(self.generation)
     }
 
     /// The canonical JSON of the row, or None without one.
@@ -1282,6 +1309,7 @@ impl WorldCore {
                 forwards: 0,
                 whole_writes: 0,
                 rebuilds: 0,
+                generation: 0,
             },
         )?;
         self.namespaces.insert(name, mirror.clone_ref(py));
