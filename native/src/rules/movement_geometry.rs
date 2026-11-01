@@ -541,7 +541,11 @@ impl Geo {
                 geo: geo.clone(),
             },
         );
-        plans.truncate(CACHED_PLANS);
+        // Dropped past the lock, since a release can run Python.
+        let keep = plans.len().min(CACHED_PLANS);
+        let old = plans.split_off(keep);
+        drop(plans);
+        drop(old);
         Ok(geo)
     }
 
