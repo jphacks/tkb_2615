@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from sheltersim.contracts.extensions import point_in_polygon
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import (
@@ -132,6 +134,7 @@ def test_v2_histories_keep_installed_facilities_unknown(
         assert _knowers(child.world, facility_id) == 0
 
 
+@pytest.mark.python_rules
 def test_runtime_placement_failure_fails_the_event_without_changes(
     tmp_path, monkeypatch, generated_scenario, add_toilets_program, saved_timeline
 ) -> None:
@@ -144,10 +147,19 @@ def test_runtime_placement_failure_fails_the_event_without_changes(
         program=program,
         approved_program_hash=digest(program.model_dump(mode="json")),
     )
-    # Something placed later (a partition, a room) can take the free point.
+    # Something placed later (a partition, a room) can take the free point. This is the Python
+    # rule's text; tests/integration/test_overlay_rules.py has the kernel refusing the same.
     import sheltersim.domain.geometry_overlay as overlay
+    from sheltersim.events import effects
 
     monkeypatch.setattr(overlay, "installed_facility_point", lambda world, facility_id: None)
+    # Without the kernels these are the Python rules already.
+    place = overlay.place_installed_facility
+    monkeypatch.setattr(effects, "place_installed_facility", getattr(place, "__wrapped__", place))
+    apply = effects.EffectProgramStructureHandler.apply
+    monkeypatch.setattr(
+        effects.EffectProgramStructureHandler, "apply", getattr(apply, "__wrapped__", apply)
+    )
     world = timeline.advance("child", _FORK_MINUTE + 1).world
     assert not _added_toilets(world)
     failed = [

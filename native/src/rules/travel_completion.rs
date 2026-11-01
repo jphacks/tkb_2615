@@ -29,7 +29,6 @@ use crate::rules::{service, toilet};
 use crate::state::events::{EventRef, EventRow, EventWriter};
 use crate::Unsupported;
 
-const QUEUES_KEY: &str = "facility_queues_v1";
 static ARRIVALS_RAN: AtomicU64 = AtomicU64::new(0);
 static ARRIVALS_REFUSED: AtomicU64 = AtomicU64::new(0);
 static ARRIVAL_REFUSALS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
@@ -131,11 +130,8 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
     let journey_dict = tree(&journey)?;
 
     let movement = movement_module(py)?;
-    let queues = py.import(intern!(py, "sheltersim.domain.facility_queues"))?;
     let independent = match facility_id {
-        Some(facility) => queues
-            .call_method1(intern!(py, "facility_has_independent_queues"), (world, &**facility))?
-            .is_truthy()?,
+        Some(facility) => crate::rules::facility_queues::has_independent(world, facility)?,
         None => false,
     };
     let at_slot = |queue: Option<&str>| -> PyResult<bool> {
@@ -263,16 +259,12 @@ fn arrive<'py>(
     destination: &str,
 ) -> PyResult<()> {
     let py = world.py();
-    let table = attribute(world, intern!(py, "model_state"))?;
-    if exact_dict(&table)?.contains(QUEUES_KEY)? {
-        return unsupported("an independent FIFO may be here");
-    }
     let is_toilet = purpose == "toilet_request";
     if !is_toilet && purpose != "resource_request" {
         return Ok(());
     }
     let configs = attribute(world, intern!(py, "model_configs"))?;
-    if exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))? {
+    if exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))? && !crate::rules::facility_queues::has_independent(world, facility_id)? {
         let Some((route, points)) = approach_route(world, agent_id, facility_id)? else {
             return unsupported("a blocked room is the Python rule's");
         };
@@ -302,7 +294,7 @@ fn arrive<'py>(
             return unsupported("the world's whole validation is Python's");
         }
         own_request(&attribute(handler, intern!(py, "toilet_service"))?)?;
-        toilet::queue_up(world, agent.as_any(), facility.as_any())?;
+        toilet::queue_up(world, agent.as_any(), facility.as_any(), None)?;
     } else {
         let manager = attribute(handler, intern!(py, "resource_service"))?;
         own_request(&manager)?;

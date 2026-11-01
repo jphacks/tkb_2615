@@ -49,6 +49,8 @@ Checkpoint document) and times them.
 - `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
   `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`
   (`docs/rust-port/lanes/m6-population.md`).
+- `src/state/facility_queues.rs`: the typed row of `facility_queues_v1`. The rules read it and write
+  through the tree (`docs/rust-port/lanes/m6-overlay.md`).
 - `src/rules/population.rs`, `src/rules/population_lifecycle.rs`: the rules of `domain/population.py`
   and `domain/population_lifecycle.py`, each behind `kernel_first`. A kernel plans, refuses before
   its first write what the Python rule raises on, then writes with the rule's operations on the
@@ -125,6 +127,11 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/overlay.rs`: `domain/temporary_spaces.py` and the rules of `domain/geometry_overlay.py`:
+  capacity, beds and room intake, placing an installed facility, checking and applying a floor-plan
+  change, and the checks of both states. `rules/effects.rs` and `rules/proposals.rs` call it directly.
+- `rules/facility_queues.rs`: `domain/facility_queues.py`. `rules/queues.rs` and `rules/service.rs`
+  serve an independent FIFO through it.
 - `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
   `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
   handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
@@ -217,7 +224,7 @@ each OS, because both call the same libm.
   `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
   arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
   `kernel_first`. Each plans and then writes, in one call.
-  An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
+  A person who gives up on the queue gives `Unsupported` before any write.
   See `docs/rust-port/lanes/m4-queues.md`.
 
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
@@ -259,7 +266,7 @@ each OS, because both call the same libm.
   facility_id, *, minute=None, validate_state=None, queue_id=None)` and
   `record_request_outcome(manager, *, ...)`, each `kernel_first` on `ResourceServiceManager`.
   `serve_head` is one pass of `arbitrate`'s loop after the positions; it returns the started event's
-  ID, or None to stop. An independent FIFO gives `Unsupported` before any write.
+  ID, or None to stop. `serve_independent_head` is the same pass of one independent queue.
 - `rules.proposals.apply_effect(controller, proposal)`: `_apply_effect` (`src/rules/proposals.rs`),
   which returns `(target_id, next_decision_at, committed)`. `seek_help`, `seek_information`, a bed in
   a temporary room and a trip of no minutes give `Unsupported` before any write.

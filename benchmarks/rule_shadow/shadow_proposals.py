@@ -3,7 +3,8 @@
 The kernel runs on the world first, and the Python step then runs on a copy made before it: plain
 copies of the people, the bed reservations and the event counter, and a list of what it schedules.
 The result, what those hold and each event's repr must come out the same. What the kernel refuses
-isn't compared: the Python step runs on the world then.
+isn't compared: the Python step runs on the world then. A trip, and sleep where a room may have a
+bed, run the Python step first, since the kernel changes the movement state it reads.
 """
 
 from __future__ import annotations
@@ -94,6 +95,12 @@ def prepare(output: str) -> None:
             if agent.next_decision_at != twin.__dict__["agents"][key].next_decision_at:
                 recorder.differ(f"{where}: {key}'s next decision")
         compare_after(recorder, where, world, twin, pending_before)
+        overlay = world.model_state.get(OVERLAY)
+        if isinstance(overlay, dict):
+            mine = text(overlay.get("bed_reservations"))
+            if mine != text(twin.__dict__["model_state"][OVERLAY].get("bed_reservations")):
+                recorder.differ(f"{where}: the bed reservations")
+            recorder.seen["beds_compared"] += 1
         return result
 
     def apply_effect(controller: Any, proposal: Any) -> Any:
@@ -102,7 +109,11 @@ def prepare(output: str) -> None:
         world = controller.world
         action = proposal.action.value
         recorder.seen["calls"] += 1
-        if action in TRIPS:
+        overlay = world.model_state.get(OVERLAY)
+        walks_to_bed = (
+            action == "sleep" and isinstance(overlay, dict) and bool(overlay.get("temporary_rooms"))
+        )
+        if action in TRIPS or walks_to_bed:
             return trip(controller, proposal, action)
         if action in SEEKS:
             recorder.seen[f"action.{action}"] += 1

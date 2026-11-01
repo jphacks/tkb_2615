@@ -18,7 +18,8 @@ use pyo3::types::{PyDict, PyString, PyTuple};
 use rustc_hash::FxBuildHasher;
 
 use crate::core::mathx::{hypot, py_fsum, py_max, py_min, py_round, py_sum};
-use crate::core::row::{attribute, exact_dict, exact_float, exact_str, unsupported, IdMap};
+use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, unsupported, IdMap};
+use crate::core::value::V;
 use crate::Unsupported;
 
 /// Past this a product could overflow where Python's `Point2D` would raise. Nothing real is here.
@@ -32,6 +33,16 @@ const REMEMBERED_ROUTES: usize = 4096;
 pub(crate) struct Pt {
     pub(crate) x: f64,
     pub(crate) y: f64,
+}
+
+/// `Identifier`: `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`. `$` also takes a final newline, which is no
+/// ID a rule writes; it says false here and the Python rule decides.
+pub(crate) fn is_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..].iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
 
 /// A coordinate pair a kernel can compute with: what `Point2D` accepts, and not so large as to overflow.
@@ -130,7 +141,7 @@ fn segment_hits_polygon(start: Pt, end: Pt, polygon: &[Pt]) -> bool {
     point_in_polygon(Pt { x: (start.x + end.x) / 2.0, y: (start.y + end.y) / 2.0 }, polygon)
 }
 
-fn point_segment_distance(point: Pt, start: Pt, end: Pt) -> f64 {
+pub(crate) fn point_segment_distance(point: Pt, start: Pt, end: Pt) -> f64 {
     let (dx, dy) = (end.x - start.x, end.y - start.y);
     let denominator = dx * dx + dy * dy;
     if denominator <= 1e-18 {
@@ -202,10 +213,26 @@ pub(crate) struct Route {
     pub(crate) accessible: bool,
 }
 
+/// A `FacilityServicePoint`, as a rule reads it.
+#[derive(Clone)]
+pub(crate) struct ServicePoint {
+    pub(crate) id: Arc<str>,
+    pub(crate) facility_id: Arc<str>,
+    pub(crate) point: Pt,
+    pub(crate) service_capacity: i64,
+    pub(crate) queue_id: Arc<str>,
+    pub(crate) accessibility: Arc<str>,
+    pub(crate) required_access_tags: Vec<Arc<str>>,
+    pub(crate) required_staff_skills: Vec<Arc<str>>,
+}
+
 pub(crate) struct Layout {
     pub(crate) zones: IdMap<Zone>,
     pub(crate) routes: IdMap<Route>,
     pub(crate) facility_points: IdMap<Pt>,
+    /// With the overlay's moves. `signed_service_points` are the Scenario's own.
+    pub(crate) service_points: Vec<ServicePoint>,
+    pub(crate) signed_service_points: Vec<ServicePoint>,
 }
 
 pub(crate) struct Wall {
@@ -229,6 +256,8 @@ pub(crate) struct Constraints {
     pub(crate) blocked: Vec<Vec<Pt>>,
     /// The equipment footprints, by facility.
     pub(crate) footprints: Vec<(Arc<str>, Vec<Pt>)>,
+    /// How many of `blocked` are obstacles, the rest being the footprints.
+    pub(crate) obstacle_count: usize,
 }
 
 /// What a route found in a room depends on, beside the plan it is kept in.
@@ -329,9 +358,65 @@ fn flag_of(model: &Bound<'_, PyAny>, name: &Bound<'_, PyString>) -> PyResult<boo
         .map_err(|_| Unsupported::new_err("not a bool"))
 }
 
-fn layout_of(model: &Bound<'_, PyAny>) -> PyResult<Layout> {
+fn id_list(model: &Bound<'_, PyAny>, name: &Bound<'_, PyString>) -> PyResult<Vec<Arc<str>>> {
+    tuple_of(model, name)?.iter().map(|id| Ok(Arc::from(exact_str(&id)?))).collect()
+}
+
+fn service_point_of(model: &Bound<'_, PyAny>) -> PyResult<ServicePoint> {
     let py = model.py();
-    let mut layout = Layout { zones: IdMap::default(), routes: IdMap::default(), facility_points: IdMap::default() };
+    let access = attribute(model, intern!(py, "access"))?;
+    Ok(ServicePoint {
+        id: id_of(model, intern!(py, "id"))?,
+        facility_id: id_of(model, intern!(py, "facility_id"))?,
+        point: point_of(&attribute(model, intern!(py, "point_m"))?)?,
+        service_capacity: exact_int(&attribute(model, intern!(py, "service_capacity"))?)?,
+        queue_id: id_of(model, intern!(py, "queue_id"))?,
+        accessibility: id_of(&access, intern!(py, "accessibility"))?,
+        required_access_tags: id_list(&access, intern!(py, "required_access_tags"))?,
+        required_staff_skills: id_list(&access, intern!(py, "required_staff_skills"))?,
+    })
+}
+
+/// A `Point2D` of the overlay, for what `Point2D.model_validate` takes as it is.
+pub(crate) fn point_in_value(value: &V) -> PyResult<Pt> {
+    let V::Map(fields) = value else {
+        return unsupported("a point is not a dict");
+    };
+    let (Some(V::Float(x)), Some(V::Float(y)), 2) = (fields.get("x"), fields.get("y"), fields.len()) else {
+        return unsupported("a point is not two floats");
+    };
+    if !usable(*x, *y) {
+        return unsupported("a point is not a usable point");
+    }
+    Ok(Pt { x: *x, y: *y })
+}
+
+pub(crate) fn points_in_value(value: &V) -> PyResult<Vec<Pt>> {
+    let V::List(points) = value else {
+        return unsupported("points are not a list");
+    };
+    points.iter().map(point_in_value).collect()
+}
+
+/// A point the arithmetic of a rule gave: `Point2D` takes what is finite, and `usable` is less.
+fn moved(point: Pt, new: Pt, old: Pt) -> PyResult<Pt> {
+    let moved = Pt { x: point.x + new.x - old.x, y: point.y + new.y - old.y };
+    if !usable(moved.x, moved.y) {
+        return unsupported("a moved point is not a usable point");
+    }
+    Ok(moved)
+}
+
+/// `effective_geometry`: the Scenario's plan with the overlay's moved facilities.
+fn layout_of(model: &Bound<'_, PyAny>, moves: Option<&V>) -> PyResult<Layout> {
+    let py = model.py();
+    let mut layout = Layout {
+        zones: IdMap::default(),
+        routes: IdMap::default(),
+        facility_points: IdMap::default(),
+        service_points: Vec::new(),
+        signed_service_points: Vec::new(),
+    };
     for zone in tuple_of(model, intern!(py, "zones"))?.iter() {
         let polygon = points_of(&zone, intern!(py, "polygon"))?;
         if polygon.is_empty() {
@@ -355,10 +440,50 @@ fn layout_of(model: &Bound<'_, PyAny>) -> PyResult<Layout> {
     for (id, point) in exact_dict(&points)?.iter() {
         layout.facility_points.insert(Arc::from(exact_str(&id)?), point_of(&point)?);
     }
+    for point in tuple_of(model, intern!(py, "service_points"))?.iter() {
+        layout.signed_service_points.push(service_point_of(&point)?);
+    }
+    layout.service_points = layout.signed_service_points.clone();
+    let Some(moves) = moves else {
+        return Ok(layout);
+    };
+    let V::Map(moves) = moves else {
+        return unsupported("the overlay's moves are not a dict");
+    };
+    if moves.is_empty() {
+        return Ok(layout);
+    }
+    let mut new_points = IdMap::default();
+    for (id, row) in moves {
+        let V::Map(row) = row else {
+            return unsupported("a move is not a dict");
+        };
+        let point = point_in_value(row.get("point_m").unwrap_or(&V::Null))?;
+        new_points.insert(id.clone(), point);
+    }
+    for point in &mut layout.service_points {
+        let Some(&new) = new_points.get(&*point.facility_id) else {
+            continue;
+        };
+        let Some(&old) = layout.facility_points.get(&*point.facility_id) else {
+            return unsupported("a moved service point has no point of its facility");
+        };
+        point.point = moved(point.point, new, old)?;
+    }
+    for (id, point) in new_points {
+        layout.facility_points.insert(id, point);
+    }
     Ok(layout)
 }
 
-fn constraints_of(model: &Bound<'_, PyAny>) -> PyResult<Constraints> {
+/// `effective_spatial_constraints`: the Scenario's with the partitions as obstacles, in ID order,
+/// and the footprints of moved facilities moved with them.
+fn constraints_of(
+    model: &Bound<'_, PyAny>,
+    partitions: Option<&V>,
+    moves: Option<&V>,
+    signed: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Constraints> {
     let py = model.py();
     let mut blocked = Vec::new();
     for item in tuple_of(model, intern!(py, "obstacles"))?.iter() {
@@ -368,14 +493,62 @@ fn constraints_of(model: &Bound<'_, PyAny>) -> PyResult<Constraints> {
         }
         blocked.push(polygon);
     }
+    if let Some(partitions) = partitions {
+        let V::Map(partitions) = partitions else {
+            return unsupported("the partitions are not a dict");
+        };
+        let mut sorted: Vec<(&Arc<str>, &V)> = partitions.iter().collect();
+        sorted.sort_by(|first, second| first.0.as_bytes().cmp(second.0.as_bytes()));
+        for (_, row) in sorted {
+            let V::Map(row) = row else {
+                return unsupported("a partition is not a dict");
+            };
+            // SpatialObstacle(id=key, ...) takes 3 to 128 corners, and its ID and sources the
+            // overlay's own validation reads: anything it could refuse goes to the Python rule.
+            let polygon = points_in_value(row.get("polygon_m").unwrap_or(&V::Null))?;
+            if !(3..=128).contains(&polygon.len()) {
+                return unsupported("a partition has another number of corners");
+            }
+            if !matches!(row.get("source_ids"), Some(V::List(sources)) if sources.iter().all(|id| matches!(id, V::Str(id) if is_identifier(id)))) {
+                return unsupported("a partition's source is not an identifier");
+            }
+            blocked.push(polygon);
+        }
+        if partitions.keys().any(|id| !is_identifier(id)) {
+            return unsupported("a partition's ID is not an identifier");
+        }
+    }
+    let obstacle_count = blocked.len();
+    let moves = match moves {
+        Some(V::Map(moves)) => Some(moves),
+        Some(_) => return unsupported("the overlay's moves are not a dict"),
+        None => None,
+    };
     let mut footprints = Vec::new();
     for item in tuple_of(model, intern!(py, "equipment_footprints"))?.iter() {
-        let polygon = points_of(&item, intern!(py, "polygon"))?;
+        let mut polygon = points_of(&item, intern!(py, "polygon"))?;
         if polygon.is_empty() {
             return unsupported("a footprint has no polygon");
         }
+        let id = id_of(&item, intern!(py, "facility_id"))?;
+        if let Some(V::Map(row)) = moves.and_then(|moves| moves.get(&*id)) {
+            let Some(signed) = signed else {
+                return unsupported("a moved footprint without the Scenario's plan");
+            };
+            let points = attribute(signed, intern!(py, "facility_points"))?;
+            let Some(old) = exact_dict(&points)?.get_item(&*id)? else {
+                return unsupported("a moved footprint has no point of its facility");
+            };
+            let old = point_of(&old)?;
+            let new = point_in_value(row.get("point_m").unwrap_or(&V::Null))?;
+            for point in &mut polygon {
+                *point = moved(*point, new, old)?;
+            }
+        } else if moves.is_some_and(|moves| moves.contains_key(&*id)) {
+            return unsupported("a move is not a dict");
+        }
         blocked.push(polygon.clone());
-        footprints.push((id_of(&item, intern!(py, "facility_id"))?, polygon));
+        footprints.push((id, polygon));
     }
     let mut walls = Vec::new();
     for wall in tuple_of(model, intern!(py, "walls"))?.iter() {
@@ -396,15 +569,13 @@ fn constraints_of(model: &Bound<'_, PyAny>) -> PyResult<Constraints> {
             edge_ids: edge_ids.iter().map(|id| Ok(Arc::from(exact_str(&id)?))).collect::<PyResult<_>>()?,
         });
     }
-    Ok(Constraints { walls, openings, blocked, footprints })
+    Ok(Constraints { walls, openings, blocked, footprints, obstacle_count })
 }
 
 // ---- Which plan a world has now --------------------------------------------------------------
 
 struct PythonParts {
     parsed_config: Py<PyAny>,
-    effective_geometry: Py<PyAny>,
-    effective_constraints: Py<PyAny>,
     geometry_model: Py<PyAny>,
     constraints_model: Py<PyAny>,
     empty_constraints: Py<PyAny>,
@@ -419,8 +590,6 @@ fn python(py: Python<'_>) -> PyResult<&'static PythonParts> {
         let spatial = py.import("sheltersim.contracts.spatial")?;
         Ok(PythonParts {
             parsed_config: overlay.getattr("_parsed_config")?.unbind(),
-            effective_geometry: overlay.getattr("effective_geometry")?.unbind(),
-            effective_constraints: overlay.getattr("effective_spatial_constraints")?.unbind(),
             geometry_model: extensions.getattr("FacilityGeometry")?.unbind(),
             constraints_model: spatial.getattr("SpatialConstraints")?.unbind(),
             empty_constraints: overlay.getattr("_EMPTY_SPATIAL_CONSTRAINTS")?.unbind(),
@@ -519,14 +688,21 @@ impl Geo {
                 return Ok(geo);
             }
         }
-        // The effective models, which run Python, outside the lock.
-        let refuse = |_| Unsupported::new_err("the Python rule's effective plan raises");
+        // The overlay's parts are read only when they have entries, as `moves` and `partitions` say.
+        let part = |name: &Bound<'_, PyString>, bytes: &[u8]| -> PyResult<Option<V>> {
+            match (overlay, bytes.is_empty()) {
+                (Some(overlay), false) => Ok(overlay.get_item(name)?.map(|value| V::from_py(&value)).transpose()?),
+                _ => Ok(None),
+            }
+        };
+        let moved_points = part(intern!(py, "facility_points"), &moves)?;
+        let walls_up = part(intern!(py, "partitions"), &partitions)?;
         let layout = match &geometry {
-            Some(_) => Some(layout_of(&functions.effective_geometry.bind(py).call1((world,)).map_err(refuse)?)?),
+            Some(model) => Some(layout_of(model, moved_points.as_ref())?),
             None => None,
         };
         let built = match &constraints {
-            Some(_) => Some(constraints_of(&functions.effective_constraints.bind(py).call1((world,)).map_err(refuse)?)?),
+            Some(model) => Some(constraints_of(model, walls_up.as_ref(), moved_points.as_ref(), geometry.as_ref())?),
             None => None,
         };
         let geo = Arc::new(Geo { layout, constraints: built, routes: Mutex::default() });
