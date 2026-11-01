@@ -499,6 +499,22 @@ def test_requests_that_stay_pending_are_the_python_rules() -> None:
         assert _text(dict(world.metric_state)) == _text(dict(plain.metric_state))
 
 
+def test_the_wait_counts_staff_off_shift_away_and_busy_as_the_python_rule_does() -> None:
+    windows = {"S01": [{"start_minute": 100, "end_minute": 110}]}
+    configs = {"staff_dynamics": {"shift_windows_by_staff": windows}}
+    world, plain = _twins(configs=configs)
+    for each in (world, plain):
+        for staff_id in ("S02", "S03"):
+            _busy(each, staff_id)
+        _request(each, 1, sorted(each.agents)[0])
+    assert native.rules("staff").assign_pending(StaffService(world), 0, validate_state=False) == ()
+    StaffService.assign_pending.__wrapped__(StaffService(plain), 0, validate_state=False)
+    assert _text(dict(world.metric_state)) == _text(dict(plain.metric_state))
+    assert world.metric_state["support_wait_staff_off_shift_request_minutes"] == 1.0
+    assert world.metric_state["support_wait_staff_busy_request_minutes"] == 1.0
+    assert world.metric_state["support_no_qualified_worker_request_minutes"] == 0.0
+
+
 def test_a_free_worker_changes_nothing_and_the_python_rule_runs() -> None:
     world = _world()
     _request(world, 1, sorted(world.agents)[0])
