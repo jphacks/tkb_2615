@@ -178,6 +178,21 @@ each OS, because both call the same libm.
   placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
   See `docs/rust-port/lanes/m4-movement.md`.
 
+- `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
+  `validate(world)` accepts a world where no staff member has a task; an active record reads the
+  pending events, which is the Python rule's.
+- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
+  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
+  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
+  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
+  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
+  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
+  (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
+  `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
+  Python rules through `recent_passed(world)`, checked the recent receipts.
+  `rules.common_operations.record_shared_operation(world, record)` appends a `CareTransitionReceipt`.
+
 - `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
   relationships typed, the history as the canonical bytes of each item. `rules.body_state.
   record_social_event(world, event, minute)` is `domain/body_state.py`'s rule with the operators of
