@@ -145,6 +145,21 @@ each OS, because both call the same libm.
   Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
   draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
+- `state.social_network.ROW`, `validate`: Rust owns `social_network_v1`
+  (`src/state/social_network.rs`). The row lists the records written since the last check, whichever
+  way they were written, so the check of a tick reads those and not all of them.
+
+- `rules.social_network.observe_event(world, event, minute)`: what an applied event records, with the
+  body's trust copied (`domain/social_network.py`). `rules/social_propagation.rs` records its observed
+  contacts through the same code, with no Python call. `rules.social_dialogue.capture_context`,
+  `validate_context`: the state context of a social event, read from the rows. Each is
+  `kernel_first`: what the Python rule would refuse, or a value of another type, gives `Unsupported`
+  before any change.
+
+- `rules.social_interaction.apply(handler, world, event)`: `SocialInteractionHandler.apply` for a
+  social action that goes through. A suppressed or failed event and the other types of interaction
+  give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
+
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
   Python rules write one record at a time through the forwarded writes, and M4 moves them.
 
@@ -171,20 +186,13 @@ each OS, because both call the same libm.
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
 
-- `social_relationships_valid`, `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
+- `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
   acceptance of the large loops of validation, read where Python keeps the state. The
   namespaces Rust owns have their `validate` in `state/` instead, which reads the row
   (`docs/rust-port/lanes/t-tick-validation.md`). Each
   returns true only if every entry passes the Python rules; on false the caller runs
   those rules, which accept the value or raise their own error, so results and error
-  messages come from one place. Key checks stay Python functions, remembered per key
-  (`core/tick_validation.py`, `PairKeys`).
-
-- `RecordWatch` (`native/src/watch.rs`): which records of a dict of dicts were written
-  since the last check, from CPython's dict watchers, which report every write
-  whichever code makes it. The functions are outside the stable ABI, so
-  `sheltersim.native` looks them up with ctypes and passes their addresses; if that
-  fails, the checks read every record. A list a rule reads is read at every check.
+  messages come from one place.
 
 - `ValuesSnapshot`: the values of a dict at the last check, held so that the next
   check can tell by identity that the dict still starts with them. It lets the

@@ -703,6 +703,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "social_propagation_v1": ("social_propagation", "ROW"),
     "movement_v1": ("movement", "ROW"),
     "body_state_v1": ("body_state", "ROW"),
+    "social_network_v1": ("social_network", "ROW"),
     "agent_dynamics_v1": ("agent_dynamics", "ROW"),
 }
 

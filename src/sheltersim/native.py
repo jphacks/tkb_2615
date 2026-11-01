@@ -104,13 +104,6 @@ def view_state_hash(*arguments: Any) -> str | None:
         return None
 
 
-def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
-    """True only if every social_network_v1 relationship passes the Python rules."""
-    return _native is not None and _native.social_relationships_valid(
-        relationships, good_keys, key_ok
-    )
-
-
 def movement_positions_valid(positions: Any, zones: Any, edges: Any) -> bool:
     """True only if every movement_v1 position passes the Python rules."""
     return _native is not None and _native.movement_positions_valid(positions, zones, edges)
@@ -165,29 +158,6 @@ def same_json_items(current: Any, documents: list[Any], start: int, count: int) 
     """Whether each of current[:count] is exactly documents[start + i], types included
     (1, 1.0 and True differ, and a tuple and a list), or None without the kernel."""
     return None if _native is None else _native.same_json_items(current, documents, start, count)
-
-
-def _dict_watchers_installed() -> bool:
-    """Hand the dict watcher functions, which are outside the stable ABI, to the kernel."""
-    try:
-        import ctypes
-
-        api = ctypes.pythonapi
-        addresses = [
-            ctypes.cast(getattr(api, name), ctypes.c_void_p).value or 0
-            for name in ("PyDict_AddWatcher", "PyDict_Watch", "PyDict_Unwatch")
-        ]
-    except (ImportError, AttributeError, OSError):
-        return False
-    return _native.install_dict_watcher(*addresses)
-
-
-def record_watch(list_field: str | None = None) -> Any:
-    """A new watch of a dict's records (sheltersim_native.RecordWatch), or None if this
-    Python or build cannot watch dicts; the caller then reads every record."""
-    if _native is None or not _dict_watchers_installed():
-        return None
-    return _native.RecordWatch(list_field)
 
 
 def values_snapshot() -> Any:

@@ -40,6 +40,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_social_propagation_row.py",
         "test_movement_row.py",
         "test_body_state_row.py",
+        "test_social_network_row.py",
         "test_world_view_row.py",
         "test_behavior_row.py",
         "test_tick_validation_routes.py",

@@ -465,6 +465,84 @@ def test_the_relationship_limit_stops_new_pairs_only(
     assert world._core.mirror(BODY_STATE_KEY).verify()
 
 
+# ---- social_network_v1 reads this namespace through the tree ---------------------------------
+
+
+def _with_social(scenario: Any) -> WorldState:
+    from sheltersim.domain.social_network import (
+        SOCIAL_NETWORK_STATE_KEY,
+        create_social_network_state,
+    )
+
+    world = _world(scenario)
+    if SOCIAL_NETWORK_STATE_KEY not in world.model_state:
+        world.model_state[SOCIAL_NETWORK_STATE_KEY] = create_social_network_state()
+    return world
+
+
+@pytest.mark.parametrize(
+    "interaction", ["cooperation", "reassurance_exchange", "family_care", "voluntary_support"]
+)
+def test_observe_event_copies_the_trust_this_kernel_wrote(
+    generated_scenario: Any, interaction: str
+) -> None:
+    """handlers.py calls record_social_event, then observe_event, which reads the tree."""
+    from sheltersim.domain.social_network import SOCIAL_NETWORK_STATE_KEY, observe_event
+
+    world = _with_social(generated_scenario)
+    first, second = _pair(world)
+    python = copy.deepcopy(world)
+    observe = native.rules("social_network").observe_event
+    for number in range(4):
+        event = _event(
+            "social_interaction",
+            {
+                "agent_id": first,
+                "participant_agent_id": second,
+                "interaction_type": interaction,
+                "topic_id": "T1",
+                "interaction_duration_minutes": 5,
+            },
+            number + 1,
+        )
+        minute = 10 + 30 * number
+        _kernel()(world, event, minute)
+        observe(world, event, minute)
+        PYTHON_RULE(python, event, minute)
+        observe_event.__wrapped__(python, event, minute)
+    for name in (BODY_STATE_KEY, SOCIAL_NETWORK_STATE_KEY):
+        assert json.dumps(world.model_state[name]) == json.dumps(python.model_state[name])
+        mirror = world._core.mirror(name)
+        assert mirror.has_row and mirror.verify(), mirror.tainted
+    body = world.model_state[BODY_STATE_KEY]["relationships"]
+    social = world.model_state[SOCIAL_NETWORK_STATE_KEY]["relationships"]
+    key = ordered_pair_key(second, first)
+    assert body[key]["trust"] != 0.5
+    assert social[key]["trust"].hex() == body[key]["trust"].hex()
+
+
+def test_observe_event_sees_a_tainted_body_tree_too(generated_scenario: Any) -> None:
+    """A body namespace without a row still has the tree that observe_event reads."""
+    from sheltersim.domain.social_network import SOCIAL_NETWORK_STATE_KEY
+
+    world = _with_social(generated_scenario)
+    first, second = _pair(world)
+    event = _event(
+        "social_interaction",
+        {"agent_id": first, "participant_agent_id": second, "interaction_type": "cooperation"},
+    )
+    _kernel()(world, event, 10)
+    world.model_state[BODY_STATE_KEY]["agents"][first]["reassurance"] = 1
+    assert world._core.mirror(BODY_STATE_KEY).tainted is not None
+    body_state.record_social_event(world, event, 11)
+    native.rules("social_network").observe_event(world, event, 11)
+    key = ordered_pair_key(second, first)
+    assert (
+        world.model_state[SOCIAL_NETWORK_STATE_KEY]["relationships"][key]["trust"]
+        == world.model_state[BODY_STATE_KEY]["relationships"][key]["trust"]
+    )
+
+
 # ---- What is left to Python ----------------------------------------------------------------
 
 

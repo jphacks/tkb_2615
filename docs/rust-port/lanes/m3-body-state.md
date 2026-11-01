@@ -124,7 +124,6 @@ Rust が `body_state_v1` を持ち、毎 tick と毎イベントの書き手が�
 - **ハンドラーのケアと衛生の書き込み**（`events/handlers.py`）、**`add_body_agent`・`remove_body_agent`、`population_lifecycle` の書き込み**：転送で動きます。ハンドラーを移す M3 の dispatch、M6 のレーンが移します。
 - **`create_body_state`、`canonical_body_config`**：tick の外です。
 - **検証の設定と履歴の規則**：`validate_body_state` に残ります。人口の状態と `model_configs` を読むからです。
-- **`watch.rs` の `list_field`、`topics_valid`**：本体だけが使っていましたが、`social_network_v1` のレーンと同じファイルなので残しました。そのレーンが `watch.rs` をやめるときに消せます。
 - **保存：** Python の経路のままです（`_WORLD_TREE` の名前空間）。全体の bytes は作らないようにしました（履歴だけで 8 MB）。`relationships` と `agents` の bytes、履歴の項目の bytes を保存が使えば、`HistoryPins` と符号化を省けるはずです。測っていません。
 - **`AgentView`、`WorldView`、`rules/action_lifecycle.rs` の `body_needs`：** 本体の値を木から読みます。行から読めば木を切り離す道が開きます。
 - **Python の読み手：** `action_lifecycle`、`staff_operations`、`social_dialogue`、`social_network`、`inspection/frames` は木を読みます。切り離しはできません。
@@ -136,8 +135,15 @@ Rust が `body_state_v1` を持ち、毎 tick と毎イベントの書き手が�
 | `body_agents_valid` | `rows_valid`（毎回すべての記録） | `test_each_write_route_is_stopped_with_python_s_text`、`test_a_record_s_bounds` |
 | `body_relationships_valid`、`_pair_key_is_good`、`_GOOD_KEYS` | `rows_valid`（書かれたキー。人が変われば全部） | `test_a_relationship_is_never_taken_when_python_refuses_it`、`test_a_key_is_never_taken_when_python_refuses_it`、`test_a_key_of_someone_who_left_is_read_again` |
 | `TickValidationMemo.body_watch` | 行の書かれたキーの控え | `test_a_relationship_written_in_each_route_is_read`、`test_a_tick_s_write_of_a_kernel_is_read_by_the_next_check` |
+| `native/src/watch.rs` の全体（`RecordWatch`、`install_dict_watcher`）、`native.record_watch`、`TickValidationMemo.relationships_to_check`、`PairKeys`、`topics_valid`、`social_relationships_valid` | 本体と `social_network_v1` の行が、書かれたキーを自分で控えます。使う場所がなくなりました。dict watcher は stable ABI の外だったので、ctypes で探す処理もなくなりました | 上のテストと `test_social_network_row.py`。読み込みの `test_tick_validation.py` の2件はやめました |
 
 taint した世界では Python の規則が毎 tick すべての関係を読むので、遅くなります。`SHELTERSIM_NATIVE=0` は前からこの形です。
+
+## `social_network_v1` との読み合い
+
+`handlers.py` は `record_social_event` のあとに `observe_event` を呼びます。`observe_event` は本体の信頼を**木**から読むので、kernel が書いた値がそこにある必要があります。kernel の書き込みは同じ呼び出しの中で木に届きます。逆向きの読みはありません（`record_social_event` は社会関係を読みません）。`test_observe_event_copies_the_trust_this_kernel_wrote` が、4種類のやりとりで両方の名前空間を Python の規則とビット単位で比べ、2つの信頼が同じビットであることを確かめます。本体が taint しても木は残るので、`observe_event` は同じ値を読みます。
+
+本体の値を読む kernel（`social_network`、`social_interaction`、`social_dialogue`、`action_lifecycle`、`world_view`）は木を読むので、木を切り離すには全部を行に変える必要があります。
 
 ## 確かめていないこと、危ないところ
 
