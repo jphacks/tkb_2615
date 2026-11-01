@@ -605,6 +605,11 @@ impl QueueStore {
         Ok(Some(row))
     }
 
+    /// Whether this event is pending.
+    pub(crate) fn has_event(&self, event_id: &str) -> bool {
+        self.by_id.contains_key(event_id)
+    }
+
     /// The IDs of the pending events in queue order, through `minute` if given.
     pub(crate) fn pending_ids(&self, minute: Option<i64>) -> Vec<Arc<str>> {
         let end = match minute {

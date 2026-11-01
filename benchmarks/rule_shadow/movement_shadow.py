@@ -46,12 +46,14 @@ def reverse_advance_movement() -> Any:
             result.reverse()
         return result
 
+    # The Python rule: the kernel's plan reads only what the tick started with, so it has no order.
     python_advance = movement.advance_movement
+    python_rule = getattr(python_advance, "__wrapped__", python_advance)
 
     def advance(world: Any, minute: int) -> tuple[str, ...]:
         active[0] = True
         try:
-            return tuple(builtins.sorted(python_advance(world, minute)))
+            return tuple(builtins.sorted(python_rule(world, minute)))
         finally:
             active[0] = False
 

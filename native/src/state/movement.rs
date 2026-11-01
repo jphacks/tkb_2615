@@ -1,6 +1,6 @@
-//! `movement_v1`: where people and staff are and the trips under way (`domain/movement.py`). Its
-//! rules stay in Python until M4 and write one record at a time through the forwarded writes
-//! (docs/rust-port/lanes/i-movement.md).
+//! `movement_v1`: where people and staff are and the trips under way (`domain/movement.py`). The
+//! rules that run every tick are `rules/movement.rs`; the others write one record at a time through
+//! the forwarded writes (docs/rust-port/lanes/i-movement.md, m4-movement.md).
 //!
 //! A value of another type than the rules write taints the namespace, and the Python rules and
 //! their errors run on the tree: an int `progress` or an int coordinate, which validation accepts,
@@ -26,6 +26,7 @@ state_row! {
 }
 
 state_row! {
+    #[derive(Clone)]
     pub(crate) struct Position {
         zone_id: Arc<str>,
         point: Option<Point>,
@@ -214,7 +215,7 @@ state_row! {
         staff_positions: IdMap<Position>,
         journeys: IdMap<Journey>,
         edge_usage_minutes: IdMap<i64>,
-        last_updated_minute: i64,
+        last_updated_minute: i64 => set_last_updated_minute,
     }
 }
 

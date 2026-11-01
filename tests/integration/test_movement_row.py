@@ -1,7 +1,8 @@
-"""movement_v1 owned by Rust, with its rules still in Python (docs/rust-port/lanes/i-movement.md).
+"""movement_v1 owned by Rust (docs/rust-port/lanes/i-movement.md, m4-movement.md).
 
 The row against the tree at every tick of the gate is benchmarks/rule_shadow/movement_shadow.py;
-here, the shapes of its records, what taints it, and the steps that hold the tree.
+here, the shapes of its records, what taints it, the steps that hold the tree, and what the Python
+rule does that depends on its order. The kernels are tests/integration/test_movement_rules.py.
 """
 
 from __future__ import annotations
@@ -195,12 +196,12 @@ def test_the_row_follows_the_rules_with_only_single_records_written(
 
     tracked = _run(generated_scenario, 60, check)
     stats = _mirror(tracked).stats()
-    # Written once when the namespace is made; everything after is a forwarded record.
+    # Written once when the namespace is made; everything after is a record at a time.
     assert stats["whole_writes"] <= 1
-    assert stats["forwards"] > 60
     assert tracked.model_state[KEY]["positions"]
 
 
+@pytest.mark.python_rules
 def test_the_step_holds_the_tree_across_advance_movement_and_its_writes_reach_the_row(
     generated_scenario: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -253,6 +254,7 @@ def _reverse() -> Any:
     return reverse_advance_movement()
 
 
+@pytest.mark.python_rules
 def test_reversed_order_reverses_the_walk(generated_scenario: Any) -> None:
     """The test below means nothing if the walk did not turn around."""
     world = _run(generated_scenario, 3)
@@ -314,6 +316,7 @@ def _two_queue_trips(scenario: Any) -> WorldState:
     return world
 
 
+@pytest.mark.python_rules
 def test_two_queue_replans_in_one_tick_depend_on_the_order_only_through_their_event_ids(
     generated_scenario_with_split_queues: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +326,8 @@ def test_two_queue_replans_in_one_tick_depend_on_the_order_only_through_their_ev
     starts to find no difference, or another one, the design's list of blockers has changed.
     """
     monkeypatch.setattr(movement, "_room_path_is_clear", lambda *_a, **_k: False)
+    # The patch reaches the Python rule only: the kernel leaves such a tick to it.
+    monkeypatch.setattr(update, "advance_movement", movement.advance_movement.__wrapped__)
     forward = _two_queue_trips(generated_scenario_with_split_queues)
     assert update.advance_movement(forward, 1) == ()
     backward = _two_queue_trips(generated_scenario_with_split_queues)
@@ -383,6 +388,7 @@ def _two_trips_in_one_queue(scenario: Any) -> tuple[WorldState, dict[str, float]
     return world, dict(slot)
 
 
+@pytest.mark.python_rules
 def test_a_slot_replanned_in_a_tick_depends_on_whether_the_one_ahead_has_walked(
     generated_scenario_with_split_queues: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,6 +404,8 @@ def test_a_slot_replanned_in_a_tick_depends_on_whether_the_one_ahead_has_walked(
         return agent_id != "A002" and python_clear(world, agent_id, *rest)
 
     monkeypatch.setattr(movement, "_room_path_is_clear", clear)
+    # The patch reaches the Python rule only: the kernel leaves such a tick to it.
+    monkeypatch.setattr(update, "advance_movement", movement.advance_movement.__wrapped__)
     forward, slot = _two_trips_in_one_queue(generated_scenario_with_split_queues)
     assert update.advance_movement(forward, 1) == ()
     backward, _ = _two_trips_in_one_queue(generated_scenario_with_split_queues)

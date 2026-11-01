@@ -194,7 +194,7 @@
 - **並列を妨げるもの：**
   - `id_counters["event"]`（`allocate_event_sequence`、`core/world.py:1429`）
   - `_apply_proposal`：`reserve_sleep_bed`、列、職員の依頼が、先に処理した人の結果を見るので直列
-  - `advance_movement`（`domain/movement.py:397`）：同じ tick で列の中の2人が予定を立て直すと、`event_id` と `_queue_slot_position` の行き先の座標が処理の順に依存します。テスト2件が固定しています。ゲートと7日分はこの分岐を通らないので、逆順のハッシュでは分かりません（[lanes/i-movement.md](lanes/i-movement.md)）
+  - `advance_movement`（`domain/movement.py:397`）：同じ tick で列の中の2人が予定を立て直すと、`event_id` と `_queue_slot_position` の行き先の座標が処理の順に依存します。テスト2件が固定しています。ゲートと7日分はこの分岐を通らないので、逆順のハッシュでは分かりません（[lanes/i-movement.md](lanes/i-movement.md)）。Rust の kernel はこの枝のある tick を断り、Python の規則が動きます（[lanes/m4-movement.md](lanes/m4-movement.md)）
   - 履歴とイベントログの追記
   - ContextVar のメモ、`lru_cache`、`_person_contexts`
   - ミラーは GIL が要る
