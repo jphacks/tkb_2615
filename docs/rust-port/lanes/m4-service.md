@@ -81,3 +81,103 @@ M4 の資源と列のレーンが残したものを移しました。`resource_s
 **Rust に書いた係数：** `SOCIAL_PRIORITY` 35、`DEFAULT_INTERACTION_MINUTES` 5、`ROUTING_SOURCE`、`SOCIAL_SOURCE`（出典の ID）。給水量、配食量、`service_minutes`、`hydration_relief`、`hunger_relief` は設定から毎回読みます。
 
 **Rust だけの条件（ここを超えると Python）：** 待ち時間 2^53 分未満、旅の時間 2^53 分未満。`mathx` を通すのは `py_max` だけです（`max(0.0, x)`、最大の待ち時間）。
+
+## 計測
+
+2026-11-01、WSL2、16コア、ほかのレーンと同時。基準は `641ca13`（レーン M4 資源の先頭）。コードは `519753f`（その後の変更はテスト、影、文書だけです）。
+
+`tick_budget.py`（9600分から480 tick、3回）：**0.959**（0.957、0.959、1.058）。A/A 1.012（0.956、1.012、1.054）。状態は3つとも一致。load average 46〜54。**tick 全体の差は A/A の揺れと同じ大きさなので、これだけでは「速くなった」とは言えません。**
+
+部品（同じ分岐から480 tick、基準2本とレーンを同時に1組、スレッドの CPU 時間、µs/tick、load average 約 11）：
+
+| | 基準 | A/A | レーン | 1 tick の回数 |
+|---|---:|---:|---:|---:|
+| `TickEngine.step` | 3,411 | 3,567 | 3,232 | 1 |
+| `_run_propose_phase` | 755 | 790 | 568 | 1 |
+| `_apply_due_proposals` | 586 | 614 | 399 | 1 |
+| `_apply_effect`（基準には手順がありません） | | | 177 | 9.31 |
+| `_record_outcome` | 149 | 158 | 138 | 9.31 |
+| `_route`（Python の手順。レーンでは kernel の中） | 74 | 78 | 0 | 2.67 |
+| `_schedule_travel`（同） | 53 | 54 | 0 | 0.88 |
+| `ResourceServiceManager.arbitrate` | 98 | 99 | 86 | 1 |
+| 上の内数 `_serve_head` | | | 58 | 1.11 |
+| `complete` | 30 | 29 | 18 | 0.39 |
+| `request` | 10 | 11 | 8 | 0.40 |
+| `toilet.arbitrate` | 31 | 32 | **39** | 1 |
+| `EventQueue.pending` | 22 | 23 | **26** | 7.63 |
+| `_run_dispatch_phase` | 636 | 658 | 642 | 1 |
+
+負荷の高い回（load average 約 30、2組の中央値）でも `step` は 5,477 → 5,178 µs、`_apply_due_proposals` は 925 → 629 µs でした。
+
+**kernel を残すかの確認：** どれも基準より減りました。一番差が小さいのは `arbitrate` で約 12%、`request` で約 20% です。`_serve_head` は1回約 52 µs で、1回 20 µs の目安より重いです。`pending_reserves` が Python の `pending()` のタプルを読むのと、提供の開始で Python のメソッド（`list.pop`、`ActiveTask(...)`）を呼ぶのが理由と見ていますが、内訳は測っていません。`QueueStore` に `resource_reserve` の索引があれば走査は要りません（`native/src/state/events.rs` はレーン M3 の範囲なので触っていません）。
+
+**増えたもの：** `toilet.arbitrate` の +7 µs と `pending()` の +4 µs は、Rust が予定したイベントのオブジェクトを Python が読むときに作るからと見ています（確かめていません）。レーン M3 の dispatch が行を読むようになれば減るはずです。
+
+7日分の素の回（負荷の下で1回）：スレッドの CPU 時間 139 秒。基準とは同時に測っていません。
+
+## 結果
+
+| 確認 | 結果 |
+|---|---|
+| 両モードの全テスト | Rust あり 3,690件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,073件成功、1,623件 skip |
+| `gate_all_paths.py --expect` | 55シナリオ、問題0件 |
+| `--reversed-order` | 55シナリオ、問題0件 |
+| ゲートの `rule_shadow`（全部の影） | 55シナリオ、問題0件、違い0件 |
+| 7日分 | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。`--expect` と一致（素の回、影の回） |
+| 7日分の `rule_shadow` | **移動、判断の効果、列、資源、提供の影だけ**（全部の影は遅いため）。違い0件 |
+| `ruff check`、`ruff format --check`、`cargo clippy`（`disallowed_methods`） | 問題なし |
+| `tracked_mirror_gate.py` | **動かしていません。** `core/state_mirror.py` は登録の2行だけで、意味は変えていません |
+
+| `rule_shadow`（kernel が動いた / 呼び出し） | ゲート | 7日分 |
+|---|---:|---:|
+| `apply_effect` | 60,035 / 63,473 | 84,155 / 87,464 |
+| `serve_head`（開始 / 止まる） | 11,951 / 11,951（1,923 / 10,028） | 12,185 / 12,185（4,008 / 8,177） |
+| `complete` | 1,955 / 2,027 | 4,008 / 4,008 |
+| `request` | 2,397 / 2,478 | 4,016 / 4,016 |
+| `facilities_to_serve` | 28,610 / 29,210 | 10,080 / 10,080 |
+| `route` | 8,810 / 8,813 | 3,212 / 3,212 |
+| `schedule_travel` | 6,663 / 6,663 | 3,095 / 3,095 |
+| `record_request_outcome` | 153 / 153 | 0 / 0（手順はすべて kernel の中です） |
+| `validate` 受け入れ / 断り（受け入れの25回に1回は Python の規則も通過） | 28,610 / 600 | 10,080 / 0 |
+| 比べた値（この2つの影） | 3,515,311 | 61,808,019 |
+| 比べたイベント / ログの記録 | 47,339 / 3,878 | 74,493 / 8,016 |
+| 違い | 0 | 0 |
+
+**断り：** 7日分は `seek_help` の 3,309回だけで、これは Python の手順です（上）。ゲートは `seek_help` 2,839、`seek_information` 290、時間の掛からない移動 92、独立した FIFO 149 + 71 + 81 + 600、仮設の部屋の `sleep` 68、辺の容量 3、タスクのない `complete` 1（Python が抑制します）です。
+
+**枝に届いた数（ゲート）：** 行動は `seek_*` を除くすべて。trip の成否 `moves` / `stays` は、`request_toilet` 2,838 / 650、`fetch_water` 1,138 / 375、`collect_meal` 1,164 / 24。`route` が None 102回。
+
+**影の最初の版の失敗：** 影は `_apply_effect` の Python の手順をコピーの上で動かします。最初の版は `toilet_service` や `facility_queues_v1` のコピーがなく、断る枝で本物の世界に書いてゲートの影の回が落ちました（kernel の問題ではありません。素のゲートは一致していました）。直したあとのゲート全体が上の結果です。7日分の影はこの修正の前の回ですが、修正した枝（独立した FIFO、時間の掛からない移動、ベッド）は7日分にありません。
+
+### 影の感度（コピーで変更。`--only generated_project`）
+
+| 変更 | 影 | ゲートのハッシュ | テスト |
+|---|---|---|---|
+| 給水の `relief` を 1.01 倍（`hunger_relief` と同じ式） | 20件以上 | 不一致 | 3件失敗 |
+| 待ち時間の合計を 1.01 倍 | 20件以上 | 不一致（world のみ） | 7件失敗 |
+| 社会の優先度 35 → 36 | 20件以上 | 不一致 | 5件失敗 |
+| 施設の負荷から向かっている人を外す | 20件以上 | 不一致 | 0件 |
+| 既定の分 5 → 6 | 0件 | 一致 | 1件失敗（設定に値があるので Run では読まれません） |
+| 区域の定員の `>=` → `>` | 0件 | 一致 | 1件失敗 |
+| 負荷と時間の順を入れ替える | 0件 | 一致 | **最初は0件。** `test_the_lower_load_goes_before_the_shorter_walk` を足して1件失敗 |
+
+## 網羅
+
+`gate_all_paths.py --coverage`（kernel ありとなしの合計 / kernel ありだけ）：`domain/resource_service.py` 477行のうち 409（86%）/ 350（73%）、`experiments/phases/propose.py` 359行のうち 293（82%）/ 207（58%）、`experiments/phases/arbitrate.py` 38行（100%）/ 同じ、`policies/space.py` 62行のうち 55（89%）/ 同じ、`domain/care_receipts.py` 164行のうち 140（85%）/ 同じ。Rust の行の網羅は測っていません。上の枝の件数と `test_service_rules.py` で見ています。
+
+## 確かめていないこと、危ないところ
+
+- **Windows と macOS では動かしていません。** 新しい C API はありません。`hypot` などの浮動小数の関数は増えていません。
+- **RSS は測っていません。** `resource_service_v1` の履歴が行と木の両方にあるぶん増えます（7日分で約1万件の型付きの行）。
+- **イベントの連番：** 計画は予定のイベントの `sequence` を調べません（`QueueStore` に問い合わせがなく、列のレーンと同じです）。`validate` が `id_counters["event"]` は予定と記録の最大より大きいと確かめているので、検証の通った世界では起きません。起きたら `schedule` が Python と同じ型の `DuplicateEventError` を出します。
+- **`shortest` の順序：** `Arc<str>` の比較（バイト順）で Python の tuple の比較（コードポイント順）を置き換えています。UTF-8 では同じ順です。ASCII でない ID はテストしていません。
+- **`_physically_closed_edges`：** Rust は実効の間取りの `routes` を見ます。Python は生の設定の `routes` を見ます。ID が同じ前提で、`effective_geometry` は `routes` を変えません。`test_every_route_is_python_s_for_every_mobility` と影の範囲で確かめています。
+- **`policy_version` ではなく `ShortestTravelTimePolicy` の型名で判断します。** 同じ名前の別のクラスには気づきません。
+- **`controller._route_rows` の属性：** グラフのオブジェクトが同じ間は読み直しません。`ZoneGraph` は frozen です。`edges` の中の値を書き換えるコードは `src/` にありません。
+- **別名：** `world.model_state["resource_service_v1"]` は置き換えられなくなりました。`src/` で持ち続ける形は調べた範囲でありません。
+
+## レーンとの重なり
+
+- `experiments/phases/segments.py`：登録の3行。`core/state_mirror.py`：`OWNED_NAMESPACES` と `_HASHED_BY_PARTS` の2行。
+- `events/handlers.py`、`experiments/phases/dispatch.py`、`native/src/state/events.rs`（M3）、`domain/staff.py`、`staff_operations.py`、`common_operations.py`（M4 職員）は変えていません。
+- `rules/staff_dynamics.rs`：`staff_status`、`is_available`、`is_available_now` を `pub(crate)` にしました（3行）。`rules/agent_dynamics.rs`：`agent_knows_facility` を同じく（1行）。職員のレーンが同じ行を変えると衝突します。

@@ -21,6 +21,8 @@ from shadow_movement import _Twin
 MOVEMENT = "movement_v1"
 LEDGER = "resource_ledger_v1"
 SERVICE = "resource_service_v1"
+QUEUES = "facility_queues_v1"
+OVERLAY = "geometry_overlay_v1"
 HISTORIES = {"request_history", "queue_stall_history"}
 ROW_CHECK_EVERY = 25
 QUEUE_LISTS = (
@@ -62,16 +64,25 @@ class _ServiceTwin(_Twin):
         table = self.__dict__["model_state"]
         if movement is None:
             del table[MOVEMENT]
-        ledger = world.model_state[LEDGER]
-        table[LEDGER] = {
-            **{key: _plain(value) for key, value in ledger.items() if key != "audit"},
-            "audit": list(ledger["audit"]),
-        }
-        service = world.model_state[SERVICE]
-        table[SERVICE] = {
-            key: list(value) if key in HISTORIES else _plain(value)
-            for key, value in service.items()
-        }
+        ledger = world.model_state.get(LEDGER)
+        if ledger is not None:
+            table[LEDGER] = {
+                **{key: _plain(value) for key, value in ledger.items() if key != "audit"},
+                "audit": list(ledger["audit"]),
+            }
+        service = world.model_state.get(SERVICE)
+        if service is not None:
+            table[SERVICE] = {
+                key: list(value) if key in HISTORIES else _plain(value)
+                for key, value in service.items()
+            }
+        # A Python rule the kernel refuses writes these too, and the copy must keep it from them.
+        queues = world.model_state.get(QUEUES)
+        if queues is not None:
+            table[QUEUES] = _plain(queues)
+        overlay = world.model_state.get(OVERLAY)
+        if isinstance(overlay, dict) and isinstance(overlay.get("bed_reservations"), dict):
+            table[OVERLAY] = {**overlay, "bed_reservations": dict(overlay["bed_reservations"])}
         self.__dict__.update(
             metric_state=dict(world.metric_state),
             id_counters=dict(world.id_counters),
@@ -113,6 +124,13 @@ def _document(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+class _NoService:
+    """In place of a manager of the world: the kernels refuse what reaches it."""
+
+    def request(self, *_arguments: Any, **_options: Any) -> None:
+        raise RuntimeError("a Python rule reached a service of the world")
+
+
 def manager_stand_in(manager: Any, twin: Any) -> Any:
     """The manager on the copy: the rule's own methods, with the copy as its world."""
     stand_in = type(manager).__new__(type(manager))
@@ -133,6 +151,9 @@ def controller_stand_in(controller: Any, twin: Any) -> Any:
     stand_in.world = twin
     if controller.resource_service is not None:
         stand_in.resource_service = manager_stand_in(controller.resource_service, twin)
+    # These hold the world: a rule that reaches them must not write it from here.
+    stand_in.toilet_service = _NoService()
+    stand_in.staff_service = _NoService()
     return stand_in
 
 
@@ -148,6 +169,8 @@ def _compare(recorder: Recorder, where: str, world: Any, twin: Any, pending_befo
     seen = recorder.seen
     table = fields["model_state"]
     for name in (LEDGER, SERVICE):
+        if name not in table:
+            continue
         theirs = table[name]
         mine = world.model_state[name]
         if name == LEDGER:
@@ -170,6 +193,11 @@ def _compare(recorder: Recorder, where: str, world: Any, twin: Any, pending_befo
         if text(mine) != text(theirs):
             recorder.differ(f"{where}: {name} {text(mine):.300} not {text(theirs):.300}")
         seen["values_compared"] += values_in(theirs)
+    overlay = world.model_state.get(OVERLAY)
+    if isinstance(overlay, dict) and text(overlay.get("bed_reservations")) != text(
+        table[OVERLAY].get("bed_reservations")
+    ):
+        recorder.differ(f"{where}: the bed reservations")
     movement = world.model_state.get(MOVEMENT)
     if movement is not None:
         if _document(movement) != _document(table[MOVEMENT]):
@@ -259,11 +287,12 @@ def prepare(output: str) -> None:
         recorder.seen["row_checks.due"] += 1
         if recorder.seen["row_checks.due"] % ROW_CHECK_EVERY:
             return
-        mirror = world._core.mirror(SERVICE)
-        if not mirror.verify():
-            recorder.differ(f"{where}: the row and the tree")
-        if mirror.row_json() != native.canonical_json(world.model_state[SERVICE]):
-            recorder.differ(f"{where}: the row's bytes and the tree's")
+        if SERVICE in world.model_state:
+            mirror = world._core.mirror(SERVICE)
+            if not mirror.verify():
+                recorder.differ(f"{where}: the row and the tree")
+            if mirror.row_json() != native.canonical_json(world.model_state[SERVICE]):
+                recorder.differ(f"{where}: the row's bytes and the tree's")
         problem = world._core.entities().verify(world)
         if problem:
             recorder.differ(f"{where}: the rows and the objects: {problem}")
