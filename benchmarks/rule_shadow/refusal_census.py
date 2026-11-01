@@ -72,7 +72,9 @@ class _Census:
         if not self.rows and not self.ticks:
             return
         with self.target.open("a", encoding="utf-8") as output:
-            head = {"argv": self.argv, "ticks": self.ticks}
+            # The driver's own counts since the process began, to check the or_rule rows against.
+            counts = dict(self.native.rules.tick.stats()[0])
+            head = {"argv": self.argv, "ticks": self.ticks, "driver": counts, "pid": os.getpid()}
             output.write(json.dumps(head, ensure_ascii=False) + "\n")
             for row, n in self.rows.items():
                 output.write(json.dumps([*row, n], ensure_ascii=False) + "\n")
@@ -256,19 +258,23 @@ def _test_sources(root: Path, ids: set[str]) -> dict[str, bool]:
     return answer
 
 
-def _read(directory: str | None) -> tuple[list[list[Any]], int]:
+def _read(directory: str | None) -> tuple[list[list[Any]], dict[str, int]]:
     rows: list[list[Any]] = []
-    ticks = 0
+    ticks = Counter()
     if directory is None:
         return rows, ticks
     for path in sorted(Path(directory).glob("*.jsonl")):
+        last: dict[str, int] = {}
         for line in path.read_text("utf-8").splitlines():
             row = json.loads(line)
             if isinstance(row, dict):
-                ticks += row["ticks"]
+                ticks["steps"] += row["ticks"]
+                last = row.get("driver", last)
             else:
                 rows.append(row)
-    return rows, ticks
+        # A process's driver counts are cumulative: its last line has them all.
+        ticks.update(last)
+    return rows, dict(ticks)
 
 
 def report(arguments: argparse.Namespace) -> int:
@@ -342,6 +348,8 @@ def report(arguments: argparse.Namespace) -> int:
                 "tests_buckets": dict(sum((b for b in item["tests"].values()), Counter())),
                 "test_examples": sorted(valid_tests)[:3] or sorted(item["tests"])[:3],
                 "entries": entries[file, line, reason].most_common(3),
+                # None caught: a check that discards the error, or a class's method's refusal.
+                "caught": sum(entries[file, line, reason].values()),
             }
         )
     table.sort(key=lambda row: (-row["week"], -row["gate"], -row["tests"], row["reason"]))
@@ -366,7 +374,8 @@ def report(arguments: argparse.Namespace) -> int:
     }
     Path(arguments.output).write_text(json.dumps(document, ensure_ascii=False, indent=1), "utf-8")
     reaches = Counter(row["reach"] for row in table)
-    print(f"ticks {ticks}; sites {len(sites)}, reached {len(reached_lines)}, never {len(never)}")
+    print(f"ticks and driver counts {ticks}")
+    print(f"sites {len(sites)}, reached {len(reached_lines)}, never {len(never)}")
     print(f"rows by reach: {dict(reaches)}")
     return 0
 
