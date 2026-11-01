@@ -8,7 +8,7 @@
 //! called with no borrow held.
 //!
 //! A walk the rule refuses says Unsupported before any change, and the Python rule says why in its
-//! own text. So do `sleep_bed` and `presence_relocation`, which write `movement_v1` and
+//! own text. `sleep_bed` and `presence_relocation` read `movement_v1` and
 //! `population_lifecycle_v1` (docs/rust-port/lanes/m3-dispatch.md).
 
 use std::collections::BTreeMap;
@@ -18,14 +18,16 @@ use std::sync::{Arc, Mutex};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyString};
+use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::raw_dict_get;
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
 use crate::rules::travel::{approach_route, plan_room_approach, write_travel};
+use crate::rules::effects::refused_by_python;
 use crate::rules::{service, toilet};
+use crate::state::resource_service::RequestRecord;
 use crate::state::events::{EventRef, EventRow, EventWriter};
 use crate::Unsupported;
 
@@ -261,6 +263,7 @@ fn arrive<'py>(
     purpose: &str,
     facility_id: &str,
     destination: &str,
+    origin: Option<&str>,
 ) -> PyResult<()> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
@@ -274,15 +277,15 @@ fn arrive<'py>(
     let configs = attribute(world, intern!(py, "model_configs"))?;
     if exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))? {
         let Some((route, points)) = approach_route(world, agent_id, facility_id)? else {
-            return unsupported("a blocked room is the Python rule's");
+            return reject_room(handler, world, purpose, agent_id, facility_id, origin);
         };
         if route.minutes > 0 {
             let writer = EventWriter::of(world)?;
             let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
-            let (agent_arc, facility_arc, origin): (Arc<str>, Arc<str>, Arc<str>) =
+            let (agent_arc, facility_arc, origin_arc): (Arc<str>, Arc<str>, Arc<str>) =
                 (Arc::from(agent_id), Arc::from(facility_id), Arc::from(destination));
-            let Some(planned) = plan_room_approach(world, &writer, &agent_arc, &facility_arc, purpose, route, &points, minute, &origin)? else {
-                return unsupported("a blocked room is the Python rule's");
+            let Some(planned) = plan_room_approach(world, &writer, &agent_arc, &facility_arc, purpose, route, &points, minute, &origin_arc)? else {
+                return reject_room(handler, world, purpose, agent_id, facility_id, origin);
             };
             return write_travel(world, &writer, planned);
         }
@@ -311,6 +314,135 @@ fn arrive<'py>(
     Ok(())
 }
 
+/// `_reject_room_approach`. `origin` is the event's origin when a str.
+fn reject_room<'py>(
+    handler: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    purpose: &str,
+    agent_id: &str,
+    facility_id: &str,
+    origin: Option<&str>,
+) -> PyResult<()> {
+    let py = world.py();
+    let metrics = service::metrics_of(world)?;
+    if purpose == "resource_request" && !attribute(handler, intern!(py, "resource_service"))?.is_none() {
+        let store = entities_of(world)?;
+        let (kind, zone) = EntityStore::with_rows(&store, |rows| {
+            let Some(agent) = rows.agents.get(agent_id) else {
+                return unsupported("no such person");
+            };
+            Ok((rows.facilities.get(facility_id).map(|facility| facility.kind.clone()), agent.zone_id.clone()))
+        })?;
+        let action = if kind.as_deref().and_then(service::resource_of) == Some("water_ml") { "fetch_water" } else { "collect_meal" };
+        let mirror = crate::state::resource_service::held_mirror(world)?;
+        service::append_outcome(
+            py,
+            &mirror,
+            RequestRecord {
+                minute: exact_int(&attribute(world, intern!(py, "minute_index"))?)?,
+                agent_id: Arc::from(agent_id),
+                action: Arc::from(action),
+                outcome: Arc::from("rejected"),
+                reason: Arc::from("room_route_blocked"),
+                facility_id: Some(Arc::from(facility_id)),
+                origin_zone_id: origin.map_or(zone, Arc::from),
+                detail: None,
+            },
+        )?;
+        service::add_one(&metrics, "resource_service_request_rejected_count")?;
+    }
+    service::add_one(&metrics, "facility_approach_rejected_count")
+}
+
+/// `_reject_room_approach`, called from Python.
+#[pyfunction]
+fn reject_room_approach<'py>(
+    handler: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    event: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    origin_zone_id: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let purpose = crate::rules::handlers::get(&attribute(event, intern!(world.py(), "payload"))?, "purpose")?;
+    let purpose = if text_is_str(&purpose, "resource_request") { "resource_request" } else { "other" };
+    reject_room(handler, world, purpose, exact_str(agent_id)?, exact_str(facility_id)?, exact_str(origin_zone_id).ok())
+}
+
+fn text_is_str(value: &Bound<'_, PyAny>, wanted: &str) -> bool {
+    exact_str(value).is_ok_and(|text| text == wanted)
+}
+
+/// The checks of `sleep_bed` before its writes: the bed's point.
+fn check_sleep_bed<'py>(world: &Bound<'py, PyAny>, walk: &Walk) -> PyResult<Bound<'py, PyAny>> {
+    use crate::rules::handlers::{get, get_is};
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let empty = PyDict::new(py);
+    let overlay = table.call_method1(intern!(py, "get"), ("geometry_overlay_v1", &empty))?;
+    let reservations = if overlay.is_instance_of::<PyDict>() { overlay.call_method1(intern!(py, "get"), ("bed_reservations", &empty))? } else { empty.clone().into_any() };
+    let reservation = if reservations.is_instance_of::<PyDict>() { get(&reservations, &walk.agent_id)? } else { py.None().into_bound(py) };
+    if !reservation.is_instance_of::<PyDict>() {
+        return unsupported("the walk has no live reservation");
+    }
+    let rooms = overlay.call_method1(intern!(py, "get"), ("temporary_rooms", &empty))?;
+    let room = rooms.call_method1(intern!(py, "get"), (get(&reservation, "room_id")?,))?;
+    if !room.is_instance_of::<PyDict>() || !get_is(&room, "zone_id", &walk.destination)? {
+        return unsupported("the walk has no live reservation");
+    }
+    let movement = table.call_method1(intern!(py, "get"), ("movement_v1", &empty))?;
+    let journey = if movement.is_instance_of::<PyDict>() {
+        movement.call_method1(intern!(py, "get"), ("journeys", &empty))?.call_method1(intern!(py, "get"), (&*walk.agent_id,))?
+    } else {
+        py.None().into_bound(py)
+    };
+    if !journey.is_instance_of::<PyDict>() {
+        return unsupported("the walk has no journey");
+    }
+    let index = get(&reservation, "bed_index")?;
+    let beds = room.call_method1(intern!(py, "get"), ("bed_points_m", PyList::empty(py)))?;
+    let index = exact_int(&index)?;
+    if index < 0 || index as usize >= beds.len()? {
+        return unsupported("the reservation has no bed");
+    }
+    let bed = beds.get_item(index as usize)?;
+    let points = journey.call_method1(intern!(py, "get"), ("route_points", PyList::empty(py)))?;
+    if !get_is(&journey, "event_id", &walk.event_id)?
+        || !get_is(&journey, "task_id", &walk.task_id)?
+        || !get_is(&journey, "purpose", "sleep_bed")?
+        || points.len()? == 0
+        || points.get_item(points.len()? - 1)?.ne(&bed)?
+    {
+        return unsupported("the walk does not match its reservation");
+    }
+    Ok(bed)
+}
+
+/// The checks of `presence_relocation` before its writes.
+fn check_relocation(world: &Bound<'_, PyAny>, walk: &Walk) -> PyResult<()> {
+    use crate::rules::handlers::{get, get_is};
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let empty = PyDict::new(py);
+    let relocation = table
+        .call_method1(intern!(py, "get"), ("population_lifecycle_v1", &empty))?
+        .call_method1(intern!(py, "get"), ("pending_relocations", &empty))?
+        .call_method1(intern!(py, "get"), (&*walk.agent_id,))?;
+    let origin_fits = match &walk.origin {
+        Some(origin) => get_is(&relocation, "from_zone_id", origin)?,
+        None => get(&relocation, "from_zone_id")?.is_none(),
+    };
+    if !relocation.is_instance_of::<PyDict>()
+        || !get_is(&relocation, "task_id", &walk.task_id)?
+        || !get_is(&relocation, "event_id", &walk.event_id)?
+        || !origin_fits
+        || !get_is(&relocation, "to_zone_id", &walk.destination)?
+    {
+        return unsupported("the relocation does not match its route");
+    }
+    Ok(())
+}
+
 /// `_after_arrival`, called from Python.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -324,8 +456,8 @@ fn after_arrival<'py>(
     destination_zone_id: &Bound<'py, PyAny>,
     origin_zone_id: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
-    let _ = (event, origin_zone_id);
-    arrive(handler, world, exact_str(agent_id)?, exact_str(purpose)?, exact_str(facility_id)?, exact_str(destination_zone_id)?)
+    let _ = event;
+    arrive(handler, world, exact_str(agent_id)?, exact_str(purpose)?, exact_str(facility_id)?, exact_str(destination_zone_id)?, exact_str(origin_zone_id).ok())
 }
 
 /// `AgentTravelCompletionHandler.apply` of a walk. `object` gives the event's object, for Python.
@@ -389,7 +521,15 @@ pub(crate) fn apply_event<'py>(
     } else {
         (None, None)
     };
-    let activity = if &**purpose == "staff_support_travel" { Activity::SeekingHelp } else { Activity::Idle };
+    let bed = if &**purpose == "sleep_bed" { Some(refused_by_python(py, check_sleep_bed(world, &walk))?) } else { None };
+    if &**purpose == "presence_relocation" {
+        refused_by_python(py, check_relocation(world, &walk))?;
+    }
+    let activity = match &**purpose {
+        "staff_support_travel" => Activity::SeekingHelp,
+        "sleep_bed" => Activity::Sleeping,
+        _ => Activity::Idle,
+    };
     EntityStore::with_rows(&store, |rows| {
         let task = rows.active_tasks.get(task_id).expect("read above");
         let agent = rows.agents.get(agent_id).expect("read above");
@@ -434,7 +574,8 @@ pub(crate) fn apply_event<'py>(
                     _ => false,
                 }
             }
-            // A bed's position, a relocation's lifecycle, and any other purpose.
+            // Its reservation and its relocation were read above.
+            "sleep_bed" | "presence_relocation" => &*task.kind == "travel_return" && at_target(destination),
             _ => false,
         };
         if !good {
@@ -444,6 +585,19 @@ pub(crate) fn apply_event<'py>(
     })?;
 
     // Everything is decided, and no Unsupported comes from here on.
+    if let Some(bed) = bed {
+        let update = PyDict::new(py);
+        update.set_item("zone_id", &**destination)?;
+        update.set_item("point", bed)?;
+        update.set_item("edge_id", py.None())?;
+        update.set_item("progress", 1.0)?;
+        update.set_item("position_kind", "physical")?;
+        attribute(world, intern!(py, "model_state"))?
+            .get_item("movement_v1")?
+            .get_item("positions")?
+            .get_item(&**agent_id)?
+            .call_method1(intern!(py, "update"), (update,))?;
+    }
     EntityStore::with_rows(&store, |rows| {
         let agent = rows.agents.get_mut(agent_id).expect("read above");
         agent.zone_id = destination.clone();
@@ -460,10 +614,13 @@ pub(crate) fn apply_event<'py>(
     raw_setattr(&person, intern!(py, "activity"), activity.member(py)?.as_ptr())?;
     raw_setattr(&person, intern!(py, "target_id"), py.None().as_ptr())?;
 
+    if &**purpose == "presence_relocation" {
+        py.import("sheltersim.domain.population_lifecycle")?.getattr("complete_presence_relocation")?.call1((world, object()?))?;
+    }
     if matches!(&**purpose, "toilet_request" | "resource_request") {
         let facility = facility_id.map(|id| &**id).unwrap_or_default();
         if direct {
-            match arrive(handler, world, agent_id, purpose, facility, destination) {
+            match arrive(handler, world, agent_id, purpose, facility, destination, walk.origin.as_deref()) {
                 Ok(()) => {
                     ARRIVALS_RAN.fetch_add(1, Ordering::Relaxed);
                     return Ok(());
@@ -512,5 +669,6 @@ pub(crate) fn arrival_counts() -> (u64, u64, BTreeMap<String, u64>) {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply, m)?)?;
     m.add_function(wrap_pyfunction!(after_arrival, m)?)?;
+    m.add_function(wrap_pyfunction!(reject_room_approach, m)?)?;
     Ok(())
 }

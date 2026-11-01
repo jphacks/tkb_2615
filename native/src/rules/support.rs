@@ -22,6 +22,8 @@ use crate::core::mathx::{py_max, py_min};
 use crate::rules::care_receipts::{
     allocate_transition, append, person_context, plan_transition, source_ids_of, transition_record, PlannedTransition, Transition,
 };
+use crate::rules::effects::refused_by_python;
+use crate::rules::handlers::{get, number, text_is};
 use crate::rules::service::{add_one, metrics_of, set_agent};
 use crate::state::body_state::{BodyRecord, BodyRow, NAME as BODY};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
@@ -35,6 +37,8 @@ const RESOLVED_METRIC: &str = "support_resolved_count";
 const BODY_SOURCE: &str = "ASM-LIFE-STATE-FEEDBACK-V1";
 const PRESENCE: &str = "population_presence_v1";
 const EMOTIONAL_SUPPORT: &str = "emotional_support";
+const TYPED_CARE_MODEL: &str = "typed-care-support-response-v1";
+const PROPORTIONAL_HYGIENE_MODEL: &str = "hygiene-support-proportional-relief-v1";
 /// What the handler says of a request that has left `pending`.
 pub(crate) const NO_LONGER_PENDING: &str = "support request is no longer pending";
 
@@ -293,6 +297,8 @@ static CHANGE_NAMES: LazyLock<ChangeNames> = LazyLock::new(|| ChangeNames {
 /// What the care does to the person and their body: their new values.
 enum Care {
     None,
+    /// What a selected care formula does: each person's new stress and body record.
+    Formula { people: Vec<CaredPerson> },
     Emotional { stress: f64, trust: f64, record: BodyRecord },
     Hygiene { record: BodyRecord },
 }
@@ -351,16 +357,31 @@ pub(crate) fn complete_support_event<'py>(
     };
     let metrics = metrics_of(world)?;
     let prior = prior_of(world, &request_id)?;
+    let mut plan_outcome = None;
     let (care, transition) = match prior {
         None => (Care::None, None),
         Some((household_id, support_kind)) => {
             let emotional = &*support_kind == EMOTIONAL_SUPPORT;
             // Of the kinds, only emotional support is the same under every care formula.
-            if !emotional && selected_care_formula(&attribute(world, intern!(py, "model_configs"))?)? {
-                return unsupported("a kind that a selected care formula decides");
-            }
+            let formula = if emotional { None } else { selected_care_formula(world)? };
             let hygiene = &*support_kind == "hygiene_support";
             let mut care = Care::None;
+            if let Some(formula) = formula {
+                let (care, outcome, source_ids) = formula_care(world, &formula, &agent_id, &support_kind, household_id.as_deref(), stress)?;
+                let transition = Transition {
+                    request_id: request_id.clone(),
+                    agent_id: agent_id.clone(),
+                    household_id,
+                    support_kind,
+                    status: "completed",
+                    staff_id: Some(staff_id.clone()),
+                    causation_id: Some(event.event_id()?),
+                    source_ids,
+                    outcome: Some(outcome),
+                };
+                plan_outcome = Some((care, Some(plan_transition(world, writer, transition, writer.next_sequence()?)?)));
+                (Care::None, None)
+            } else {
             let mut outcome = ("not_measured", V::List(Vec::new()));
             let mut source_ids = vec![NAMES.source.clone()];
             if emotional || hygiene {
@@ -422,8 +443,10 @@ pub(crate) fn complete_support_event<'py>(
                 outcome: Some(outcome),
             };
             (care, Some(plan_transition(world, writer, transition, writer.next_sequence()?)?))
+            }
         }
     };
+    let (care, transition) = plan_outcome.unwrap_or((care, transition));
     let requests = attribute(world, intern!(py, "support_requests"))?;
     let agents = attribute(world, intern!(py, "agents"))?;
     let staff_map = attribute(world, intern!(py, "staff"))?;
@@ -466,11 +489,40 @@ pub(crate) fn complete_support_event<'py>(
         }
         Ok(())
     })?;
+    if let Care::Formula { people } = &care {
+        EntityStore::with_rows(&store, |rows| {
+            for person in people {
+                if let (Some(stress), Some(row)) = (person.stress, rows.agents.get_mut(&*person.agent_id)) {
+                    row.stress = stress;
+                }
+            }
+            Ok(())
+        })?;
+    }
     raw_setattr(&agent, intern!(py, "support_request_id"), py.None().as_ptr())?;
     raw_setattr(&agent, intern!(py, "support_cooldown_until"), until.into_pyobject(py)?.as_ptr())?;
     add_one(&metrics, RESOLVED_METRIC)?;
+    if let Care::Formula { people } = &care {
+        let mirror = mirror_of(world, BODY)?;
+        for person in people {
+            if let Some(stress) = person.stress {
+                let object = raw_dict_get(&agents, PyString::new(py, &person.agent_id).as_any())?
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("a row has no object"))?;
+                raw_setattr(&object, intern!(py, "stress"), stress.into_pyobject(py)?.as_ptr())?;
+            }
+            if let Some(next) = &person.record {
+                NamespaceMirror::with_row_tree::<BodyRow, _>(&mirror, |row, tree| {
+                    let record = row
+                        .agents
+                        .get_mut(&*person.agent_id)
+                        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("a planned record left the row"))?;
+                    record.set_all(&tree.child(intern!(py, "agents"))?.child_str(&person.agent_id)?, next)
+                })?;
+            }
+        }
+    }
     let next_record = match care {
-        Care::None => None,
+        Care::None | Care::Formula { .. } => None,
         Care::Emotional { stress, trust, record } => {
             raw_setattr(&agent, intern!(py, "stress"), stress.into_pyobject(py)?.as_ptr())?;
             raw_setattr(&agent, intern!(py, "trust"), trust.into_pyobject(py)?.as_ptr())?;
@@ -497,16 +549,334 @@ pub(crate) fn complete_support_event<'py>(
     }
 }
 
-/// Whether `selected_models(configs).get("care_outcome")` is set. What it refuses is the Python rule's.
-fn selected_care_formula(configs: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let py = configs.py();
+/// `create_care_outcome_formula(configs)`, which the registry makes from a selected model.
+fn selected_care_formula<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = world.py();
+    let configs = attribute(world, intern!(py, "model_configs"))?;
     static SELECTED: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
     let selected = SELECTED.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py.import("sheltersim.contracts.policies")?.getattr("selected_models")?.unbind())
     })?;
-    let selection = selected.bind(py).call1((configs,)).map_err(|_| Unsupported::new_err("the model selection refuses"))?;
+    let selection = selected.bind(py).call1((&configs,)).map_err(|_| Unsupported::new_err("the model selection refuses"))?;
     let selection = selection.downcast_exact::<PyDict>().map_err(|_| Unsupported::new_err("not a selection"))?;
-    Ok(selection.get_item(intern!(py, "care_outcome"))?.is_some_and(|name| !name.is_none()))
+    if !selection.get_item(intern!(py, "care_outcome"))?.is_some_and(|name| !name.is_none()) {
+        return Ok(None);
+    }
+    let formula = py
+        .import("sheltersim.policies.registry")?
+        .getattr("create_care_outcome_formula")?
+        .call1((configs,))
+        .map_err(|_| Unsupported::new_err("the formula refuses"))?;
+    Ok(Some(formula))
+}
+
+// ---- What a selected care formula does ---------------------------------------------------------------
+
+/// One person whom a formula's care changes.
+pub(crate) struct CaredPerson {
+    agent_id: Arc<str>,
+    stress: Option<f64>,
+    record: Option<BodyRecord>,
+}
+
+/// `configured_value` of `support_state_deltas`.
+fn configured_value(config: &Bound<'_, PyAny>, name: &str, default: f64, agent_id: &str) -> PyResult<f64> {
+    let py = config.py();
+    let per_agent = config.call_method1(intern!(py, "get"), (format!("{name}_by_agent"), PyDict::new(py)))?;
+    if per_agent.is_instance_of::<PyDict>() && per_agent.contains(agent_id)? {
+        return number(&per_agent.get_item(agent_id)?);
+    }
+    match get(config, name)? {
+        value if value.is_none() && !config.contains(name)? => Ok(default),
+        value => number(&value),
+    }
+}
+
+/// `CareOutcomeFormula.support_state_deltas`: each field with its delta, in the formula's order.
+fn formula_deltas(formula: &Bound<'_, PyAny>, kind: &str, agent_id: &str) -> PyResult<Vec<(&'static str, f64)>> {
+    let py = formula.py();
+    if !text_is(&attribute(formula, intern!(py, "model_id"))?, TYPED_CARE_MODEL) {
+        return Ok(Vec::new());
+    }
+    let config = attribute(formula, intern!(py, "config"))?;
+    let value = |name: &str, default: f64| configured_value(&config, name, default, agent_id);
+    Ok(match kind {
+        "caregiver_assistance" => vec![
+            ("stress", -value("caregiver_assistance_stress_relief", 0.03)?),
+            ("reassurance", value("caregiver_assistance_reassurance_gain", 0.02)?),
+        ],
+        "dependent_assistance" => vec![
+            ("stress", -value("dependent_assistance_stress_relief", 0.04)?),
+            ("reassurance", value("dependent_assistance_reassurance_gain", 0.03)?),
+        ],
+        "privacy_accommodation" => vec![("discontent", -value("privacy_accommodation_discontent_relief", 0.02)?)],
+        "mobility_assistance" => vec![("stress", -value("mobility_assistance_stress_relief", 0.03)?)],
+        "language_access" => vec![("uncertainty", -value("language_access_uncertainty_relief", 0.05)?)],
+        "medical_assessment" => vec![("uncertainty", -value("medical_assessment_uncertainty_relief", 0.02)?)],
+        "medication_support" => vec![("uncertainty", -value("medication_support_uncertainty_relief", 0.01)?)],
+        _ => Vec::new(),
+    })
+}
+
+/// `CareOutcomeFormula.hygiene_need_after_support`.
+fn hygiene_after(model: &Bound<'_, PyAny>, need: f64, relief: f64) -> f64 {
+    let bounded_need = py_min(1.0, py_max(0.0, need));
+    let bounded_relief = py_min(1.0, py_max(0.0, relief));
+    if text_is(model, PROPORTIONAL_HYGIENE_MODEL) {
+        bounded_need * (1.0 - bounded_relief)
+    } else {
+        py_max(0.0, bounded_need - bounded_relief)
+    }
+}
+
+/// `explicit_care_dependents`.
+fn care_dependents(world: &Bound<'_, PyAny>, caregiver_id: &str, household_id: Option<&str>) -> PyResult<Vec<Arc<str>>> {
+    let py = world.py();
+    let Some(caregiver) = person_context(world, caregiver_id)? else {
+        return Ok(Vec::new());
+    };
+    if !caregiver.is_instance_of::<PyDict>() || caregiver.call_method1(intern!(py, "get"), ("requires_review", false))?.is_truthy()? {
+        return Ok(Vec::new());
+    }
+    let dependents = caregiver.call_method1(intern!(py, "get"), ("care_for_ids", PyTuple::empty(py)))?;
+    let household = get(&caregiver, "household_id")?;
+    let is_sequence = dependents.is_instance_of::<PyList>() || dependents.is_instance_of::<PyTuple>();
+    if !is_sequence || !dependents.is_truthy()? || !household.is_instance_of::<PyString>() {
+        return Ok(Vec::new());
+    }
+    let household_text = exact_str(&household)?;
+    if household_id.is_some_and(|given| given != household_text) || !get(&caregiver, "source_ids")?.is_truthy()? {
+        return Ok(Vec::new());
+    }
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let mut linked: Vec<Arc<str>> = Vec::new();
+    for dependent_id in dependents.try_iter()? {
+        let dependent_id = dependent_id?;
+        let id = exact_str(&dependent_id)?;
+        let Some(dependent) = person_context(world, id)? else {
+            continue;
+        };
+        if !agents.contains(id)?
+            || !dependent.is_instance_of::<PyDict>()
+            || dependent.call_method1(intern!(py, "get"), ("requires_review", false))?.is_truthy()?
+            || !get(&dependent, "household_id")?.eq(&household)?
+            || !dependent.call_method1(intern!(py, "get"), ("caregiver_ids", PyTuple::empty(py)))?.contains(caregiver_id)?
+            || !get(&dependent, "source_ids")?.is_truthy()?
+        {
+            continue;
+        }
+        linked.push(Arc::from(id));
+    }
+    linked.sort_unstable();
+    linked.dedup();
+    Ok(linked)
+}
+
+fn body_field(record: &BodyRecord, field: &str) -> PyResult<f64> {
+    match field {
+        "reassurance" => Ok(record.reassurance),
+        "discontent" => Ok(record.discontent),
+        "uncertainty" => Ok(record.uncertainty),
+        _ => unsupported("another field of the body"),
+    }
+}
+
+fn set_body_field(record: &mut BodyRecord, field: &str, value: f64) -> PyResult<()> {
+    match field {
+        "reassurance" => record.reassurance = value,
+        "discontent" => record.discontent = value,
+        "uncertainty" => record.uncertainty = value,
+        _ => return unsupported("another field of the body"),
+    }
+    Ok(())
+}
+
+/// The part of `StaffSupportCompletionHandler.apply` that a selected formula decides, for a kind other
+/// than emotional support: what changes, the outcome, and the receipt's sources.
+fn formula_care(
+    world: &Bound<'_, PyAny>,
+    formula: &Bound<'_, PyAny>,
+    agent_id: &Arc<str>,
+    kind: &str,
+    household_id: Option<&str>,
+    stress: f64,
+) -> PyResult<(Care, (&'static str, V), Vec<Arc<str>>)> {
+    let py = world.py();
+    let result = (|| -> PyResult<_> {
+        let names = &*CHANGE_NAMES;
+        let hygiene = kind == "hygiene_support";
+        let typed = formula_deltas(formula, kind, agent_id)?;
+        let mut relational: Vec<(Arc<str>, Vec<(&'static str, f64)>)> = Vec::new();
+        let mut sources = Vec::new();
+        if kind == "caregiver_assistance" {
+            for dependent in care_dependents(world, agent_id, household_id)? {
+                let deltas = formula_deltas(formula, "caregiver_assistance", &dependent)?;
+                if !deltas.is_empty() {
+                    relational.push((dependent, deltas));
+                }
+            }
+            let mut identities = vec![agent_id.clone()];
+            identities.extend(relational.iter().map(|(id, _)| id.clone()));
+            for identity in identities {
+                if let Some(context) = person_context(world, &identity)? {
+                    if context.is_instance_of::<PyDict>() {
+                        let listed = context.call_method1(intern!(py, "get"), ("source_ids", PyTuple::empty(py)))?;
+                        for source in listed.try_iter()? {
+                            let source = source?;
+                            if source.is_instance_of::<PyString>() {
+                                sources.push(Arc::<str>::from(exact_str(&source)?));
+                            }
+                        }
+                    }
+                }
+            }
+            sources.sort_unstable();
+            sources.dedup();
+        }
+        let mut source_ids = vec![NAMES.source.clone()];
+        source_ids.extend(sources);
+        let measured_kind = hygiene || !typed.is_empty();
+        let body_mirror = if namespace_is_absent(world, intern!(py, BODY))? { None } else { Some(mirror_of(world, BODY)?) };
+        let Some(mirror) = body_mirror else {
+            if !relational.is_empty() {
+                return unsupported("a dependent without a body record");
+            }
+            return Ok((Care::None, ("not_measured", V::List(Vec::new())), source_ids));
+        };
+        let store = entities_of(world)?;
+        let stress_of = |id: &str| -> PyResult<f64> {
+            EntityStore::with_rows(&store, |rows| rows.agents.get(id).map_or_else(|| unsupported("no such person"), |row| Ok(row.stress)))
+        };
+        // The people as they are, each once; sequential updates read each other's results.
+        let mut order: Vec<Arc<str>> = vec![agent_id.clone()];
+        for (dependent, _) in &relational {
+            if !order.contains(dependent) {
+                order.push(dependent.clone());
+            }
+        }
+        let (records, own_has_body, relief) = NamespaceMirror::with_row::<BodyRow, _>(&mirror, |row| {
+            let mut records = Vec::with_capacity(order.len());
+            for id in &order {
+                records.push(row.agents.get(&**id).copied());
+            }
+            let relief = config_float(&row.config, "hygiene_support_relief_by_agent", "hygiene_support_relief", agent_id)?;
+            Ok((records, row.agents.get(&**agent_id).is_some(), relief))
+        })?;
+        if !own_has_body {
+            if !relational.is_empty() {
+                return unsupported("a dependent is measured without the person's body");
+            }
+            return Ok((Care::None, ("not_measured", V::List(Vec::new())), source_ids));
+        }
+        let mut people: Vec<CaredPerson> = Vec::with_capacity(order.len());
+        for (id, record) in order.iter().zip(records) {
+            let Some(record) = record else {
+                return unsupported("a dependent without a body record");
+            };
+            people.push(CaredPerson { agent_id: id.clone(), stress: None, record: Some(record) });
+        }
+        let index_of = |id: &Arc<str>| order.iter().position(|known| known == id).expect("listed above");
+        let originals: Vec<BodyRecord> = people.iter().map(|person| person.record.expect("set above")).collect();
+        let mut stresses: Vec<f64> = Vec::with_capacity(order.len());
+        stresses.push(stress);
+        for id in &order[1..] {
+            stresses.push(stress_of(id)?);
+        }
+        let original_stresses = stresses.clone();
+        // What the Python rule records before anything changes: (kind, person, field).
+        let mut before: Vec<(bool, usize, &'static str)> = Vec::new();
+        if measured_kind {
+            if hygiene {
+                before.push((false, 0, "hygiene_need"));
+            }
+            for (field, _) in &typed {
+                before.push((*field == "stress", 0, field));
+            }
+        }
+        for (dependent, deltas) in &relational {
+            let index = index_of(dependent);
+            for (field, _) in deltas {
+                before.push((*field == "stress", index, field));
+            }
+        }
+        // The changes, in the order of the Python rule.
+        let mut outcome_source = false;
+        if hygiene {
+            let mut record = people[0].record.expect("set above");
+            record.hygiene_need = hygiene_after(&attribute(formula, intern!(py, "model_id"))?, record.hygiene_need, relief);
+            people[0].record = Some(record);
+            outcome_source = true;
+        } else if !typed.is_empty() {
+            let mut record = people[0].record.expect("set above");
+            for (field, delta) in &typed {
+                if *field == "stress" {
+                    stresses[0] = py_min(1.0, py_max(0.0, stresses[0] + delta));
+                } else {
+                    let next = py_min(1.0, py_max(0.0, body_field(&record, field)? + delta));
+                    set_body_field(&mut record, field, next)?;
+                }
+            }
+            people[0].record = Some(record);
+            outcome_source = true;
+        }
+        for (dependent, deltas) in &relational {
+            let index = index_of(dependent);
+            let mut record = people[index].record.expect("set above");
+            for (field, delta) in deltas {
+                if *field == "stress" {
+                    stresses[index] = py_min(1.0, py_max(0.0, stresses[index] + delta));
+                } else {
+                    let next = py_min(1.0, py_max(0.0, body_field(&record, field)? + delta));
+                    set_body_field(&mut record, field, next)?;
+                }
+            }
+            people[index].record = Some(record);
+            outcome_source = true;
+        }
+        if !measured_kind && relational.is_empty() {
+            return Ok((Care::None, ("not_measured", V::List(Vec::new())), source_ids));
+        }
+        let mut changes = Vec::with_capacity(before.len());
+        let mut changed = false;
+        for (is_stress, index, field) in &before {
+            let id = &order[*index];
+            let (kind_name, path, was, now) = if *is_stress {
+                (&names.agent, "stress".to_owned(), original_stresses[*index], stresses[*index])
+            } else if *field == "hygiene_need" {
+                (&names.model_state, "body_state_v1.agents.hygiene_need".to_owned(), originals[*index].hygiene_need, people[*index].record.expect("set above").hygiene_need)
+            } else {
+                (
+                    &names.model_state,
+                    format!("body_state_v1.agents.{field}"),
+                    body_field(&originals[*index], field)?,
+                    body_field(&people[*index].record.expect("set above"), field)?,
+                )
+            };
+            if !was.is_finite() || !now.is_finite() {
+                return unsupported("a value is not finite");
+            }
+            changed |= was != now;
+            changes.push(change(names, kind_name, id, &path, was, now));
+        }
+        if changes.len() > 32 {
+            return unsupported("more changes than a receipt holds");
+        }
+        for (index, person) in people.iter_mut().enumerate() {
+            if stresses[index] != original_stresses[index] {
+                person.stress = Some(stresses[index]);
+            }
+        }
+        source_ids.push(Arc::from(BODY_SOURCE));
+        if outcome_source {
+            source_ids.push(Arc::from(exact_str(&attribute(formula, intern!(py, "source_id"))?)?));
+        }
+        Ok((
+            Care::Formula { people },
+            (if changed { "observed_change" } else { "observed_no_change" }, V::List(changes)),
+            source_ids,
+        ))
+    })();
+    refused_by_python(py, result)
 }
 
 /// `StaffSupportCompletionHandler.apply`, called from Python: its records, which the dispatcher

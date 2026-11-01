@@ -364,6 +364,7 @@ def _operation_record_adapter() -> TypeAdapter:
     return TypeAdapter(OperationHistoryRecord)
 
 
+@kernel_first("care_receipts", "ingest")
 def ingest_applied_shared_operation_records(world: WorldState, outcomes: tuple[Any, ...]) -> None:
     """Project typed shared receipts only after EventLog APPLIED insertion."""
     if SHARED_OPERATIONS_KEY not in world.model_state:

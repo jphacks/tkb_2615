@@ -156,6 +156,12 @@ if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     importlib.import_module("shadow_dispatch").prepare(OUTPUT)
     importlib.import_module("shadow_effects").prepare(OUTPUT)
+    importlib.import_module("shadow_handlers_rest").prepare(OUTPUT)
+elif OUTPUT and os.environ.get("SHELTERSIM_RULE_SHADOW_ONLY"):
+    # Only these shadows, by the name after "shadow_", for a lane's own run.
+    Path(OUTPUT).mkdir(parents=True, exist_ok=True)
+    for name in os.environ["SHELTERSIM_RULE_SHADOW_ONLY"].split(","):
+        importlib.import_module(f"shadow_{name}").prepare(OUTPUT)
 elif OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):

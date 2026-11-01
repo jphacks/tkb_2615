@@ -91,7 +91,7 @@ state_row! {
 }
 
 /// `_validate_information_id`: `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`, matched in full.
-fn is_stable_id(text: &str) -> bool {
+pub(crate) fn is_stable_id(text: &str) -> bool {
     let bytes = text.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 64
@@ -115,7 +115,7 @@ pub(crate) fn belief_rank(status: &str) -> Option<u8> {
 
 impl MessageRow {
     /// `TypedMessage.from_dict` takes this record of the row's exact types.
-    fn parses(&self) -> bool {
+    pub(crate) fn parses(&self) -> bool {
         is_stable_id(&self.id)
             && is_stable_id(&self.source_id)
             && is_stable_id(&self.zone_id)
@@ -128,7 +128,7 @@ impl MessageRow {
 
 impl BeliefRow {
     /// `AgentInformationState.from_dict` takes this record of the row's exact types.
-    fn parses(&self) -> bool {
+    pub(crate) fn parses(&self) -> bool {
         is_stable_id(&self.message_id)
             && is_stable_id(&self.source)
             && is_stable_id(&self.last_event_id)

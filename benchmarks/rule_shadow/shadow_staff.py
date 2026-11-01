@@ -70,7 +70,7 @@ def prepare(output: str) -> None:
     update_kernel = rules.update_operations
     assign_kernel = rules.assign_operations
     relief_kernel = rules.relief
-    pending_kernel = rules.assign_pending
+    pending_kernel = rules.assign_none
     snapshot_kernel = rules.wait_snapshot
 
     def update_operations(world: Any, minute: Any) -> None:
@@ -213,7 +213,7 @@ def prepare(output: str) -> None:
     rules.relief = read_only(
         "relief", relief_kernel, lambda: operations().schedule_staff_operation_relief
     )
-    rules.assign_pending = assign_pending
+    rules.assign_none = assign_pending
     rules.wait_snapshot = wait_snapshot
 
     # domain/staff_operations.py registers `validate` when it is imported, later than this.

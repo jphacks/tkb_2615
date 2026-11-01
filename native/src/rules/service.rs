@@ -91,7 +91,7 @@ static NAMES: LazyLock<Names> = LazyLock::new(|| Names {
 });
 
 /// `resource_for_facility`.
-fn resource_of(kind: &str) -> Option<&'static str> {
+pub(crate) fn resource_of(kind: &str) -> Option<&'static str> {
     match kind {
         "water_station" => Some(WATER),
         "meal_distribution" => Some(FOOD),

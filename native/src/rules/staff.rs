@@ -18,6 +18,7 @@ use crate::core::mathx::{py_fsum, py_max};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, namespace_is_absent, unsupported};
 use crate::core::value::V;
 use crate::core::world_core::{field_mirror_of, mirror_of, raw_dict_get, NamespaceMirror};
+use crate::rules::handlers::{assumption, get, get_is, log_record, new_event, NewEvent};
 use crate::rules::staff_dynamics::{is_available, on_shift, staff_status};
 use crate::state::body_state::{BodyRow, NAME as BODY_STATE};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
@@ -27,6 +28,8 @@ use crate::state::staff_operations::{Phase, StaffOperationsRow, NAME};
 use crate::Unsupported;
 
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
+const SUPPORT_SOURCE: &str = "ASM-STAFF-SUPPORT-LIFECYCLE-V1";
+const PREEMPTION_SOURCE: &str = "ASM-URGENT-STAFF-SUPPORT-PREEMPTION-V1";
 const DEFAULT_KIND: &str = "emotional_support";
 const WAIT_REASON: &str = "no_available_qualified_staff";
 const NO_QUALIFIED_METRIC: &str = "support_no_qualified_worker_request_minutes";
@@ -247,12 +250,403 @@ fn kind_exposure(workers: &[Worker], kind: &str) -> PyResult<(bool, bool, bool)>
     Ok((!any, busy, off_shift))
 }
 
-/// `StaffService.assign_pending` when every pending request stays pending: it records the attempt
-/// and the wait's reason on each, and the minute's exposure. Unsupported as soon as a request has
-/// a qualified free worker or a priority, because taking it needs a route.
+/// `StaffService.assign_pending`: the plain case without a call to Python, and the rest.
 #[pyfunction]
 #[pyo3(signature = (service, minute, *, validate_state=true))]
 fn assign_pending<'py>(
+    service: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+    validate_state: bool,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let py = service.py();
+    let rules = service_rules(py)?;
+    match rules.call_method(intern!(py, "assign_none"), (service, minute), Some(&validate_option(py, validate_state)?)) {
+        Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            rules.call_method(intern!(py, "assign_work"), (service, minute), Some(&validate_option(py, validate_state)?))?.downcast_into::<PyTuple>().map_err(PyErr::from)
+        }
+        other => other?.downcast_into::<PyTuple>().map_err(PyErr::from),
+    }
+}
+
+/// The module of these kernels: a shadow replaces what it finds there.
+fn service_rules(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    py.import(intern!(py, "sheltersim.native"))?.getattr(intern!(py, "rules"))?.call1(("staff",))
+}
+
+fn validate_option(py: Python<'_>, validate_state: bool) -> PyResult<Bound<'_, PyDict>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(intern!(py, "validate_state"), validate_state)?;
+    Ok(kwargs)
+}
+
+fn priority_of(priorities: Option<&Bound<'_, PyDict>>, id: &Bound<'_, PyAny>) -> PyResult<i64> {
+    let Some(priorities) = priorities else {
+        return Ok(0);
+    };
+    let Some(value) = priorities.get_item(id)? else {
+        return Ok(0);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Ok(0);
+    }
+    exact_int(&value)
+}
+
+/// `StaffService.assign_pending` when a request can be taken, on the objects of the world. Its route and
+/// its trip are the callbacks the service was given, called in the same order as the Python rule. What
+/// it reads first refuses with nothing changed; past that what is raised is what the Python rule raises.
+#[pyfunction]
+#[pyo3(signature = (service, minute, *, validate_state=true))]
+fn assign_work<'py>(service: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>, validate_state: bool) -> PyResult<Bound<'py, PyTuple>> {
+    let py = service.py();
+    struct Open<'py> {
+        object: Bound<'py, PyAny>,
+        id: Bound<'py, PyAny>,
+        agent_id: Bound<'py, PyAny>,
+        requested: i64,
+        kind: String,
+        priority: i64,
+    }
+    let plan = (|| -> PyResult<_> {
+        let world = attribute(service, intern!(py, "world"))?;
+        let at = exact_int(minute)?;
+        if at != minute_of(&world)? {
+            return unsupported("the minute is not the world's");
+        }
+        let table = table_of(&world)?;
+        let kinds = CareKinds::of(&table)?;
+        let priorities = priorities_of(&table)?;
+        let fairness = exact_int(&attribute(service, intern!(py, "fairness_after_minutes"))?)?;
+        let mut pending: Vec<Open<'py>> = Vec::new();
+        for request in world.call_method0(intern!(py, "unsettled_support_requests"))?.try_iter()? {
+            let object = request?;
+            if !exact_str(&attribute(&attribute(&object, intern!(py, "status"))?, intern!(py, "value"))?).is_ok_and(|status| status == "pending") {
+                continue;
+            }
+            let id = attribute(&object, intern!(py, "id"))?;
+            exact_str(&id)?;
+            let kind = kinds.kind_of(&id)?;
+            let kind = match &kind {
+                Some(kind) => exact_str(kind)?.to_owned(),
+                None => DEFAULT_KIND.to_owned(),
+            };
+            pending.push(Open {
+                agent_id: attribute(&object, intern!(py, "agent_id"))?,
+                requested: exact_int(&attribute(&object, intern!(py, "requested_minute"))?)?,
+                priority: priority_of(priorities.as_ref(), &id)?,
+                object,
+                id,
+                kind,
+            });
+        }
+        // `_support_assignment_order`.
+        let mut ordered: Vec<((i64, i64, String), Open<'py>)> = pending
+            .into_iter()
+            .map(|open| {
+                let effective = i64::from(open.priority > 0 || at - open.requested >= fairness);
+                ((-effective, open.requested, exact_str(&open.id).map(str::to_owned).unwrap_or_default()), open)
+            })
+            .collect();
+        ordered.sort_by(|first, second| first.0.cmp(&second.0));
+        let workers = workers_at(&world, at)?;
+        let staff_map = attribute(&world, intern!(py, "staff"))?;
+        let mut objects = Vec::with_capacity(workers.len());
+        for worker in &workers {
+            objects.push(staff_map.get_item(&*worker.id)?);
+        }
+        let metrics = attribute(&world, intern!(py, "metric_state"))?;
+        let attempt = number_at(&metrics, ATTEMPT_METRIC, -1.0)?;
+        let no_qualified = ordered.iter().filter(|(_, open)| !workers.iter().any(|worker| qualifies(worker, &open.kind))).count();
+        let current_no_qualified = number_at(&metrics, NO_QUALIFIED_METRIC, 0.0)?;
+        Ok((world, at, ordered, workers, objects, metrics, attempt, no_qualified, current_no_qualified, fairness))
+    })();
+    let (world, at, ordered, workers, objects, metrics, attempt, no_qualified, current_no_qualified, fairness) = crate::rules::effects::refused_by_python(py, plan)?;
+
+    // Sorted by ID: the workers free to start.
+    let mut free: Vec<usize> = (0..workers.len()).filter(|index| !workers[*index].has_task && workers[*index].available && workers[*index].can_start).collect();
+    free.sort_by(|first, second| workers[*first].id.cmp(&workers[*second].id));
+    let record_metrics = attempt != at as f64;
+    if record_metrics {
+        metrics.set_item(NO_QUALIFIED_METRIC, current_no_qualified + no_qualified as f64)?;
+    }
+    let (mut busy, mut off_shift) = (0_i64, 0_i64);
+    let duration = attribute(&world, intern!(py, "duration_minutes"))?.extract::<i64>()?;
+    let task_minutes = attribute(service, intern!(py, "task_duration_minutes"))?.extract::<i64>()?;
+    let resolver = attribute(service, intern!(py, "route_resolver"))?;
+    let scheduler = attribute(service, intern!(py, "travel_scheduler"))?;
+    let policy = attribute(service, intern!(py, "policy_version"))?;
+    let agents = attribute(&world, intern!(py, "agents"))?;
+    let mut assigned: Vec<Bound<'py, PyAny>> = Vec::new();
+    for (_, open) in ordered {
+        open.object.setattr(intern!(py, "last_assignment_attempt_minute"), at)?;
+        open.object.setattr(intern!(py, "last_assignment_wait_reason_code"), WAIT_REASON)?;
+        let mut person = free.iter().copied().find(|index| qualifies(&workers[*index], &open.kind));
+        if person.is_none() && open.priority > 0 {
+            person = preempt_worker(&world, &workers, &objects, &open.kind, at, &open.id, &open.agent_id, &resolver, task_minutes, duration)?;
+            if let Some(index) = person {
+                free.push(index);
+            }
+        }
+        let Some(person) = person else {
+            if record_metrics {
+                let mut any_busy = false;
+                let mut any_away = false;
+                for (index, worker) in workers.iter().enumerate() {
+                    if qualifies(worker, &open.kind) {
+                        any_busy |= !attribute(&objects[index], intern!(py, "active_task_id"))?.is_none();
+                        any_away |= !worker.on_shift || !worker.available;
+                    }
+                }
+                busy += i64::from(any_busy);
+                off_shift += i64::from(any_away);
+            }
+            continue;
+        };
+        let agent = agents.get_item(&open.agent_id)?;
+        let staff = &objects[person];
+        let staff_id = attribute(staff, intern!(py, "id"))?;
+        let mut route = py.None().into_bound(py);
+        let mut travel_minutes = 0_i64;
+        if !resolver.is_none() {
+            route = resolver.call1((attribute(&agent, intern!(py, "zone_id"))?, attribute(staff, intern!(py, "zone_id"))?, attribute(&agent, intern!(py, "id"))?))?;
+            if route.is_none() {
+                open.object.setattr(intern!(py, "last_assignment_wait_reason_code"), "route_unavailable_at_assignment")?;
+                continue;
+            }
+            travel_minutes = attribute(&route, intern!(py, "travel_minutes"))?.extract()?;
+        }
+        let due = at + travel_minutes + task_minutes;
+        if due >= duration {
+            open.object.setattr(intern!(py, "last_assignment_wait_reason_code"), "insufficient_run_time")?;
+            continue;
+        }
+        let sequence: i64 = world.call_method0(intern!(py, "allocate_event_sequence"))?.extract()?;
+        let task_id = format!("staff-support-{sequence}");
+        let event_id = format!("staff-support-complete-{sequence}");
+        if travel_minutes > 0 {
+            let scheduled = if scheduler.is_none() || route.is_none() {
+                false
+            } else {
+                scheduler.call1((attribute(&agent, intern!(py, "id"))?, &route, &open.id, &staff_id, at))?.is_truthy()?
+            };
+            if !scheduled {
+                open.object.setattr(intern!(py, "last_assignment_wait_reason_code"), "resident_travel_schedule_rejected")?;
+                continue;
+            }
+        }
+        let task_kwargs = PyDict::new(py);
+        task_kwargs.set_item("id", &task_id)?;
+        task_kwargs.set_item("kind", "staff_support")?;
+        task_kwargs.set_item("agent_id", &open.agent_id)?;
+        task_kwargs.set_item("resource_id", py.None())?;
+        task_kwargs.set_item("start_minute", at + travel_minutes)?;
+        task_kwargs.set_item("due_minute", due)?;
+        task_kwargs.set_item("staff_id", &staff_id)?;
+        let task = crate::rules::service::active_task_class(py)?.call((), Some(&task_kwargs))?;
+        let promoted = open.priority == 0 && at - open.requested >= fairness;
+        let payload = PyDict::new(py);
+        payload.set_item("request_id", &open.id)?;
+        payload.set_item("agent_id", &open.agent_id)?;
+        payload.set_item("staff_id", &staff_id)?;
+        payload.set_item("task_id", &task_id)?;
+        payload.set_item("support_duration_minutes", task_minutes)?;
+        let provenance = assumption(py, PyString::new(py, SUPPORT_SOURCE).as_any(), exact_str(&policy)?)?;
+        provenance.set_item("assignment_wait_minutes", at - open.requested)?;
+        provenance.set_item("fairness_promoted", promoted)?;
+        let event = new_event(
+            py,
+            NewEvent {
+                event_id: &event_id,
+                kind: "COMPLETION",
+                due_minute: due,
+                priority: 0,
+                sequence,
+                event_type: "staff_support_complete",
+                payload: payload.into_any(),
+                source_id: Some(PyString::new(py, &task_id).into_any()),
+                causation_id: Some(open.id.clone()),
+                provenance: provenance.into_any(),
+            },
+        )?;
+        attribute(&world, intern!(py, "active_tasks"))?.set_item(&task_id, task)?;
+        staff.setattr(intern!(py, "active_task_id"), &task_id)?;
+        attribute(staff, intern!(py, "work_queue"))?.set_item(pyo3::types::PySlice::full(py), PyList::new(py, [&task_id])?)?;
+        staff.setattr(intern!(py, "busy_until"), due)?;
+        open.object.setattr(intern!(py, "status"), RequestStatus::Assigned.member(py)?)?;
+        open.object.setattr(intern!(py, "assigned_staff_id"), &staff_id)?;
+        open.object.setattr(intern!(py, "task_id"), &task_id)?;
+        open.object.setattr(intern!(py, "last_assignment_wait_reason_code"), py.None())?;
+        world.call_method1(intern!(py, "schedule_event"), (event,))?;
+        if promoted {
+            let count = number_at(&metrics, "support_fairness_promoted_assignment_count", 0.0)?;
+            metrics.set_item("support_fairness_promoted_assignment_count", count + 1.0)?;
+        }
+        assigned.push(open.id.clone());
+        free.retain(|index| *index != person);
+    }
+    if record_metrics {
+        for (metric, count) in [(BUSY_METRIC, busy), (OFF_SHIFT_METRIC, off_shift)] {
+            if count != 0 {
+                let value = number_at(&metrics, metric, 0.0)?;
+                metrics.set_item(metric, value + count as f64)?;
+            }
+        }
+        metrics.set_item(ATTEMPT_METRIC, at as f64)?;
+    }
+    if validate_state {
+        world.call_method0(intern!(py, "validate"))?;
+    }
+    PyTuple::new(py, assigned)
+}
+
+fn number_at(metrics: &Bound<'_, PyAny>, name: &str, default: f64) -> PyResult<f64> {
+    crate::rules::handlers::number(&metrics.call_method1(intern!(metrics.py(), "get"), (name, default))?)
+}
+
+fn qualifies(worker: &Worker, kind: &str) -> bool {
+    let required = required_skills(kind);
+    worker.skills.iter().any(|skill| required.contains(&&**skill))
+}
+
+/// `_preempt_background_staff`: frees one qualified routed worker for an urgent request.
+#[allow(clippy::too_many_arguments)]
+fn preempt_worker<'py>(
+    world: &Bound<'py, PyAny>,
+    workers: &[Worker],
+    objects: &[Bound<'py, PyAny>],
+    kind: &str,
+    at: i64,
+    request_id: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    resolver: &Bound<'py, PyAny>,
+    task_minutes: i64,
+    duration: i64,
+) -> PyResult<Option<usize>> {
+    let py = world.py();
+    let state = get(&table_of(world)?, NAME)?;
+    if !state.is_instance_of::<PyDict>() {
+        return Ok(None);
+    }
+    let empty = PyDict::new(py);
+    let records = state.call_method1(intern!(py, "get"), ("staff", &empty))?;
+    let mut order: Vec<usize> = (0..workers.len()).collect();
+    order.sort_by(|first, second| workers[*first].id.cmp(&workers[*second].id));
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let mut candidates = Vec::new();
+    for index in order {
+        let (worker, staff) = (&workers[index], &objects[index]);
+        if !qualifies(worker, kind)
+            || attribute(staff, intern!(py, "active_task_id"))?.is_none()
+            || get_is(&records.call_method1(intern!(py, "get"), (&*worker.id, &empty))?, "phase", "idle")?
+            || !worker.available
+            || !worker.on_shift
+        {
+            continue;
+        }
+        if !resolver.is_none() {
+            let zone = attribute(&agents.get_item(agent_id)?, intern!(py, "zone_id"))?;
+            let route = resolver.call1((zone, attribute(staff, intern!(py, "zone_id"))?, agent_id))?;
+            if route.is_none() || at + attribute(&route, intern!(py, "travel_minutes"))?.extract::<i64>()? + task_minutes >= duration {
+                continue;
+            }
+        }
+        candidates.push(index);
+    }
+    let Some(chosen) = candidates.first().copied() else {
+        return Ok(None);
+    };
+    let worker = &workers[chosen];
+    let record = records.get_item(&*worker.id)?;
+    let sequence: i64 = world.call_method0(intern!(py, "allocate_event_sequence"))?.extract()?;
+    let payload = PyDict::new(py);
+    payload.set_item("staff_id", &*worker.id)?;
+    payload.set_item("task_id", record.get_item("task_id")?)?;
+    payload.set_item("request_id", request_id)?;
+    payload.set_item("reason_code", "urgent_resident_support")?;
+    let event = new_event(
+        py,
+        NewEvent {
+            event_id: &format!("staff-operation-preempted-{sequence}"),
+            kind: "ENDOGENOUS",
+            due_minute: at,
+            priority: -10,
+            sequence,
+            event_type: "staff_operation_preempted",
+            payload: payload.into_any(),
+            source_id: Some(PyString::new(py, "urgent-resident-support-preemption-v1").into_any()),
+            causation_id: Some(request_id.clone()),
+            provenance: assumption(py, PyString::new(py, PREEMPTION_SOURCE).as_any(), "urgent-staff-support-preemption-v1")?.into_any(),
+        },
+    )?;
+    attribute(world, intern!(py, "event_log"))?.call_method1(
+        intern!(py, "append"),
+        (log_record(py, &event, at.into_pyobject(py)?.as_any(), "APPLIED", Some("A priority-1 support request preempted a routed background staff task."))?,),
+    )?;
+    let interrupted = py.import("sheltersim.domain.staff_operations")?.getattr("interrupt_staff_operation")?.call1((world, &*worker.id, &event))?;
+    if !interrupted.is_truthy()? {
+        return Err(pyo3::exceptions::PyValueError::new_err("urgent support preemption lost its active staff operation"));
+    }
+    Ok(Some(chosen))
+}
+
+/// `_consider_due_complaints`, whose decision stays the policy's: its provider boundary is Python's.
+#[pyfunction]
+fn consider_due_complaints<'py>(controller: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = controller.py();
+    let policy = attribute(controller, intern!(py, "social_policy"))?;
+    if policy.is_none() {
+        return Ok(());
+    }
+    let threshold = exact_int(&attribute(&attribute(&policy, intern!(py, "limits"))?, intern!(py, "complaint_wait_minutes"))?)?;
+    let at = exact_int(minute)?;
+    let world = attribute(controller, intern!(py, "world"))?;
+    let store = entities_of(&world)?;
+    let open = world.call_method0(intern!(py, "unsettled_support_requests"))?;
+    let due_of = |id: &str| -> PyResult<Option<Arc<str>>> {
+        EntityStore::with_rows(&store, |rows| {
+            let Some(row) = rows.support_requests.get(id) else {
+                return unsupported("a request has no row");
+            };
+            Ok((row.status == RequestStatus::Pending && row.requested_minute + threshold == at).then(|| row.agent_id.clone()))
+        })
+    };
+    let mut due: Vec<(String, Bound<'py, PyAny>)> = Vec::new();
+    let id_name = intern!(py, "id");
+    for request in open.try_iter()? {
+        let request = request?;
+        let id = attribute(&request, id_name)?;
+        let text = exact_str(&id)?;
+        if due_of(text)?.is_some() {
+            due.push((text.to_owned(), id));
+        }
+    }
+    due.sort_unstable_by(|first, second| first.0.cmp(&second.0));
+    for (text, id) in due {
+        // A decision before this one may have settled the request.
+        let Some(agent_id) = due_of(&text).map_err(|error| {
+            if error.is_instance_of::<Unsupported>(py) {
+                pyo3::exceptions::PyRuntimeError::new_err("a request left its row in a complaint's decision")
+            } else {
+                error
+            }
+        })?
+        else {
+            continue;
+        };
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("agent_id", &*agent_id)?;
+        kwargs.set_item("request_id", id)?;
+        policy.call_method(intern!(py, "consider_complaint_response"), (&world,), Some(&kwargs))?;
+    }
+    Ok(())
+}
+
+/// `StaffService.assign_pending` when every pending request stays pending: it records the attempt
+/// and the wait's reason on each, and the minute's exposure. Unsupported as soon as a request has
+/// a qualified free worker or a priority, which `assign_work` takes.
+#[pyfunction]
+#[pyo3(signature = (service, minute, *, validate_state=true))]
+fn assign_none<'py>(
     service: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
     validate_state: bool,
@@ -876,6 +1270,9 @@ fn relief<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResul
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(assign_pending, m)?)?;
+    m.add_function(wrap_pyfunction!(consider_due_complaints, m)?)?;
+    m.add_function(wrap_pyfunction!(assign_none, m)?)?;
+    m.add_function(wrap_pyfunction!(assign_work, m)?)?;
     m.add_function(wrap_pyfunction!(wait_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(update_operations, m)?)?;
     m.add_function(wrap_pyfunction!(assign_operations, m)?)?;
