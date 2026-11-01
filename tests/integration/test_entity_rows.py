@@ -707,7 +707,7 @@ def test_rules_over_real_ticks_keep_every_row_equal_to_its_object(generated_scen
     controller = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))
     engine = TickEngine(world, phase_handler=controller)
     forwards = 0
-    for _ in range(25):
+    for _ in range(40):
         engine.step()
         _in_step(world)
         forwards = max(forwards, _store(world).stats()["forwards"])
