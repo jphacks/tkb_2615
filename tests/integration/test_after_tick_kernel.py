@@ -9,6 +9,7 @@ the scans of a tick and the next check read it.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import random
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -24,7 +25,7 @@ from sheltersim.core.tick_validation import TickValidationMemo, _is_settled
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain import simulator_state
 from sheltersim.domain.infrastructure import INFRASTRUCTURE_EVENT_TYPES
-from sheltersim.domain.models import SupportRequestStatus
+from sheltersim.domain.models import Activity, SupportRequestStatus
 from sheltersim.domain.operational import H03_EVENT_TYPES
 from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.runner import run_scenario
@@ -128,20 +129,21 @@ def _remove(world: WorldState, name: str) -> None:
     del world.model_state[name]
 
 
-def _first_body_record(world: WorldState) -> dict[str, Any]:
+def _recent_body_record(world: WorldState) -> dict[str, Any]:
+    """A good record of this minute, which the rule reads: what it holds passed the row too, so a
+    test of the rule writes past the row with dict.__setitem__, as only the tree holds that."""
     history = world.model_state["body_state_v1"]["history"]
-    if not history:
-        history.append(
-            {
-                "event_id": "e",
-                "minute": world.minute_index,
-                "kind": "k",
-                "actor_ids": [],
-                "topic_id": None,
-                "causation_id": None,
-                "deltas": {},
-            }
-        )
+    history.append(
+        {
+            "event_id": "probe",
+            "minute": world.minute_index,
+            "kind": "probe",
+            "actor_ids": [next(iter(world.agents))],
+            "topic_id": None,
+            "causation_id": None,
+            "deltas": {},
+        }
+    )
     return history[-1]
 
 
@@ -170,6 +172,11 @@ BREAKS: dict[str, Callable[[WorldState], Any]] = {
     "a config written": lambda w: _set_item(w.model_configs, "probe", {}),
     "a person's key added past the map": lambda w: dict.__setitem__(w.agents, "new", None),
     "a zone's key removed past the map": lambda w: dict.pop(w.zones, next(iter(w.zones))),
+    "a facility moved to another zone": lambda w: setattr(
+        next(iter(w.facilities.values())),
+        "zone_id",
+        next(zone for zone in w.zones if zone != next(iter(w.facilities.values())).zone_id),
+    ),
     "a facility moved": lambda w: setattr(
         next(iter(w.facilities.values())), "zone_id", "elsewhere"
     ),
@@ -194,21 +201,6 @@ BREAKS: dict[str, Callable[[WorldState], Any]] = {
     ),
     # ---- The body state's config and history.
     "the body config": lambda w: _set_item(w.model_state["body_state_v1"]["config"], "probe", 1),
-    "a body record's field": lambda w: _first_body_record(w).pop("deltas"),
-    "a body record with one too many": lambda w: _set_item(_first_body_record(w), "probe", 1),
-    "a body record's minute below 0": lambda w: _set_item(_first_body_record(w), "minute", -1),
-    "a body record's minute of another type": lambda w: _set_item(
-        _first_body_record(w), "minute", 1.0
-    ),
-    "a body record's actor nobody knows": lambda w: _set_item(
-        _first_body_record(w), "actor_ids", ["nobody"]
-    ),
-    "a body record's actors of another type": lambda w: _set_item(
-        _first_body_record(w), "actor_ids", "A001"
-    ),
-    "a body record's event ID": lambda w: _set_item(_first_body_record(w), "event_id", 1),
-    "a body record's kind": lambda w: _set_item(_first_body_record(w), "kind", None),
-    "a body record's deltas": lambda w: _set_item(_first_body_record(w), "deltas", []),
     # ---- The operational events' and the environment's schema.
     "operational events gone": lambda w: _remove(w, "operational_events_v1"),
     "an operational field added": lambda w: _set_item(
@@ -235,6 +227,10 @@ BREAKS: dict[str, Callable[[WorldState], Any]] = {
         w.model_state, "infrastructure_v1", {}
     ),
     "an infrastructure event without its model": lambda w: _pending_event(w, "power_outage"),
+    # ---- A row's validator asked last.
+    "a ledger balance below 0": lambda w: _set_item(
+        next(iter(w.model_state["resource_ledger_v1"]["accounts"].values())), "remaining", -1
+    ),
     # ---- A rule still Python's, called from the kernel.
     "a temporary space state the Python rule turns down": lambda w: _set_item(
         w.model_state["temporary_spaces_v1"], "schema_version", 2
@@ -263,7 +259,7 @@ def test_a_broken_state_is_left_to_the_python_check_with_the_memo_as_it_was(
     [
         "stress above 1 past the row",
         "the ledger removed",
-        "a body record's actor nobody knows",
+        "the body config",
         "an operational version",
         "the environment's modifiers",
     ],
@@ -339,6 +335,39 @@ def test_the_body_history_is_read_from_the_last_record_before_the_tick(documents
         dict.__setitem__(old, "probe", 1)
         assert _takes(world, memo)
         assert _python_error(world) is None
+
+
+BODY_RECORD_BREAKS: dict[str, tuple[str, Any]] = {
+    "an event ID of another type": ("event_id", 1),
+    "a kind of another type": ("kind", None),
+    "a minute below 0": ("minute", -1),
+    "a minute of another type": ("minute", 1.0),
+    "an actor nobody knows": ("actor_ids", ["nobody"]),
+    "actors of another type": ("actor_ids", "A001"),
+    "deltas of another type": ("deltas", []),
+    "a field too many": ("probe", 1),
+}
+
+
+@pytest.mark.parametrize("what", sorted(BODY_RECORD_BREAKS))
+def test_a_recent_body_record_past_the_row_is_left_to_the_python_rule(documents, what) -> None:
+    world, memo = _primed(documents[0])
+    record = _recent_body_record(world)
+    world.validate_after_tick()
+    assert _takes(world, memo)
+    name, value = BODY_RECORD_BREAKS[what]
+    dict.__setitem__(record, name, value)
+    assert not _takes(world, memo)
+    assert _python_error(world) == "invalid simulator extension state"
+
+
+def test_a_body_record_missing_a_field_past_the_row_is_left_to_the_python_rule(documents) -> None:
+    world, memo = _primed(documents[0])
+    record = _recent_body_record(world)
+    assert _takes(world, memo)
+    dict.pop(record, "deltas")
+    assert not _takes(world, memo)
+    assert _python_error(world) == "invalid simulator extension state"
 
 
 def test_a_zone_over_its_capacity_is_left_to_the_python_rule(documents) -> None:
@@ -495,20 +524,88 @@ def test_the_memo_is_what_the_python_check_leaves_as_requests_change(documents) 
         step()
 
 
+def test_a_new_request_is_read_and_held(documents) -> None:
+    world, memo = _primed(documents[0])
+    settled = next(item for item in world.support_requests.values() if _is_settled(item))
+    new = dataclasses.replace(settled, id="probe-request")
+    world.support_requests[new.id] = new
+    held = len(memo._requests)
+    assert _kernel(world, memo) == []
+    assert len(memo._requests) == held + 1
+    assert new._write_listener is memo._written_requests
+    # And what's added next is what comes after it.
+    assert memo._requests.added_values(world.support_requests) == []
+    new.__dict__["requested_minute"] = -1
+    new.cooldown_until = new.cooldown_until
+    assert memo._written_requests == [new]
+    assert not _takes(world, memo)
+
+
+def test_the_memo_moves_on_to_the_minute_it_checked(documents) -> None:
+    world, memo = _primed(documents[0])
+    world.__dict__["minute_index"] += 1
+    assert _kernel(world, memo) == []
+    assert memo.minute == world.minute_index
+
+
+def _reopened(world: WorldState) -> Any:
+    """The first settled request of someone with no other, pending again as the rules want it."""
+    open_people = {
+        item.agent_id for item in world.support_requests.values() if not _is_settled(item)
+    }
+    # Before an open one in the dict, so the order of the dict shows.
+    last_open = max(
+        (
+            place
+            for place, item in enumerate(world.support_requests.values())
+            if not _is_settled(item)
+        ),
+        default=-1,
+    )
+    item = next(
+        (
+            item
+            for place, item in enumerate(world.support_requests.values())
+            if place < last_open
+            and _is_settled(item)
+            and item.agent_id not in open_people
+            and world.agents[item.agent_id].support_request_id is None
+            and world.agents[item.agent_id].activity is Activity.IDLE
+        ),
+        None,
+    )
+    if item is None:
+        return None
+    item.status = SupportRequestStatus.PENDING
+    item.resolved_minute = None
+    item.assigned_staff_id = None
+    item.task_id = None
+    world.agents[item.agent_id].support_request_id = item.id
+    # A request settled by its worker leaves its timeout in the queue.
+    kept = [
+        event
+        for event in world.event_queue.pending()
+        if event.event_type == "support_request_timeout"
+        and event.payload.get("request_id") == item.id
+    ]
+    item.timeout_minute = kept[0].due_minute if kept else world.duration_minutes
+    world.agents[item.agent_id].activity = Activity.SEEKING_HELP
+    return item
+
+
 def test_a_reopened_request_comes_back_in_the_order_of_the_dict(documents) -> None:
-    world, memo = _primed(documents[-1])
-    settled = [item for item in world.support_requests.values() if _is_settled(item)]
-    if not settled:
-        pytest.skip("no settled request in this Run")
-    item = settled[0]
-    item.status = SupportRequestStatus.ASSIGNED
-    took = _takes(world, memo)
-    if took:
-        # The rules let it stand as assigned: the Python check's order holds.
-        wanted = [req for req in world.support_requests.values() if not _is_settled(req)]
-        assert memo._open_requests == wanted
-    else:
-        assert memo._written_requests == [item]
+    for document in documents:
+        world, memo = _primed(document)
+        item = _reopened(world)
+        if item is not None:
+            break
+    assert item is not None
+    assert item in memo._written_requests
+    wanted = [req for req in world.support_requests.values() if not _is_settled(req)]
+    assert _python_error(world) is None
+    assert _kernel(world, memo) == []
+    assert memo._open_requests == wanted
+    assert item._write_listener is None
 
 
 def test_random_writes_taken_by_the_kernel_pass_the_python_rules(documents) -> None:

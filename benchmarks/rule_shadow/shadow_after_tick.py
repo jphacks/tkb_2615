@@ -3,12 +3,14 @@
 The kernel answers yes or Unsupported, so at each yes the Python rules run too, without any memo,
 and must pass. The memo it leaves is compared with what `commit` would leave, worked out beside it
 from the same start. Every PROBE_EVERY-th yes also breaks a restored copy, one rule at a time, and
-the kernel must turn each down. rules/metrics.rs's capture runs only in the driver, which shadows
+the kernel must turn each down, when this is the only shadow: the others stand in for the kernels
+this one calls, and would report the break. rules/metrics.rs's capture runs only in the driver, which shadows
 keep off: the hashes, first_difference.py and tests/integration/test_metric_capture.py compare it.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from shadow_kit import Recorder
@@ -144,7 +146,7 @@ def prepare(output: str) -> None:
         recorder.seen["open_requests"] += len(still_open)
         recorder.seen["people_read"] += len(world.agents)
         accepted[0] += 1
-        if accepted[0] % PROBE_EVERY == 0:
+        if accepted[0] % PROBE_EVERY == 0 and "shadow_metrics" not in sys.modules:
             probe(world)
         return left
 
