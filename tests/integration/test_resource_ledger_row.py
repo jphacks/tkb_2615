@@ -544,6 +544,18 @@ def test_each_write_is_stopped_with_the_python_text(case: str) -> None:
         )
 
 
+def test_balances_that_add_up_but_are_not_the_audit_trail_s_are_refused() -> None:
+    world = _world()
+    _operate(world)
+    account = world.model_state[KEY]["accounts"]["water_ml"]
+    account["served"] += 1
+    account["remaining"] -= 1
+    world.resources["water_ml"] -= 1
+    assert not rust_validated(world, KEY)
+    with pytest.raises(ResourceLedgerError, match="balance does not match audit"):
+        _validate_state(world)
+
+
 def test_a_bool_in_the_resources_is_refused() -> None:
     world = _world()
     _operate(world)
