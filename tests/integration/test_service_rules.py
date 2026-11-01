@@ -326,11 +326,15 @@ def test_the_lower_load_goes_before_the_shorter_walk(generated_scenario: Any) ->
     assert target == far.id
 
 
-def test_seek_help_goes_to_python(generated_scenario: Any) -> None:
+def test_a_request_of_the_run_s_last_minute_goes_to_python(generated_scenario: Any) -> None:
     world, controller = _run(generated_scenario, 5)
     agent_id = _idle_people(world, 1)[0]
+    world.agents[agent_id].activity = Activity.IDLE
+    world.agents[agent_id].support_cooldown_until = 0
+    world.agents[agent_id].support_request_id = None
+    world.duration_minutes = world.minute_index + 1
     for action in (ActionKind.SEEK_HELP, ActionKind.SEEK_INFORMATION):
-        with pytest.raises(native.Unsupported, match="staff service"):
+        with pytest.raises(native.Unsupported, match="closed at once"):
             native.rules("proposals").apply_effect(controller, _proposal(action, agent_id, world))
 
 

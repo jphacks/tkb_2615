@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.facility_queues import (
@@ -79,6 +80,7 @@ class ToiletServiceManager:
         self.min_service_minutes = min_service_minutes
         self.max_service_minutes = max_service_minutes
 
+    @kernel_first("toilet", "request")
     def request(
         self,
         agent_id: str,
@@ -189,16 +191,12 @@ class ToiletServiceManager:
         if minute != world.minute_index:
             raise ValueError("facility arbitration minute must match WorldState")
         started: list[ScheduledEvent] = []
-        for facility in sorted(world.facilities.values(), key=lambda item: item.id):
-            if "toilet" not in facility.kind.casefold():
-                continue
+        for facility in self._facilities_to_serve():
             if facility_has_independent_queues(world, facility.id):
                 started.extend(self._arbitrate_independent_facility(facility, minute, rng))
                 continue
             prepare_facility_queue(world, facility.id, resource=False, minute=minute)
-            while facility.queue_agent_ids and len(
-                facility.active_agent_ids
-            ) < physical_service_capacity(world, facility.id, facility.working_units):
+            while self._has_room(facility.id):
                 if progress_physical_queue_positions(
                     world, facility.id, resource=False, minute=minute
                 ):
@@ -207,85 +205,113 @@ class ToiletServiceManager:
                     world, facility.id, resource=False, minute=minute
                 ):
                     break
-                agent_id = facility.queue_agent_ids[0]
-                queue_task = self._queue_task(facility.id, agent_id)
-                queue_wait = minute - queue_task.start_minute
-                if queue_wait < 0:
-                    raise StateInvariantError("toilet queue time cannot be in the future")
-
-                rng_key = (
-                    "toilet-service",
-                    facility.id,
-                    agent_id,
-                    "minute",
-                    minute,
-                    self.policy_version,
-                    "duration",
-                )
-                draw = rng.random(*rng_key)
-                if not 0.0 <= draw < 1.0:
-                    raise ValueError("keyed RNG draw must be between zero and one")
-                duration_span = self.max_service_minutes - self.min_service_minutes + 1
-                service_minutes = self.min_service_minutes + int(draw * duration_span)
-                service_minutes = min(service_minutes, self.max_service_minutes)
-                due_minute = minute + service_minutes
-                if due_minute >= world.duration_minutes:
-                    # Keep FIFO order when the head request cannot finish before the run ends.
+                event_id = self._start_head(facility.id, minute, rng)
+                if event_id is None:
                     break
-
-                sequence, event_id, task_id = self._allocate_service_ids()
-                task = ActiveTask(
-                    id=task_id,
-                    kind="toilet_service",
-                    agent_id=agent_id,
-                    resource_id=facility.id,
-                    start_minute=minute,
-                    due_minute=due_minute,
-                )
-                event = ScheduledEvent(
-                    event_id=event_id,
-                    kind=EventKind.COMPLETION,
-                    due_minute=due_minute,
-                    priority=0,
-                    sequence=sequence,
-                    event_type="toilet_service_complete",
-                    payload={
-                        "facility_id": facility.id,
-                        "agent_id": agent_id,
-                        "task_id": task_id,
-                    },
-                    source_id=task_id,
-                    causation_id=queue_task.id,
-                    provenance={
-                        "source_type": "assumption",
-                        "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
-                        "policy_version": self.policy_version,
-                        "duration_distribution": "discrete_uniform_inclusive",
-                        "minimum_minutes": self.min_service_minutes,
-                        "maximum_minutes": self.max_service_minutes,
-                        "service_minutes": service_minutes,
-                        "queue_wait_minutes": queue_wait,
-                        "requested_at": queue_task.start_minute,
-                        "service_started_at": minute,
-                        "rng_key": list(rng_key),
-                        "rng_draw": draw,
-                    },
-                )
-
-                facility.queue_agent_ids.pop(0)
-                facility.active_agent_ids.append(agent_id)
-                del world.active_tasks[queue_task.id]
-                world.active_tasks[task.id] = task
-                agent = world.agents[agent_id]
-                agent.activity = Activity.IN_SERVICE
-                agent.target_id = facility.id
-                world.schedule_event(event)
-                self._record_queue_wait(queue_wait)
-                started.append(event)
+                started.append(world.event_queue.find(event_id))
 
         if validate_state:
             world.validate()
         return tuple(started)
+
+    @kernel_first("toilet", "has_room")
+    def _has_room(self, facility_id: str) -> bool:
+        """Whether someone is queued and a place is free."""
+        world = self.world
+        facility = world.facilities[facility_id]
+        return bool(facility.queue_agent_ids) and len(
+            facility.active_agent_ids
+        ) < physical_service_capacity(world, facility.id, facility.working_units)
+
+    @kernel_first("toilet", "start_head")
+    def _start_head(self, facility_id: str, minute: int, rng: KeyedRandom) -> str | None:
+        """The head starts its service, if it can finish in the Run: the event's ID, or None."""
+        world = self.world
+        facility = world.facilities[facility_id]
+        agent_id = facility.queue_agent_ids[0]
+        queue_task = self._queue_task(facility.id, agent_id)
+        queue_wait = minute - queue_task.start_minute
+        if queue_wait < 0:
+            raise StateInvariantError("toilet queue time cannot be in the future")
+
+        rng_key = (
+            "toilet-service",
+            facility.id,
+            agent_id,
+            "minute",
+            minute,
+            self.policy_version,
+            "duration",
+        )
+        draw = rng.random(*rng_key)
+        if not 0.0 <= draw < 1.0:
+            raise ValueError("keyed RNG draw must be between zero and one")
+        duration_span = self.max_service_minutes - self.min_service_minutes + 1
+        service_minutes = self.min_service_minutes + int(draw * duration_span)
+        service_minutes = min(service_minutes, self.max_service_minutes)
+        due_minute = minute + service_minutes
+        if due_minute >= world.duration_minutes:
+            # Keep FIFO order when the head request cannot finish before the run ends.
+            return None
+
+        sequence, event_id, task_id = self._allocate_service_ids()
+        task = ActiveTask(
+            id=task_id,
+            kind="toilet_service",
+            agent_id=agent_id,
+            resource_id=facility.id,
+            start_minute=minute,
+            due_minute=due_minute,
+        )
+        event = ScheduledEvent(
+            event_id=event_id,
+            kind=EventKind.COMPLETION,
+            due_minute=due_minute,
+            priority=0,
+            sequence=sequence,
+            event_type="toilet_service_complete",
+            payload={
+                "facility_id": facility.id,
+                "agent_id": agent_id,
+                "task_id": task_id,
+            },
+            source_id=task_id,
+            causation_id=queue_task.id,
+            provenance={
+                "source_type": "assumption",
+                "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+                "policy_version": self.policy_version,
+                "duration_distribution": "discrete_uniform_inclusive",
+                "minimum_minutes": self.min_service_minutes,
+                "maximum_minutes": self.max_service_minutes,
+                "service_minutes": service_minutes,
+                "queue_wait_minutes": queue_wait,
+                "requested_at": queue_task.start_minute,
+                "service_started_at": minute,
+                "rng_key": list(rng_key),
+                "rng_draw": draw,
+            },
+        )
+
+        facility.queue_agent_ids.pop(0)
+        facility.active_agent_ids.append(agent_id)
+        del world.active_tasks[queue_task.id]
+        world.active_tasks[task.id] = task
+        agent = world.agents[agent_id]
+        agent.activity = Activity.IN_SERVICE
+        agent.target_id = facility.id
+        world.schedule_event(event)
+        self._record_queue_wait(queue_wait)
+        return event_id
+
+    @kernel_first("toilet", "facilities_to_serve")
+    def _facilities_to_serve(self) -> list[Any]:
+        """The toilet facilities in ID order."""
+        return [
+            facility
+            for facility in sorted(self.world.facilities.values(), key=lambda item: item.id)
+            if "toilet" in facility.kind.casefold()
+        ]
 
     def _arbitrate_independent_facility(
         self, facility: object, minute: int, rng: KeyedRandom

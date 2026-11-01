@@ -483,6 +483,52 @@ impl EventRef<'_, '_> {
         }
     }
 
+    /// `payload.get(key)` when an int and no other type; Unsupported for one that doesn't fit.
+    pub(crate) fn int(&self, key: &str) -> PyResult<Option<i64>> {
+        match self {
+            EventRef::Row(row) => Ok(match &row.payload {
+                V::Map(payload) => match payload.get(key) {
+                    Some(V::Int(value)) => Some(*value),
+                    Some(V::Big(_)) => return Err(Unsupported::new_err("an int is too large")),
+                    _ => None,
+                },
+                _ => None,
+            }),
+            EventRef::Object(event) => {
+                let py = event.py();
+                let payload = event.getattr(intern!(py, "payload"))?;
+                let value = payload.call_method1(intern!(py, "get"), (PyString::intern(py, key),))?;
+                match value.downcast_exact::<PyInt>() {
+                    Ok(number) => Ok(Some(number.extract().map_err(|_| Unsupported::new_err("an int is too large"))?)),
+                    Err(_) => Ok(None),
+                }
+            }
+        }
+    }
+
+    /// `len(payload)`.
+    pub(crate) fn payload_len(&self) -> PyResult<usize> {
+        match self {
+            EventRef::Row(row) => Ok(match &row.payload {
+                V::Map(payload) => payload.len(),
+                _ => 0,
+            }),
+            EventRef::Object(event) => event.getattr(intern!(event.py(), "payload"))?.len(),
+        }
+    }
+
+    /// `event.kind is EventKind.COMPLETION`.
+    pub(crate) fn is_completion(&self) -> PyResult<bool> {
+        match self {
+            EventRef::Row(row) => Ok(row.kind == EventKind::Completion),
+            EventRef::Object(event) => {
+                let py = event.py();
+                let kind = event.getattr(intern!(py, "kind"))?.getattr(intern!(py, "_value_"))?;
+                Ok(kind.downcast_exact::<PyString>().map_err(|_| Unsupported::new_err("a kind is not a str"))?.to_str()? == "completion")
+            }
+        }
+    }
+
     /// The first and last of a payload's list when both are str, or None for anything else.
     /// `Some((None, None))`, for a list with other values, says what is there is not the rule's.
     pub(crate) fn list_ends(&self, key: &str) -> PyResult<Option<(Option<Arc<str>>, Option<Arc<str>>)>> {

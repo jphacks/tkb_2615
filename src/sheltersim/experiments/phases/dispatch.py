@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from sheltersim import native
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import (
     record_applied_action_completion,
@@ -85,6 +87,7 @@ class DispatchPhase:
                 if outcome.event.event_type == "support_request_timeout":
                     self._record_request_interrupted(world, outcome.event)
 
+    @kernel_first("support", "record_started")
     def _record_staff_support_started(self, world: WorldState, event: ScheduledEvent) -> None:
         request_id = event.payload.get("request_id")
         request = world.support_requests.get(request_id)
@@ -110,6 +113,7 @@ class DispatchPhase:
                 source_ids=care_source_ids_for_agent(world, request.agent_id),
             )
 
+    @kernel_first("support", "record_interrupted")
     def _record_request_interrupted(self, world: WorldState, event: ScheduledEvent) -> None:
         request_id = event.payload.get("request_id")
         request = world.support_requests.get(request_id)
@@ -266,6 +270,7 @@ class DispatchPhase:
                 trigger_event_id=event.event_id,
             )
 
+    @kernel_first("travel", "schedule_return")
     def _schedule_return_to_initial_zone(
         self, world: WorldState, service_event: ScheduledEvent
     ) -> None:
@@ -288,3 +293,9 @@ class DispatchPhase:
             causation_id=service_event.event_id,
             validate_state=False,
         )
+
+
+# Which step a toilet's completion leads to, for the table of rules/dispatch.rs. A patch of the
+# step shows there, and the walk home then goes through it.
+if native.available():
+    native.rules("dispatch").install_return_rule(DispatchPhase._schedule_return_to_initial_zone)
