@@ -705,6 +705,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "body_state_v1": ("body_state", "ROW"),
     "social_network_v1": ("social_network", "ROW"),
     "agent_dynamics_v1": ("agent_dynamics", "ROW"),
+    "resource_ledger_v1": ("resource_ledger", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field
@@ -816,7 +817,7 @@ def _attach_fields(world: Any, core: Any) -> None:
 
 # A namespace whose fields the Checkpoint hash tree reads apart (_WORLD_TREE in
 # core/checkpoint_cache.py) has no use for the bytes of the whole: 8 MB of history at each save.
-_HASHED_BY_PARTS = frozenset({"body_state_v1"})
+_HASHED_BY_PARTS = frozenset({"body_state_v1", "resource_ledger_v1"})
 
 
 def owned_row_bytes(

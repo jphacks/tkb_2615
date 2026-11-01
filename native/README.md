@@ -185,6 +185,14 @@ each OS, because both call the same libm.
   An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
   See `docs/rust-port/lanes/m4-queues.md`.
 
+- `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
+  (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each
+  record, with the newest of each resource kept typed for the check. A record the rules would turn
+  down, or a write into a record already there, taints the namespace. `validate` answers for the
+  check of a tick; the replay of a save stays in Python. `rules.resources.apply_operation(world,
+  event, operation)`, `metric_values(world, *, tick_memo=None)` and `reservation_id_was_used(world,
+  id)` are `kernel_first` (`docs/rust-port/lanes/m4-resources.md`).
+
 - `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
   relationships typed, the history as the canonical bytes of each item. `rules.body_state.
   record_social_event(world, event, minute)` is `domain/body_state.py`'s rule with the operators of

@@ -260,6 +260,7 @@ def _clear(counts: dict[str, list[int]]) -> None:
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_unchanged_old_entries_are_not_read_again(finished_world, reads) -> None:
     world, cache = _saved(finished_world)
     assert reads["audit"] and reads["operations"][-1] > 8
@@ -272,6 +273,7 @@ def test_unchanged_old_entries_are_not_read_again(finished_world, reads) -> None
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_changed_entry_or_input_reads_that_history_again(finished_world, reads) -> None:
     world, cache = _saved(finished_world)
     audit = world.model_state[_AUDIT[0]][_AUDIT[1]]
@@ -288,6 +290,7 @@ def test_a_changed_entry_or_input_reads_that_history_again(finished_world, reads
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_changed_staff_history_reads_the_operations_history_again(
     finished_world, reads, monkeypatch
 ) -> None:
@@ -306,6 +309,7 @@ def test_a_changed_staff_history_reads_the_operations_history_again(
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_truncated_operations_history_is_replayed_in_full(finished_world, reads) -> None:
     """Records dropped from the front change where a replay starts."""
     world, cache = _saved(finished_world)
@@ -318,6 +322,7 @@ def test_a_truncated_operations_history_is_replayed_in_full(finished_world, read
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_failed_capture_leaves_nothing_proven(finished_world, reads) -> None:
     world, cache = _saved(finished_world)
     entry = _entry(world, _AUDIT)
@@ -332,6 +337,7 @@ def test_a_failed_capture_leaves_nothing_proven(finished_world, reads) -> None:
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_capture_that_fails_after_validation_leaves_nothing_proven(
     finished_world, reads, monkeypatch
 ) -> None:
@@ -350,6 +356,7 @@ def test_a_capture_that_fails_after_validation_leaves_nothing_proven(
 
 
 @needs_kernels
+@pytest.mark.python_rules
 def test_a_restored_world_starts_with_a_complete_validation(finished_world, reads) -> None:
     world, cache = _saved(finished_world)
     checkpoint = Checkpoint.capture(world, history_cache=cache)
