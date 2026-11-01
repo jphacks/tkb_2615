@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from sheltersim.contracts.policies import selected_models, selected_models_scope
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
 from sheltersim.core.rng import KeyedRandom
+from sheltersim.core.state_mirror import field_stamp, same_stamp
 from sheltersim.core.world import WorldState
 from sheltersim.domain.action_lifecycle import active_action_store
 from sheltersim.domain.facilities import ToiletServiceManager
@@ -124,6 +125,7 @@ class OfflineSimulationController(
         self._config_scopes_minute: int | None = None
         self._config_scopes_object: dict[str, Any] | None = None
         self._config_scopes_configs: dict[str, Any] | None = None
+        self._config_scopes_stamp: tuple[Any, int] | None = None
         self._parsed_configs: dict[tuple[str, int], tuple[Any, Any]] = {}
         self._model_selections: list[tuple[Any, dict[str, str]]] = []
         self._room_routes: dict[str, Any] = {"routes": {}}
@@ -362,7 +364,11 @@ class OfflineSimulationController(
         # the same. Comparing the object too keeps swaps from piling up old configs.
         if minute != self._config_scopes_minute:
             self._config_scopes_minute = minute
-            if (
+            # The stamp says no write reached the object, without reading it.
+            stamp = field_stamp(world, "model_configs")
+            unwritten = same_stamp(stamp, self._config_scopes_stamp)
+            self._config_scopes_stamp = stamp
+            if not unwritten and (
                 world.model_configs is not self._config_scopes_object
                 or world.model_configs != self._config_scopes_configs
             ):

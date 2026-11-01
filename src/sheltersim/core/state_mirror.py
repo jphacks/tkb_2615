@@ -708,6 +708,11 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "staff_operations_v1": ("staff_operations", "ROW"),
     "shared_operations_v1": ("shared_operations", "ROW"),
     "resource_ledger_v1": ("resource_ledger", "ROW"),
+    "population_presence_v1": ("population", "ROW"),
+    "population_lifecycle_v1": ("population", "ROW"),
+    "population_dynamics_v1": ("population", "ROW"),
+    "temporary_spaces_v1": ("population", "ROW"),
+    "geometry_overlay_v1": ("population", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field
@@ -715,6 +720,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
 # world_core.rs) and the Python rules run on it.
 OWNED_FIELDS: dict[str, tuple[str, str]] = {
     "metric_state": ("metric_state", "ROW"),
+    "model_configs": ("population", "ROW"),
 }
 
 # name of a namespace -> the kernel that accepts it: kernel(world) is True only if the namespace
@@ -730,6 +736,43 @@ def register_rust_validator(name: str, kernel: Callable[[Any], bool] | None) -> 
         _RUST_VALIDATORS.pop(name, None)
     elif native.available():
         _RUST_VALIDATORS[name] = kernel
+
+
+def namespace_stamp(world: Any, name: str) -> tuple[Any, int] | None:
+    """What stays the same while nothing writes to this namespace, or None if no mirror follows it.
+
+    Two stamps are the same state when same_stamp says so. dict.__setitem__ on a node of the tree
+    passes the mirror (docs/rust-port/lanes/t-tick-validation.md); a validation of the whole world
+    still reads the node.
+    """
+    table = world.__dict__.get("model_state")
+    if not isinstance(table, NamespaceTable):
+        return None
+    mirror = table._mirrors.get(name)
+    value = dict.get(table, name, _MISSING)
+    if mirror is None or value is _MISSING:
+        return None
+    generation = mirror.generation_of(value)
+    return None if generation is None else (value, generation)
+
+
+def field_stamp(world: Any, name: str) -> tuple[Any, int] | None:
+    """namespace_stamp of a field in OWNED_FIELDS. A field assigned whole has no stamp."""
+    state = world.__dict__
+    core = state.get("_core")
+    mirror = None if core is None else core.mirror(name)
+    if mirror is None:
+        return None
+    value = state[name]
+    generation = mirror.generation_of(value)
+    return None if generation is None else (value, generation)
+
+
+def same_stamp(first: tuple[Any, int] | None, second: tuple[Any, int] | None) -> bool:
+    """Whether both stamps exist and say the same tree at the same generation."""
+    return (
+        first is not None and second is not None and first[0] is second[0] and first[1] == second[1]
+    )
 
 
 def rust_validated(world: Any, name: str) -> bool:

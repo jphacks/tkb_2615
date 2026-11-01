@@ -717,7 +717,10 @@ def admit_pending_arrivals(world: WorldState, minute: int) -> tuple[str, ...]:
             item["admitted_minute"] = minute
         else:
             remaining.append(item)
-    state["pending_arrivals"] = remaining
+    pending = state["pending_arrivals"]
+    # Everyone stays where they were on most ticks, and a new list is converted again.
+    if len(remaining) != len(pending) or any(a is not b for a, b in zip(remaining, pending)):
+        state["pending_arrivals"] = remaining
     if admitted:
         world.metric_state["population_arrival_count"] = world.metric_state.get(
             "population_arrival_count", 0.0
@@ -1016,7 +1019,7 @@ def _record_waiting_presence(world: WorldState, item: dict[str, Any]) -> None:
         to_household_id=household_id,
         source_ids=tuple(sorted({POPULATION_SOURCE_ID, *route_sources})),
     )
-    raw["history"] = [*raw["history"], transition.model_dump(mode="json")][-20_000:]
+    _append_presence_history(raw, transition)
 
 
 def _record_approach_completed(
@@ -1063,7 +1066,7 @@ def _record_approach_completed(
             )
         ),
     )
-    raw["history"] = [*raw["history"], transition.model_dump(mode="json")][-20_000:]
+    _append_presence_history(raw, transition)
 
 
 def _record_presence_transition(
@@ -1118,7 +1121,13 @@ def _record_presence_transition(
         to_household_id=household,
         source_ids=(source_id,),
     )
-    raw["history"] = [*raw["history"], transition.model_dump(mode="json")][-20_000:]
+    _append_presence_history(raw, transition)
+
+
+def _append_presence_history(raw: dict[str, Any], transition: PresenceTransition) -> None:
+    # In place: a new list would be converted again, record by record, at every transition.
+    raw["history"].append(transition.model_dump(mode="json"))
+    del raw["history"][:-20_000]
 
 
 def _add_information_state(world: WorldState, agent_id: str) -> None:
