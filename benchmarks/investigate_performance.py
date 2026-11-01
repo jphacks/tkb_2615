@@ -168,6 +168,8 @@ def main() -> None:
         (WorldState, "validate_after_tick"),
         (OfflineSimulationController, "__call__"),
         (_IndexedMetricSink, "record_decision"),
+        # With the Rust kernels this records a decision, and record_decision doesn't run.
+        (OfflineSimulationController, "_record_outcome"),
         (_IndexedMetricSink, "record_social_decision"),
         (_IndexedMetricSink, "capture_metric"),
         (TimelineStore, "record"),

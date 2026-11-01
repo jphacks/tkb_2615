@@ -774,6 +774,9 @@ impl QueueStore {
                 self.objects.remove(&serial);
             }
         }
+    /// Whether this event is pending.
+    pub(crate) fn has_event(&self, event_id: &str) -> bool {
+        self.by_id.contains_key(event_id)
     }
 
     /// The IDs of the pending events in queue order, through `minute` if given.

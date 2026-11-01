@@ -276,14 +276,18 @@ def _route_inputs(world: WorldState) -> tuple[str, Point2D, Point2D]:
     )
 
 
+# The memo is the Python rule's: the kernel keeps its own in the plan of the floor.
+_python_plan = getattr(plan_in_room_route, "__wrapped__", plan_in_room_route)
+
+
 def test_a_remembered_room_route_is_the_planned_route(generated_scenario) -> None:
     world = WorldState.from_scenario(generated_scenario)
     zone_id, start, destination = _route_inputs(world)
-    planned = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
+    planned = _python_plan(world, zone_id=zone_id, start=start, destination=destination)
     memo = {"routes": {}}
     with room_route_scope(memo):
-        first = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
-        again = plan_in_room_route(world, zone_id=zone_id, start=start, destination=destination)
+        first = _python_plan(world, zone_id=zone_id, start=start, destination=destination)
+        again = _python_plan(world, zone_id=zone_id, start=start, destination=destination)
     assert first == planned
     assert again is first
     assert len(memo["routes"]) == 1
@@ -300,10 +304,8 @@ def test_a_remembered_room_route_is_dropped_when_what_it_read_changes(generated_
 
     def planned() -> tuple:
         with room_route_scope(memo):
-            remembered = plan_in_room_route(
-                world, zone_id=zone_id, start=start, destination=destination
-            )
-        assert remembered == plan_in_room_route(
+            remembered = _python_plan(world, zone_id=zone_id, start=start, destination=destination)
+        assert remembered == _python_plan(
             world, zone_id=zone_id, start=start, destination=destination
         )
         return remembered
@@ -343,7 +345,7 @@ def test_zero_coordinates_are_not_remembered(generated_scenario) -> None:
     zone_id, start, destination = _route_inputs(world)
     memo = {"routes": {}}
     with room_route_scope(memo):
-        plan_in_room_route(
+        _python_plan(
             world, zone_id=zone_id, start=Point2D(x=0.0, y=start.y), destination=destination
         )
     assert memo["routes"] == {}

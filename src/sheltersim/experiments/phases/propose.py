@@ -449,15 +449,10 @@ class ProposePhase:
                                 + 1.0
                             )
 
-        recorded_proposal = proposal.with_outcome(target_id, agent.next_decision_at)
-        self.artifacts.record_decision(
-            recorded_proposal,
-            observed_state=observed_state,
-        )
-        record_action_proposal(
-            self.world,
-            recorded_proposal,
+        self._record_outcome(
+            proposal,
             target_id=target_id,
+            next_decision_at=agent.next_decision_at,
             committed=(
                 target_id is not None
                 or proposal.action in {ActionKind.WAIT, ActionKind.REST, ActionKind.SLEEP}
@@ -468,6 +463,28 @@ class ProposePhase:
                 and target_id in self.world.support_requests
                 and self.world.support_requests[target_id].status is SupportRequestStatus.UNRESOLVED
             ),
+            observed_state=observed_state,
+        )
+
+    def _record_outcome(
+        self,
+        proposal: Any,
+        *,
+        target_id: str | None,
+        next_decision_at: int,
+        committed: bool,
+        observed_state: Any,
+    ) -> None:
+        recorded_proposal = proposal.with_outcome(target_id, next_decision_at)
+        self.artifacts.record_decision(
+            recorded_proposal,
+            observed_state=observed_state,
+        )
+        record_action_proposal(
+            self.world,
+            recorded_proposal,
+            target_id=target_id,
+            committed=committed,
             active_actions=self.active_actions,
         )
         if "agent_dynamics_v1" in self.world.model_state:
