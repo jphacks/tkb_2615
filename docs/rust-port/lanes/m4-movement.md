@@ -27,7 +27,7 @@
 
 **残る `domain/movement.py`（Python）の毎 tick の分は約 140 µs/tick、tick の約 2%** です（上の Python の行の足し算。`_sync_movement_after_events` を除き、中で呼ぶ kernel の分を含みます）。ほかに残るもの：
 
-- `_schedule_queue_trip`（0.75回/tick）と `_replan_physical_queue_trip`：イベントを割り当てて予定します。
+- `_schedule_queue_trip`（0.75回/tick）と `_replan_physical_queue_trip`：イベントを割り当てて予定します。列の旅の予定と列の進み具合は、その後 [m4-queues.md](m4-queues.md) が移しました。
 - 独立した FIFO（`facility_queues_v1` の `queue_id`）の枠と、測量された `service_point_id` への経路。`point_for_queue` と列の名前空間を読むので断ります。7日分は0件です。
 - `facility_queue_slot_route`、`in_room_travel_minutes`、`agent_is_at_*`、`staff_position_snapshots`（`advance_movement` の外から呼ぶ分）、`agent_positions`、`create_movement_runtime_state`、`canonical_movement_config`。
 

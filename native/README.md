@@ -185,6 +185,35 @@ each OS, because both call the same libm.
   `advance_movement` says Unsupported for a tick in which a queue trip must replan or a person is
   placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
   See `docs/rust-port/lanes/m4-movement.md`.
+- `rules.queues`: a facility's physical queue (`src/rules/queues.rs`):
+  `prepare_facility_queue(world, facility_id, *, resource, minute)`,
+  `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
+  arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
+  `kernel_first`. Each plans and then writes, in one call.
+  An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
+  See `docs/rust-port/lanes/m4-queues.md`.
+
+- `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
+  `validate(world)` accepts a world where no staff member has a task; an active record reads the
+  pending events, which is the Python rule's.
+- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
+  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
+  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
+  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
+  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
+  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
+  (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
+  `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
+  Python rules through `recent_passed(world)`, checked the recent receipts.
+  `rules.common_operations.record_shared_operation(world, record)` appends a `CareTransitionReceipt`.
+- `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
+  (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each
+  record, with the newest of each resource kept typed for the check. A record the rules would turn
+  down, or a write into a record already there, taints the namespace. `validate` answers for the
+  check of a tick; the replay of a save stays in Python. `rules.resources.apply_operation(world,
+  event, operation)`, `metric_values(world, *, tick_memo=None)` and `reservation_id_was_used(world,
+  id)` are `kernel_first` (`docs/rust-port/lanes/m4-resources.md`).
 
 - `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
   relationships typed, the history as the canonical bytes of each item. `rules.body_state.

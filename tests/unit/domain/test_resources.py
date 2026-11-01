@@ -524,11 +524,30 @@ def test_operations_keep_both_checks_passing() -> None:
 
 
 def test_a_successful_operation_leaves_the_previous_ledger_untouched() -> None:
+    """The Python rule's way to be atomic. The kernel writes in place, after all its checks."""
     world = _operated_world()
     previous = world.model_state[RESOURCE_LEDGER_KEY]
     snapshot = copy.deepcopy(previous)
+    python_rule = getattr(apply_resource_operation, "__wrapped__", apply_resource_operation)
 
-    _apply(world, 20, "delivery", resource_id="food_meal_units", quantity=3)
+    python_rule(
+        world,
+        ScheduledEvent(
+            event_id="python-delivery",
+            kind=EventKind.EXOGENOUS,
+            due_minute=world.minute_index,
+            priority=0,
+            sequence=9000,
+            event_type="resource_delivery",
+            payload={
+                "warehouse_id": "warehouse-main",
+                "resource_id": "food_meal_units",
+                "quantity": 3,
+            },
+            source_id="ASM-H01-TEST-RESOURCE-OPERATION-V1",
+        ),
+        "delivery",
+    )
 
     assert previous == snapshot
     assert world.model_state[RESOURCE_LEDGER_KEY] is not previous
@@ -588,8 +607,10 @@ def test_the_full_check_rejects_a_reused_reservation_id() -> None:
 def test_the_tick_memo_still_refuses_bad_reservation_ids() -> None:
     """The memo checks only IDs it has not seen, by value, so the rules stay the same."""
     from sheltersim.core.tick_validation import TickValidationMemo
-    from sheltersim.domain.resources import resource_metric_values
+    from sheltersim.domain.resources import resource_metric_values as metric_values
 
+    # The memo serves the Python rule; the kernel's row keeps its own set.
+    resource_metric_values = getattr(metric_values, "__wrapped__", metric_values)
     world = _operated_world()
     memo = TickValidationMemo()
     world.__dict__["_tick_memo"] = memo

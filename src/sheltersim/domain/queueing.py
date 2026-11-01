@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ActiveTask, Activity
 from sheltersim.events.models import EventKind, EventLogRecord, EventStatus, ScheduledEvent
 from sheltersim.policies.queueing import create_queue_policy
 
 
+@kernel_first("queues", "prepare_facility_queue")
 def prepare_facility_queue(
     world: WorldState, facility_id: str, *, resource: bool, minute: int
 ) -> None:

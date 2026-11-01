@@ -29,11 +29,11 @@ use crate::state::events::QueueStore;
 use crate::state::movement::{Journey, MovementRow, Point, Position};
 use crate::Unsupported;
 
-const KEY: &str = "movement_v1";
+pub(crate) const KEY: &str = "movement_v1";
 const OVERLAY_KEY: &str = "geometry_overlay_v1";
-const POLICY_VERSION: &str = "spatial-route-and-room-waypoint-v2";
+pub(crate) const POLICY_VERSION: &str = "spatial-route-and-room-waypoint-v2";
 /// Above this an int does not always fit a float, and a Python division of ints is not an f64 one.
-const EXACT_INT: i64 = 1 << 53;
+pub(crate) const EXACT_INT: i64 = 1 << 53;
 
 // `_MOVEMENT_DEFAULTS`.
 const SPEED_INDEPENDENT: f64 = 72.0;
@@ -41,7 +41,7 @@ const SPEED_ASSISTED: f64 = 36.0;
 const SPEED_WHEELCHAIR: f64 = 48.0;
 const DENSITY_SLOWDOWN: f64 = 0.12;
 const MAXIMUM_SLOWDOWN: f64 = 2.5;
-const MOVEMENT_SOURCE_ID: &str = "ASM-SPATIAL-MOVEMENT-V2";
+pub(crate) const MOVEMENT_SOURCE_ID: &str = "ASM-SPATIAL-MOVEMENT-V2";
 // `_queue_slot_position`'s spacing and `facility_approach_route`'s clearance, in metres.
 const SPACING_INDEPENDENT: f64 = 0.6;
 const SPACING_ASSISTED: f64 = 0.9;
@@ -62,7 +62,7 @@ static KINDS: LazyLock<Kinds> = LazyLock::new(|| Kinds {
     unavailable: Arc::from("unavailable"),
 });
 
-fn is_queue_trip(purpose: &str) -> bool {
+pub(crate) fn is_queue_trip(purpose: &str) -> bool {
     matches!(
         purpose,
         "toilet_queue_position" | "resource_queue_position" | "toilet_queue_service" | "resource_queue_service"
@@ -101,7 +101,7 @@ fn on_route_kind(point: &Option<Pt>) -> Arc<str> {
 }
 
 /// What a tick's kernel reads beside the rows.
-struct Scene<'py> {
+pub(crate) struct Scene<'py> {
     world: Bound<'py, PyAny>,
     geo: Arc<Geo>,
     zones: Bound<'py, PyAny>,
@@ -110,7 +110,7 @@ struct Scene<'py> {
 }
 
 impl<'py> Scene<'py> {
-    fn of(world: &Bound<'py, PyAny>) -> PyResult<Self> {
+    pub(crate) fn of(world: &Bound<'py, PyAny>) -> PyResult<Self> {
         let py = world.py();
         let table = attribute(world, intern!(py, "model_state"))?;
         let overlay = exact_dict(&table)?.get_item(OVERLAY_KEY)?;
@@ -128,7 +128,7 @@ impl<'py> Scene<'py> {
         edges.get_item(edge_id)?.ok_or_else(|| Unsupported::new_err("a journey's edge is unknown"))
     }
 
-    fn edge_minutes(&self, edge_id: &str) -> PyResult<i64> {
+    pub(crate) fn edge_minutes(&self, edge_id: &str) -> PyResult<i64> {
         let minutes = exact_int(&attribute(&self.edge(edge_id)?, intern!(self.world.py(), "travel_minutes"))?)?;
         if minutes <= 0 || minutes >= EXACT_INT {
             return unsupported("an edge's minutes are not a plain duration");
@@ -298,7 +298,7 @@ fn points_of_journey(journey: &Journey) -> PyResult<Vec<Pt>> {
 
 /// What a kernel found to change. Applied in this order, each map in its own order.
 #[derive(Default)]
-struct Changes {
+pub(crate) struct Changes {
     /// `(record's key, new record)`, dropped when the same bits are there already.
     positions: Vec<(Arc<str>, Position)>,
     gone_positions: Vec<Arc<str>>,
@@ -311,14 +311,14 @@ struct Changes {
 }
 
 /// One write of the tree, which needs the mirror itself.
-enum TreeWrite<'py> {
+pub(crate) enum TreeWrite<'py> {
     Set(&'static str, Arc<str>, Bound<'py, PyAny>),
     Delete(&'static str, Arc<str>),
 }
 
 impl Changes {
     /// Put the plan in the row, and the scalars in the tree. Returns what the tree still needs.
-    fn apply<'py>(self, row: &mut MovementRow, tree: &Tree<'py>) -> PyResult<Vec<TreeWrite<'py>>> {
+    pub(crate) fn apply<'py>(self, row: &mut MovementRow, tree: &Tree<'py>) -> PyResult<Vec<TreeWrite<'py>>> {
         let py = tree.py();
         let mut writes = Vec::new();
         if let Some(minute) = self.minute {
@@ -360,7 +360,7 @@ impl Changes {
     }
 }
 
-fn write_tree<'py>(mirror: &Bound<'py, NamespaceMirror>, writes: Vec<TreeWrite<'py>>) -> PyResult<()> {
+pub(crate) fn write_tree<'py>(mirror: &Bound<'py, NamespaceMirror>, writes: Vec<TreeWrite<'py>>) -> PyResult<()> {
     for write in writes {
         match write {
             TreeWrite::Set(map, id, value) => NamespaceMirror::write_through(mirror, &[map], &id, &value)?,
@@ -371,7 +371,7 @@ fn write_tree<'py>(mirror: &Bound<'py, NamespaceMirror>, writes: Vec<TreeWrite<'
 }
 
 /// The mirror of a namespace the world really holds: Python stores past the table are not the row's.
-fn mirror_held<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, NamespaceMirror>> {
+pub(crate) fn mirror_held<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, NamespaceMirror>> {
     let py = world.py();
     let mirror = mirror_of(world, KEY)?;
     let table = attribute(world, intern!(py, "model_state"))?;
@@ -407,17 +407,17 @@ fn arrived(current: &Position) -> Option<Position> {
 
 // ---- Queue slots and the walk to a facility --------------------------------------------------
 
-fn refused(reason: &'static str) -> PyErr {
+pub(crate) fn refused(reason: &'static str) -> PyErr {
     Unsupported::new_err(reason)
 }
 
-fn position_point(position: Option<&Position>) -> Option<Pt> {
+pub(crate) fn position_point(position: Option<&Position>) -> Option<Pt> {
     position.and_then(|position| position.point).map(|point| Pt { x: point.x, y: point.y })
 }
 
 /// `_queue_slot_position` of a facility's own queue: the slot first free of the people ahead as
 /// they stand now, with a real route from where the person is.
-fn queue_slot(geo: &Geo, row: &MovementRow, rows: &Entities, agent_id: &str, facility_id: &str) -> PyResult<Option<Pt>> {
+pub(crate) fn queue_slot(geo: &Geo, row: &MovementRow, rows: &Entities, agent_id: &str, facility_id: &str) -> PyResult<Option<Pt>> {
     let Some(facility) = rows.facilities.get(facility_id) else {
         return Ok(None);
     };
@@ -647,27 +647,85 @@ fn facility_approach_route<'py>(
     let geo = Geo::of(world)?;
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let raw_model = exact_dict(&configs)?.get_item(intern!(py, "movement_model"))?;
-    let (agent_zone, facility_zone, mobility, loads) = EntityStore::with_rows(&store, |rows| {
+    let (agent_zone, facility_zone) = EntityStore::with_rows(&store, |rows| {
         let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
             return unsupported("no such agent or facility");
         };
-        let loads = rows.agents.iter().filter(|(_, other)| other.zone_id == agent.zone_id).count();
-        Ok((agent.zone_id.clone(), facility.zone_id.clone(), mobility_text(agent), loads))
+        Ok((agent.zone_id.clone(), facility.zone_id.clone()))
     })?;
     let route_class = zone_route_class(py)?;
-    let Some(layout) = &geo.layout else {
+    if geo.layout.is_none() {
         let route = route_class.call1((&*agent_zone, &*facility_zone, (&*agent_zone,), PyTuple::empty(py), 0))?;
         return Ok((route, PyTuple::empty(py)).into_pyobject(py)?.into_any());
-    };
-    if agent_zone != facility_zone {
-        return Ok(py.None().into_bound(py));
     }
-    let start = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| Ok(position_point(row.positions.get(agent_id))))?;
+    let found = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
+        EntityStore::with_rows(&store, |rows| approach(&geo, row, rows, raw_model, agent_id, facility_id))
+    })?;
+    let Some((duration, path)) = found else {
+        return Ok(py.None().into_bound(py));
+    };
+    let route = route_class.call1((&*facility_zone, &*facility_zone, (&*facility_zone, &*facility_zone), PyTuple::empty(py), duration))?;
+    let points = path.iter().map(|point| point_object(py, *point)).collect::<PyResult<Vec<_>>>()?;
+    Ok((route, PyTuple::new(py, points)?).into_pyobject(py)?.into_any())
+}
+
+/// `in_room_travel_minutes` of a path of this length, for a person standing in `agent_zone`.
+pub(crate) fn room_minutes(
+    raw_model: Option<Bound<'_, PyAny>>,
+    geo: &Geo,
+    rows: &Entities,
+    agent_zone: &str,
+    mobility: &str,
+    length: f64,
+) -> PyResult<i64> {
+    let Some(layout) = &geo.layout else {
+        return unsupported("no floor plan");
+    };
+    let model = movement_model(raw_model)?;
+    let speed = match mobility {
+        "independent" => model.independent,
+        "assisted" => model.assisted,
+        _ => model.wheelchair,
+    };
+    let loads = rows.agents.iter().filter(|(_, other)| &*other.zone_id == agent_zone).count();
+    let density = match layout.zones.get(agent_zone).map(|zone| zone.usable_area).filter(|area| *area > 0.0) {
+        Some(area) => loads as f64 / area,
+        None => 0.0,
+    };
+    let crowding = py_min(model.maximum_slowdown, 1.0 + model.density_slowdown * py_max(0.0, density - 0.5));
+    let minutes = length / speed * crowding;
+    if !minutes.is_finite() || minutes.abs() >= EXACT_INT as f64 {
+        return unsupported("the duration is too large");
+    }
+    Ok((minutes.ceil() as i64).max(1))
+}
+
+/// `facility_approach_route` in a placed world, for a facility's own point: the route's minutes and
+/// its path, or None for no route. Says Unsupported without a floor plan.
+pub(crate) fn approach(
+    geo: &Geo,
+    row: &MovementRow,
+    rows: &Entities,
+    raw_model: Option<Bound<'_, PyAny>>,
+    agent_id: &str,
+    facility_id: &str,
+) -> PyResult<Option<(i64, Arc<[Pt]>)>> {
+    let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
+        return unsupported("no such agent or facility");
+    };
+    let Some(layout) = &geo.layout else {
+        return unsupported("no floor plan");
+    };
+    let mobility = mobility_text(agent);
+    if agent.zone_id != facility.zone_id {
+        return Ok(None);
+    }
+    let start = position_point(row.positions.get(agent_id));
     if start.is_some_and(|start| !usable(start.x, start.y)) {
         return unsupported("a position is not a usable point");
     }
     let Some(&facility_point) = layout.facility_points.get(facility_id) else {
-        return Ok(py.None().into_bound(py));
+        return Ok(None);
     };
     let mut candidates = vec![facility_point];
     let footprint = geo.constraints.as_ref().and_then(|constraints| {
@@ -702,7 +760,7 @@ fn facility_approach_route<'py>(
     }
     let mut best: Option<(f64, Arc<[Pt]>)> = None;
     for destination in candidates {
-        let Some(path) = geo.room_route(&facility_zone, start, destination, mobility).map_err(refused)? else {
+        let Some(path) = geo.room_route(&facility.zone_id, start, destination, mobility).map_err(refused)? else {
             continue;
         };
         let length = polyline_length(&path).ok_or_else(|| Unsupported::new_err("not a plain sum"))?;
@@ -711,35 +769,15 @@ fn facility_approach_route<'py>(
         }
     }
     let Some((length, path)) = best else {
-        return Ok(py.None().into_bound(py));
+        return Ok(None);
     };
     // in_room_travel_minutes, then what facility_approach_route makes of it.
-    let mut duration = if path.len() < 2 {
-        0
-    } else {
-        let model = movement_model(raw_model)?;
-        let speed = match mobility {
-            "independent" => model.independent,
-            "assisted" => model.assisted,
-            _ => model.wheelchair,
-        };
-        let density = match layout.zones.get(&*agent_zone).map(|zone| zone.usable_area).filter(|area| *area > 0.0) {
-            Some(area) => loads as f64 / area,
-            None => 0.0,
-        };
-        let crowding = py_min(model.maximum_slowdown, 1.0 + model.density_slowdown * py_max(0.0, density - 0.5));
-        let minutes = length / speed * crowding;
-        if !minutes.is_finite() || minutes.abs() >= EXACT_INT as f64 {
-            return unsupported("the duration is too large");
-        }
-        (minutes.ceil() as i64).max(1)
-    };
+    let mut duration =
+        if path.len() < 2 { 0 } else { room_minutes(raw_model, geo, rows, &agent.zone_id, mobility, length)? };
     if path.len() == 1 || path.windows(2).all(|pair| distance(pair[0], pair[1]) <= 1e-8) {
         duration = 0;
     }
-    let route = route_class.call1((&*facility_zone, &*facility_zone, (&*facility_zone, &*facility_zone), PyTuple::empty(py), duration))?;
-    let points = path.iter().map(|point| point_object(py, *point)).collect::<PyResult<Vec<_>>>()?;
-    Ok((route, PyTuple::new(py, points)?).into_pyobject(py)?.into_any())
+    Ok(Some((duration, path)))
 }
 
 fn zone_route_class(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
@@ -953,7 +991,7 @@ fn plan_journey(
     })
 }
 
-fn mobility_text(agent: &AgentRow) -> &'static str {
+pub(crate) fn mobility_text(agent: &AgentRow) -> &'static str {
     use crate::state::entities::Mobility;
     match agent.profile.mobility {
         Mobility::Independent => "independent",
@@ -1222,38 +1260,53 @@ fn start_movement<'py>(
     };
     let scene = Scene::of(world)?;
     let writes = NamespaceMirror::with_row_tree::<MovementRow, _>(&mirror, |row, tree| {
-        let mut changes = EntityStore::with_rows(&store, |rows| {
-            let mut changes = Changes::default();
-            missing_positions(row, rows, &mut changes);
-            Ok(changes)
-        })?;
-        let elapsed = i64::from(row.last_updated_minute >= started);
-        let initial_progress = py_min(1.0, elapsed as f64 / duration as f64);
-        let point = if !points.is_empty() {
-            if elapsed != 0 {
-                match point_along_polyline(&points, initial_progress) {
-                    Some(point) => Some(point),
-                    None => return unsupported("a route's length is not a plain sum"),
-                }
-            } else {
-                Some(points[0])
-            }
-        } else if let Some(edge) = edge_ids.first() {
-            let progress = if elapsed != 0 { initial_progress } else { 0.0 };
-            scene.route_point(edge, progress, &origin)?
-        } else {
-            scene.geo.zone_center(&origin)?
-        };
-        let kind = if point.is_some() && (!edge_ids.is_empty() || !points.is_empty()) {
-            KINDS.physical.clone()
-        } else {
-            KINDS.unavailable.clone()
-        };
-        changes.positions.push((agent_id.clone(), record(origin.clone(), point, kind, edge_ids.first().cloned(), initial_progress)));
-        changes.new_journey = Some((agent_id.clone(), journey));
+        let changes = EntityStore::with_rows(&store, |rows| plan_start(&scene, row, rows, &agent_id, journey, &origin, &points, &edge_ids, started, duration))?;
         changes.apply(row, tree)
     })?;
     write_tree(&mirror, writes)
+}
+
+/// What `start_movement` writes, changing nothing.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_start(
+    scene: &Scene<'_>,
+    row: &MovementRow,
+    rows: &Entities,
+    agent_id: &Arc<str>,
+    journey: Journey,
+    origin: &Arc<str>,
+    points: &[Pt],
+    edge_ids: &[Arc<str>],
+    started: i64,
+    duration: i64,
+) -> PyResult<Changes> {
+    let mut changes = Changes::default();
+    missing_positions(row, rows, &mut changes);
+    let elapsed = i64::from(row.last_updated_minute >= started);
+    let initial_progress = py_min(1.0, elapsed as f64 / duration as f64);
+    let point = if !points.is_empty() {
+        if elapsed != 0 {
+            match point_along_polyline(points, initial_progress) {
+                Some(point) => Some(point),
+                None => return unsupported("a route's length is not a plain sum"),
+            }
+        } else {
+            Some(points[0])
+        }
+    } else if let Some(edge) = edge_ids.first() {
+        let progress = if elapsed != 0 { initial_progress } else { 0.0 };
+        scene.route_point(edge, progress, origin)?
+    } else {
+        scene.geo.zone_center(origin)?
+    };
+    let kind = if point.is_some() && (!edge_ids.is_empty() || !points.is_empty()) {
+        KINDS.physical.clone()
+    } else {
+        KINDS.unavailable.clone()
+    };
+    changes.positions.push((agent_id.clone(), record(origin.clone(), point, kind, edge_ids.first().cloned(), initial_progress)));
+    changes.new_journey = Some((agent_id.clone(), journey));
+    Ok(changes)
 }
 
 /// `finish_movement`.

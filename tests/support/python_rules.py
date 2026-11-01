@@ -35,6 +35,20 @@ PORTED_NAMES = frozenset(
         "_reserved_bed_point",
         "_facility_move_invalidated_journey",
         "_zone_center",
+        # domain/staff.py, domain/staff_operations.py, experiments/metrics.py: rules/staff.rs.
+        # The mark runs `_support_wait_snapshot`'s Python rule; the others have kernels of
+        # `kernel_first` that a test reaches through `__wrapped__`.
+        "support_wait_reason_codes",
+        "support_waited_minutes",
+        "support_required_skills",
+        "_support_kind",
+        "_support_priority",
+        "_support_assignment_order",
+        "_route_candidates",
+        "_support_route_wait_reasons",
+        # domain/common_operations.py: rules/common_operations.rs, likewise.
+        "_event_payload_matches",
+        "_validate_observed_state_changes",
         # policies/world_view.py: rules/world_view.rs
         "_view_state_hash",
         "_zone_environment",
@@ -78,6 +92,10 @@ PORTED_NAMES = frozenset(
         "observe_event",
         "record_applied_action_completion",
         "learn_facility",
+        # domain/resources.py: rules/resources.rs, state/resource_ledger.rs
+        "apply_resource_operation",
+        "resource_metric_values",
+        "_validate_audit_record",
     }
 )
 
@@ -114,6 +132,7 @@ def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
         return
     from sheltersim import native
     from sheltersim.core import state_mirror
+    from sheltersim.experiments import metrics
     from sheltersim.experiments.phases.segments import SEGMENTS
     from sheltersim.experiments.runner import OfflineSimulationController
 
@@ -123,3 +142,6 @@ def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
         # install_segments set it on this class, and the phases' mixins keep the Python step.
         monkeypatch.delattr(OfflineSimulationController, step)
     monkeypatch.setattr(state_mirror, "_RUST_VALIDATORS", {})
+    monkeypatch.setattr(
+        metrics, "_support_wait_snapshot", metrics._support_wait_snapshot.__wrapped__
+    )

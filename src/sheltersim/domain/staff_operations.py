@@ -6,7 +6,10 @@ import math
 from copy import deepcopy
 from typing import Any
 
+from sheltersim import native
 from sheltersim.contracts.operations import SHARED_OPERATIONS_KEY
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ActiveTask
 from sheltersim.domain.movement import shared_passage_edge_loads
@@ -401,6 +404,7 @@ def add_staff_operations_agent(world: WorldState, staff_id: str) -> None:
         state["staff"][staff_id] = _idle_record()
 
 
+@kernel_first("staff", "update_operations")
 def update_staff_operations(world: WorldState, minute: int) -> None:
     """Apply occupancy-linked sanitation demand using bounded per-person rates."""
     state = world.model_state.get(STAFF_OPERATIONS_STATE_KEY)
@@ -422,6 +426,7 @@ def update_staff_operations(world: WorldState, minute: int) -> None:
         zone["updated_minute"] = minute
 
 
+@kernel_first("staff", "assign_operations")
 def assign_staff_operations(world: WorldState, minute: int, router: SpaceRouter) -> tuple[str, ...]:
     """Choose the highest-need available task by role, urgency and reachable travel time."""
     state = world.model_state.get(STAFF_OPERATIONS_STATE_KEY)
@@ -906,6 +911,7 @@ def order_staff_operation(
     return task_id
 
 
+@kernel_first("staff", "relief")
 def schedule_staff_operation_relief(world: WorldState, minute: int) -> tuple[str, ...]:
     """Schedule same-site relief before a working or traveling staff member goes off shift.
 
@@ -1461,3 +1467,7 @@ def _idle_record() -> dict[str, Any]:
         "travel_minutes": 0,
         "causation_event_ids": [],
     }
+
+
+if native.available():
+    register_rust_validator(STAFF_OPERATIONS_STATE_KEY, native.state("staff_operations").validate)
