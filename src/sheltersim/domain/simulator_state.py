@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from sheltersim.contracts.operations import (
@@ -563,3 +564,82 @@ def simulator_state_catalog() -> dict[str, Any]:
             "external_validation": False,
         },
     }
+
+
+def _install_after_tick_kernel() -> None:
+    """Tell native/src/rules/after_tick.rs what the Python check would call, as defined here.
+
+    A patch of one of these, and the python_rules mark, leave a tick to the Python check.
+    """
+    from sheltersim import native
+
+    if not native.available():
+        return
+    from sheltersim.contracts import runtime
+    from sheltersim.core import state_mirror, tick_validation
+    from sheltersim.core import world as world_module
+    from sheltersim.domain import body_state, common_operations
+    from sheltersim.events import effects
+
+    this_module = sys.modules[__name__]
+    watched = [
+        (this_module, name)
+        for name in (
+            "validate_simulator_extensions",
+            "validate_agent_dynamics_state",
+            "validate_body_state",
+            "validate_population_dynamics_state",
+            "validate_population_lifecycle_state",
+            "validate_social_network_state",
+            "validate_staff_dynamics_state",
+            "validate_staff_operations_state",
+            "validate_temporary_spaces_state",
+            "validate_movement_runtime_state",
+            "validate_geometry_overlay_state",
+            "validate_facility_queue_state",
+            "validate_shared_operations_state",
+            "is_legacy_queue_checkpoint",
+        )
+    ]
+    watched += [
+        (world_module, name)
+        for name in (
+            "_entity_rules_kernel",
+            "validate_information_runtime_state",
+            "validate_psychological_state",
+            "validate_operational_events_state",
+            "validate_infrastructure_runtime_state",
+            "validate_zone_environment_runtime_state",
+            "validate_resource_ledger_state",
+        )
+    ]
+    watched += [
+        (WorldState, "validate"),
+        (WorldState, "_validate_entity_rules"),
+        (WorldState, "_validate_event_rules"),
+        (state_mirror, "_RUST_VALIDATORS"),
+        (runtime, "validate_declared_states"),
+        (effects, "validate_effect_program_state"),
+        (tick_validation.TickValidationMemo, "begin"),
+        (tick_validation.TickValidationMemo, "commit"),
+        (tick_validation.TickValidationMemo, "requests_to_check"),
+        (body_state, "_ROWS_VALID"),
+        (common_operations, "_TICK_VALID"),
+    ]
+    native.rules("after_tick").install(
+        watched,
+        state_mirror._RUST_VALIDATORS,
+        body_state._ROWS_VALID,
+        common_operations._TICK_VALID,
+        native.rules("effects").validate_state,
+        (
+            validate_population_lifecycle_state,
+            validate_geometry_overlay_state,
+            validate_facility_queue_state,
+            validate_temporary_spaces_state,
+        ),
+        (world_module.InitialNeedProfile, world_module.NeedState),
+    )
+
+
+_install_after_tick_kernel()

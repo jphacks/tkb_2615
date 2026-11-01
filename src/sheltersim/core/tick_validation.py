@@ -31,6 +31,10 @@ Each saving rests on one of these arguments:
   are unchanged; new records are checked as they arrive.
 - used_reservation_ids is append-only, so only its new tail is checked in full; the
   earlier IDs are compared with the ones that passed.
+
+On a tick where all of these say "unchanged", native/src/rules/after_tick.rs does begin, the rules
+and commit in one call, reading this memo; `steady` is what it takes from model_configs. Any other
+tick is the Python code here (WorldState.validate_after_tick).
 """
 
 from __future__ import annotations
@@ -59,6 +63,8 @@ class TickValidationMemo:
         self.minute = -1
         self._configs: dict[str, Any] | None = None
         self._configs_stamp: tuple[Any, int] | None = None
+        # What rules/after_tick.rs reads of the configs that passed, or None to leave it the rules.
+        self.steady: Any = None
         self._agent_ids: frozenset[str] = frozenset()
         self._zone_ids: frozenset[str] = frozenset()
         self._facility_zones: dict[str, str] = {}
@@ -174,6 +180,7 @@ class TickValidationMemo:
         """Record what the passed check proved."""
         if not self.configs_unchanged:
             self._configs = deepcopy(world.model_configs)
+            self.steady = _steady_plan(world, self)
         if not self.agents_unchanged:
             self._agent_ids = frozenset(world.agents)
         if not self.zones_unchanged:
@@ -281,6 +288,38 @@ class TickValidationMemo:
         self._last_operation = history[-1] if history else None
         self._last_operation_json = saved_json(self._last_operation)
         self._operations_header_json = _operations_header_json(state)
+
+
+def _steady_plan(world: WorldState, memo: TickValidationMemo) -> Any:
+    """What a check that just passed on these configs knows, for rules/after_tick.rs, or None for
+    a world it doesn't take at all: then every tick is the Python code."""
+    from sheltersim.domain.facility_queues import independent_queues_required
+    from sheltersim.domain.infrastructure import INFRASTRUCTURE_EVENT_TYPES
+    from sheltersim.domain.operational import H03_EVENT_TYPES, operational_events_enabled
+    from sheltersim.domain.psychological_state import MEAN_REVERTING_PSYCHOLOGY_POLICIES
+
+    configs = world.model_configs
+    if (
+        field_stamp(world, "model_configs") is None
+        or memo.resource_config is None
+        or configs.get("infrastructure") is not None
+        or (configs.get("zone_environment") is not None and not memo.environment_config_passed)
+    ):
+        return None
+    return native.rules("after_tick").Plan(
+        declared=[(name, item.schema_version) for name, item in memo.declared_states.items()],
+        required=sorted(memo.required_states),
+        independent_queues=independent_queues_required(configs),
+        information_enabled=memo.information_config.enabled,
+        mean_reverting=memo.psychology_model in MEAN_REVERTING_PSYCHOLOGY_POLICIES,
+        shared_configured="shared_operations" in configs,
+        operational_enabled=operational_events_enabled(configs, ()),
+        environment_configured=configs.get("zone_environment") is not None,
+        # "resource_delivery" opts in only with a shipment ID; the Python rule tells which.
+        operational_events=frozenset(H03_EVENT_TYPES | {"resource_delivery"}),
+        infrastructure_events=frozenset(INFRASTRUCTURE_EVENT_TYPES),
+        resource_config=memo.resource_config,
+    )
 
 
 def _is_settled(request: Any) -> bool:

@@ -510,6 +510,11 @@ fn python_path_only(value: bool) {
     PYTHON_PATH_ONLY.store(value, Ordering::Relaxed);
 }
 
+/// Whether a benchmark's shadows keep every tick on the Python path.
+pub(crate) fn path_is_python_only() -> bool {
+    PYTHON_PATH_ONLY.load(Ordering::Relaxed)
+}
+
 /// What has run in this process: `(counts, refused ticks and refused kernels by reason)`.
 #[pyfunction]
 fn stats<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
