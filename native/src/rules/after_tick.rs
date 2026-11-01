@@ -574,10 +574,10 @@ fn check<'py>(table: &Table, world: &Bound<'py, PyAny>, memo: &Bound<'py, PyAny>
     if cx.state(QUEUES)?.is_some() || plan.independent_queues {
         cx.validate_or_rule(QUEUES, &table.queues_rule)?;
     }
-    let shared = cx.state(SHARED)?;
-    if shared.is_some() && !plan.shared_configured {
+    if model_state.contains(SHARED)? && !plan.shared_configured {
         return unsupported("shared operations without their contract");
     }
+    let shared = cx.state(SHARED)?;
     if shared.is_some() && !cx.taken_by_kernel(SHARED)? && !cx.accepts(SHARED, table.tick_valid.bind(py))? {
         return unsupported("the shared operations are the Python rule's");
     }

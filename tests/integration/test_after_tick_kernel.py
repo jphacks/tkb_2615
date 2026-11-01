@@ -414,6 +414,33 @@ def test_a_configured_infrastructure_keeps_every_tick_python(documents) -> None:
         world.validate_after_tick()
 
 
+def test_a_config_only_a_plan_would_read_does_not_fail_the_check(documents) -> None:
+    # Beside its state, the check of a tick doesn't read this config, so it has always passed.
+    document = copy.deepcopy(documents[0])
+    document["model_configs"]["operational_events"] = {"enabled": "yes"}
+    world = WorldState.from_dict(document)
+    assert "operational_events_v1" in world.model_state
+    world.validate_after_tick()
+    world.validate_after_tick()
+    assert world.__dict__["_tick_memo"].steady is None
+
+
+def test_shared_operations_stored_as_none_without_a_contract_are_not_taken(documents) -> None:
+    world = WorldState.from_dict(copy.deepcopy(documents[0]))
+    world.validate_after_tick()
+    memo = world.__dict__["_tick_memo"]
+    configs = {k: v for k, v in world.model_configs.items() if k != "shared_operations"}
+    patch = pytest.MonkeyPatch()
+    patch.setattr(tick_validation, "field_stamp", lambda *_: (configs, 0))
+    try:
+        memo.steady = tick_validation._steady_plan(SimpleNamespace(model_configs=configs), memo)
+    finally:
+        patch.undo()
+    assert _takes(world, memo) is False  # The state is there, without the contract.
+    dict.__setitem__(world.model_state, "shared_operations_v1", None)
+    assert not _takes(world, memo)
+
+
 def _python_memo_after(world: WorldState, memo: TickValidationMemo) -> dict[str, Any]:
     """What the Python check would leave, computed on the side from the memo it would start with."""
     added = memo._requests.added_values(world.support_requests)

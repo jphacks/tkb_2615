@@ -306,20 +306,25 @@ def _steady_plan(world: WorldState, memo: TickValidationMemo) -> Any:
         or (configs.get("zone_environment") is not None and not memo.environment_config_passed)
     ):
         return None
-    return native.rules("after_tick").Plan(
-        declared=[(name, item.schema_version) for name, item in memo.declared_states.items()],
-        required=sorted(memo.required_states),
-        independent_queues=independent_queues_required(configs),
-        information_enabled=memo.information_config.enabled,
-        mean_reverting=memo.psychology_model in MEAN_REVERTING_PSYCHOLOGY_POLICIES,
-        shared_configured="shared_operations" in configs,
-        operational_enabled=operational_events_enabled(configs, ()),
-        environment_configured=configs.get("zone_environment") is not None,
-        # "resource_delivery" opts in only with a shipment ID; the Python rule tells which.
-        operational_events=frozenset(H03_EVENT_TYPES | {"resource_delivery"}),
-        infrastructure_events=frozenset(INFRASTRUCTURE_EVENT_TYPES),
-        resource_config=memo.resource_config,
-    )
+    try:
+        return native.rules("after_tick").Plan(
+            declared=[(name, item.schema_version) for name, item in memo.declared_states.items()],
+            required=sorted(memo.required_states),
+            independent_queues=independent_queues_required(configs),
+            information_enabled=memo.information_config.enabled,
+            mean_reverting=memo.psychology_model in MEAN_REVERTING_PSYCHOLOGY_POLICIES,
+            shared_configured="shared_operations" in configs,
+            operational_enabled=operational_events_enabled(configs, ()),
+            environment_configured=configs.get("zone_environment") is not None,
+            # "resource_delivery" opts in only with a shipment ID; the Python rule tells which.
+            operational_events=frozenset(H03_EVENT_TYPES | {"resource_delivery"}),
+            infrastructure_events=frozenset(INFRASTRUCTURE_EVENT_TYPES),
+            resource_config=memo.resource_config,
+        )
+    except (TypeError, ValueError):
+        # A config the check that passed doesn't read at a tick, such as operational_events beside
+        # its state. A plan only saves time, and a check must not fail for lack of one.
+        return None
 
 
 def _is_settled(request: Any) -> bool:
