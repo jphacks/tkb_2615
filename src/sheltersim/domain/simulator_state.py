@@ -350,7 +350,7 @@ def validate_simulator_extensions(
     ):
         validate_population_lifecycle_state(world)
     if not rust_validated(world, "social_network_v1"):
-        validate_social_network_state(world, tick_memo=tick_memo)
+        validate_social_network_state(world)
     if not rust_validated(world, "staff_dynamics_v1"):
         validate_staff_dynamics_state(world)
     if not rust_validated(world, "staff_operations_v1"):
