@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from sheltersim import native
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import SupportRequestStatus
 from sheltersim.domain.resources import RESOURCE_METRIC_FIELDS, resource_metric_values
@@ -23,6 +24,36 @@ def _source_ids_json(source_ids: dict[str, Any]) -> str:
         return encoded.decode()
     # The kernel leaves any value it does not handle, NaN included, to json.
     return json.dumps(source_ids, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+@kernel_first("staff", "wait_snapshot")
+def _support_wait_snapshot(
+    world: WorldState, active_support: list[Any], sample_minute: int
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """The wait of each open support request, and who waits with no qualified staff at all."""
+    staff_memo: dict[str, Any] = {}
+    details = {
+        request.agent_id: {
+            "request_id": request.id,
+            "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
+            "reason_codes": list(
+                support_wait_reason_codes(
+                    world, request.id, minute=sample_minute, staff_memo=staff_memo
+                )
+            ),
+        }
+        for request in sorted(active_support, key=lambda item: item.agent_id)
+    }
+    no_qualified = sorted(
+        request.agent_id
+        for request in active_support
+        if request.status is SupportRequestStatus.PENDING
+        and not any(
+            support_required_skills(world, request.id).intersection(staff.skills)
+            for staff in world.staff.values()
+        )
+    )
+    return details, no_qualified
 
 
 @dataclass(frozen=True)
@@ -88,29 +119,8 @@ class MetricSnapshot:
                 for task_id in staff.work_queue
             )
         )
-        pending_support = [
-            request for request in active_support if request.status is SupportRequestStatus.PENDING
-        ]
-        staff_memo: dict[str, Any] = {}
-        support_wait_details = {
-            request.agent_id: {
-                "request_id": request.id,
-                "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
-                "reason_codes": list(
-                    support_wait_reason_codes(
-                        world, request.id, minute=sample_minute, staff_memo=staff_memo
-                    )
-                ),
-            }
-            for request in sorted(active_support, key=lambda item: item.agent_id)
-        }
-        no_qualified_support_ids = sorted(
-            request.agent_id
-            for request in pending_support
-            if not any(
-                support_required_skills(world, request.id).intersection(staff.skills)
-                for staff in world.staff.values()
-            )
+        support_wait_details, no_qualified_support_ids = _support_wait_snapshot(
+            world, active_support, sample_minute
         )
         wait_count = world.metric_state.get("toilet_wait_count", 0.0)
         wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)

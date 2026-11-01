@@ -202,6 +202,7 @@ def test_the_proposal_view_equals_a_read_view_with_full_traces(
     assert len(views) == 20
 
 
+@pytest.mark.python_rules
 def test_requests_of_one_kind_get_the_reasons_they_get_alone(
     generated_scenario, tmp_path, monkeypatch
 ) -> None:

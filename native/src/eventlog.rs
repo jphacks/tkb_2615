@@ -713,6 +713,11 @@ impl EventStore {
         Ok(self.add(event.index_fields(realized_minute, status), Handles::default(), Some(written)))
     }
 
+    /// The event of a request's first care record, if it has one.
+    pub(crate) fn first_care_request_event_of(&self, request_id: &str) -> Option<&str> {
+        self.first_care_request.get(request_id).map(String::as_str)
+    }
+
     pub(crate) fn has_event_id(&self, event_id: &str) -> bool {
         self.by_id.contains_key(event_id)
     }

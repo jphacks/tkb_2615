@@ -185,6 +185,20 @@ each OS, because both call the same libm.
   An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
   See `docs/rust-port/lanes/m4-queues.md`.
 
+- `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
+  `validate(world)` accepts a world where no staff member has a task; an active record reads the
+  pending events, which is the Python rule's.
+- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
+  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
+  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
+  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
+  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
+  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
+  (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
+  `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
+  Python rules through `recent_passed(world)`, checked the recent receipts.
+  `rules.common_operations.record_shared_operation(world, record)` appends a `CareTransitionReceipt`.
 - `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
   (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each
   record, with the newest of each resource kept typed for the check. A record the rules would turn
