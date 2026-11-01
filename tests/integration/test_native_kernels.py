@@ -137,6 +137,7 @@ def test_the_social_relationship_check_judges_every_record_as_python_does(
     ]
     # Several records: the first broken one decides, as in the Python loop.
     cases.append({'["A001","A003"]': record, '["A002","A003"]': candidates[1], "[": record})
+
     def validated(world: WorldState) -> None:
         if not rust_validated(world, SOCIAL_NETWORK_STATE_KEY):
             validate_social_network_state(world)

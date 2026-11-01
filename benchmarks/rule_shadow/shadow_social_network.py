@@ -3,7 +3,7 @@
 - observe_event: the Python rule on a plain copy of the counters and of the records it touches,
   then the kernel on the world; JSON text with sorted keys, so a float keeps its bits. Copying only
   those records keeps a seven-day run possible. The row and the tree are compared every 500 calls.
-- The namespace's validator: whenever the kernel accepts, the Python rules must accept too.
+- The namespace's validator is in shadow_tick_validation.py, with the other rows'.
 - capture_context and validate_context: what the rule returns, or that it refused.
 - The handler's apply: the Python rule on stand-ins of the two people; then the three values it
   writes, by their bits, on the objects; the rows are compared with the objects every 500 calls.
@@ -70,9 +70,7 @@ def prepare(output: str) -> None:
     rules = native.rules("social_network")
     dialogue = native.rules("social_dialogue")
     interaction = native.rules("social_interaction")
-    state = native.state("social_network")
     observe_kernel = rules.observe_event
-    validate_kernel = state.validate
     apply_kernel = interaction.apply
     calls = [0]
 
@@ -125,23 +123,6 @@ def prepare(output: str) -> None:
             if not world._core.mirror(key).verify():
                 recorder.differ(f"observe minute {minute}: the row and the tree")
         return result
-
-    def validate(world: Any) -> bool:
-        from sheltersim.domain import social_network as module
-
-        recorder.seen["validate.calls"] += 1
-        try:
-            answer = validate_kernel(world)
-        except unsupported as reason:
-            recorder.reasons[f"validate: {reason}"] += 1
-            raise
-        recorder.seen[f"validate.{bool(answer)}"] += 1
-        if answer:
-            try:
-                module.validate_social_network_state(world)
-            except ValueError as raised:
-                recorder.differ(f"validate: the kernel took what Python turned down: {raised}")
-        return answer
 
     def apply(handler: Any, world: Any, event: Any) -> Any:
         from sheltersim.events.handlers import SocialInteractionHandler
@@ -200,7 +181,6 @@ def prepare(output: str) -> None:
         return result
 
     rules.observe_event = observe
-    state.validate = validate
     interaction.apply = apply
 
     module_of: list[Any] = []

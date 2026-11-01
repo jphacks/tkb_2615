@@ -68,7 +68,7 @@ M1 の最後のレーンです。Rust が持つ名前空間について、Python
 | 残したもの | やめられない理由 | いつ |
 |---|---|---|
 | `world_agents_valid` と `core/world.py` の実体の規則（キーと ID、人、設備、列、職員、作業、支援の依頼） | `agent.__dict__` への書き込みは行に届きません。行で判定すると、この経路を検出できなくなります。さらに、作業と支援の依頼の規則はイベントの列と突き合わせます | Python のオブジェクトが行の写しでなくなるとき（M4、M5）。イベントは M2 の E |
-| `RecordWatch`（`watch.rs`）、`social_relationships_valid`、`body_relationships_valid`、`body_agents_valid`、`PairKeys`、`TickValidationMemo` の `social_watch`・`body_watch` | `social_network_v1`、`body_state_v1` を Rust が持っていません | M3 |
+| `RecordWatch`（`watch.rs`）、`body_relationships_valid`、`body_agents_valid`、`PairKeys`、`TickValidationMemo` の `body_watch` | `body_state_v1` を Rust が持っていません。`social_network_v1` の分は [m3-social-network.md](m3-social-network.md) でやめました | M3 |
 | `agent_dynamics_valid` | `agent_dynamics_v1` | M2 の F |
 | `movement_positions_valid` | レーン I で `movement_v1` は Rust の行になりましたが（`state/movement.rs`）、規則は Python のままで、この確認は今も木を読みます | 規則が移る M4 |
 | `TickValidationMemo` の `population_*`・`geometry_overlay_v1` の正準 JSON、共有運用、予約 ID、支援の依頼の記憶 | それぞれの名前空間と実体を Rust が持っていません | M3〜M5 |

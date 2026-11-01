@@ -1,8 +1,8 @@
 """social_network_v1 owned by Rust, with its rules (docs/rust-port/lanes/m3-social-network.md).
 
 Every call of the gate and of seven days against the Python rules is
-benchmarks/rule_shadow/shadow_social_network.py; here, what taints the row, each way into it that the
-per-tick check must see now that it reads only the written records, what the kernels leave to
+benchmarks/rule_shadow/shadow_social_network.py; here, what taints the row, each way into it that
+the per-tick check must see now that it reads only the written records, what the kernels leave to
 Python, and random inputs compared with the Python rules by their bits.
 """
 
@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from support.paths import BENCHMARKS
 
 from sheltersim import native
 from sheltersim.core.engine import TraceLevel
@@ -90,7 +91,9 @@ def _colocate(world: Any, ids: list[str]) -> str:
     return zone
 
 
-def _event(event_type: str, payload: dict[str, Any], minute: int, number: int = 1) -> ScheduledEvent:
+def _event(
+    event_type: str, payload: dict[str, Any], minute: int, number: int = 1
+) -> ScheduledEvent:
     return ScheduledEvent(
         event_id=f"e{number}",
         kind=EventKind.ENDOGENOUS,
@@ -108,7 +111,9 @@ def _event(event_type: str, payload: dict[str, Any], minute: int, number: int = 
     )
 
 
-def _action(world: Any, kind: str, actor: str, participant: str, number: int = 1, **more: Any) -> Any:
+def _action(
+    world: Any, kind: str, actor: str, participant: str, number: int = 1, **more: Any
+) -> Any:
     action, topic = ACTIONS[kind]
     return _event(
         "social_interaction",
@@ -189,9 +194,7 @@ def test_a_value_of_another_type_taints_and_python_still_decides(world: Any, cha
         lambda state, record: record.__setitem__("contact_count", -1),
         lambda state, record: record.__setitem__("last_contact_minute", -1),
         lambda state, record: record.update(conversation_count=-3),
-        lambda state, record: state["relationships"].__setitem__(
-            '["x1","x1"]', _record()
-        ),
+        lambda state, record: state["relationships"].__setitem__('["x1","x1"]', _record()),
         lambda state, record: state["relationships"].__setitem__('["x1"]', _record()),
         lambda state, record: state["relationships"].update({"[": _record()}),
         lambda state, record: state["relationships"].setdefault('["a", "b"]', _record()),
@@ -200,7 +203,9 @@ def test_a_value_of_another_type_taints_and_python_still_decides(world: Any, cha
         lambda state, record: state.__setitem__("policy_version", "other"),
     ],
 )
-def test_every_write_the_check_of_a_tick_must_see_after_it_has_passed(world: Any, write: Any) -> None:
+def test_every_write_the_check_of_a_tick_must_see_after_it_has_passed(
+    world: Any, write: Any
+) -> None:
     """The check reads only written records, so each way of writing has to reach it. What stops
     the world is the Python rule's own text, the same as with no kernel."""
     state = world.model_state[KEY]
@@ -273,7 +278,10 @@ def test_the_kernel_takes_no_key_python_refuses(world: Any) -> None:
     rng = random.Random(7)
     alphabet = '[]",\\ab \x7fあ'
     keys += ["".join(rng.choice(alphabet) for _ in range(rng.randint(0, 12))) for _ in range(5000)]
-    keys += ['["' + "".join(rng.choice('ab",\\') for _ in range(rng.randint(0, 8))) + '"]' for _ in range(5000)]
+    keys += [
+        '["' + "".join(rng.choice('ab",\\') for _ in range(rng.randint(0, 8))) + '"]'
+        for _ in range(5000)
+    ]
     accepted = 0
     for key in keys:
         if good(key):
@@ -357,9 +365,7 @@ def test_observe_event_gives_the_bits_of_the_python_rule(world: Any) -> None:
     assert _mirror(world).verify()
     assert _accepted(world)
     # The cap of the message IDs was reached, or the test proves little.
-    assert any(
-        len(record["shared_message_ids"]) >= 10 for record in ours["relationships"].values()
-    )
+    assert any(len(record["shared_message_ids"]) >= 10 for record in ours["relationships"].values())
 
 
 def test_observe_event_computes_trust_when_the_body_has_no_record(world: Any) -> None:
@@ -370,7 +376,13 @@ def test_observe_event_computes_trust_when_the_body_has_no_record(world: Any) ->
             each.model_state["body_state_v1"]["relationships"].pop(key, None)
             each.model_state[KEY]["relationships"].pop(key, None)
     for number, kind in enumerate(
-        ["cooperation", "voluntary_support", "family_care", "reassurance_exchange", "information_reaction"]
+        [
+            "cooperation",
+            "voluntary_support",
+            "family_care",
+            "reassurance_exchange",
+            "information_reaction",
+        ]
     ):
         event = _event(
             "social_interaction",
@@ -464,7 +476,7 @@ def test_at_the_bound_the_python_rule_says_so(world: Any, monkeypatch: pytest.Mo
 def test_record_observed_contacts_comes_through_the_social_step_without_python(
     finished: Any,
 ) -> None:
-    """The step writes the row itself: a run's forwards are its population's and the first tick's."""
+    """The step writes the row itself: forwards are the population's and the first tick's."""
     assert _mirror(finished).stats()["forwards"] < 50
 
 
@@ -549,7 +561,11 @@ def _values(world: Any, ids: list[str]) -> list[str]:
     return [
         value.hex()
         for id_ in ids
-        for value in (world.agents[id_].stress, world.agents[id_].trust, world.agents[id_].needs.fatigue)
+        for value in (
+            world.agents[id_].stress,
+            world.agents[id_].trust,
+            world.agents[id_].needs.fatigue,
+        )
     ]
 
 
@@ -682,3 +698,17 @@ def test_a_bad_payload_is_python_s_to_refuse(world: Any, more: dict) -> None:
     assert _values(world, ids) == before
     with pytest.raises(Exception, match="social"):
         SocialInteractionHandler().apply(world, event)
+
+
+def test_the_social_shadow_ignores_key_order_only_in_a_run_that_reverses_dicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(BENCHMARKS / "rule_shadow"))
+    from social_propagation_shadow import _text
+
+    first, second = {"a": 1, "b": 2}, {"b": 2, "a": 1}
+    monkeypatch.delenv("SHELTERSIM_GATE_REVERSE", raising=False)
+    assert _text(first) != _text(second)
+    monkeypatch.setenv("SHELTERSIM_GATE_REVERSE", "phase")
+    assert _text(first) == _text(second)
+    assert _text({"a": 1.0}) != _text({"a": 1})

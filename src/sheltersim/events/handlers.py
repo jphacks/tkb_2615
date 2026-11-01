@@ -7,8 +7,8 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from sheltersim.contracts.operations import NumericStateChange
-from sheltersim.core.rng import CounterRNG
 from sheltersim.core.kernels import kernel_first
+from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.care_receipts import (
     care_receipt_for_request,
