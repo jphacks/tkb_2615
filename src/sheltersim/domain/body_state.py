@@ -10,7 +10,9 @@ from typing import Any
 
 from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
-from sheltersim.core.tick_validation import PairKeys, saved_json
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import rust_accepts
+from sheltersim.core.tick_validation import saved_json
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ordered_pair_key
 from sheltersim.policies.affect import create_affect_policy
@@ -180,6 +182,10 @@ def canonical_body_config(raw: Any) -> dict[str, Any]:
     return config
 
 
+# Accepts the header, records and relationships from the row (native/src/state/body_state.rs).
+_ROWS_VALID = native.state("body_state").rows_valid if native.available() else None
+
+
 def create_body_state(world: WorldState) -> dict[str, Any]:
     """Initialize a detached record for each active Agent before checkpoint zero."""
     config, _ = _body_config_for_world(world)
@@ -227,10 +233,6 @@ def _parse_key(key: Any) -> tuple[tuple[Any, ...] | None, bool] | None:
     return _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
 
 
-# Keys naming two different current people, for the Rust kernel to look up first.
-_GOOD_KEYS = PairKeys()
-
-
 _RELATIONSHIP_FIELDS = frozenset(
     {
         "contact_count",
@@ -241,20 +243,6 @@ _RELATIONSHIP_FIELDS = frozenset(
         "topic_ids",
     }
 )
-
-
-def _pair_key_is_good(key: Any, agents: Any) -> bool:
-    parsed = _parse_key(key)
-    if parsed is None:
-        return False
-    pair, compact = parsed
-    return (
-        compact
-        and pair is not None
-        and pair[0] != pair[1]
-        and pair[0] in agents
-        and pair[1] in agents
-    )
 
 
 def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
@@ -323,6 +311,64 @@ def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
     return only_current_residents
 
 
+def _validate_body_rows(world: WorldState, state: dict[str, Any]) -> None:
+    """The rules of the records and relationships, when the kernel has not accepted them."""
+    fields = {
+        "sleep_debt_minutes",
+        "uncertainty",
+        "reassurance",
+        "discontent",
+        "positive_affect",
+        "negative_affect",
+        "hygiene_need",
+    }
+    for agent_id, record in state["agents"].items():
+        if not isinstance(record, dict) or set(record) != fields:
+            raise ValueError(f"body_state_v1 record for {agent_id!r} is invalid")
+        for name, value in record.items():
+            upper = 1440.0 if name == "sleep_debt_minutes" else 1.0
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0.0 <= value <= upper
+            ):
+                raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
+    agents = world.agents
+    for key, record in state["relationships"].items():
+        parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
+        if parsed is None:
+            raise ValueError("body_state_v1 relationship key is invalid")
+        pair, compact = parsed
+        if (
+            pair is None
+            or pair[0] not in agents
+            or pair[1] not in agents
+            or pair[0] == pair[1]
+            or not compact
+            or not isinstance(record, dict)
+            or record.keys() != _RELATIONSHIP_FIELDS
+            or type(contact_count := record["contact_count"]) is not int
+            or contact_count < 0
+            or type(contact_minutes := record["contact_minutes"]) is not int
+            or contact_minutes < 0
+            or not isinstance(topic_ids := record["topic_ids"], list)
+            or len(topic_ids) > 32
+            or (
+                topic_ids and any(not isinstance(item, str) or len(item) > 64 for item in topic_ids)
+            )
+        ):
+            raise ValueError("body_state_v1 relationship record is invalid")
+        trust = record["trust"]
+        minute = record["last_contact_minute"]
+        if trust is not None and (
+            not isinstance(trust, (int, float)) or isinstance(trust, bool) or not 0 <= trust <= 1
+        ):
+            raise ValueError("body_state_v1 trust must be within 0..1")
+        if minute is not None and (type(minute) is not int or minute < 0):
+            raise ValueError("body_state_v1 contact minute is invalid")
+
+
 def validate_body_state(
     world: WorldState,
     *,
@@ -334,7 +380,10 @@ def validate_body_state(
     state = world.model_state.get(BODY_STATE_KEY)
     if state is None:
         return
-    if (
+    # True says the row holds what these rules would accept, so a config or history error below
+    # keeps its place: everything before it passed. False says nothing, and they all run.
+    rows_accepted = _ROWS_VALID is not None and rust_accepts(world, BODY_STATE_KEY, _ROWS_VALID)
+    if not rows_accepted and (
         not isinstance(state, dict)
         or set(state)
         != {
@@ -367,74 +416,8 @@ def validate_body_state(
             tick_memo.body_config_json = (
                 saved_json(state["config"]) if depends_on_config_only else None
             )
-    fields = {
-        "sleep_debt_minutes",
-        "uncertainty",
-        "reassurance",
-        "discontent",
-        "positive_affect",
-        "negative_affect",
-        "hygiene_need",
-    }
-    checked_agents = () if native.body_agents_valid(state["agents"]) else state["agents"].items()
-    for agent_id, record in checked_agents:
-        if not isinstance(record, dict) or set(record) != fields:
-            raise ValueError(f"body_state_v1 record for {agent_id!r} is invalid")
-        for name, value in record.items():
-            upper = 1440.0 if name == "sleep_debt_minutes" else 1.0
-            if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0.0 <= value <= upper
-            ):
-                raise ValueError(f"body_state_v1 {name} for {agent_id!r} is invalid")
-    agents = world.agents
-    # Without the kernel, or for a value it leaves to Python, this loop decides. Every
-    # tick checks every relationship, so each record is checked inline, accepting
-    # exactly what the field-by-field rules accept.
-    checked_relationships = state["relationships"]
-    if tick_memo is not None:
-        checked_relationships = tick_memo.relationships_to_check(
-            tick_memo.body_watch, checked_relationships
-        )
-    relationships_valid = native.body_relationships_valid(
-        checked_relationships,
-        _GOOD_KEYS.good_keys(agents.keys()),
-        functools.partial(_pair_key_is_good, agents=agents),
-    )
-    for key, record in () if relationships_valid else state["relationships"].items():
-        parsed = _cached_relationship_key(key) if type(key) is str else _relationship_key(key)
-        if parsed is None:
-            raise ValueError("body_state_v1 relationship key is invalid")
-        pair, compact = parsed
-        if (
-            pair is None
-            or pair[0] not in agents
-            or pair[1] not in agents
-            or pair[0] == pair[1]
-            or not compact
-            or not isinstance(record, dict)
-            or record.keys() != _RELATIONSHIP_FIELDS
-            or type(contact_count := record["contact_count"]) is not int
-            or contact_count < 0
-            or type(contact_minutes := record["contact_minutes"]) is not int
-            or contact_minutes < 0
-            or not isinstance(topic_ids := record["topic_ids"], list)
-            or len(topic_ids) > 32
-            or (
-                topic_ids and any(not isinstance(item, str) or len(item) > 64 for item in topic_ids)
-            )
-        ):
-            raise ValueError("body_state_v1 relationship record is invalid")
-        trust = record["trust"]
-        minute = record["last_contact_minute"]
-        if trust is not None and (
-            not isinstance(trust, (int, float)) or isinstance(trust, bool) or not 0 <= trust <= 1
-        ):
-            raise ValueError("body_state_v1 trust must be within 0..1")
-        if minute is not None and (type(minute) is not int or minute < 0):
-            raise ValueError("body_state_v1 contact minute is invalid")
+    if not rows_accepted:
+        _validate_body_rows(world, state)
     population = world.model_state.get("population_dynamics_v1", {})
     historical_ids = set(world.agents)
     if isinstance(population, dict):
@@ -494,6 +477,7 @@ def remove_body_agent(world: WorldState, agent_id: str) -> dict[str, Any] | None
     return removed
 
 
+@kernel_first("body_state", "record_social_event")
 def record_social_event(world: WorldState, event: Any, minute: int) -> None:
     """Apply bounded affect and trust changes only from typed, applied simulation events."""
     state = world.model_state.get(BODY_STATE_KEY)

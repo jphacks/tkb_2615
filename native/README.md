@@ -147,8 +147,7 @@ each OS, because both call the same libm.
 
 - `state.social_network.ROW`, `validate`: Rust owns `social_network_v1`
   (`src/state/social_network.rs`). The row lists the records written since the last check, whichever
-  way they were written, so the check of a tick reads those and not all of them. `RecordWatch` no
-  longer serves this namespace.
+  way they were written, so the check of a tick reads those and not all of them.
 
 - `rules.social_network.observe_event(world, event, minute)`: what an applied event records, with the
   body's trust copied (`domain/social_network.py`). `rules/social_propagation.rs` records its observed
@@ -163,6 +162,14 @@ each OS, because both call the same libm.
 
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
   Python rules write one record at a time through the forwarded writes, and M4 moves them.
+
+- `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
+  relationships typed, the history as the canonical bytes of each item. `rules.body_state.
+  record_social_event(world, event, minute)` is `domain/body_state.py`'s rule with the operators of
+  `policies/affect.py` and `policies/relationships.py`; `rules.psychology.apply_deltas` writes the
+  row. `state.body_state.rows_valid(world)` accepts the header, records and relationships, reading
+  only the relationships written since it last said yes. The config and history rules read what
+  the row doesn't hold and stay in Python (`docs/rust-port/lanes/m3-body-state.md`).
 
 - `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
   `_sample_information_contacts` for the three information policies (contact sampling, durations,
@@ -179,21 +186,13 @@ each OS, because both call the same libm.
   `sample_endogenous_events` 38.6 s -> 1.8 s, with the other changes of this step
   (docs/rust-port.md).
 
-- `body_relationships_valid`, `body_agents_valid`,
-  `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
+- `agent_dynamics_valid`, `movement_positions_valid`, `world_agents_valid`: fast
   acceptance of the large loops of validation, read where Python keeps the state. The
   namespaces Rust owns have their `validate` in `state/` instead, which reads the row
   (`docs/rust-port/lanes/t-tick-validation.md`). Each
   returns true only if every entry passes the Python rules; on false the caller runs
   those rules, which accept the value or raise their own error, so results and error
-  messages come from one place. Key checks stay Python functions, remembered per key
-  (`core/tick_validation.py`, `PairKeys`).
-
-- `RecordWatch` (`native/src/watch.rs`): which records of a dict of dicts were written
-  since the last check, from CPython's dict watchers, which report every write
-  whichever code makes it. The functions are outside the stable ABI, so
-  `sheltersim.native` looks them up with ctypes and passes their addresses; if that
-  fails, the checks read every record. A list a rule reads is read at every check.
+  messages come from one place.
 
 - `ValuesSnapshot`: the values of a dict at the last check, held so that the next
   check can tell by identity that the dict still starts with them. It lets the

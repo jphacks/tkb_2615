@@ -485,7 +485,8 @@ def test_each_owned_namespace_and_field_of_a_world_comes_from_its_row(finished_d
     assert cache._owned_rows == {
         name
         for name in (*state_mirror.OWNED_NAMESPACES, *state_mirror.OWNED_FIELDS)
-        if name in world.model_state or name in state_mirror.OWNED_FIELDS
+        if (name in world.model_state or name in state_mirror.OWNED_FIELDS)
+        and name not in state_mirror._HASHED_BY_PARTS
     }
     assert "social_propagation_v1" in cache._owned_rows
     raw = world._core.mirror("social_propagation_v1").row_json()

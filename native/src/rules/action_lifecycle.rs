@@ -222,7 +222,7 @@ fn body_value(record: &Bound<'_, PyAny>, name: &Bound<'_, PyString>) -> PyResult
 }
 
 /// `sleep_debt_minutes` and `hygiene_need` of `body_state_v1.agents[id]`. The one place here that
-/// reads a Python document: `body_state_v1` is not Rust's yet. Tracked trees read the same way.
+/// reads a Python document: the tree of `body_state_v1`, whose row this could read instead.
 fn body_needs(world: &Bound<'_, PyAny>, id: &str) -> PyResult<(f64, f64)> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;

@@ -15,10 +15,6 @@ Each saving rests on one of these arguments:
 - Config checks read only model_configs. They are skipped while model_configs equals
   the copy taken after they last passed. Equality does not tell 1 from True or 1.0;
   no tick writes model_configs, and the next full validation checks the values.
-- A relationship record holds immutable values, so it can only change by a write to
-  its dict, and dict watchers report every such write (native/src/watch.rs). The
-  lists whose content a rule reads are read at every check. A body relationship key
-  also depends on the Agent IDs, so a change of IDs checks them all.
 - A settled support request (resolved or unresolved) depends only on its own fields,
   which SupportRequestState reports writing, on the set of Agent IDs, and on the clock
   only through "not after the current minute". It is checked again when written or
@@ -80,9 +76,6 @@ class TickValidationMemo:
         self._written_requests: list[Any] = []
         self._added_requests: Any = []
         self._checked_requests: list[Any] = []
-        # Relationship records written since the last check.
-        self.body_watch = native.record_watch("topic_ids")
-        self._relationships_read: list[tuple[Any, Any]] = []
         # used_reservation_ids: the IDs that passed, as a list and as a set.
         self._used_ids: list[Any] = []
         self._used_id_set: set[Any] = set()
@@ -102,10 +95,6 @@ class TickValidationMemo:
         if not self.configs_unchanged:
             self.geometry_scope.clear()
         self.agents_unchanged = world.agents.keys() == self._agent_ids
-        if not self.agents_unchanged and self.body_watch is not None:
-            # A body relationship key's rule reads the Agent IDs.
-            self.body_watch.reset()
-        self._relationships_read = []
         zones_unchanged = world.zones.keys() == self._zone_ids
         model_state = world.model_state
         previous = self._saved_json
@@ -159,8 +148,6 @@ class TickValidationMemo:
         self._agent_ids = frozenset(world.agents)
         self._zone_ids = frozenset(world.zones)
         self._settle_requests(world.support_requests)
-        for watch, relationships in self._relationships_read:
-            watch.accept(relationships)
         state = world.model_state.get(_OPERATIONS_KEY)
         if isinstance(state, dict) and isinstance(state.get("history"), list):
             self._remember_operations(state)
@@ -170,14 +157,6 @@ class TickValidationMemo:
         from sheltersim.domain.geometry_overlay import _CONFIG_SCOPE
 
         return ContextScope(_CONFIG_SCOPE, self.geometry_scope)
-
-    def relationships_to_check(self, watch: Any, relationships: dict[str, Any]) -> dict[str, Any]:
-        """The relationships written or added since the last check, whose rules read only
-        the record and its key; all of them without a watch or when that is not known."""
-        if watch is None:
-            return relationships
-        self._relationships_read.append((watch, relationships))
-        return watch.changed(relationships)
 
     def requests_to_check(self, requests: dict[str, Any]) -> list[Any]:
         """The support requests that are not settled, written or new since the last check.
@@ -295,22 +274,3 @@ def _no_archive_paths(presence: Any) -> bool:
     return isinstance(people, dict) and not any(
         isinstance(person, dict) and person.get("archive_path") for person in people.values()
     )
-
-
-class PairKeys:
-    """Keys checked good for one set of Agent IDs, for the rust relationship checks.
-
-    A key's check depends on the key and the Agent IDs alone. A different set of IDs
-    gets a new set of keys, so a world never reads keys checked for other people.
-    """
-
-    def __init__(self) -> None:
-        self._current: tuple[frozenset[str], set[str]] = (frozenset(), set())
-
-    def good_keys(self, agent_ids: Any) -> set[str]:
-        """The good keys for these IDs (a set or a dict's keys view)."""
-        ids, keys = self._current
-        if agent_ids != ids:
-            ids, keys = frozenset(agent_ids), set()
-            self._current = (ids, keys)
-        return keys
