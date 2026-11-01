@@ -22,6 +22,12 @@ Each count has a bucket, from the state it came from:
                  outside a tick, at a kernel's entry: world.validate() passed, failed, or no
                  WorldState among its arguments (with SHELTERSIM_REFUSAL_CENSUS_PROBE=1)
   outside        outside a tick and not probed
+
+The report's `reach` for a row: run (reached in the gate or the 7 days), tests_tick (only tests, in
+a finished tick of a test that doesn't patch or break anything in its own source), tests_direct
+(only tests, a direct call on a world that validates, whose arguments the test made), tests_broken
+(the rest). A fixture's source isn't read, so the two middle ones are upper bounds, and a row with
+`caught` 0 is a check that discards the error rather than a refusal.
 """
 
 from __future__ import annotations
@@ -199,10 +205,10 @@ def pytest_runtest_logfinish(nodeid: str, location: Any) -> None:
 _SITE = re.compile(r"\b(?:unsupported|refuse)\s*(?:::<[^>]*>)?\(|\bUnsupported::new_err\(")
 _FN = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?fn\s+(\w+)", re.M)
 _TEXT = re.compile(r'\s*(?:format!\(\s*)?"((?:[^"\\]|\\.)*)"')
-# What marks a test as one that breaks state on purpose, in its own source.
+# What marks a test as one that breaks state or swaps a hook on purpose, in its own source.
 _BREAKS = re.compile(
     r"dict\.__setitem__|list\.__setitem__|object\.__setattr__|\b_?taint|\.__dict__\[|corrupt|tamper"
-    r"|SimpleNamespace|python_rules|nan\b|\binf\b"
+    r"|SimpleNamespace|python_rules|\bnan\b|\binf\b|patch|use_python_entries|python_path_only"
 )
 
 
@@ -254,7 +260,8 @@ def _test_sources(root: Path, ids: set[str]) -> dict[str, bool]:
                     if isinstance(node, ast.FunctionDef):
                         functions[node.name] = ast.get_source_segment(source, node) or ""
             by_file[file] = functions
-        answer[test] = bool(_BREAKS.search(by_file[file].get(name, "")))
+        # The tracked-mirror tests run every kernel over containers no Run has.
+        answer[test] = "tracked_mirror" in file or bool(_BREAKS.search(by_file[file].get(name, "")))
     return answer
 
 
@@ -315,21 +322,27 @@ def report(arguments: argparse.Namespace) -> int:
     breaks = _test_sources(root, all_tests)
     table = []
     for (file, line, reason), item in data.items():
-        tests_valid = tests_other = 0
-        valid_tests = []
+        tests_tick = tests_direct = tests_other = 0
+        tick_tests: list[str] = []
+        direct_tests: list[str] = []
         for test, buckets in item["tests"].items():
-            valid = buckets["tick_ok"] + buckets["direct_valid"]
-            if valid and not breaks.get(test, False):
-                tests_valid += valid
-                tests_other += sum(buckets.values()) - valid
-                valid_tests.append(test)
-            else:
+            if breaks.get(test, False):
                 tests_other += sum(buckets.values())
+                continue
+            tests_tick += buckets["tick_ok"]
+            tests_direct += buckets["direct_valid"]
+            tests_other += sum(buckets.values()) - buckets["tick_ok"] - buckets["direct_valid"]
+            if buckets["tick_ok"]:
+                tick_tests.append(test)
+            if buckets["direct_valid"]:
+                direct_tests.append(test)
         counts = item["counts"]
         if counts["gate"] or counts["week"]:
             reach = "run"
-        elif tests_valid:
-            reach = "tests_valid"
+        elif tests_tick:
+            reach = "tests_tick"
+        elif tests_direct:
+            reach = "tests_direct"
         else:
             reach = "tests_broken"
         site = sites.get((file, line), {})
@@ -343,10 +356,13 @@ def report(arguments: argparse.Namespace) -> int:
                 "gate": counts["gate"],
                 "week": counts["week"],
                 "reach": reach,
-                "tests_valid": tests_valid,
+                "tests_tick": tests_tick,
+                "tests_direct": tests_direct,
                 "tests_other": tests_other,
                 "tests_buckets": dict(sum((b for b in item["tests"].values()), Counter())),
-                "test_examples": sorted(valid_tests)[:3] or sorted(item["tests"])[:3],
+                "test_examples": (
+                    sorted(tick_tests) or sorted(direct_tests) or sorted(item["tests"])
+                )[:3],
                 "entries": entries[file, line, reason].most_common(3),
                 # None caught: a check that discards the error, or a class's method's refusal.
                 "caught": sum(entries[file, line, reason].values()),
