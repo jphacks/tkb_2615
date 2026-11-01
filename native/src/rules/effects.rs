@@ -696,8 +696,9 @@ fn facility_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
     let working = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
     let capacity = exact_int(&attribute(&facility, intern!(py, "capacity"))?)?;
     let occupied = occupancy(world, &facility)?;
-    // What the stack is now, and what the facility's units become.
-    let (baseline, active, target) = program_state(world, |state| {
+    // Whether the facility has a stack; the modifier's units, or how many others stay; and what
+    // the facility's units become.
+    let (has_stack, units_or_others, target) = program_state(world, |state| {
         let Some(state) = state else {
             return unsupported("no effect_program_v1");
         };
@@ -749,7 +750,7 @@ fn facility_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
     let facility = attribute(&candidate, intern!(py, "facilities"))?.get_item(&**facility_id)?;
     if expire {
         // The items stay the nodes they are, as the Python rule's list comprehension keeps them.
-        if active > 0 {
+        if units_or_others > 0 {
             let current = records.get_item(&**facility_id)?;
             let remaining = PyList::empty(py);
             for item in current.get_item(intern!(py, "modifiers"))?.try_iter()? {
@@ -765,14 +766,14 @@ fn facility_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
             records.call_method1(intern!(py, "pop"), (&**facility_id,))?;
         }
     } else {
-        if !baseline {
+        if !has_stack {
             let record = PyDict::new(py);
             record.set_item("baseline_working_units", working)?;
             record.set_item("modifiers", PyList::empty(py))?;
             records.set_item(&**facility_id, record)?;
         }
         let current = records.get_item(&**facility_id)?;
-        let item = modifier_dict(py, modifier, program_id, effect_id, active, &row)?;
+        let item = modifier_dict(py, modifier, program_id, effect_id, units_or_others, &row)?;
         current.get_item(intern!(py, "modifiers"))?.call_method1(intern!(py, "append"), (item,))?;
         facility.setattr(intern!(py, "working_units"), target)?;
     }
@@ -791,6 +792,7 @@ fn facility(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<
 
 const ENVIRONMENT_STATE: &str = "zone_environment_v1";
 const ENVIRONMENT_POLICY: &str = "zone_environment_v1";
+const ZONE_EXPIRE_FIELDS: [&str; 4] = ["program_id", "effect_id", "modifier_id", "zone_id"];
 const ENVIRONMENT_APPLY_FIELDS: [&str; 7] =
     ["program_id", "effect_id", "modifier_id", "zone_id", "op", "parameters", "end_minute"];
 
@@ -805,7 +807,7 @@ fn environment_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: 
     let py = world.py();
     let row = event_row(event)?;
     let payload = map_of(&row.payload)?;
-    let fields: &[&str] = if expire { &FACILITY_EXPIRE_FIELDS_ZONE } else { &ENVIRONMENT_APPLY_FIELDS };
+    let fields: &[&str] = if expire { &ZONE_EXPIRE_FIELDS } else { &ENVIRONMENT_APPLY_FIELDS };
     if !has_exactly(payload, fields) {
         return unsupported("the payload has other fields");
     }
@@ -960,8 +962,6 @@ fn environment_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: 
     commit(world, &candidate)
 }
 
-const FACILITY_EXPIRE_FIELDS_ZONE: [&str; 4] = ["program_id", "effect_id", "modifier_id", "zone_id"];
-
 /// `EffectProgramEnvironmentHandler.apply`.
 #[pyfunction]
 fn environment(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1008,7 +1008,7 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
         return unsupported("the event does not reference an approved installed effect");
     }
     if expire {
-        if !has_exactly(payload, &FACILITY_EXPIRE_FIELDS_ZONE) {
+        if !has_exactly(payload, &ZONE_EXPIRE_FIELDS) {
             return unsupported("the payload has other fields");
         }
         let spaces = state.get_item(intern!(py, "spaces"))?;

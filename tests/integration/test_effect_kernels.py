@@ -419,6 +419,62 @@ def test_a_repair_is_the_same_and_checks_what_it_expects(world: WorldState, rule
     _refused(rules.structure, handler, world, event)
 
 
+def test_an_order_is_the_same_and_only_for_its_minute(world: WorldState, rules: Any) -> None:
+    staff_id = next(id for id, staff in sorted(world.staff.items()) if "support" in staff.skills)
+    zone = sorted({agent.zone_id for agent in world.agents.values()})[0]
+    schedule_effect_program(
+        world,
+        _program(
+            _action(
+                "staff_task_order",
+                "staff",
+                staff_id,
+                {"task_kind": "patrol", "target_zone_id": zone, "reason": "a test order"},
+                start=world.minute_index,
+                end=None,
+            )
+        ),
+    )
+    event = _structure_event(world, "staff_task_order")
+    handler = EffectProgramStructureHandler()
+    state = _same_in_both(rules.structure, handler, world, event)
+    assert state.staff[staff_id].active_task_id is not None
+    document = event.to_dict()
+    document["due_minute"] = world.minute_index + 1
+    _refused(rules.structure, handler, world, ScheduledEvent(**document))
+    with pytest.raises(EventApplicationError):
+        type(handler).apply.__wrapped__(handler, _copy(world), ScheduledEvent(**document))
+
+
+def test_a_handoff_the_rule_cannot_take_goes_to_python(world: WorldState, rules: Any) -> None:
+    """The whole of a handoff is compared in the gate's scenario, where a task is under way."""
+    first, second = sorted(world.staff)[:2]
+    payload = {
+        "program_id": "program-1",
+        "effect_id": "effect-1",
+        "modifier_id": "modifier-1",
+        "op": "staff_handoff",
+        "staff_id": first,
+        "parameters": {"staff_id": first, "replacement_staff_id": second, "task_id": "no-task"},
+    }
+    event = ScheduledEvent(
+        event_id="handoff",
+        kind="intervention",
+        due_minute=1,
+        priority=0,
+        sequence=999_999,
+        event_type="effect_program_structure",
+        payload=payload,
+        source_id=None,
+        causation_id=None,
+        provenance={KEY: {"program_id": "program-1", "effect_id": "effect-1"}},
+    )
+    handler = EffectProgramStructureHandler()
+    _refused(rules.structure, handler, world, event)
+    with pytest.raises(EventApplicationError):
+        type(handler).apply.__wrapped__(handler, _copy(world), event)
+
+
 def test_a_structure_event_with_other_fields_goes_to_python(world: WorldState, rules: Any) -> None:
     schedule_effect_program(
         world, _program(_action("add_staff", "zone", _a_zone(world), {"count": 2}, end=None))
