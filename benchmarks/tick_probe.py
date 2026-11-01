@@ -518,6 +518,9 @@ class ReversedOrder:
                 kwargs["after_event"] = after_each
             return original(*args, **kwargs)
 
+        # A shadow of benchmarks/rule_shadow asks a rule for its Python body this way.
+        if hasattr(original, "__wrapped__"):
+            wrapped.__wrapped__ = original.__wrapped__  # type: ignore[attr-defined]
         setattr(holder, method, classmethod(wrapped) if is_class_method else wrapped)
         self._undo.append(lambda: setattr(holder, method, raw))
 
