@@ -107,7 +107,7 @@ M4 の資源と列のレーンが残したものを移しました。`resource_s
 | `EventQueue.pending` | 22 | 23 | **26** | 7.63 |
 | `_run_dispatch_phase` | 636 | 658 | 642 | 1 |
 
-負荷の高い回（load average 約 30、2組の中央値）でも `step` は 5,477 → 5,178 µs、`_apply_due_proposals` は 925 → 629 µs でした。
+負荷の高い回（load average 約 30、2組の中央値）でも `step` は基準 5,532（A/A 5,422）→ レーン 5,178 µs、`_apply_due_proposals` は基準 940（A/A 909）→ レーン 629 µs でした。
 
 **kernel を残すかの確認：** どれも基準より減りました。一番差が小さいのは `arbitrate` で約 12%、`request` で約 20% です。`_serve_head` は1回約 52 µs で、1回 20 µs の目安より重いです。`pending_reserves` が Python の `pending()` のタプルを読むのと、提供の開始で Python のメソッド（`list.pop`、`ActiveTask(...)`）を呼ぶのが理由と見ていますが、内訳は測っていません。`QueueStore` に `resource_reserve` の索引があれば走査は要りません（`native/src/state/events.rs` はレーン M3 の範囲なので触っていません）。
 
