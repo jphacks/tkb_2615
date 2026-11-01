@@ -49,9 +49,9 @@ def _order(state: dict[str, Any]) -> list[list[str]]:
     return [list(state[name]) for name in MAPS]
 
 
-def _count_branches(recorder: Recorder, state: dict[str, Any], result: Any) -> None:
+def _count_branches(recorder: Recorder, state: dict[str, Any]) -> None:
+    """Which journeys a tick starts with: what the kernel had to walk."""
     seen = recorder.seen
-    seen["advance.replans_returned"] += len(result)
     for journey in state["journeys"].values():
         seen["advance.journeys_in_rooms"] += bool(journey["route_points"])
         seen["advance.journeys_on_edges"] += bool(journey["route_edge_ids"])
@@ -104,6 +104,9 @@ def prepare(output: str) -> None:
                 return result
             where = f"{name} {arguments!r:.100} at {world.minute_index}"
             before = _document(plain)
+            if name == "advance_movement":
+                _count_branches(recorder, plain)
+                recorder.seen["advance.replans_returned"] += len(result)
             try:
                 expected = getattr(domain(), name).__wrapped__(
                     _Twin(world, plain), *arguments, **options
@@ -125,8 +128,6 @@ def prepare(output: str) -> None:
                 recorder.differ(f"{where}: the order of a map")
             recorder.seen[f"{name}.values_compared"] += values_in(plain)
             recorder.seen[f"{name}.changed"] += before != theirs
-            if name == "advance_movement":
-                _count_branches(recorder, plain, result)
             row_check(world, where)
             return result
 

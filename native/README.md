@@ -161,9 +161,15 @@ each OS, because both call the same libm.
   social action that goes through. A suppressed or failed event and the other types of interaction
   give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
 
-- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
-  Python rules write one record at a time through the forwarded writes, and M4 moves them.
-
+- `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`).
+- `rules.movement`: the movement rules of a tick (`src/rules/movement.rs`, with the floor plan and
+  its geometry in `src/rules/movement_geometry.rs`): `advance_movement(world, minute)`,
+  `start_movement`, `finish_movement`, `route_with_movement_time`, `route_is_physically_clear`,
+  `plan_in_room_route`, `queue_slot_position`, `facility_approach_route`, and `validate(world)` for
+  `register_rust_validator`. `domain/movement.py` calls them through `kernel_first`.
+  `advance_movement` says Unsupported for a tick in which a queue trip must replan or a person is
+  placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
+  See `docs/rust-port/lanes/m4-movement.md`.
 - `rules.information.sample_contacts(controller, minute, rng)`: the sample phase's step
   `_sample_information_contacts` for the three information policies (contact sampling, durations,
   forgetting, transfers and their probabilities). Rust owns `information_spread_v1`

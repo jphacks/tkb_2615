@@ -562,8 +562,16 @@ fn route_is_physically_clear(
     edge_id: &Bound<'_, PyAny>,
     mobility: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<bool> {
+    // The member or its value; the Python rule looks either up in a table of strs.
+    let member_value;
     let mobility = match mobility {
-        Some(mobility) => exact_str(mobility)?,
+        Some(mobility) => match mobility.downcast_exact::<PyString>() {
+            Ok(text) => text.to_str().map_err(|_| Unsupported::new_err("a str is not UTF-8"))?,
+            Err(_) => {
+                member_value = attribute(mobility, intern!(mobility.py(), "value"))?;
+                exact_str(&member_value)?
+            }
+        },
         None => "independent",
     };
     Ok(Geo::of(world)?.route_is_clear(exact_str(edge_id)?, mobility))

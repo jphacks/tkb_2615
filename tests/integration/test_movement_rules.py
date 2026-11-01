@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import math
 import random
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -685,12 +686,16 @@ def _routes_of(world: WorldState) -> list[ZoneRoute]:
         )
         for edge in edges
     ]
+    # A long one, since a duration is rounded up to whole minutes: 1% shows only at this length.
+    routes.append(replace(routes[0], travel_minutes=997))
     routes.append(
         ZoneRoute(edges[0].from_zone_id, edges[0].from_zone_id, (edges[0].from_zone_id,), (), 0)
     )
     return routes
 
 
+# Areas that leave a route uncrowded, crowded, and at the most crowding counts for.
+@pytest.mark.parametrize("area", [None, 5.0, 0.2])
 @pytest.mark.parametrize(
     "model",
     [
@@ -707,9 +712,13 @@ def _routes_of(world: WorldState) -> list[ZoneRoute]:
     ],
 )
 def test_a_route_s_minutes_are_python_s(
-    generated_scenario: Any, model: dict[str, Any] | None
+    generated_scenario: Any, model: dict[str, Any] | None, area: float | None
 ) -> None:
     world = _run(generated_scenario, 5)
+    for zone in world.model_configs["facility_geometry"]["zones"] if area else ():
+        zone["usable_area_m2"] = area
+    for agent in world.agents.values() if area else ():
+        agent.zone_id = next(iter(world.zone_edges.values())).from_zone_id
     if model is None:
         world.model_configs.pop("movement_model", None)
     else:
@@ -727,8 +736,6 @@ def test_a_route_s_minutes_are_python_s(
 
 
 def _with_mobility(profile: Any, mobility: Any) -> Any:
-    from dataclasses import replace
-
     return replace(profile, mobility=mobility)
 
 
@@ -923,3 +930,100 @@ def test_the_route_of_a_plan_is_found_again_the_same(generated_scenario: Any) ->
     with geometry_config_scope():
         first = _rules().plan_in_room_route(world, **options)
         assert repr(first) == repr(_rules().plan_in_room_route(world, **options))
+
+
+# ---- The validator ------------------------------------------------------------------------------
+
+
+def _set(*path: Any) -> Any:
+    def change(world: WorldState, agent_id: str) -> None:
+        record: Any = world.model_state[KEY]
+        for part in path[:-2]:
+            record = record[agent_id if part is None else part]
+        record[path[-2]] = path[-1]
+
+    return change
+
+
+BROKEN_JOURNEYS = {
+    "unknown destination": _set("journeys", None, "destination_zone_id", "nowhere"),
+    "unknown zone on the route": _set("journeys", None, "route_zone_ids", ["nowhere"]),
+    "unknown edge": _set("journeys", None, "route_edge_ids", ["nowhere"]),
+    "due before it starts": _set("journeys", None, "due_minute", -5),
+    "support fields on another trip": _set("journeys", None, "support_request_id", "r"),
+    "queue on another trip": _set("journeys", None, "queue_id", "q"),
+    "one room point": _set("journeys", None, "route_points", [{"x": 1.0, "y": 1.0}]),
+    "room points beyond the room": _set(
+        "journeys", None, "route_points", [{"x": 1e6, "y": 1e6}, {"x": 2e6, "y": 2e6}]
+    ),
+    "position out of range": _set("positions", None, "progress", 1.5),
+    "position on an unknown edge": _set("positions", None, "edge_id", "nowhere"),
+    "another kind of position": _set("positions", None, "position_kind", "nowhere"),
+    "a person nobody knows": _set(
+        "positions",
+        "nobody",
+        {
+            "zone_id": "hall",
+            "point": None,
+            "edge_id": None,
+            "progress": 0.0,
+            "position_kind": "unavailable",
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("broken", BROKEN_JOURNEYS)
+def test_the_validator_takes_nothing_the_python_rule_refuses(
+    generated_scenario: Any, broken: str
+) -> None:
+    world = _run(generated_scenario, 5)
+    agent_id = _walker(world)
+    state = world.model_state[KEY]
+    state["journeys"][agent_id]["purpose"] = "walk"
+    assert _rules().validate(world) is True
+    movement.validate_movement_runtime_state(world)
+    BROKEN_JOURNEYS[broken](world, agent_id)
+    try:
+        accepted = _rules().validate(world)
+    except native.Unsupported:
+        accepted = False
+    assert accepted is False
+    with pytest.raises(ValueError, match="movement_v"):
+        movement.validate_movement_runtime_state(world)
+
+
+# ---- The walk to a facility's footprint ---------------------------------------------------------
+
+
+def test_the_walk_to_a_facility_with_a_footprint_is_python_s(generated_scenario: Any) -> None:
+    """The points around a footprint, for each mobility: its clearances are in Rust too."""
+    from sheltersim.domain.models import Mobility
+
+    world = _run(generated_scenario, 2)
+    geometry = movement._geometry(world)
+    configs = world.model_configs
+    ids = sorted(world.agents)[:3]
+    mobilities = (Mobility.INDEPENDENT, Mobility.ASSISTED, Mobility.WHEELCHAIR)
+    found = 0
+    for facility_id, point in sorted(geometry.facility_points.items()):
+        zone_id = world.facilities[facility_id].zone_id
+        center = movement._zone_center(geometry, zone_id)
+        half = 0.2
+        polygon = [
+            {"x": point.x + dx, "y": point.y + dy}
+            for dx, dy in ((-half, -half), (half, -half), (half, half), (-half, half))
+        ]
+        configs["spatial_constraints"] = {
+            "equipment_footprints": [
+                {"facility_id": facility_id, "polygon": polygon, "area_m2": 0.16},
+            ]
+        }
+        for agent_id, mobility in zip(ids, mobilities, strict=True):
+            agent = world.agents[agent_id]
+            agent.profile = _with_mobility(agent.profile, mobility)
+            agent.zone_id = zone_id
+            world.model_state[KEY]["positions"][agent_id]["point"] = {"x": center.x, "y": center.y}
+            route = _same_after(world, "facility_approach_route", agent_id, facility_id)
+            found += route is not None and len(route[1]) >= 2
+    assert found
