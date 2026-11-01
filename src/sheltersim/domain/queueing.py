@@ -75,6 +75,7 @@ def prepare_facility_queue(
             )
 
 
+@kernel_first("queues", "prepare_independent_facility_queue")
 def prepare_independent_facility_queue(
     world: WorldState, queue_id: str, *, minute: int, resource: bool
 ) -> None:

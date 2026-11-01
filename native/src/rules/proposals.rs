@@ -6,8 +6,7 @@
 //! (docs/rust-port/lanes/m4-service.md):
 //! - a request of a Run's last minute, which `StaffService.request` closes at once;
 //! - a trip that takes no time, which asks the toilet or the water queue at once;
-//! - `sleep` where a temporary room exists, since a bed can then be reserved;
-//! - an independent FIFO (`facility_queues_v1`);
+//! - a person at a facility with an independent FIFO, who queues at once;
 //! - anything that isn't plainly what the Python step accepts.
 
 use std::sync::{Arc, LazyLock};
@@ -21,24 +20,24 @@ use pyo3::types::{PyBool, PyDict, PyString, PyTuple};
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
-use crate::core::world_core::{raw_dict_get, NamespaceMirror};
+use crate::core::world_core::raw_dict_get;
 use crate::rules::care_receipts::{plan_transition, source_ids_of, write_transition, Transition};
-use crate::rules::movement::{mirror_held, KEY};
-use crate::rules::movement_geometry::{usable, Geo, Pt};
+use crate::rules::facility_queues::has_independent;
+use crate::rules::movement::KEY;
+use crate::rules::movement_geometry::Pt;
+use crate::rules::overlay;
 use crate::rules::service::{add_one, append_outcome, metrics_of};
 use crate::rules::social_dialogue::context_value;
 use crate::rules::support::{add_rejected, household_of, plan_request, support_kind_of, write_request, PlannedRequest};
 use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_travel, PlannedTrip, Route, Selected, Trip};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
-use crate::state::movement::MovementRow;
 use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
 
 
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
 const INFORMATION: &str = "information_spread_v1";
 const OVERLAY_KEY: &str = "geometry_overlay_v1";
-const QUEUES_KEY: &str = "facility_queues_v1";
 const REJECTED_METRIC: &str = "resource_service_request_rejected_count";
 const TRAVEL_REJECTED_DETAIL: &str = "travel could not be scheduled within current limits";
 /// `interaction_minutes` where the config has none.
@@ -160,6 +159,9 @@ fn plan_toilet<'py>(
     let Selected::Found(facility_id, route) = select_toilet(world, &graph, agent_object)? else {
         return Ok(effect);
     };
+    if route.destination == *zone_id && has_independent(world, &facility_id)? {
+        return unsupported("the toilet's independent queue at once");
+    }
     effect.trip = if route.destination == *zone_id {
         match approach_route(world, agent_id, &facility_id)? {
             None => None,
@@ -197,6 +199,9 @@ fn plan_resource<'py>(
             effect.rejected = true;
         }
         Selected::Found(facility_id, route) => {
+            if route.destination == *zone_id && has_independent(world, &facility_id)? {
+                return unsupported("the service's independent queue at once");
+            }
             if route.destination == *zone_id {
                 match approach_route(world, agent_id, &facility_id)? {
                     None => effect.outcome = Some(("rejected", "room_route_blocked", None)),
@@ -241,60 +246,90 @@ fn held_bed<'py>(table: &Bound<'py, PyDict>, agent_id: &Bound<'py, PyAny>) -> Py
     Ok(if raw_dict_get(held.as_any(), agent_id)?.is_some() { Some(reservations) } else { None })
 }
 
-/// Where `reserve_sleep_bed` finds no bed and returns None, or Unsupported. It reads the positions
-/// of the person and of who is in the same zone, and each must be what `Point2D` takes.
-fn no_bed_to_reserve(world: &Bound<'_, PyAny>, table: &Bound<'_, PyDict>, agent_id: &str, zone_id: &str) -> PyResult<()> {
+/// What `sleep` does beside the activity, planned.
+enum SleepPlan<'py> {
+    /// A walk to the bed, with the reservation the person takes.
+    Walk(overlay::Bed, Box<PlannedTrip>, EventWriter<'py>),
+    /// The person is at the bed.
+    Stay(overlay::Bed),
+    /// No trip could be scheduled: what the person held is released.
+    NoRoom(Option<Bound<'py, PyAny>>),
+}
+
+/// The `sleep` branch, changing nothing. None for no bed.
+fn plan_sleep<'py>(
+    world: &Bound<'py, PyAny>,
+    agent_object: &Bound<'py, PyAny>,
+    agent_id: &str,
+    zone_id: &Arc<str>,
+) -> PyResult<Option<SleepPlan<'py>>> {
     let py = world.py();
-    let Some(state) = table.get_item(OVERLAY_KEY)? else {
+    let Some(bed) = overlay::plan_bed(world, agent_id)? else {
+        return Ok(None);
+    };
+    if bed.travel_minutes <= 0 {
+        return Ok(Some(SleepPlan::Stay(bed)));
+    }
+    let writer = EventWriter::of(world)?;
+    let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+    let route = Route {
+        origin: zone_id.clone(),
+        destination: zone_id.clone(),
+        zone_ids: vec![zone_id.clone(), zone_id.clone()],
+        edge_ids: Vec::new(),
+        minutes: bed.travel_minutes,
+    };
+    let trip = plan_travel(
+        world,
+        &writer,
+        Trip {
+            agent_id: Arc::from(agent_id),
+            route,
+            points: bed.path.to_vec(),
+            purpose: "sleep_bed",
+            facility_id: None,
+            minute,
+            causation_id: None,
+            support_request_id: None,
+            support_staff_id: None,
+        },
+    )?;
+    Ok(Some(match trip {
+        Some(trip) => SleepPlan::Walk(bed, Box::new(trip), writer),
+        None => {
+            let table = attribute(world, intern!(py, "model_state"))?;
+            SleepPlan::NoRoom(held_bed(exact_dict(&table)?, agent_object)?)
+        }
+    }))
+}
+
+/// `position.update(...)` of a person already at their bed: through the tree, which tells the row.
+fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: &overlay::Bed, zone_id: &Arc<str>) -> PyResult<()> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let Some(movement) = exact_dict(&table)?.get_item(KEY)? else {
         return Ok(());
     };
-    let Some(state) = as_readable_dict(&state) else {
-        return unsupported("the overlay is not a plain dict");
+    let Some(positions) = exact_dict(&movement)?.get_item(intern!(py, "positions"))? else {
+        return Ok(());
     };
-    let configs = attribute(world, intern!(py, "model_configs"))?;
-    let schema = match exact_dict(&configs)?.get_item(intern!(py, "geometry_overlay"))? {
-        Some(config) => exact_dict(&config)?.get_item(intern!(py, "schema_version"))?,
-        None => None,
+    let Some(position) = exact_dict(&positions)?.get_item(agent_object)? else {
+        return Ok(());
     };
-    let schema_takes_beds = match &schema {
-        Some(schema) => matches!(exact_int(schema), Ok(2..=4)),
-        None => false,
-    };
-    if !schema_takes_beds {
-        return if schema.is_none() || schema.as_ref().is_some_and(|schema| exact_int(schema).is_ok()) {
-            Ok(())
-        } else {
-            unsupported("the overlay's schema is not an int")
-        };
+    if as_readable_dict(&position).is_none() {
+        return Ok(());
     }
-    if state.get_item(intern!(py, "bed_reservations"))?.is_none() {
-        return unsupported("the reservations are still to be made");
-    }
-    Geo::of(world)?;
-    if !table.contains(KEY)? {
-        return unsupported("a bed's positions without the movement state");
-    }
-    let mirror = mirror_held(world)?;
-    let store = entities_of(world)?;
-    NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| {
-            for (other_id, other) in rows.agents.iter() {
-                if &**other_id != agent_id && &*other.zone_id != zone_id {
-                    continue;
-                }
-                if let Some(point) = row.positions.get(&**other_id).and_then(|position| position.point) {
-                    if !usable(point.x, point.y) {
-                        return unsupported("a position is not a usable point");
-                    }
-                }
-            }
-            Ok(())
-        })
-    })?;
-    match state.get_item(intern!(py, "temporary_rooms"))? {
-        Some(rooms) if !exact_dict(&rooms)?.is_empty() => unsupported("a temporary room may have a bed"),
-        _ => Ok(()),
-    }
+    let point = PyDict::new(py);
+    point.set_item(intern!(py, "x"), bed.point.x)?;
+    point.set_item(intern!(py, "y"), bed.point.y)?;
+    let fields = PyDict::new(py);
+    fields.set_item(intern!(py, "zone_id"), &**zone_id)?;
+    fields.set_item(intern!(py, "point"), point)?;
+    fields.set_item(intern!(py, "edge_id"), py.None())?;
+    fields.set_item(intern!(py, "progress"), 1.0)?;
+    fields.set_item(intern!(py, "position_kind"), "physical")?;
+    position.call_method1(intern!(py, "update"), (fields,))?;
+    Ok(())
 }
 
 /// The `seek_help` and `seek_information` branch of `_apply_effect`. What the LLM's hooks and the
@@ -459,12 +494,8 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
     })?;
 
     // Plan.
-    let bed = if action == "sleep" {
-        no_bed_to_reserve(&world, table, agent_id, &zone_id)?;
-        None
-    } else {
-        held_bed(table, &agent_object)?
-    };
+    let bed = if action == "sleep" { None } else { held_bed(table, &agent_object)? };
+    let sleep = if action == "sleep" { plan_sleep(&world, &agent_object, agent_id, &zone_id)? } else { None };
     let mut social: Option<(EventRow, EventWriter<'py>, Arc<str>, i64)> = None;
     if let Effect::Social(interaction) = &effect {
         let configs = attribute(&world, intern!(py, "model_configs"))?;
@@ -535,9 +566,6 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
 
     let mut trip_effect = None;
     if matches!(effect, Effect::Toilet | Effect::Resource(..)) {
-        if table.contains(QUEUES_KEY)? {
-            return unsupported("an independent FIFO may be here");
-        }
         let writer = EventWriter::of(&world)?;
         let minute = exact_int(&attribute(&world, intern!(py, "minute_index"))?)?;
         let agent_arc: Arc<str> = Arc::from(agent_id);
@@ -562,7 +590,11 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
         reservations.del_item(&agent_object)?;
     }
     let next = social.as_ref().map_or(planned_next, |(.., due)| *due);
-    let still = if let Effect::Still(activity) = effect { Some(activity) } else { None };
+    let walks_to_bed = matches!(&sleep, Some(SleepPlan::Walk(..)));
+    let still = match effect {
+        Effect::Still(activity) if !walks_to_bed => Some(activity),
+        _ => None,
+    };
     EntityStore::with_rows(&store, |rows| {
         let Some(row) = rows.agents.get_mut(agent_id) else {
             return unsupported("the rows have no such agent");
@@ -591,6 +623,23 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
         }
         None => py.None().into_bound(py),
     };
+    match sleep {
+        None => {}
+        Some(SleepPlan::Walk(bed, trip, writer)) => {
+            overlay::write_bed(&world, agent_id, &bed)?;
+            write_travel(&world, &writer, *trip)?;
+            target = PyString::new(py, &bed.target_id).into_any();
+        }
+        Some(SleepPlan::Stay(bed)) => {
+            overlay::write_bed(&world, agent_id, &bed)?;
+            place_in_bed(&world, &agent_object, &bed, &zone_id)?;
+            target = PyString::new(py, &bed.target_id).into_any();
+        }
+        Some(SleepPlan::NoRoom(Some(reservations))) => {
+            reservations.del_item(&agent_object)?;
+        }
+        Some(SleepPlan::NoRoom(None)) => {}
+    }
     if let Some((planned, writer, held, metrics, minute)) = trip_effect {
         let facility_id = planned.facility_id;
         if let Some(trip) = planned.trip {

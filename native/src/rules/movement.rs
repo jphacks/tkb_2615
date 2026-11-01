@@ -433,19 +433,36 @@ pub(crate) fn position_point(position: Option<&Position>) -> Option<Pt> {
 /// `_queue_slot_position` of a facility's own queue: the slot first free of the people ahead as
 /// they stand now, with a real route from where the person is.
 pub(crate) fn queue_slot(geo: &Geo, row: &MovementRow, rows: &Entities, agent_id: &str, facility_id: &str) -> PyResult<Option<Pt>> {
+    queue_slot_in(geo, row, rows, agent_id, facility_id, None)
+}
+
+/// The same, or of an independent queue: its people, and its signed point if it has one.
+pub(crate) fn queue_slot_in(
+    geo: &Geo,
+    row: &MovementRow,
+    rows: &Entities,
+    agent_id: &str,
+    facility_id: &str,
+    independent: Option<(&[Arc<str>], Option<Pt>)>,
+) -> PyResult<Option<Pt>> {
     let Some(facility) = rows.facilities.get(facility_id) else {
         return Ok(None);
     };
     let Some(layout) = &geo.layout else {
         return Ok(None);
     };
-    let (Some(&facility_point), Some(zone)) = (layout.facility_points.get(facility_id), layout.zones.get(&*facility.zone_id)) else {
+    let signed = independent.and_then(|(_, point)| point);
+    let own = signed.or_else(|| layout.facility_points.get(facility_id).copied());
+    let (Some(facility_point), Some(zone)) = (own, layout.zones.get(&*facility.zone_id)) else {
         return Ok(None);
     };
-    let holds = |queue: &Vec<Arc<str>>| queue.iter().position(|id| &**id == agent_id);
-    let (queue, slot_index) = match holds(&facility.resource_queue_agent_ids) {
-        Some(slot) => (&facility.resource_queue_agent_ids, Some(slot)),
-        None => (&facility.queue_agent_ids, holds(&facility.queue_agent_ids)),
+    let holds = |queue: &[Arc<str>]| queue.iter().position(|id| &**id == agent_id);
+    let (queue, slot_index): (&[Arc<str>], Option<usize>) = match independent {
+        Some((members, _)) => (members, holds(members)),
+        None => match holds(&facility.resource_queue_agent_ids) {
+            Some(slot) => (&facility.resource_queue_agent_ids, Some(slot)),
+            None => (&facility.queue_agent_ids, holds(&facility.queue_agent_ids)),
+        },
     };
     let Some(slot_index) = slot_index else {
         return Ok(Some(facility_point));
@@ -497,7 +514,7 @@ pub(crate) fn queue_slot(geo: &Geo, row: &MovementRow, rows: &Entities, agent_id
 }
 
 /// `Point2D(x=..., y=...)`.
-fn point_object<'py>(py: Python<'py>, point: Pt) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn point_object<'py>(py: Python<'py>, point: Pt) -> PyResult<Bound<'py, PyAny>> {
     static CLASS: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
     let class = CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py.import("sheltersim.contracts.extensions")?.getattr("Point2D")?.unbind())
@@ -598,7 +615,7 @@ fn zone_center(world: &Bound<'_, PyAny>, zone_id: &str) -> PyResult<Option<(f64,
     Ok(Geo::of(world)?.zone_center(zone_id)?.map(|point| (point.x, point.y)))
 }
 
-/// `_queue_slot_position`, for a facility's own queue. An independent FIFO reads its namespace: Python.
+/// `_queue_slot_position`.
 #[pyfunction]
 #[pyo3(signature = (world, geometry, agent_id, facility_id, queue_id=None))]
 fn queue_slot_position<'py>(
@@ -610,16 +627,17 @@ fn queue_slot_position<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = world.py();
     let _ = geometry; // What _geometry(world) gives, as every caller passes.
-    let table = attribute(world, intern!(py, "model_state"))?;
-    if queue_id.is_some_and(|queue_id| !queue_id.is_none()) && exact_dict(&table)?.contains("facility_queues_v1")? {
-        return unsupported("an independent FIFO");
-    }
     let (agent_id, facility_id) = (exact_str(agent_id)?, exact_str(facility_id)?);
     let mirror = mirror_held(world)?;
     let store = entities_of(world)?;
     let geo = Geo::of(world)?;
+    let fifo = match queue_id {
+        Some(queue) if !queue.is_none() => crate::rules::queues::Fifo::read(world, &geo, exact_str(queue)?)?,
+        _ => None,
+    };
+    let independent = fifo.as_ref().map(crate::rules::queues::Fifo::slot_view);
     let slot = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| queue_slot(&geo, row, rows, agent_id, facility_id))
+        EntityStore::with_rows(&store, |rows| queue_slot_in(&geo, row, rows, agent_id, facility_id, independent))
     })?;
     match slot {
         Some(point) => point_object(py, point),
@@ -643,7 +661,7 @@ fn is_shorter(first: (f64, &[Pt]), second: (f64, &[Pt])) -> bool {
     first.1.len() < second.1.len()
 }
 
-/// `facility_approach_route`, for a facility's own point. A surveyed service point goes to Python.
+/// `facility_approach_route`.
 #[pyfunction]
 #[pyo3(signature = (world, agent_id, facility_id, service_point_id=None))]
 fn facility_approach_route<'py>(
@@ -653,9 +671,10 @@ fn facility_approach_route<'py>(
     service_point_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = world.py();
-    if service_point_id.is_some_and(|point| !point.is_none()) {
-        return unsupported("a surveyed service point");
-    }
+    let service_point = match service_point_id {
+        Some(point) if !point.is_none() => Some(exact_str(point)?),
+        _ => None,
+    };
     let (agent_id, facility_id) = (exact_str(agent_id)?, exact_str(facility_id)?);
     let mirror = mirror_held(world)?;
     let store = entities_of(world)?;
@@ -674,7 +693,7 @@ fn facility_approach_route<'py>(
         return Ok((route, PyTuple::empty(py)).into_pyobject(py)?.into_any());
     }
     let found = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| approach(&geo, row, rows, raw_model, agent_id, facility_id))
+        EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model, agent_id, facility_id, service_point))
     })?;
     let Some((duration, path)) = found else {
         return Ok(py.None().into_bound(py));
@@ -725,6 +744,19 @@ pub(crate) fn approach(
     agent_id: &str,
     facility_id: &str,
 ) -> PyResult<Option<(i64, Arc<[Pt]>)>> {
+    approach_point(geo, row, rows, raw_model, agent_id, facility_id, None)
+}
+
+/// The same, to a surveyed service point when one is given: then no point beside a footprint.
+pub(crate) fn approach_point(
+    geo: &Geo,
+    row: &MovementRow,
+    rows: &Entities,
+    raw_model: Option<Bound<'_, PyAny>>,
+    agent_id: &str,
+    facility_id: &str,
+    service_point: Option<&str>,
+) -> PyResult<Option<(i64, Arc<[Pt]>)>> {
     let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
         return unsupported("no such agent or facility");
     };
@@ -739,11 +771,18 @@ pub(crate) fn approach(
     if start.is_some_and(|start| !usable(start.x, start.y)) {
         return unsupported("a position is not a usable point");
     }
-    let Some(&facility_point) = layout.facility_points.get(facility_id) else {
-        return Ok(None);
+    let facility_point = match service_point {
+        Some(id) => match layout.service_points.iter().find(|point| &*point.id == id) {
+            Some(point) if &*point.facility_id == facility_id => point.point,
+            _ => return Ok(None),
+        },
+        None => match layout.facility_points.get(facility_id) {
+            Some(point) => *point,
+            None => return Ok(None),
+        },
     };
     let mut candidates = vec![facility_point];
-    let footprint = geo.constraints.as_ref().and_then(|constraints| {
+    let footprint = geo.constraints.as_ref().filter(|_| service_point.is_none()).and_then(|constraints| {
         constraints.footprints.iter().find(|(id, _)| &**id == facility_id).map(|(_, polygon)| polygon)
     });
     if let Some(footprint) = footprint {

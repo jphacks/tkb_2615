@@ -617,16 +617,6 @@ def test_without_a_task_python_raises_its_own_error(generated_scenario: Any) -> 
         movement.progress_physical_queue_positions(world, toilet, resource=False, minute=minute)
 
 
-def test_an_independent_fifo_goes_to_python(generated_scenario_with_split_queues: Any) -> None:
-    world = _world(generated_scenario_with_split_queues)
-    queue_id, row = sorted(world.model_state["facility_queues_v1"]["queues"].items())[0]
-    minute = world.minute_index
-    for name in ("progress_physical_queue_positions", "progress_physical_queue_head_to_service"):
-        assert "independent" in _refuses(
-            world, name, row["facility_id"], resource=False, minute=minute, queue_id=queue_id
-        )
-
-
 def test_int_coordinates_taint_and_go_to_python(generated_scenario: Any) -> None:
     world = _world(generated_scenario)
     toilet = _facility(world, "toilet")
