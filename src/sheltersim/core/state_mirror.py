@@ -709,6 +709,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "shared_operations_v1": ("shared_operations", "ROW"),
     "resource_ledger_v1": ("resource_ledger", "ROW"),
     "resource_service_v1": ("resource_service", "ROW"),
+    "effect_program_v1": ("effect_program", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field
