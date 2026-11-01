@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from sheltersim import native
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import SupportRequestStatus
 from sheltersim.domain.resources import RESOURCE_METRIC_FIELDS, resource_metric_values
@@ -23,6 +24,113 @@ def _source_ids_json(source_ids: dict[str, Any]) -> str:
         return encoded.decode()
     # The kernel leaves any value it does not handle, NaN included, to json.
     return json.dumps(source_ids, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+@kernel_first("staff", "wait_snapshot")
+def _support_wait_snapshot(
+    world: WorldState, active_support: list[Any], sample_minute: int
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """The wait of each open support request, and who waits with no qualified staff at all."""
+    staff_memo: dict[str, Any] = {}
+    details = {
+        request.agent_id: {
+            "request_id": request.id,
+            "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
+            "reason_codes": list(
+                support_wait_reason_codes(
+                    world, request.id, minute=sample_minute, staff_memo=staff_memo
+                )
+            ),
+        }
+        for request in sorted(active_support, key=lambda item: item.agent_id)
+    }
+    no_qualified = sorted(
+        request.agent_id
+        for request in active_support
+        if request.status is SupportRequestStatus.PENDING
+        and not any(
+            support_required_skills(world, request.id).intersection(staff.skills)
+            for staff in world.staff.values()
+        )
+    )
+    return details, no_qualified
+
+
+@kernel_first("metrics", "snapshot_fields")
+def _snapshot_fields(
+    world: WorldState, unsettled: list[Any], sample_minute: int
+) -> tuple[Any, ...]:
+    """The fields of the minute's MetricSnapshot, in the order of the dataclass."""
+    toilets = [
+        facility for facility in world.facilities.values() if "toilet" in facility.kind.casefold()
+    ]
+    queued_ids = sorted(agent_id for facility in toilets for agent_id in facility.queue_agent_ids)
+    active_ids = sorted(agent_id for facility in toilets for agent_id in facility.active_agent_ids)
+    stresses = [agent.stress for agent in world.agents.values()]
+    high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
+    active_support = [
+        request
+        for request in unsettled
+        if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
+    ]
+    active_support_agent_ids = sorted(request.agent_id for request in active_support)
+    staff_task_ids = sorted(
+        task_id for staff in world.staff.values() for task_id in staff.work_queue
+    )
+    busy_staff_ids = sorted(
+        staff.id
+        for staff in world.staff.values()
+        if any(
+            world.active_tasks[task_id].start_minute
+            <= sample_minute
+            < world.active_tasks[task_id].due_minute
+            for task_id in staff.work_queue
+        )
+    )
+    support_wait_details, no_qualified_support_ids = _support_wait_snapshot(
+        world, active_support, sample_minute
+    )
+    wait_count = world.metric_state.get("toilet_wait_count", 0.0)
+    wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
+    wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
+    source_events = sorted(world.event_log.event_ids_at_minute(sample_minute))
+    source_ids = {
+        "toilet_queue_agents": queued_ids,
+        "toilet_active_agents": active_ids,
+        "high_stress_agents": high_stress_ids,
+        "staff_tasks": staff_task_ids,
+        "busy_staff": busy_staff_ids,
+        "unresolved_support_agents": active_support_agent_ids,
+        "support_requests_without_qualified_staff": no_qualified_support_ids,
+        "support_wait_by_agent": support_wait_details,
+        "support_wait_exposure_semantics": (
+            "per-minute observed request exposure by blocker; reason totals may overlap "
+            "and are not exclusive causal attribution"
+        ),
+        "realized_events": source_events,
+    }
+    return (
+        sample_minute,
+        len(queued_ids),
+        len(active_ids),
+        sum(facility.working_units for facility in toilets),
+        wait_count,
+        wait_total,
+        wait_total / wait_count if wait_count else 0.0,
+        wait_max,
+        sum(stresses) / len(stresses) if stresses else 0.0,
+        len(high_stress_ids),
+        len(staff_task_ids),
+        len(busy_staff_ids),
+        len(busy_staff_ids) / len(world.staff) if world.staff else 0.0,
+        len(active_support_agent_ids),
+        _source_ids_json(source_ids),
+        len(no_qualified_support_ids),
+        world.metric_state.get("support_no_qualified_worker_request_minutes", 0.0),
+        world.metric_state.get("support_fairness_promoted_assignment_count", 0.0),
+        world.metric_state.get("support_wait_staff_busy_request_minutes", 0.0),
+        world.metric_state.get("support_wait_staff_off_shift_request_minutes", 0.0),
+    )
 
 
 @dataclass(frozen=True)
@@ -56,110 +164,8 @@ class MetricSnapshot:
         sample_minute = world.minute_index if minute is None else minute
         if sample_minute != world.minute_index:
             raise ValueError("metric minute must match WorldState")
-        toilets = [
-            facility
-            for facility in world.facilities.values()
-            if "toilet" in facility.kind.casefold()
-        ]
-        queued_ids = sorted(
-            agent_id for facility in toilets for agent_id in facility.queue_agent_ids
-        )
-        active_ids = sorted(
-            agent_id for facility in toilets for agent_id in facility.active_agent_ids
-        )
-        stresses = [agent.stress for agent in world.agents.values()]
-        high_stress_ids = sorted(agent.id for agent in world.agents.values() if agent.stress >= 0.7)
-        active_support = [
-            request
-            for request in world.unsettled_support_requests()
-            if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
-        ]
-        active_support_agent_ids = sorted(request.agent_id for request in active_support)
-        staff_task_ids = sorted(
-            task_id for staff in world.staff.values() for task_id in staff.work_queue
-        )
-        busy_staff_ids = sorted(
-            staff.id
-            for staff in world.staff.values()
-            if any(
-                world.active_tasks[task_id].start_minute
-                <= sample_minute
-                < world.active_tasks[task_id].due_minute
-                for task_id in staff.work_queue
-            )
-        )
-        pending_support = [
-            request for request in active_support if request.status is SupportRequestStatus.PENDING
-        ]
-        staff_memo: dict[str, Any] = {}
-        support_wait_details = {
-            request.agent_id: {
-                "request_id": request.id,
-                "waited_minutes": support_waited_minutes(world, request.id, minute=sample_minute),
-                "reason_codes": list(
-                    support_wait_reason_codes(
-                        world, request.id, minute=sample_minute, staff_memo=staff_memo
-                    )
-                ),
-            }
-            for request in sorted(active_support, key=lambda item: item.agent_id)
-        }
-        no_qualified_support_ids = sorted(
-            request.agent_id
-            for request in pending_support
-            if not any(
-                support_required_skills(world, request.id).intersection(staff.skills)
-                for staff in world.staff.values()
-            )
-        )
-        wait_count = world.metric_state.get("toilet_wait_count", 0.0)
-        wait_total = world.metric_state.get("toilet_wait_total_minutes", 0.0)
-        wait_max = world.metric_state.get("toilet_wait_max_minutes", 0.0)
-        source_events = sorted(world.event_log.event_ids_at_minute(sample_minute))
-        source_ids = {
-            "toilet_queue_agents": queued_ids,
-            "toilet_active_agents": active_ids,
-            "high_stress_agents": high_stress_ids,
-            "staff_tasks": staff_task_ids,
-            "busy_staff": busy_staff_ids,
-            "unresolved_support_agents": active_support_agent_ids,
-            "support_requests_without_qualified_staff": no_qualified_support_ids,
-            "support_wait_by_agent": support_wait_details,
-            "support_wait_exposure_semantics": (
-                "per-minute observed request exposure by blocker; reason totals may overlap "
-                "and are not exclusive causal attribution"
-            ),
-            "realized_events": source_events,
-        }
         return cls(
-            minute_index=sample_minute,
-            toilet_queue_length=len(queued_ids),
-            toilet_active_users=len(active_ids),
-            toilet_working_units=sum(facility.working_units for facility in toilets),
-            toilet_wait_count=wait_count,
-            toilet_wait_total_minutes=wait_total,
-            toilet_wait_mean_minutes=wait_total / wait_count if wait_count else 0.0,
-            toilet_wait_max_minutes=wait_max,
-            stress_mean=sum(stresses) / len(stresses) if stresses else 0.0,
-            stress_high_count=len(high_stress_ids),
-            staff_assigned_task_count=len(staff_task_ids),
-            staff_busy_count=len(busy_staff_ids),
-            staff_load_ratio=len(busy_staff_ids) / len(world.staff) if world.staff else 0.0,
-            unresolved_support_request_count=len(active_support_agent_ids),
-            support_no_qualified_worker_count=len(no_qualified_support_ids),
-            support_no_qualified_worker_request_minutes=world.metric_state.get(
-                "support_no_qualified_worker_request_minutes", 0.0
-            ),
-            support_fairness_promoted_assignment_count=world.metric_state.get(
-                "support_fairness_promoted_assignment_count", 0.0
-            ),
-            support_wait_staff_busy_request_minutes=world.metric_state.get(
-                "support_wait_staff_busy_request_minutes", 0.0
-            ),
-            support_wait_staff_off_shift_request_minutes=world.metric_state.get(
-                "support_wait_staff_off_shift_request_minutes", 0.0
-            ),
-            source_ids_json=_source_ids_json(source_ids),
+            *_snapshot_fields(world, list(world.unsettled_support_requests()), sample_minute)
         )
 
     def csv_row(self) -> dict[str, Any]:

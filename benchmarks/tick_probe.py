@@ -514,6 +514,8 @@ class ReversedOrder:
                 kwargs["after_event"] = after_each
             return original(*args, **kwargs)
 
+        # A shadow reaches the Python rule of a kernel_first method through this.
+        wrapped.__wrapped__ = getattr(original, "__wrapped__", original)  # type: ignore[attr-defined]
         setattr(holder, method, classmethod(wrapped) if is_class_method else wrapped)
         self._undo.append(lambda: setattr(holder, method, raw))
 

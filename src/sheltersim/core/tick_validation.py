@@ -12,9 +12,10 @@ unchanged since they last passed (core/save_validation.py).
 
 Each saving rests on one of these arguments:
 
-- Config checks read only model_configs. They are skipped while model_configs equals
-  the copy taken after they last passed. Equality does not tell 1 from True or 1.0;
-  no tick writes model_configs, and the next full validation checks the values.
+- Config checks read only model_configs, and the zone environment's also the zone IDs. They
+  are skipped while those equal what they were when the checks last passed. Equality does not
+  tell 1 from True or 1.0; no tick writes model_configs, and the next full validation checks
+  the values.
 - A settled support request (resolved or unresolved) depends only on its own fields,
   which SupportRequestState reports writing, on the set of Agent IDs, and on the clock
   only through "not after the current minute". It is checked again when written or
@@ -64,9 +65,11 @@ class TickValidationMemo:
         self.information_config: Any = None
         self.geometry_scope: dict[tuple[str, int], tuple[Any, Any]] = {}
         self.body_config_json: bytes | None = None
+        self.environment_config_passed = False
         # Facts of the check in progress, set by begin().
         self.configs_unchanged = False
         self.agents_unchanged = False
+        self.zones_unchanged = False
         self.presence_unchanged = False
         self.lifecycle_unchanged = False
         self.overlay_unchanged = False
@@ -94,8 +97,9 @@ class TickValidationMemo:
         self.configs_unchanged = world.model_configs == self._configs
         if not self.configs_unchanged:
             self.geometry_scope.clear()
+            self.environment_config_passed = False
         self.agents_unchanged = world.agents.keys() == self._agent_ids
-        zones_unchanged = world.zones.keys() == self._zone_ids
+        zones_unchanged = self.zones_unchanged = world.zones.keys() == self._zone_ids
         model_state = world.model_state
         previous = self._saved_json
         current = {
@@ -145,8 +149,10 @@ class TickValidationMemo:
         """Record what the passed check proved."""
         if not self.configs_unchanged:
             self._configs = deepcopy(world.model_configs)
-        self._agent_ids = frozenset(world.agents)
-        self._zone_ids = frozenset(world.zones)
+        if not self.agents_unchanged:
+            self._agent_ids = frozenset(world.agents)
+        if not self.zones_unchanged:
+            self._zone_ids = frozenset(world.zones)
         self._settle_requests(world.support_requests)
         state = world.model_state.get(_OPERATIONS_KEY)
         if isinstance(state, dict) and isinstance(state.get("history"), list):
@@ -238,6 +244,10 @@ class TickValidationMemo:
             and _operations_header_json(state) == self._operations_header_json
         )
         return self._operations_unchanged
+
+    def operations_passed_in_rust(self) -> None:
+        """The kernel accepted the state: what's remembered stays what last passed here."""
+        self._operations_unchanged = True
 
     def _remember_operations(self, state: dict[str, Any]) -> None:
         if self._operations_unchanged:

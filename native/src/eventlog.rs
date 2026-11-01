@@ -713,6 +713,21 @@ impl EventStore {
         Ok(self.add(event.index_fields(realized_minute, status), Handles::default(), Some(written)))
     }
 
+    /// The event of a request's first care record, if it has one.
+    pub(crate) fn first_care_request_event_of(&self, request_id: &str) -> Option<&str> {
+        self.first_care_request.get(request_id).map(String::as_str)
+    }
+
+    pub(crate) fn max_realized_sequence(&self) -> i64 {
+        self.max_sequence
+    }
+
+    /// The event IDs of `at_minute(minute)`.
+    pub(crate) fn event_ids_at(&self, minute: i64) -> impl Iterator<Item = &str> {
+        let indices = self.by_minute.get(&minute).map_or(&[][..], Vec::as_slice);
+        indices.iter().map(|index| &*self.entries[*index].event_id)
+    }
+
     pub(crate) fn has_event_id(&self, event_id: &str) -> bool {
         self.by_id.contains_key(event_id)
     }

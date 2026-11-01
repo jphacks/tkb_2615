@@ -83,7 +83,7 @@ pub(crate) fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyS
 }
 
 /// `_on_shift`. A config of the oldest schema has no windows, and the Python rule raises.
-fn on_shift(config: &ConfigRow, id: &str, minute: i64) -> PyResult<bool> {
+pub(crate) fn on_shift(config: &ConfigRow, id: &str, minute: i64) -> PyResult<bool> {
     let Some(windows) = &config.shift_windows_by_staff.0 else {
         return unsupported("the config has no shift windows");
     };

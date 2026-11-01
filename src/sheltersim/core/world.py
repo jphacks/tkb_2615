@@ -90,6 +90,30 @@ def _event_from_document(document: dict[str, Any]) -> ScheduledEvent:
     return ScheduledEvent(**document)
 
 
+# native/src/rules/tick_validation.rs; benchmarks/rule_shadow and the python_rules mark replace it.
+_entity_rules_kernel = native.rules("tick_validation").entity_rules if native.available() else None
+
+
+def _entity_rules_accepted(
+    world: WorldState, tick_memo: TickValidationMemo | None, resource_config: Any
+) -> list[tuple[str, int]] | None:
+    """The zones whose capacity is left to check if the kernel takes the rest of the world's
+    entity and event rules, or None for the Python rules to run. Only at the end of a tick: a
+    save reads everything (validate's docstring)."""
+    if tick_memo is None or _entity_rules_kernel is None or world.schema_version != 6:
+        return None
+    try:
+        return _entity_rules_kernel(
+            world,
+            tick_memo.requests_to_check(world.support_requests),
+            resource_config,
+            InitialNeedProfile,
+            NeedState,
+        )
+    except native.Unsupported:
+        return None
+
+
 @dataclass
 class WorldState:
     """Mutable state owned by the engine/controller for one scenario run."""
@@ -597,7 +621,7 @@ class WorldState:
         try:
             if not rust_validated(self, ZONE_ENVIRONMENT_STATE_KEY):
                 validate_zone_environment_runtime_state(
-                    self, validate_event_history=validate_event_history
+                    self, validate_event_history=validate_event_history, tick_memo=_tick_memo
                 )
         except ValueError as exc:
             raise StateInvariantError(f"invalid zone environment state: {exc}") from exc
@@ -611,6 +635,85 @@ class WorldState:
                 validate_effect_program_state(self, validate_event_history=validate_event_history)
         except ValueError as exc:
             raise StateInvariantError(f"invalid EffectProgram state: {exc}") from exc
+        # What the kernel accepted is not read again; it leaves the zones it doesn't decide.
+        left_zones = _entity_rules_accepted(self, _tick_memo, resource_config)
+        pending_events: tuple[ScheduledEvent, ...] = ()
+        if left_zones is None:
+            pending_events = self._validate_entity_rules(resource_config, _tick_memo)
+        else:
+            for zone_id, occupancy in left_zones:
+                self._validate_zone_capacity(zone_id, occupancy)
+        # The kernel answers for the state of a tick; replaying the audit trail stays in Python.
+        if RESOURCE_LEDGER_KEY in self.model_state and (
+            validate_event_history or not rust_validated(self, RESOURCE_LEDGER_KEY)
+        ):
+            try:
+                population_state = self.model_state.get("population_dynamics_v1", {})
+                archived_agent_ids: set[str] = set()
+                if population_state:
+                    if (
+                        not isinstance(population_state, dict)
+                        or population_state.get("schema_version") != 1
+                        or not isinstance(population_state.get("initial_agent_ids"), list)
+                        or not isinstance(population_state.get("profile_traits"), dict)
+                        or not isinstance(population_state.get("pending_arrivals"), list)
+                        or not isinstance(population_state.get("arrivals"), list)
+                    ):
+                        raise ValueError("population_dynamics_v1 identity history is invalid")
+                    historical_ids = set(population_state["initial_agent_ids"])
+                    historical_ids.update(
+                        item.get("profile", {}).get("id")
+                        for item in population_state["pending_arrivals"]
+                        if isinstance(item, dict) and isinstance(item.get("profile"), dict)
+                    )
+                    historical_ids.update(
+                        item.get("agent_id")
+                        for item in population_state["arrivals"]
+                        if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
+                    )
+                    profile_ids = set(population_state["profile_traits"])
+                    if not profile_ids <= historical_ids:
+                        raise ValueError("population_dynamics_v1 contains an unknown profile ID")
+                    archived_agent_ids = set(population_state["initial_agent_ids"]) | {
+                        item["agent_id"]
+                        for item in population_state["arrivals"]
+                        if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
+                    }
+                ledger_arguments = (
+                    self.model_state[RESOURCE_LEDGER_KEY],
+                    self.resources,
+                    set(self.agents) | archived_agent_ids,
+                    set(self.zones),
+                )
+                if validate_event_history:
+                    validate_resource_ledger(*ledger_arguments, history_memo=_history_memo)
+                else:
+                    validate_resource_ledger_state(
+                        *ledger_arguments, minute_index=self.minute_index, tick_memo=_tick_memo
+                    )
+            except ValueError as exc:
+                raise StateInvariantError(f"invalid resource ledger: {exc}") from exc
+        if left_zones is None:
+            self._validate_event_rules(pending_events, validate_event_history)
+
+    def _validate_zone_capacity(self, zone_id: str, occupancy: int) -> None:
+        from sheltersim.domain.temporary_spaces import effective_total_zone_capacity
+
+        capacity = effective_total_zone_capacity(self, zone_id, occupancy=occupancy)
+        if capacity is not None and occupancy > capacity:
+            raise StateInvariantError(
+                f"zone {zone_id!r} exceeds nominal plus approved temporary or "
+                "physical-room capacity"
+            )
+
+    def _validate_entity_rules(
+        self, resource_config: Any, _tick_memo: TickValidationMemo | None
+    ) -> tuple[ScheduledEvent, ...]:
+        """The rules of entities and of the events that serve them; returns the pending events.
+
+        native/src/rules/tick_validation.rs stands in front of these and the event rules at the
+        end of a tick, so a change here belongs there too.
+        """
         if self.duration_minutes <= 0 or not 0 <= self.minute_index <= self.duration_minutes:
             raise StateInvariantError("world clock is outside the scenario duration")
         if self.seed < 0:
@@ -722,15 +825,8 @@ class WorldState:
                 raise StateInvariantError(
                     f"Agent {agent.profile.id!r} has invalid support cooldown"
                 )
-        from sheltersim.domain.temporary_spaces import effective_total_zone_capacity
-
         for zone_id, occupancy in zone_occupancy.items():
-            capacity = effective_total_zone_capacity(self, zone_id, occupancy=occupancy)
-            if capacity is not None and occupancy > capacity:
-                raise StateInvariantError(
-                    f"zone {zone_id!r} exceeds nominal plus approved temporary or "
-                    "physical-room capacity"
-                )
+            self._validate_zone_capacity(zone_id, occupancy)
 
         for facility in self.facilities.values():
             if facility.zone_id not in self.zones:
@@ -1373,56 +1469,11 @@ class WorldState:
             for value in self.resources.values()
         ):
             raise StateInvariantError("resource inventory must contain non-negative integers")
-        # The kernel answers for the state of a tick; replaying the audit trail stays in Python.
-        if RESOURCE_LEDGER_KEY in self.model_state and (
-            validate_event_history or not rust_validated(self, RESOURCE_LEDGER_KEY)
-        ):
-            try:
-                population_state = self.model_state.get("population_dynamics_v1", {})
-                archived_agent_ids: set[str] = set()
-                if population_state:
-                    if (
-                        not isinstance(population_state, dict)
-                        or population_state.get("schema_version") != 1
-                        or not isinstance(population_state.get("initial_agent_ids"), list)
-                        or not isinstance(population_state.get("profile_traits"), dict)
-                        or not isinstance(population_state.get("pending_arrivals"), list)
-                        or not isinstance(population_state.get("arrivals"), list)
-                    ):
-                        raise ValueError("population_dynamics_v1 identity history is invalid")
-                    historical_ids = set(population_state["initial_agent_ids"])
-                    historical_ids.update(
-                        item.get("profile", {}).get("id")
-                        for item in population_state["pending_arrivals"]
-                        if isinstance(item, dict) and isinstance(item.get("profile"), dict)
-                    )
-                    historical_ids.update(
-                        item.get("agent_id")
-                        for item in population_state["arrivals"]
-                        if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
-                    )
-                    profile_ids = set(population_state["profile_traits"])
-                    if not profile_ids <= historical_ids:
-                        raise ValueError("population_dynamics_v1 contains an unknown profile ID")
-                    archived_agent_ids = set(population_state["initial_agent_ids"]) | {
-                        item["agent_id"]
-                        for item in population_state["arrivals"]
-                        if isinstance(item, dict) and isinstance(item.get("agent_id"), str)
-                    }
-                ledger_arguments = (
-                    self.model_state[RESOURCE_LEDGER_KEY],
-                    self.resources,
-                    set(self.agents) | archived_agent_ids,
-                    set(self.zones),
-                )
-                if validate_event_history:
-                    validate_resource_ledger(*ledger_arguments, history_memo=_history_memo)
-                else:
-                    validate_resource_ledger_state(
-                        *ledger_arguments, minute_index=self.minute_index, tick_memo=_tick_memo
-                    )
-            except ValueError as exc:
-                raise StateInvariantError(f"invalid resource ledger: {exc}") from exc
+        return pending_events
+
+    def _validate_event_rules(
+        self, pending_events: tuple[ScheduledEvent, ...], validate_event_history: bool
+    ) -> None:
         if any(value < 0 for value in self.id_counters.values()):
             raise StateInvariantError("ID counters cannot be negative")
         if not isinstance(self.event_queue, EventQueue) or not isinstance(self.event_log, EventLog):

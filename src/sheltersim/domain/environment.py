@@ -374,14 +374,36 @@ def zone_environment_view(world: WorldState, zone_id: str) -> ZoneEnvironmentVie
     )
 
 
+def _has_exact_schema(state: Any) -> bool:
+    return (
+        isinstance(state, dict)
+        and set(state) == {"schema_version", "modifiers"}
+        and state.get("schema_version") == 1
+        and isinstance(state.get("modifiers"), dict)
+    )
+
+
 def validate_zone_environment_runtime_state(
     world: WorldState,
     *,
     validate_event_history: bool = True,
+    tick_memo: Any = None,
 ) -> None:
-    """Validate opt-in config and active modifier/event/provenance links."""
+    """Validate opt-in config and active modifier/event/provenance links.
+
+    With a tick_memo a config that passed is not read again while it and the zones are unchanged.
+    """
     config_data = world.model_configs.get("zone_environment")
     state = world.model_state.get(ZONE_ENVIRONMENT_STATE_KEY)
+    if (
+        tick_memo is not None
+        and tick_memo.configs_unchanged
+        and tick_memo.zones_unchanged
+        and tick_memo.environment_config_passed
+    ):
+        if _has_exact_schema(state):
+            return
+        raise ValueError("zone_environment_v1 has an invalid exact schema")
     if config_data is None:
         if state is not None:
             raise ValueError("zone environment state requires a zone_environment config")
@@ -416,13 +438,10 @@ def validate_zone_environment_runtime_state(
         raise ValueError("zone_environment config must contain canonical v1 values")
     if set(config.baseline_by_zone) - set(world.zones):
         raise ValueError("zone environment baseline references an unknown zone")
-    if (
-        not isinstance(state, dict)
-        or set(state) != {"schema_version", "modifiers"}
-        or state.get("schema_version") != 1
-        or not isinstance(state.get("modifiers"), dict)
-    ):
+    if not _has_exact_schema(state):
         raise ValueError("zone_environment_v1 has an invalid exact schema")
+    if tick_memo is not None:
+        tick_memo.environment_config_passed = True
 
     if not validate_event_history:
         return
