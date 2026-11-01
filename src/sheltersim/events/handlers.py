@@ -1732,6 +1732,7 @@ class SocialInteractionHandler:
 class EffectProgramPopulationHandler:
     """Apply typed population primitives through the approved EffectProgram record."""
 
+    @kernel_first("handlers", "population")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.population import (
@@ -3322,6 +3323,7 @@ if native.available():
                 FacilityRecoveryHandler,
                 InfrastructureEventHandler,
                 ResourceServiceCancellationHandler,
+                EffectProgramPopulationHandler,
                 DeliveryDelayHandler,
                 WaterOutageHandler,
                 WaterRestorationHandler,

@@ -1376,6 +1376,114 @@ fn interrupt_for_staff<'py>(manager: &Bound<'py, PyAny>, staff_id: &Bound<'py, P
     Ok(())
 }
 
+// ---- EffectProgramPopulationHandler ------------------------------------------------------------------
+//
+// The rules themselves are `domain/population.py` and `domain/population_lifecycle.py`, with their own
+// kernels (docs/rust-port/lanes/m6-population-rules.md). This is what checks a primitive against its
+// approved program and runs it on a copy. A suppressed one swaps its copy in Python too: it is the
+// Python rule's, from the start.
+
+const BASE_FIELDS: [&str; 5] = ["program_id", "effect_id", "op", "zone_id", "count"];
+
+fn with_fields(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut fields = BASE_FIELDS.to_vec();
+    fields.extend_from_slice(extra);
+    fields
+}
+
+fn population_fields_fit(payload: &Bound<'_, PyAny>, op: &str) -> PyResult<bool> {
+    let shapes: Vec<Vec<&'static str>> = match op {
+        "add_evacuees" => vec![
+            with_fields(&["household_size", "mobility", "language", "admission_zone_ids", "approach_route_id", "person_context_overrides"]),
+            with_fields(&["household_size", "mobility", "language", "admission_zone_ids", "approach_route_id"]),
+            with_fields(&["household_size", "mobility", "language", "admission_zone_ids"]),
+            with_fields(&["household_size", "mobility", "language"]),
+        ],
+        "depart_evacuees" => vec![with_fields(&["include_initial"]), with_fields(&[])],
+        _ => vec![vec!["program_id", "effect_id", "op", "command"]],
+    };
+    for shape in shapes {
+        if fields_are(payload, &shape)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `EffectProgramPopulationHandler.apply`.
+#[pyfunction]
+fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    if text_is(&attribute(event, intern!(py, "event_type"))?, "population_approach_complete") {
+        py.import("sheltersim.domain.population")?.getattr("apply_arrival_approach_completion")?.call1((world, event))?;
+        return counted(py, "population.approach", Ok(()));
+    }
+    let checked = (|| -> PyResult<_> {
+        let payload = attribute(event, intern!(py, "payload"))?;
+        let op_value = get(&payload, "op")?;
+        let op = exact_str(&op_value)?.to_owned();
+        if !matches!(op.as_str(), "add_evacuees" | "depart_evacuees" | "population_presence") || !population_fields_fit(&payload, &op)? {
+            return unsupported("the primitive is for the Python rule to judge");
+        }
+        let state = get(&table_of(world)?, "effect_program_v1")?;
+        if !state.is_instance_of::<PyDict>() {
+            return unsupported("the primitive is not in a program");
+        }
+        let programs = state.call_method1(intern!(py, "get"), ("programs", PyDict::new(py)))?;
+        let program = programs.call_method1(intern!(py, "get"), (get(&payload, "program_id")?,))?;
+        if !program.is_instance_of::<PyDict>() {
+            return unsupported("the primitive is not in a program");
+        }
+        let effect_id = get(&payload, "effect_id")?;
+        let operators = program.call_method1(intern!(py, "get"), ("operators", PyDict::new(py)))?;
+        if !program.call_method1(intern!(py, "get"), ("effect_ids", PyList::empty(py)))?.contains(&effect_id)?
+            || !operators.call_method1(intern!(py, "get"), (&effect_id,))?.eq(&op_value)?
+            || !program.call_method1(intern!(py, "get"), ("scheduled_event_ids", PyList::empty(py)))?.contains(attribute(event, intern!(py, "event_id"))?)?
+            || (op != "population_presence" && !attribute(world, intern!(py, "zones"))?.contains(get(&payload, "zone_id")?)?)
+        {
+            return unsupported("the primitive is not in the approved program");
+        }
+        Ok((payload, op))
+    })();
+    let (payload, op) = counted(py, "population.checks", refused_by_python(py, checked))?;
+    if op == "population_presence" {
+        // Past its checks the Python rule lets this rule's exceptions go, as this does.
+        py.import("sheltersim.domain.population_lifecycle")?
+            .getattr("apply_population_presence_command")?
+            .call1((world, event, payload.get_item("command")?))?;
+        return Ok(());
+    }
+    let changed = (|| -> PyResult<_> {
+        let candidate = copy_of(world)?;
+        let tuple = py.import("builtins")?.getattr("tuple")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("event", event)?;
+        kwargs.set_item("zone_id", payload.get_item("zone_id")?)?;
+        kwargs.set_item("count", payload.get_item("count")?)?;
+        let empty = PyTuple::empty(py);
+        let module = py.import("sheltersim.domain.population")?;
+        if op == "add_evacuees" {
+            for name in ["household_size", "mobility", "language"] {
+                kwargs.set_item(name, payload.get_item(name)?)?;
+            }
+            kwargs.set_item("admission_zone_ids", tuple.call1((payload.call_method1(intern!(py, "get"), ("admission_zone_ids", &empty))?,))?)?;
+            kwargs.set_item("approach_route_id", get(&payload, "approach_route_id")?)?;
+            kwargs.set_item("person_context_overrides", tuple.call1((payload.call_method1(intern!(py, "get"), ("person_context_overrides", &empty))?,))?)?;
+            module.getattr("queue_arrivals")?.call((&candidate,), Some(&kwargs))?;
+        } else {
+            kwargs.set_item("include_initial", payload.call_method1(intern!(py, "get"), ("include_initial", false))?)?;
+            module.getattr("queue_departures")?.call((&candidate,), Some(&kwargs))?;
+            py.import("sheltersim.domain.population_lifecycle")?
+                .getattr("admit_pending_returns")?
+                .call1((&candidate, attribute(event, intern!(py, "due_minute"))?))?;
+        }
+        candidate.call_method0(intern!(py, "validate"))?;
+        py.import("sheltersim.domain.simulator_state")?.getattr("validate_simulator_extensions")?.call1((&candidate,))?;
+        swap(world, &candidate)
+    })();
+    counted(py, "population.copy", refused_by_python(py, changed))
+}
+
 // ---- InfrastructureEventHandler --------------------------------------------------------------------
 
 fn infrastructure_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -1891,6 +1999,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(staff_unavailable, m)?)?;
     m.add_function(wrap_pyfunction!(staff_restoration, m)?)?;
     m.add_function(wrap_pyfunction!(infrastructure, m)?)?;
+    m.add_function(wrap_pyfunction!(population, m)?)?;
     m.add_function(wrap_pyfunction!(cancel, m)?)?;
     m.add_function(wrap_pyfunction!(service_cancellation, m)?)?;
     m.add_function(wrap_pyfunction!(interrupt_for_staff, m)?)?;

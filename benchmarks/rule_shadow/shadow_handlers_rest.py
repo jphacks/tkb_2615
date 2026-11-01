@@ -34,6 +34,7 @@ HANDLERS = (
     ("handlers", "facility_recovery", "FacilityRecoveryHandler"),
     ("handlers", "infrastructure", "InfrastructureEventHandler"),
     ("handlers", "service_cancellation", "ResourceServiceCancellationHandler"),
+    ("handlers", "population", "EffectProgramPopulationHandler"),
     ("handlers", "delivery_delay", "DeliveryDelayHandler"),
     ("handlers", "water_outage", "WaterOutageHandler"),
     ("handlers", "water_restoration", "WaterRestorationHandler"),
