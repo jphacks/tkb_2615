@@ -98,7 +98,7 @@ driver が1 tick に通る入口と、その費用です（`cProfile`、µs/tick
 | **`first_difference.py --both`：55シナリオすべて、driver と `SHELTERSIM_NATIVE=0`** | 段階の前後の digest 220,892か所、違い0件。最終のハッシュも同じ |
 | `tracked_mirror_gate.py` | **動かしていません。** `core/state_mirror.py` は変えていません |
 | `ruff`、`cargo clippy`（`disallowed_methods`） | 問題なし |
-@@SHADOW7@@
+| 7日分に `rule_shadow`（`shadow_dispatch`、`shadow_queues`、`shadow_service`、`shadow_tick`。Python の経路） | 同じハッシュ、違い0件 |
 
 **最初の版の `investigate_performance.py` は driver を動かしていませんでした。** `__call__` と `_record_outcome` を包んでいたので、すべての tick が断られ、Python の経路でハッシュが一致するだけでした。プロファイルの回数で分かったので直しました。下の回数がその確認です。
 
@@ -143,7 +143,7 @@ driver から Python の部分に届いた回数（ゲート）：`_consider_due
 | `_record_assigned_support` を飛ばす | 違いあり | 不一致 | 5件失敗 |
 | `_consider_due_complaints` と `relief` を入れ替え | **0件** | **一致** | 順序のテストだけが失敗 |
 | `apply_deltas` と `update_long_term` を入れ替え | **0件** | **一致** | 順序のテストだけが失敗 |
-| `_view_before_proposals` を残さない | **0件** | **一致** | 足したテストが見ます（確かめたのはテストの内容だけで、変更して動かしてはいません）。結果は変わらず、遅くなるだけです |
+| `_view_before_proposals` を残さない | **0件** | **一致** | 足したテスト1件が失敗。結果は変わらず、遅くなるだけです |
 
 **順序の入れ替えの2つは、結果の比較には見えません。** どのシナリオでも、同じ分に両方が書かないからです。このため `test_the_driver_takes_a_phase_s_steps_in_the_order_of_its_python_method` が `phases/*.py` の AST と `tick.rs` の文字の順序を比べます。2つの入れ替えで失敗することは確かめました。
 
