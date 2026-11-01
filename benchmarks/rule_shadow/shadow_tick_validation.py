@@ -21,6 +21,7 @@ PROBE_EVERY = 997
 PSYCHOLOGY = "psychological_distress_v1"
 INFORMATION = "information_spread_v1"
 STAFF = "staff_dynamics_v1"
+SOCIAL_NETWORK = "social_network_v1"
 
 
 def _plain(value: Any) -> Any:
@@ -40,6 +41,8 @@ def _beyond_the_bound(world: Any, name: str) -> bool:
         holder, key = next(iter(state["agents"].values()), None), "long_term_distress"
     elif name == INFORMATION:
         holder, key = state["query_pressure"], next(iter(state["query_pressure"]), None)
+    elif name == SOCIAL_NETWORK:
+        holder, key = next(iter(state["relationships"].values()), None), "trust"
     else:
         holder, key = next(iter(state["staff"].values()), None), "fatigue"
     if holder is None or key is None:
@@ -56,7 +59,13 @@ def prepare(output: str) -> None:
     from sheltersim.contracts import runtime
     from sheltersim.core import state_mirror
     from sheltersim.core import world as world_module
-    from sheltersim.domain import information, psychological_state, simulator_state, staff_dynamics
+    from sheltersim.domain import (
+        information,
+        psychological_state,
+        simulator_state,
+        social_network,
+        staff_dynamics,
+    )
 
     recorder = Recorder(output, "tick_validation")
     rules = {
@@ -70,6 +79,7 @@ def prepare(output: str) -> None:
             duration_minutes=world.duration_minutes,
         ),
         STAFF: staff_dynamics.validate_staff_dynamics_state,
+        SOCIAL_NETWORK: social_network.validate_social_network_state,
     }
     rust_validated = state_mirror.rust_validated
 

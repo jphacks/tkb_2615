@@ -81,7 +81,6 @@ class TickValidationMemo:
         self._added_requests: Any = []
         self._checked_requests: list[Any] = []
         # Relationship records written since the last check.
-        self.social_watch = native.record_watch()
         self.body_watch = native.record_watch("topic_ids")
         self._relationships_read: list[tuple[Any, Any]] = []
         # used_reservation_ids: the IDs that passed, as a list and as a set.

@@ -8,6 +8,8 @@ import math
 from typing import Any, Mapping
 
 from sheltersim import native
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ordered_pair_key
 from sheltersim.events.models import ScheduledEvent
@@ -99,20 +101,6 @@ def _pair_key_problem(pair_key: Any) -> str | None:
 _cached_pair_key_problem = functools.lru_cache(maxsize=65_536)(_pair_key_problem)
 
 
-def _key_problem(pair_key: Any) -> str | None:
-    return (
-        _cached_pair_key_problem(pair_key) if type(pair_key) is str else _pair_key_problem(pair_key)
-    )
-
-
-def _key_is_good(pair_key: Any) -> bool:
-    return _key_problem(pair_key) is None
-
-
-# str keys whose check found no problem, for the Rust kernel to look up first.
-_GOOD_PAIR_KEYS: set[str] = set()
-
-
 _RELATIONSHIP_FIELDS = frozenset(
     {
         "contact_count",
@@ -130,7 +118,7 @@ def _is_count(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def validate_social_network_state(world: WorldState, *, tick_memo: Any = None) -> None:
+def validate_social_network_state(world: WorldState) -> None:
     """Validate sparse directed edges without requiring every possible Agent pair."""
     state = world.model_state.get(SOCIAL_NETWORK_STATE_KEY)
     if state is None:
@@ -151,14 +139,10 @@ def validate_social_network_state(world: WorldState, *, tick_memo: Any = None) -
         or len(state["relationships"]) > MAX_RELATIONSHIPS
     ):
         raise ValueError("social_network_v1 has an invalid exact schema")
-    relationships = state["relationships"]
-    if tick_memo is not None:
-        relationships = tick_memo.relationships_to_check(tick_memo.social_watch, relationships)
-    if native.social_relationships_valid(relationships, _GOOD_PAIR_KEYS, _key_is_good):
-        return
-    # Without the kernel, or for a value it leaves to Python, these rules decide. Every
-    # tick checks every relationship, so each record is checked inline, accepting
-    # exactly what the field-by-field rules accept.
+    # With the Rust kernels, state/social_network.rs accepts first (rust_validated at the caller),
+    # and reads only the records written since its last check. Without them, or for a value it
+    # leaves to Python, these rules decide. Every tick checks every relationship here, so each
+    # record is checked inline, accepting exactly what the field-by-field rules accept.
     for pair_key, record in state["relationships"].items():
         problem = (
             _cached_pair_key_problem(pair_key)
@@ -270,6 +254,7 @@ def record_interaction(
     state["interaction_count"] += 1
 
 
+@kernel_first("social_network", "observe_event")
 def observe_event(world: WorldState, event: ScheduledEvent, minute: int) -> None:
     """Extract only allowlisted, structured contact data from an applied event."""
     payload = event.payload
@@ -416,3 +401,7 @@ def _sync_body_trust(world: WorldState, recipient_id: str, source_id: str) -> No
     )
     if body_record is not None and social_record is not None:
         social_record["trust"] = body_record["trust"]
+
+
+if native.available():
+    register_rust_validator(SOCIAL_NETWORK_STATE_KEY, native.state("social_network").validate)

@@ -104,13 +104,6 @@ def view_state_hash(*arguments: Any) -> str | None:
         return None
 
 
-def social_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
-    """True only if every social_network_v1 relationship passes the Python rules."""
-    return _native is not None and _native.social_relationships_valid(
-        relationships, good_keys, key_ok
-    )
-
-
 def body_relationships_valid(relationships: Any, good_keys: set[str], key_ok: Any) -> bool:
     """True only if every body_state_v1 relationship passes the Python rules."""
     return _native is not None and _native.body_relationships_valid(
