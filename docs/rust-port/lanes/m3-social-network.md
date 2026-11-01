@@ -22,7 +22,7 @@ Rust が `social_network_v1` を型付きの行で持ち、書き手を一緒に
 
 - `virtual_dialogue_example` と手がかりの閾値 0.65（`domain/social_dialogue.py`）。履歴を読むときだけ動き、tick の中にありません。
 - ハンドラーの残りの枝。`complaint_response`、`cooperation`、`information_reaction`、種類のない形は、ゲートの社会イベントの 0.2% で、7日分には0件です。`cooperation` はイベントログを読み、`information_reaction` は `TypedMessage` の検証を通します。
-- ハンドラーの抑止と失敗。文が event の `detail` に残るので、Python が言います。ゲートで約 12%、7日分で約 5% です。
+- ハンドラーの失敗。抑止の3つの文はその後 M3 の dispatch が Rust に移しました（[m3-dispatch.md](m3-dispatch.md)）。この節の残りと下の表の `Python が抑止` の数は、このレーンの時点の値です。
 - `events/handlers.py:438,643,772` の乱数のキーと、イベントの番号の割り当て。どれも情報のハンドラーで、ここでは動かしていません。
 - dispatch のループ、`effect_event_guard_or_suppress`、`record_social_event`（`body_state_v1` のレーン）。
 - `remove_agent`、`population_lifecycle.py` の退去と復元。1項目ずつの転送で動きます。

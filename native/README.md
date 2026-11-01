@@ -113,6 +113,13 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
+  a Rust function (`social_interaction`, `agent_travel_complete`) runs it when the registered handler
+  is that class with its `apply` as defined; anything else, and any refused event, calls
+  `controller._dispatch_one_event`. Unsupported only before the first change. `rules/travel_completion.rs`
+  is the walk's handler; what a walk leads to is still `handler._after_arrival` (M4). No borrow is held
+  across a Python call. `use_python_entries(True)` makes it call each rule through its Python entry,
+  for `benchmarks/rule_shadow`, and `stats()` says what ran and why anything was refused.
 - `rules/behavior.rs`: `propose_due(controller, view, rng)` and `observed_state(controller, view,
   agent_id)` replace the steps `_propose_due` and `_observed_state` of the propose phase. They read
   the snapshot of `rules/world_view.rs`, so a tick makes no Python view of the people for them, and
@@ -157,8 +164,9 @@ each OS, because both call the same libm.
   before any change.
 
 - `rules.social_interaction.apply(handler, world, event)`: `SocialInteractionHandler.apply` for a
-  social action that goes through. A suppressed or failed event and the other types of interaction
-  give `Unsupported`, and the Python rule runs (`docs/rust-port/lanes/m3-social-network.md`).
+  social action, which raises the rule's `EventSuppressed` text for one that no longer applies. A
+  failed event and the other types of interaction give `Unsupported`, and the Python rule runs
+  (`docs/rust-port/lanes/m3-social-network.md`, `m3-dispatch.md`).
 
 - `state.movement.ROW`: Rust owns `movement_v1` (`src/state/movement.rs`). No rule moved yet: the
   Python rules write one record at a time through the forwarded writes, and M4 moves them.
