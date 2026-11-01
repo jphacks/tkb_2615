@@ -1343,13 +1343,6 @@ fn map_get<'a>(value: &'a V, key: &str) -> Option<&'a V> {
     }
 }
 
-fn str_of(value: Option<&V>) -> Arc<str> {
-    match value {
-        Some(V::Str(text)) => text.clone(),
-        _ => Arc::from(""),
-    }
-}
-
 struct Prepared {
     item: IndexMap<Arc<str>, V>,
     agent_id: Arc<str>,

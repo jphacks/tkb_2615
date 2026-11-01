@@ -147,7 +147,9 @@ def prepare(output: str) -> None:
 
         return shadow
 
-    def reader(label: str, kernel: Callable[..., Any], rule: Callable[[], Any]) -> Callable[..., Any]:
+    def reader(
+        label: str, kernel: Callable[..., Any], rule: Callable[[], Any]
+    ) -> Callable[..., Any]:
         compared = pure_shadow(recorder, label, kernel, rule, unsupported)
 
         def shadow(*arguments: Any, **options: Any) -> Any:
@@ -179,13 +181,19 @@ def prepare(output: str) -> None:
     ):
         population_rule = rule_of("population", rule_name)
         options = {"idle": idle} if idle else {}
-        setattr(population, name, writer(name, getattr(population, name), population_rule, **options))
+        setattr(
+            population, name, writer(name, getattr(population, name), population_rule, **options)
+        )
     for name, rule_name in (
         ("zone_has_room", "_zone_has_room"),
         ("choose_admission_target", "_choose_admission_target"),
         ("validate_population_dynamics_state", "validate_population_dynamics_state"),
     ):
-        setattr(population, name, reader(name, getattr(population, name), rule_of("population", rule_name)))
+        setattr(
+            population,
+            name,
+            reader(name, getattr(population, name), rule_of("population", rule_name)),
+        )
     lifecycle = native.rules("population_lifecycle")
     lifecycle.apply_presence_action = writer(
         "apply_presence_action",
@@ -212,5 +220,9 @@ def prepare(output: str) -> None:
         setattr(
             lifecycle,
             name,
-            reader(f"lifecycle.{name}", getattr(lifecycle, name), rule_of("population_lifecycle", rule_name)),
+            reader(
+                f"lifecycle.{name}",
+                getattr(lifecycle, name),
+                rule_of("population_lifecycle", rule_name),
+            ),
         )
