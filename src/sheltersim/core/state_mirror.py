@@ -702,6 +702,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "information_spread_v1": ("information", "ROW"),
     "social_propagation_v1": ("social_propagation", "ROW"),
     "movement_v1": ("movement", "ROW"),
+    "body_state_v1": ("body_state", "ROW"),
     "social_network_v1": ("social_network", "ROW"),
     "agent_dynamics_v1": ("agent_dynamics", "ROW"),
 }
@@ -739,7 +740,16 @@ def rust_validated(world: Any, name: str) -> bool:
     if not _RUST_VALIDATORS:
         return False
     kernel = _RUST_VALIDATORS.get(name)
-    if kernel is None or not _rows_are_what_the_world_holds(world, name):
+    return kernel is not None and rust_accepts(world, name, kernel)
+
+
+def rust_accepts(world: Any, name: str, kernel: Callable[[Any], bool]) -> bool:
+    """Whether a kernel accepts a part of this namespace, whose Python rules can then be skipped.
+
+    For a namespace with rules that read what its row doesn't hold (domain/body_state.py), which
+    has no validator for the whole. A false or Unsupported says nothing about the state.
+    """
+    if not _rows_are_what_the_world_holds(world, name):
         return False
     try:
         return kernel(world) is True
@@ -804,6 +814,11 @@ def _attach_fields(world: Any, core: Any) -> None:
             world.__dict__[name] = mirror.replace_root(current)
 
 
+# A namespace whose fields the Checkpoint hash tree reads apart (_WORLD_TREE in
+# core/checkpoint_cache.py) has no use for the bytes of the whole: 8 MB of history at each save.
+_HASHED_BY_PARTS = frozenset({"body_state_v1"})
+
+
 def owned_row_bytes(
     world: Any,
 ) -> tuple[dict[str, list[bytes]], dict[str, bytes], dict[str, bytes]]:
@@ -831,6 +846,8 @@ def owned_row_bytes(
     table = world.__dict__.get("model_state")
     # Without the table the namespaces are in a dict no row follows.
     for name in OWNED_NAMESPACES if isinstance(table, NamespaceTable) else ():
+        if name in _HASHED_BY_PARTS:
+            continue
         mirror = core.mirror(name)
         try:
             raw = (

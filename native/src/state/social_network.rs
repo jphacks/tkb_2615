@@ -8,8 +8,7 @@
 //!
 //! The row knows which records were written since the last check, so the check of each tick reads
 //! those and not the thousands of others: a forwarded write and a rule's write are the only ways
-//! into the row, and both say which record they touch. This is what the dict watcher of `watch.rs`
-//! and `social_relationships_valid` did on the tree (docs/rust-port/lanes/m3-social-network.md).
+//! into the row, and both say which record they touch (docs/rust-port/lanes/m3-social-network.md).
 
 use std::sync::Arc;
 

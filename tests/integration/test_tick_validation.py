@@ -475,53 +475,6 @@ def test_the_validation_leaves_the_saved_state_unchanged(finished_world) -> None
     assert world.same_state(_restored(finished_world))
 
 
-def test_only_written_relationships_are_read_again(finished_world) -> None:
-    """The watch hands over written and new records, and all of them when in doubt."""
-    watch = native.record_watch()
-    if watch is None:
-        pytest.skip("this build cannot watch dicts")
-    relationships = _restored(finished_world).model_state["social_network_v1"]["relationships"]
-    assert watch.changed(relationships) is relationships
-    watch.accept(relationships)
-    assert watch.changed(relationships) == {}
-    watch.accept(relationships)
-
-    key = next(iter(relationships))
-    relationships[key]["contact_count"] += 1
-    relationships["new"] = {"contact_count": 0}
-    assert watch.changed(relationships) == {key: relationships[key], "new": relationships["new"]}
-    watch.accept(relationships)
-    assert watch.changed(relationships) == {}
-    watch.accept(relationships)
-
-    relationships["new"]["contact_count"] = 1
-    assert watch.changed(relationships) == {"new": relationships["new"]}
-    watch.accept(relationships)
-
-    del relationships[key]
-    assert watch.changed(relationships) is relationships
-    watch.accept(relationships)
-    assert watch.changed({**relationships}) == relationships
-
-
-def test_a_second_watch_on_a_dict_leaves_the_first_reading_everything(finished_world) -> None:
-    first = native.record_watch()
-    if first is None:
-        pytest.skip("this build cannot watch dicts")
-    second = native.record_watch()
-    relationships = _restored(finished_world).model_state["social_network_v1"]["relationships"]
-    first.changed(relationships)
-    first.accept(relationships)
-    second.changed(relationships)
-    second.accept(relationships)
-
-    assert first.changed(relationships) is relationships
-    first.reset()
-    key = next(iter(relationships))
-    relationships[key]["contact_count"] += 1
-    assert second.changed(relationships) == {key: relationships[key]}
-
-
 def _unsettled_scan(world: WorldState) -> list[SupportRequestState]:
     return [
         request

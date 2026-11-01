@@ -773,6 +773,60 @@ impl NamespaceMirror {
         Self::release_value(slf, &old, py.None().bind(py))
     }
 
+    /// The list at this path of the tree, from the root through dicts, or None for a detached
+    /// namespace. `path` leads to a list.
+    fn list_at<'py>(slf: &Bound<'py, Self>, path: &[&str]) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = slf.py();
+        let Some(mut node) = slf.try_borrow()?.root.as_ref().map(|root| root.bind(py).clone()) else {
+            return Ok(None);
+        };
+        for part in path {
+            let part = PyString::new(py, part);
+            node = raw_dict_get(&node, part.as_any())?
+                .ok_or_else(|| Unsupported::new_err("the tree has no such path"))?;
+        }
+        Ok(Some(node))
+    }
+
+    /// items.append(value) in the tree from Rust, after the row took it. See `write_through`.
+    pub(crate) fn append_through<'py>(
+        slf: &Bound<'py, Self>,
+        path: &[&str],
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let Some(list) = Self::list_at(slf, path)? else {
+            return Ok(());
+        };
+        let id: u32 = list.getattr(intern!(slf.py(), "_node"))?.extract()?;
+        let stored = Self::adopt_value(slf, id, NodeKey::ListItem, value, 0)?;
+        raw_list_append(&list, &stored)
+    }
+
+    /// del items[:count] in the tree from Rust, after the row dropped them. See `write_through`.
+    pub(crate) fn drop_oldest_through(slf: &Bound<'_, Self>, path: &[&str], count: usize) -> PyResult<()> {
+        let py = slf.py();
+        let Some(list) = Self::list_at(slf, path)? else {
+            return Ok(());
+        };
+        let list_pointer = list.as_ptr();
+        // SAFETY: list is a live list, the indexes are within it when the row has this many, and
+        // each item gets its own reference before it leaves the list.
+        let old: Vec<Bound<'_, PyAny>> = unsafe {
+            let size = ffi::PyList_Size(list_pointer) as usize;
+            (0..count.min(size))
+                .map(|index| Bound::from_borrowed_ptr(py, ffi::PyList_GetItem(list_pointer, index as ffi::Py_ssize_t)))
+                .collect()
+        };
+        // SAFETY: a null value deletes the slice.
+        if unsafe { ffi::PyList_SetSlice(list_pointer, 0, old.len() as ffi::Py_ssize_t, null_mut()) } != 0 {
+            return Err(PyErr::fetch(py));
+        }
+        for item in &old {
+            Self::release_value(slf, item, py.None().bind(py))?;
+        }
+        Ok(())
+    }
+
     /// d[key] = value in the tree, keeping the table right, without touching the row.
     fn store<'py>(
         slf: &Bound<'py, Self>,

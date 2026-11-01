@@ -210,8 +210,9 @@ def test_an_edit_of_old_history_shows_when_it_is_hashed_from_the_first_item(
 ) -> None:
     """History items are hashed once per stream, and again every so many minutes."""
     world = WorldState.from_scenario(generated_scenario)
-    history = [{"n": 1}, {"n": 2}]
-    world.model_state["body_state_v1"] = {"history": history}
+    world.model_state["body_state_v1"] = {"history": [{"n": 1}, {"n": 2}]}
+    # Read back: an owned namespace stores a tracked tree, not the list it was given.
+    history = world.model_state["body_state_v1"]["history"]
     path = tmp_path / "digests.jsonl"
     stream = tick_probe.DigestStream(path, full_every_minutes=2)
     stream.engine_started(0, world)
