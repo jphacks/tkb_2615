@@ -1,9 +1,11 @@
 """Compare the proposals of rules/behavior.rs with Python's at every call: see sitecustomize.py.
 
-Each `_propose_due` runs the Python rule on the same view, then the kernel, and compares every field
-of every proposal bit by bit: its type, a float's hex, the order of each dict's keys, the key of the
-draw. The same for each `_observed_state`. The view is compared by world_view_shadow.py. Results are
-in DIR/behavior, with what the runs reached: a branch no scenario takes is not compared.
+Each `_propose_due` runs the Python rule on the same view, then the kernel of rules/decisions.rs, and
+compares every field of every proposal bit by bit: its type, a float's hex, the order of each dict's
+keys, the key of the draw, and what a row answers without its object. The same for each
+`_observed_state`. The rows go on, so shadow_decisions.py sees the real path. The view is compared by
+world_view_shadow.py. Results are in DIR/behavior, with what the runs reached: a branch no scenario
+takes is not compared.
 """
 
 from __future__ import annotations
@@ -85,7 +87,7 @@ def install(output: str) -> None:
     seen: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
     differences: list[str] = []
-    rules = native.rules("behavior")
+    rules = native.rules("decisions")
     propose_python = ProposePhase._propose_due
     observed_python = ProposePhase._observed_state
 
@@ -97,7 +99,7 @@ def install(output: str) -> None:
         except Exception as error:  # noqa: BLE001 - only compared with what the kernel does
             python_error = error
         try:
-            made = rules.propose_due(self, view, rng)
+            rows = rules.propose_rows(self, view, rng)
         except native.Unsupported as reason:
             reasons[f"propose_due: {reason}"] += 1
             if python_error is not None:
@@ -106,7 +108,33 @@ def install(output: str) -> None:
         seen["propose_ran"] += 1
         if python_error is not None:
             differences.append(f"minute {view.minute_index}: the kernel took what Python raises on")
-            return made
+            return rows
+        # What a row answers itself, read before its object exists.
+        direct = [
+            (
+                row.agent_id,
+                row.action,
+                row.next_decision_at,
+                row.target_id,
+                row.minute_index,
+                row.observed_state_hash,
+            )
+            for row in rows
+        ]
+        made = tuple(row.materialize() for row in rows)
+        expected = [
+            (
+                item.agent_id,
+                item.action,
+                item.next_decision_at,
+                item.target_id,
+                item.minute_index,
+                item.observed_state_hash,
+            )
+            for item in python
+        ]
+        if json.dumps(exact(direct, seen)) != json.dumps(exact(expected, seen)):
+            differences.append(f"minute {view.minute_index}: a row's fields are not the proposal's")
         left = json.dumps(exact(python, seen))
         right = json.dumps(exact(made, seen))
         if left != right:
@@ -119,17 +147,18 @@ def install(output: str) -> None:
             if task.agent_id is not None and task.kind in ("toilet_queue", "resource_service_queue")
         )
         seen["proposals_with_two_queued_tasks"] += sum(queued[p.agent_id] > 1 for p in made)
-        return made
+        return rows
 
     def observed(self: Any, view: Any, agent_id: str) -> Any:
         seen["observed_calls"] += 1
         python = observed_python(self, view, agent_id)
         try:
-            made = rules.observed_state(self, view, agent_id)
+            row = rules.observed_row(self, view, agent_id)
         except native.Unsupported as reason:
             reasons[f"observed_state: {reason}"] += 1
             return python
         seen["observed_ran"] += 1
+        made = dict(row)
         left = json.dumps(exact(python, seen))
         right = json.dumps(exact(made, seen))
         if left != right:
@@ -139,7 +168,7 @@ def install(output: str) -> None:
         seen["observed_with_queue"] += made["queue"]["task_id"] is not None
         seen["observed_with_request"] += made["support"]["request_id"] is not None
         seen["observed_with_environment"] += "zone_environment" in made
-        return made
+        return row
 
     OfflineSimulationController._propose_due = propose  # type: ignore[method-assign]
     OfflineSimulationController._observed_state = observed  # type: ignore[method-assign]

@@ -8,7 +8,8 @@
 //! That covers a view Python made, a policy, runner or RNG of another class (subclasses too), and any
 //! value on which the Python rule would raise, which `check_candidate` and `check_proposal` repeat
 //! from `ActionCandidate` and `ActionProposal`. The proposals are the Python classes, without their
-//! generated `__init__`. Nothing here writes a trace: what a run records of a decision is the proposal.
+//! generated `__init__`, made only when something reads one (rules/decisions.rs keeps the rows).
+//! Nothing here writes a trace: what a run records of a decision is the proposal.
 //!
 //! The coefficients are the ones of `UtilityBehaviorPolicy.propose`: `score` and `candidates_of` have
 //! them with the same order of operations, and the policy's own fields are read from it at each call.
@@ -38,7 +39,7 @@ fn unsupported<T>(reason: &'static str) -> PyResult<T> {
 
 /// `ActionKind`; the discriminant is the place in `ACTION_VALUES` and in `Classes::actions`.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
+pub(crate) enum Action {
     Wait,
     RequestToilet,
     Rest,
@@ -67,7 +68,7 @@ const ACTION_VALUES: [&str; 11] = [
 ];
 
 impl Action {
-    fn value(self) -> &'static str {
+    pub(crate) fn value(self) -> &'static str {
         ACTION_VALUES[self as usize]
     }
 }
@@ -158,7 +159,7 @@ impl<'a> Frozen<'a> {
 }
 
 /// The last modifier of an action wins, as in `{item.action: item for item in ...}`.
-fn demand_of<'a>(modifiers: &'a [DemandModifier], action: Action) -> Option<&'a DemandModifier> {
+pub(crate) fn demand_of<'a>(modifiers: &'a [DemandModifier], action: Action) -> Option<&'a DemandModifier> {
     modifiers.iter().rev().find(|modifier| &*modifier.action == action.value())
 }
 
@@ -172,23 +173,23 @@ struct Candidate {
 
 /// A candidate with what `ActionCandidate` holds. `utility` includes the priority's half.
 #[derive(Clone, Copy)]
-struct Scored {
-    action: Action,
-    eligible: bool,
-    utility: f64,
-    priority: i64,
-    probability: f64,
+pub(crate) struct Scored {
+    pub(crate) action: Action,
+    pub(crate) eligible: bool,
+    pub(crate) utility: f64,
+    pub(crate) priority: i64,
+    pub(crate) probability: f64,
 }
 
 /// What a proposal says.
-struct Outcome {
-    candidates: Vec<Scored>,
-    choice_value: f64,
-    tie_broken: bool,
-    selection_probability: f64,
-    action: Action,
-    next_decision_at: i64,
-    target: Option<usize>,
+pub(crate) struct Outcome {
+    pub(crate) candidates: Vec<Scored>,
+    pub(crate) choice_value: f64,
+    pub(crate) tie_broken: bool,
+    pub(crate) selection_probability: f64,
+    pub(crate) action: Action,
+    pub(crate) next_decision_at: i64,
+    pub(crate) target: Option<usize>,
 }
 
 /// `ActionCandidate.__post_init__`, on what the scorer can make.
@@ -597,20 +598,20 @@ fn compute(frozen: &Frozen<'_>, index: usize, temperature: f64, base_minutes: i6
 
 // ---- Python's side ---------------------------------------------------------------------------------
 
-struct Classes {
+pub(crate) struct Classes {
     runner: Py<PyType>,
     utility: Py<PyType>,
     priority: Py<PyType>,
     counter_rng: Py<PyType>,
     candidate: Py<PyType>,
     proposal: Py<PyType>,
-    actions: Vec<Py<PyAny>>,
+    pub(crate) actions: Vec<Py<PyAny>>,
     new: Py<PyAny>,
 }
 
 static CLASSES: GILOnceCell<Classes> = GILOnceCell::new();
 
-fn classes(py: Python<'_>) -> PyResult<&Classes> {
+pub(crate) fn classes(py: Python<'_>) -> PyResult<&Classes> {
     CLASSES.get_or_try_init(py, || {
         let module = py.import("sheltersim.policies.behavior")?;
         let kind = |name: &str| -> PyResult<Py<PyType>> { Ok(module.getattr(name)?.downcast_into::<PyType>()?.unbind()) };
@@ -654,7 +655,7 @@ fn number(value: &Bound<'_, PyAny>) -> PyResult<f64> {
 
 /// The snapshot of a view the phases made. One Python made (`from_python_view`) has zeros for most
 /// of what this rule reads, so `partial` is refused, as a view without a snapshot is.
-fn snapshot_of<'py>(view: &Bound<'py, PyAny>) -> PyResult<Bound<'py, RustView>> {
+pub(crate) fn snapshot_of<'py>(view: &Bound<'py, PyAny>) -> PyResult<Bound<'py, RustView>> {
     let py = view.py();
     let fields = view.getattr(intern!(py, "__dict__"))?;
     let Some(found) = raw_dict_get(&fields, intern!(py, "_rust_view").as_any())? else {
@@ -675,14 +676,14 @@ fn g<'py>(value: &Bound<'py, PyAny>) -> PyResult<String> {
 }
 
 /// The trigger text of each action, made once a call that has someone due.
-struct Triggers<'py> {
-    texts: Vec<Option<Bound<'py, PyString>>>,
+pub(crate) struct Triggers {
+    texts: Vec<Option<Py<PyString>>>,
 }
 
-impl<'py> Triggers<'py> {
-    fn new(py: Python<'py>, policy: &Bound<'py, PyAny>, query_enabled: bool, resource_service: bool) -> PyResult<Self> {
-        let mut texts: Vec<Option<Bound<'py, PyString>>> = vec![None; ACTION_VALUES.len()];
-        let mut set = |action: Action, text: &Bound<'py, PyString>| texts[action as usize] = Some(text.clone());
+impl Triggers {
+    fn new<'py>(py: Python<'py>, policy: &Bound<'py, PyAny>, query_enabled: bool, resource_service: bool) -> PyResult<Self> {
+        let mut texts: Vec<Option<Py<PyString>>> = (0..ACTION_VALUES.len()).map(|_| None).collect();
+        let mut set = |action: Action, text: &Bound<'py, PyString>| texts[action as usize] = Some(text.clone().unbind());
         set(Action::Wait, intern!(py, "always"));
         set(Action::RequestToilet, intern!(py, "toilet_urgency>=0.25 or hygiene_need>=0.5"));
         set(Action::Rest, intern!(py, "fatigue>=0.25 or hunger>=0.70 or stress>=0.50"));
@@ -718,10 +719,11 @@ impl<'py> Triggers<'py> {
     }
 
     /// `_demand_trigger`.
-    fn of(&self, py: Python<'py>, action: Action, modifier: Option<&DemandModifier>) -> PyResult<Bound<'py, PyString>> {
+    pub(crate) fn of<'py>(&self, py: Python<'py>, action: Action, modifier: Option<&DemandModifier>) -> PyResult<Bound<'py, PyString>> {
         let Some(trigger) = &self.texts[action as usize] else {
             return unsupported("an action has no trigger");
         };
+        let trigger = trigger.bind(py);
         let Some(modifier) = modifier else {
             return Ok(trigger.clone());
         };
@@ -753,19 +755,26 @@ macro_rules! set {
     };
 }
 
+/// What all the proposals of one `propose_due` share.
+pub(crate) struct Common {
+    pub(crate) triggers: Triggers,
+    pub(crate) state_hash: Py<PyAny>,
+    pub(crate) scorer_version: Py<PyAny>,
+    pub(crate) policy_version: Py<PyAny>,
+}
+
 /// One `ActionProposal`, with the fields in the order its `__init__` sets them.
-#[allow(clippy::too_many_arguments)]
-fn proposal_of<'py>(
+pub(crate) fn proposal_of<'py>(
     py: Python<'py>,
-    classes: &Classes,
-    triggers: &Triggers<'py>,
+    common: &Common,
     rust: &RustView,
     index: usize,
     outcome: &Outcome,
-    state_hash: &Bound<'py, PyAny>,
-    scorer_version: &Bound<'py, PyAny>,
-    policy_version: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let classes = classes(py)?;
+    let triggers = &common.triggers;
+    let (state_hash, scorer_version, policy_version) =
+        (common.state_hash.bind(py), common.scorer_version.bind(py), common.policy_version.bind(py));
     let data = rust.data();
     let agent = &data.agents[index];
     let modifiers = &data.zone_of(agent).demand_modifiers;
@@ -814,13 +823,21 @@ fn proposal_of<'py>(
     new_object(classes, &classes.proposal, &fields)
 }
 
-/// `self.decisions.propose_due(view, rng)` of the propose phase.
-#[pyfunction]
-fn propose_due<'py>(
+/// The proposals of one `propose_due`, as rows: the snapshot they read, what they share, and each
+/// person's place with the outcome. None when nobody is due.
+pub(crate) struct Due<'py> {
+    pub(crate) rust: Bound<'py, RustView>,
+    pub(crate) common: Common,
+    pub(crate) outcomes: Vec<(usize, Outcome)>,
+}
+
+/// `self.decisions.propose_due(view, rng)` of the propose phase, with no Python object for a
+/// proposal. Everyone is computed first, as Python does, so a refusal changes nothing.
+pub(crate) fn due_outcomes<'py>(
     controller: &Bound<'py, PyAny>,
     view: &Bound<'py, PyAny>,
     rng: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Option<Due<'py>>> {
     let py = controller.py();
     let classes = classes(py)?;
     let runner = controller.getattr(intern!(py, "decisions"))?;
@@ -847,8 +864,8 @@ fn propose_due<'py>(
     if seed < 0 {
         return unsupported("the seed is negative");
     }
-    let rust = snapshot_of(view)?;
-    let rust = rust.get();
+    let snapshot = snapshot_of(view)?;
+    let rust = snapshot.get();
     let data = rust.data();
     let state_hash = view.getattr(intern!(py, "state_hash"))?;
     let hash_is_good = state_hash.downcast_exact::<PyString>().is_ok_and(|text| text.len().is_ok_and(|length| length == 64));
@@ -861,7 +878,7 @@ fn propose_due<'py>(
             && matches!(agent.activity, Activity::Idle | Activity::Resting | Activity::Sleeping)
     };
     if !data.agents.iter().any(due) {
-        return Ok(PyTuple::empty(py).into_any());
+        return Ok(None);
     }
 
     let scorer_version = scorer.getattr(intern!(py, "policy_version"))?;
@@ -907,7 +924,7 @@ fn propose_due<'py>(
         settings.resource_service && data.resource_service_enabled,
     )?;
 
-    let mut proposals = Vec::new();
+    let mut outcomes = Vec::new();
     for (index, agent) in data.agents.iter().enumerate() {
         if !due(agent) {
             continue;
@@ -922,7 +939,31 @@ fn propose_due<'py>(
             None => interval,
         };
         let outcome = compute(&frozen, index, temperature, interval).map_err(Unsupported::new_err)?;
-        proposals.push(proposal_of(py, classes, &triggers, rust, index, &outcome, &state_hash, &scorer_version, &policy_version)?);
+        outcomes.push((index, outcome));
+    }
+    let common = Common {
+        triggers,
+        state_hash: state_hash.unbind(),
+        scorer_version: scorer_version.unbind(),
+        policy_version: policy_version.unbind(),
+    };
+    Ok(Some(Due { rust: snapshot, common, outcomes }))
+}
+
+/// `self.decisions.propose_due(view, rng)` as Python objects, the comparison base of the rows.
+#[pyfunction]
+fn propose_due<'py>(
+    controller: &Bound<'py, PyAny>,
+    view: &Bound<'py, PyAny>,
+    rng: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = controller.py();
+    let Some(due) = due_outcomes(controller, view, rng)? else {
+        return Ok(PyTuple::empty(py).into_any());
+    };
+    let mut proposals = Vec::with_capacity(due.outcomes.len());
+    for (index, outcome) in &due.outcomes {
+        proposals.push(proposal_of(py, &due.common, due.rust.get(), *index, outcome)?);
     }
     Ok(PyTuple::new(py, proposals)?.into_any())
 }
@@ -947,15 +988,22 @@ fn observed_state<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = controller.py();
     let rust = snapshot_of(view)?;
-    let rust = rust.get();
-    let data = rust.data();
+    let index = person_of(rust.get(), agent_id)?;
+    observed_dict(py, rust.get(), index)
+}
+
+/// The place in the snapshot of the person with this ID.
+pub(crate) fn person_of(rust: &RustView, agent_id: &Bound<'_, PyAny>) -> PyResult<usize> {
     let Ok(id) = agent_id.downcast_exact::<PyString>() else {
         return unsupported("the ID is not a str");
     };
     let id_text = id.to_str().map_err(|_| Unsupported::new_err("the ID is not UTF-8"))?;
-    let Some(index) = data.index_of(id_text) else {
-        return unsupported("no such person");
-    };
+    rust.data().index_of(id_text).ok_or_else(|| Unsupported::new_err("no such person"))
+}
+
+/// `_agent_view_snapshot`. rules/decisions.rs has the same document as bytes.
+pub(crate) fn observed_dict<'py>(py: Python<'py>, rust: &RustView, index: usize) -> PyResult<Bound<'py, PyDict>> {
+    let data = rust.data();
     let agent = &data.agents[index];
     let zone = data.zone_of(agent);
     let float = |value: f64| PyFloat::new(py, value);
