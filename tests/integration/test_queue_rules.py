@@ -466,7 +466,7 @@ def test_someone_who_is_moved_from_another_activity_is_queued_by_the_walk(
     assert world.model_state[KEY]["journeys"][person]["purpose"] == "resource_queue_position"
 
 
-@pytest.mark.parametrize(("away", "walks"), [(0.049, False), (0.051, True)])
+@pytest.mark.parametrize(("away", "walks"), [(0.0499, False), (0.0501, True)])
 def test_a_follower_within_the_tolerance_stands_in_their_slot(
     generated_scenario: Any, away: float, walks: bool
 ) -> None:
