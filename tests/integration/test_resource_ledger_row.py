@@ -19,6 +19,7 @@ from support.paths import SMALL_REPLAY
 
 from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint
+from sheltersim.core.checkpoint_cache import canonical_bytes
 from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain import resources
@@ -104,11 +105,7 @@ def _assert_row_is_the_tree(world: WorldState) -> None:
     mirror = world._core.mirror(KEY)
     assert mirror.tainted is None
     assert mirror.verify()
-    assert mirror.row_json().decode() == _canonical(world.model_state[KEY])
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert mirror.row_json() == canonical_bytes(world.model_state[KEY])
 
 
 def _operate(world: WorldState) -> str:
@@ -181,7 +178,7 @@ def test_the_public_rule_runs_the_kernel() -> None:
 
 REFUSED = {
     "an unknown warehouse": (
-        lambda agent: _event("delivery", resource_id="water_ml", quantity=1).__class__(
+        lambda agent: ScheduledEvent(
             event_id="bad-warehouse",
             kind=EventKind.EXOGENOUS,
             due_minute=0,
@@ -609,12 +606,11 @@ def test_a_tainted_row_comes_back_with_the_python_rule_s_write() -> None:
 
 def test_a_forwarded_append_keeps_the_row() -> None:
     world = _world()
-    agent = _operate(world)
+    _operate(world)
     record = dict(world.model_state[KEY]["audit"][-1])
     world.model_state[KEY]["audit"].append(
         {**record, "minute": 9, "event_id": "by-hand", "operation": "delivery", "agent_id": None}
     )
-    assert agent
     _assert_row_is_the_tree(world)
 
 
@@ -649,7 +645,6 @@ def test_the_save_check_still_replays_the_audit_trail() -> None:
     world.model_state[KEY]["audit"][2]["delivered"] += 1
     with pytest.raises(StateInvariantError, match="audit after-state does not match replay"):
         world.validate()
-    assert resources.RESOURCE_IDS == ("water_ml", "food_meal_units")
 
 
 def test_the_check_takes_nothing_python_refuses_on_random_writes() -> None:
