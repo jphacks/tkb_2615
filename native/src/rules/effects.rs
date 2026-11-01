@@ -34,7 +34,7 @@ use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::staff_dynamics::{is_available, staff_status};
 use crate::state::effect_program::{EffectProgramRow, Program, NAME};
 use crate::state::entities::{entities_of, EntityStore};
-use crate::state::events::{is_stable_id, EventRow, EventWriter, PendingSource};
+use crate::state::events::{is_stable_id, EventRow, EventWriter};
 use crate::state::resource_ledger::{held_mirror, resource_index, LedgerRow};
 use crate::Unsupported;
 
@@ -561,7 +561,7 @@ fn should_apply_guard(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyR
     let py = world.py();
     let result = (|| {
         let provenance = attribute(event, intern!(py, "provenance"))?;
-        if get_or_none(&provenance, MARKER)?.is_none() {
+        if provenance.call_method1(intern!(py, "get"), (intern!(py, MARKER),))?.is_none() {
             return Ok(true);
         }
         guard_of_row(world, &event_row(event)?)
@@ -1872,20 +1872,9 @@ fn is_lower_hex_64(value: &str) -> bool {
 fn pending_has_marker(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = world.py();
     let writer = EventWriter::of(world)?;
-    let Some(events) = writer.queue().borrow().pending_events(py)? else {
-        return unsupported("a pending event is not a plain ScheduledEvent");
-    };
-    for event in &events {
-        // A marker that is no mapping passes, and the Python rule knows which it is.
-        let marked = match &event.source {
-            PendingSource::Row(row) => matches!(&row.provenance, V::Map(provenance) if provenance.contains_key(MARKER)),
-            PendingSource::Object(object) => attribute(object, intern!(py, "provenance"))?.contains(intern!(py, MARKER))?,
-        };
-        if marked {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    // A marker that is no mapping passes, and the Python rule knows which it is.
+    let found = writer.queue().borrow().any_pending_has_provenance(py, intern!(py, MARKER))?;
+    found.map_or_else(|| unsupported("a pending event is not a plain ScheduledEvent"), Ok)
 }
 
 fn marker_events<'py>(world: &Bound<'py, PyAny>) -> PyResult<Vec<EventRow>> {

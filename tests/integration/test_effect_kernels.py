@@ -848,6 +848,68 @@ def test_the_state_of_a_good_world_is_accepted_with_its_history(
     assert not rust_validated(world, KEY)
 
 
+def _break_stack(world: WorldState, facility: str, name: str) -> None:
+    record = world.model_state[KEY]["active_facility_modifiers"][facility]
+    item = record["modifiers"][0]
+    if name == "units_not_the_lowest":
+        item["working_units"] = record["baseline_working_units"]
+    elif name == "facility_not_the_lowest":
+        world.facilities[facility].working_units = record["baseline_working_units"]
+    elif name == "above_the_baseline":
+        item["working_units"] = record["baseline_working_units"] + 1
+    elif name == "baseline_above_capacity":
+        record["baseline_working_units"] = world.facilities[facility].capacity + 1
+    elif name == "negative_baseline":
+        record["baseline_working_units"] = -1
+    elif name == "empty_stack":
+        record["modifiers"] = []
+    elif name == "another_modifier_id":
+        item["modifier_id"] = "modifier-other"
+    elif name == "repeated_modifier":
+        record["modifiers"].append(dict(item))
+    elif name == "unknown_effect":
+        item["effect_id"] = "no-such-effect"
+    elif name == "negative_sequence":
+        item["sequence"] = -1
+    elif name == "negative_minute":
+        item["start_minute"] = -1
+    else:
+        raise AssertionError(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "units_not_the_lowest",
+        "facility_not_the_lowest",
+        "above_the_baseline",
+        "baseline_above_capacity",
+        "negative_baseline",
+        "empty_stack",
+        "another_modifier_id",
+        "repeated_modifier",
+        "unknown_effect",
+        "negative_sequence",
+        "negative_minute",
+    ],
+)
+def test_a_stack_the_python_rule_refuses_is_refused(
+    world: WorldState, rules: Any, name: str
+) -> None:
+    facility = _a_facility(world)
+    schedule_effect_program(
+        world,
+        _program(_action("set_facility_availability", "facility", facility, {"working_units": 0})),
+    )
+    EffectProgramFacilityHandler().apply(world, _event(world, "effect_program_apply"))
+    rules.validate_state(world, validate_event_history=True)
+    _break_stack(world, facility, name)
+    with pytest.raises(native.Unsupported):
+        rules.validate_state(world, validate_event_history=True)
+    with pytest.raises(ValueError):
+        validate_effect_program_state.__wrapped__(world, validate_event_history=True)
+
+
 @pytest.mark.parametrize(
     ("write", "good"),
     [
