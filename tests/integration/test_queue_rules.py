@@ -20,7 +20,6 @@ from sheltersim.core.world import WorldState
 from sheltersim.domain import movement, queueing
 from sheltersim.domain.models import ActiveTask, Activity
 from sheltersim.domain.movement import MOVEMENT_STATE_KEY as KEY
-from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.timeline import _MetricSink
@@ -31,8 +30,6 @@ MODULES = {
     "prepare_facility_queue": queueing,
     "progress_physical_queue_positions": movement,
     "progress_physical_queue_head_to_service": movement,
-    "physical_service_capacity": movement,
-    "shared_passage_edge_loads": movement,
 }
 QUEUE_POLICY = "need-weighted-physical-queue-v1"
 
@@ -600,9 +597,6 @@ def test_an_independent_fifo_goes_to_python(generated_scenario_with_split_queues
         assert "independent" in _refuses(
             world, name, row["facility_id"], resource=False, minute=minute, queue_id=queue_id
         )
-    assert "independent" in _refuses(
-        world, "physical_service_capacity", row["facility_id"], 1, queue_id
-    )
 
 
 def test_int_coordinates_taint_and_go_to_python(generated_scenario: Any) -> None:
@@ -650,166 +644,4 @@ def test_each_tick_of_a_run_is_python_s_at_every_facility(generated_scenario: An
             _same_after(world, "progress_physical_queue_positions", facility, **options)
             _same_after(world, "progress_physical_queue_head_to_service", facility, **options)
             _same_after(world, "prepare_facility_queue", facility, **options)
-        _same_after(world, "shared_passage_edge_loads", minute)
     assert reached
-
-
-# ---- physical_service_capacity -------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("configured", [0, 1, 5])
-def test_a_surveyed_point_serves_one_at_a_time(generated_scenario: Any, configured: int) -> None:
-    world = _world(generated_scenario)
-    toilet = _facility(world, "toilet")
-    assert _same_after(world, "physical_service_capacity", toilet, configured) == min(configured, 1)
-    assert _same_after(world, "physical_service_capacity", "nowhere", configured) == configured
-    del world.model_configs["facility_geometry"]
-    assert _kernel("physical_service_capacity")(world, toilet, configured) == configured
-
-
-def test_a_capacity_that_is_not_an_int_goes_to_python(generated_scenario: Any) -> None:
-    world = _world(generated_scenario)
-    assert "not an int" in _refuses(
-        world, "physical_service_capacity", _facility(world, "toilet"), 2.0
-    )
-
-
-# ---- shared_passage_edge_loads -------------------------------------------------------------------
-
-
-def _travel_event(
-    world: WorldState,
-    agent_id: str,
-    edges: list[str],
-    *,
-    start: int,
-    due: int,
-    origin: str = "zone",
-) -> None:
-    task_id = f"travel-task-{agent_id}"
-    world.active_tasks[task_id] = ActiveTask(
-        id=task_id,
-        kind="travel",
-        agent_id=agent_id,
-        resource_id=None,
-        start_minute=start,
-        due_minute=due,
-    )
-    sequence = world.allocate_event_sequence()
-    world.schedule_event(
-        ScheduledEvent(
-            event_id=f"travel-{sequence}",
-            kind=EventKind.COMPLETION,
-            due_minute=due,
-            priority=0,
-            sequence=sequence,
-            event_type="agent_travel_complete",
-            payload={
-                "agent_id": agent_id,
-                "task_id": task_id,
-                "origin_zone_id": origin,
-                "route_edge_ids": edges,
-            },
-            source_id=task_id,
-            causation_id=task_id,
-            provenance={"source_type": "assumption", "source_id": "ASM-TEST"},
-        )
-    )
-
-
-def _edge_pair(world: WorldState) -> list[str]:
-    return sorted(world.zone_edges)[:2]
-
-
-def _no_walks(world: WorldState) -> None:
-    world.model_state[KEY]["journeys"].clear()
-    world.model_state["staff_operations_v1"]["staff"].clear()
-
-
-def test_a_journey_s_edge_at_each_minute_of_it(generated_scenario: Any) -> None:
-    world = _world(generated_scenario)
-    _no_walks(world)
-    agent_id = _people(world, 1)[0]
-    edges = _edge_pair(world)
-    world.model_state[KEY]["journeys"][agent_id] = {
-        "event_id": "e",
-        "task_id": "t",
-        "purpose": "walk",
-        "facility_id": None,
-        "destination_zone_id": "z",
-        "route_zone_ids": ["a", "b", "c"],
-        "route_edge_ids": edges,
-        "route_points": [],
-        "started_minute": 100,
-        "due_minute": 113,
-    }
-    seen = set()
-    for minute in range(98, 116):
-        seen.add(tuple(_same_after_loads(world, minute)))
-    assert () in seen and (edges[0],) in seen and (edges[1],) in seen
-
-
-def _same_after_loads(world: WorldState, minute: int | None = None) -> dict[str, int]:
-    result = _kernel("shared_passage_edge_loads")(world, minute)
-    expected = _rule("shared_passage_edge_loads")(world, minute)
-    assert repr(result) == repr(expected)
-    return result
-
-
-def test_a_pending_trip_counts_unless_a_journey_already_does(generated_scenario: Any) -> None:
-    world = _world(generated_scenario)
-    _no_walks(world)
-    first, second = _people(world, 2)
-    edges = _edge_pair(world)
-    _travel_event(world, first, edges, start=0, due=world.duration_minutes - 1)
-    assert sum(_same_after_loads(world).values()) == 1
-    _travel_event(world, second, edges[:1], start=0, due=world.duration_minutes - 2, origin="")
-    assert sum(_same_after_loads(world).values()) == 1
-    world.model_state[KEY]["journeys"][first] = {
-        "event_id": "e",
-        "task_id": "t",
-        "purpose": "walk",
-        "facility_id": None,
-        "destination_zone_id": "z",
-        "route_zone_ids": ["a", "b"],
-        "route_edge_ids": edges[:1],
-        "started_minute": 0,
-        "due_minute": world.duration_minutes - 1,
-        "route_points": [],
-    }
-    assert sum(_same_after_loads(world).values()) == 1
-
-
-def test_staff_on_their_way_count_and_the_keys_are_sorted(generated_scenario: Any) -> None:
-    world = _world(generated_scenario)
-    _no_walks(world)
-    edges = _edge_pair(world)
-    others = sum(_same_after_loads(world, 0).values())
-    staff = world.model_state["staff_operations_v1"]["staff"]
-    staff["S1"] = {
-        "phase": "travel",
-        "started_minute": 0,
-        "travel_due_minute": 10,
-        "route_edge_ids": list(reversed(edges)),
-    }
-    staff["S2"] = {
-        "phase": "travel",
-        "started_minute": 0,
-        "travel_due_minute": 10,
-        "route_edge_ids": edges,
-    }
-    staff["S3"] = {"phase": "work"}
-    for minute in range(12):
-        result = _same_after_loads(world, minute)
-        assert list(result) == sorted(result)
-    assert sum(_same_after_loads(world, 0).values()) == others + 2
-
-
-def test_an_edge_nobody_knows_goes_to_python(generated_scenario: Any) -> None:
-    world = _world(generated_scenario)
-    _no_walks(world)
-    agent_id = _people(world, 1)[0]
-    _travel_event(world, agent_id, ["no-such-edge"], start=0, due=world.duration_minutes - 1)
-    assert "edge" in _refuses(world, "shared_passage_edge_loads", world.minute_index)
-    with pytest.raises(KeyError):
-        movement.shared_passage_edge_loads(world, world.minute_index)

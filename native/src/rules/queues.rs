@@ -20,11 +20,11 @@ use indexmap::IndexMap;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyBool, PyDict, PyInt, PyList, PySlice, PyString};
+use pyo3::types::{PyBool, PyDict, PyList, PySlice, PyString};
 
 use crate::core::mathx::{py_max, py_min};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, unsupported};
-use crate::core::tracked::{as_readable_dict, as_readable_list};
+use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{field_mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::movement::{
@@ -746,200 +746,9 @@ fn progress_physical_queue_head_to_service<'py>(
     Ok(result)
 }
 
-/// `physical_service_capacity`, for a facility's own queue.
-#[pyfunction]
-#[pyo3(signature = (world, facility_id, configured, queue_id=None))]
-fn physical_service_capacity<'py>(
-    world: &Bound<'py, PyAny>,
-    facility_id: &Bound<'py, PyAny>,
-    configured: &Bound<'py, PyAny>,
-    queue_id: Option<&Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    given_queue_id(queue_id)?;
-    let configured_value = configured.downcast_exact::<PyInt>().map_err(|_| Unsupported::new_err("not an int"))?;
-    let facility_name = exact_str(facility_id)?;
-    if no_geometry(world)? {
-        return Ok(configured.clone());
-    }
-    let geo = Geo::of(world)?;
-    let placed = geo.layout.as_ref().is_some_and(|layout| layout.facility_points.contains_key(facility_name));
-    if !placed {
-        return Ok(configured.clone());
-    }
-    // min(configured, 1): the first of two that are equal.
-    let one = 1_i64.into_pyobject(world.py())?;
-    Ok(if one.lt(configured_value)? { one.into_any() } else { configured.clone() })
-}
-
-// ---- shared_passage_edge_loads -----------------------------------------------------------------
-
-/// `_current_journey_edge`.
-fn current_edge<'a>(scene: &Scene<'_>, edges: &'a [Arc<str>], start: i64, due: i64, minute: i64) -> PyResult<Option<&'a Arc<str>>> {
-    let Some(first) = edges.first() else {
-        return Ok(None);
-    };
-    let duration = due - start;
-    if duration <= 0 {
-        return Ok(None);
-    }
-    if duration >= EXACT_INT || start.abs() >= EXACT_INT || minute.abs() >= EXACT_INT {
-        return unsupported("minutes too large for a float");
-    }
-    let weights = edges.iter().map(|edge| scene.edge_minutes(edge)).collect::<PyResult<Vec<_>>>()?;
-    let total: i64 = weights.iter().sum();
-    if total >= EXACT_INT {
-        return unsupported("minutes too large for a float");
-    }
-    let scaled = (minute - start) as f64 / duration as f64 * total as f64;
-    let mut cumulative = 0;
-    for (edge, weight) in edges.iter().zip(&weights) {
-        if scaled < (cumulative + weight) as f64 {
-            return Ok(Some(edge));
-        }
-        cumulative += weight;
-    }
-    Ok(edges.last().or(Some(first)))
-}
-
-/// A payload's text; None for no value or None; Unsupported for what the rule might read otherwise.
-fn payload_text<'a>(payload: &'a IndexMap<Arc<str>, V>, name: &str) -> PyResult<Option<&'a Arc<str>>> {
-    match payload.get(name) {
-        None | Some(V::Null) => Ok(None),
-        Some(V::Str(text)) => Ok(Some(text)),
-        _ => unsupported("a travel event's field is not a str"),
-    }
-}
-
-fn add_load(loads: &mut BTreeMap<Arc<str>, i64>, edge: &Arc<str>) {
-    *loads.entry(edge.clone()).or_insert(0) += 1;
-}
-
-/// `shared_passage_edge_loads`.
-#[pyfunction]
-#[pyo3(signature = (world, minute=None))]
-fn shared_passage_edge_loads<'py>(world: &Bound<'py, PyAny>, minute: Option<&Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyDict>> {
-    let py = world.py();
-    let at = match minute {
-        Some(minute) if !minute.is_none() => exact_int(minute)?,
-        _ => exact_int(&attribute(world, intern!(py, "minute_index"))?)?,
-    };
-    let model_state = attribute(world, intern!(py, "model_state"))?;
-    let table = exact_dict(&model_state)?;
-    let scene = Scene::of(world)?;
-    let mut loads = BTreeMap::new();
-    let mut represented: HashSet<Arc<str>> = HashSet::new();
-    if table.contains(KEY)? {
-        let mirror = mirror_held(world)?;
-        NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
-            for (agent_id, journey) in row.journeys.iter() {
-                if !(journey.started_minute <= at && at < journey.due_minute) {
-                    continue;
-                }
-                if let Some(edge) = current_edge(&scene, &journey.route_edge_ids, journey.started_minute, journey.due_minute, at)? {
-                    add_load(&mut loads, edge);
-                    represented.insert(agent_id.clone());
-                }
-            }
-            Ok(())
-        })?;
-    }
-    let writer = EventWriter::of(world)?;
-    let store = entities_of(world)?;
-    let pending = writer.queue().borrow().pending_ids(None);
-    for event_id in pending {
-        let Some(event) = writer.queue().borrow_mut().row(py, &event_id)? else {
-            return unsupported("a pending event has no row");
-        };
-        if &*event.event_type != "agent_travel_complete" {
-            continue;
-        }
-        let V::Map(payload) = &event.payload else {
-            return unsupported("a payload is not a map");
-        };
-        if payload_text(payload, "agent_id")?.is_some_and(|agent_id| represented.contains(agent_id)) {
-            continue;
-        }
-        if payload_text(payload, "origin_zone_id")?.is_none_or(|zone| zone.is_empty()) {
-            continue;
-        }
-        let edges = match payload.get("route_edge_ids") {
-            None | Some(V::Null) => continue,
-            Some(V::List(items)) if items.is_empty() => continue,
-            Some(V::List(items)) => items
-                .iter()
-                .map(|item| match item {
-                    V::Str(edge) => Ok(edge.clone()),
-                    _ => unsupported("an edge is not a str"),
-                })
-                .collect::<PyResult<Vec<_>>>()?,
-            _ => return unsupported("a route's edges are not a list"),
-        };
-        let Some(task_id) = payload_text(payload, "task_id")? else {
-            continue;
-        };
-        let window = EntityStore::with_rows(&store, |rows| Ok(rows.active_tasks.get(task_id).map(|task| (task.start_minute, task.due_minute))))?;
-        let Some((start, due)) = window else {
-            continue;
-        };
-        if !(start <= at && at < due) {
-            continue;
-        }
-        if let Some(edge) = current_edge(&scene, &edges, start, due, at)? {
-            add_load(&mut loads, edge);
-        }
-    }
-    if let Some(operations) = table.get_item(intern!(py, "staff_operations_v1"))? {
-        if let Some(operations) = as_readable_dict(&operations) {
-            if let Some(staff) = operations.get_item(intern!(py, "staff"))? {
-                let Some(staff) = as_readable_dict(&staff) else {
-                    return unsupported("staff records are not a dict");
-                };
-                for (_, record) in staff.iter() {
-                    let Some(record) = as_readable_dict(&record) else {
-                        return unsupported("a staff record is not a dict");
-                    };
-                    let is_travel = match record.get_item(intern!(py, "phase"))? {
-                        Some(phase) => phase.downcast_exact::<PyString>().is_ok_and(|phase| phase.to_str().is_ok_and(|phase| phase == "travel")),
-                        None => false,
-                    };
-                    if !is_travel {
-                        continue;
-                    }
-                    let field = |name: &Bound<'py, PyString>| -> PyResult<Bound<'py, PyAny>> {
-                        record.get_item(name)?.ok_or_else(|| Unsupported::new_err("a staff record lacks a field"))
-                    };
-                    let start = exact_int(&field(intern!(py, "started_minute"))?)?;
-                    let due = exact_int(&field(intern!(py, "travel_due_minute"))?)?;
-                    if !(start <= at && at < due) {
-                        continue;
-                    }
-                    let raw_edges = field(intern!(py, "route_edge_ids"))?;
-                    let Some(raw_edges) = as_readable_list(&raw_edges) else {
-                        return unsupported("a staff route is not a list");
-                    };
-                    let edges = raw_edges
-                        .iter()
-                        .map(|edge| Ok(Arc::from(exact_str(&edge)?)))
-                        .collect::<PyResult<Vec<Arc<str>>>>()?;
-                    if let Some(edge) = current_edge(&scene, &edges, start, due, at)? {
-                        add_load(&mut loads, edge);
-                    }
-                }
-            }
-        }
-    }
-    let result = PyDict::new(py);
-    for (edge, load) in &loads {
-        result.set_item(&**edge, *load)?;
-    }
-    Ok(result)
-}
-
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare_facility_queue, m)?)?;
     m.add_function(wrap_pyfunction!(progress_physical_queue_positions, m)?)?;
     m.add_function(wrap_pyfunction!(progress_physical_queue_head_to_service, m)?)?;
-    m.add_function(wrap_pyfunction!(physical_service_capacity, m)?)?;
-    m.add_function(wrap_pyfunction!(shared_passage_edge_loads, m)?)?;
     Ok(())
 }

@@ -5,8 +5,6 @@ plain copies of the movement state, the metrics, the event counter, the faciliti
 and a list of what it schedules. Everything those hold must come out the same, floats by their bits,
 along with the result and each event's repr. What the kernel refuses isn't compared: the Python rule
 runs on the world then.
-
-The two readers run the Python rule on the same world first.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from shadow_kit import Recorder, pure_shadow, values_in
+from shadow_kit import Recorder, values_in
 from shadow_movement import _Twin
 
 KEY = "movement_v1"
@@ -224,22 +222,3 @@ def prepare(output: str) -> None:
         ("progress_physical_queue_head_to_service", "movement"),
     ):
         setattr(rules, name, writer(name, module, getattr(rules, name)))
-
-    def loads_seen(result: Any) -> None:
-        recorder.seen["shared_passage_edge_loads.people_on_edges"] += sum(result.values())
-
-    rules.physical_service_capacity = pure_shadow(
-        recorder,
-        "physical_service_capacity",
-        rules.physical_service_capacity,
-        rule_of("movement", "physical_service_capacity"),
-        unsupported,
-    )
-    rules.shared_passage_edge_loads = pure_shadow(
-        recorder,
-        "shared_passage_edge_loads",
-        rules.shared_passage_edge_loads,
-        rule_of("movement", "shared_passage_edge_loads"),
-        unsupported,
-        detail=loads_seen,
-    )

@@ -180,9 +180,8 @@ each OS, because both call the same libm.
 - `rules.queues`: a facility's physical queue (`src/rules/queues.rs`):
   `prepare_facility_queue(world, facility_id, *, resource, minute)`,
   `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
-  arguments, optional `queue_id`), `physical_service_capacity(world, facility_id, configured,
-  queue_id=None)` and `shared_passage_edge_loads(world, minute=None)`. `domain/queueing.py` and
-  `domain/movement.py` call them through `kernel_first`. Each plans and then writes, in one call.
+  arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
+  `kernel_first`. Each plans and then writes, in one call.
   An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
   See `docs/rust-port/lanes/m4-queues.md`.
 
