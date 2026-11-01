@@ -10,26 +10,26 @@
 
 | 規則 | 7日分の回数 | ゲートの回数 | 基準 µs/tick | レーン µs/tick | 扱い |
 |---|---:|---:|---:|---:|---|
-| `prepare_facility_queue` | 90,720（列あり 19,832） | 144,247 | 51〜64 | 22〜24 | **kernel** |
+| `prepare_facility_queue` | 90,720（列あり 19,832） | 144,247 | 47〜64 | 22〜24 | **kernel** |
 | `progress_physical_queue_positions` | 18,556 | 22,120 | 46〜58 | 21〜22 | **kernel** |
 | `progress_physical_queue_head_to_service` | 13,067 | 10,425 | 31〜39 | 20〜22 | **kernel** |
 | `_schedule_queue_trip`（上の2つから） | 9,335 | 13,799 | 上の内数 | 上の内数 | **kernel の中** |
 | `shared_passage_edge_loads` | 10,080 | 28,869 | 14〜18 | 19〜23 | Python |
 | `physical_service_capacity` | 19,518 | 33,739 | 6〜7 | 8〜9 | Python |
 | `_abandon_and_retry` | 4 | 168 | | | Python（kernel は断ります） |
-| `ToiletServiceManager.request` | 2,464 | 2,893 | 約 4（`cProfile` 6.8） | 同じ | Python |
-| `complete_toilet_service` | 2,460 | 3,247 | 約 3（`cProfile` 4.9） | 同じ | Python |
+| `ToiletServiceManager.request` | 2,464 | 2,893 | `cProfile` で 6.8 | 同じコード | Python |
+| `complete_toilet_service` | 2,460 | 3,247 | `cProfile` で 4.9 | 同じコード | Python |
 | `enqueue`、`start_service`、`mark_stall`、`choose_queue_id` | **0** | 146、136、417、146 | | | Python |
 | `prepare_independent_facility_queue`、`_arbitrate_independent_facility` | **0** | 4,200、1,200 | | | Python |
 
 **kernel にして、やめた2つ：**
 
-- `shared_passage_edge_loads`：kernel は 13 → 89〜123 µs/tick になりました。Python が予定したイベントすべてから行を読むためです（待っているイベントごとに `EventRow::from_event`）。Python の規則は `pending()` のタプルを `event_type` で読むだけです。
+- `shared_passage_edge_loads`：kernel は 13〜17 → 89〜123 µs/tick になりました（同時に動かした3組）。Python が予定したイベントすべてから行を読むためです（待っているイベントごとに `EventRow::from_event`）。Python の規則は `pending()` のタプルを `event_type` で読むだけです。
 - `physical_service_capacity`：差が 1 µs/tick 未満でした（`Geo::of` の `_parsed_config` 2回で、Python の規則の分がほぼ消えません）。
 
 Python のままの2つがレーンで少し増えるのは（上の表）、Rust が予定した行のオブジェクトを `pending()` が作るからと見ています（確かめていません）。
 
-**`facility_queues_v1` を持たない理由：** 7日分は名前空間そのものがなく、ゲートでも 31,532 tick のうち 600 tick（`split_queues`）です。書き手を残して持ち主だけ宣言すると転送の費用が増えるだけで、書き手を移すと 500 行ほどの Rust に対して生成 Scenario での得が0です。独立した列を持つ Scenario が実際に使われるようになったら移します。読む kernel は `queue_id` があれば断るので、持ち主を変える作業はこのレーンと競合しません。
+**`facility_queues_v1` を持たない理由：** 7日分は名前空間そのものがなく、ゲートでも 31,532 tick のうち 600 tick です。書き手を残して持ち主だけ宣言すると転送の費用が増えるだけで、書き手を移しても生成 Scenario での得は0です。独立した列を持つ Scenario が実際に使われるようになったら移します。読む kernel は `queue_id` があれば断るので、持ち主を変える作業はこのレーンと競合しません。
 
 **残る列の Python（`fork-b1` の `cProfile`、µs/tick）：** `ToiletServiceManager.arbitrate` の本体 12、`independent_queues_required` 26（検証と `is_legacy_queue_checkpoint` から）、`shared_passage_edge_loads` 25、`physical_service_capacity` 12、`facility_has_independent_queues` 8、`agent_is_at_*` 12、`request` 7、`complete_toilet_service` 5。計 約 105 µs/tick、tick の約 1.7% です（`ResourceServiceManager.arbitrate` の本体は別レーンの `domain/resource_service.py` なので入れていません）。
 
@@ -73,7 +73,7 @@ Python のままの2つがレーンで少し増えるのは（上の表）、Rus
 | 最後のコード 1回目 | **0.971**（0.971、0.991、0.947） | 1.023（0.993、1.023、1.235） | 8〜16 |
 | 最後のコード 2回目 | **0.968**（0.968、0.976、0.965） | 1.030（1.03、0.941、1.071） | 3〜5 |
 
-状態はどの回も一致しました。**tick 全体の差は A/A の揺れより小さいので、「速くなった」とは言えません。** 確かな差は上の部品の表で、3つの kernel で 約 80 µs/tick（約 1.6%）です。部品の足し算です。
+状態はどの回も一致しました。**tick 全体の差は A/A の揺れより小さいので、「速くなった」とは言えません。** 確かな差は上の部品の表で、3つの kernel で約 80 µs/tick 減り、Python のままの2つで約 6 µs/tick 増えて、差し引き約 1.5% です。部品の足し算で、全体の差として確かめたものではありません。
 
 7日分の素の回：実時間 144.8 秒、スレッドの CPU 時間 95.0 秒（ほかの確認と同時の1回で、基準とは同時に測っていません）。
 
@@ -81,7 +81,7 @@ Python のままの2つがレーンで少し増えるのは（上の表）、Rus
 
 | 確認 | 結果 |
 |---|---|
-| 両モードの全テスト | Rust あり 3,583件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,073件成功、1,516件 skip。その後 `test_queue_rules.py` に2件足し、そのファイルだけ動かしました |
+| 両モードの全テスト | Rust あり 3,585件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,073件成功、1,518件 skip |
 | `gate_all_paths.py --expect` | 55シナリオ、問題0件 |
 | `--reversed-order` | 55シナリオ、問題0件 |
 | ゲートの `rule_shadow`（全部の影） | 55シナリオ、問題0件、違い0件 |
@@ -99,7 +99,7 @@ Python のままの2つがレーンで少し増えるのは（上の表）、Rus
 | 比べた値 | 18,704,110 | 35,761,963 |
 | 違い | 0 | 0 |
 
-**断り：** 7日分は `prepare_facility_queue` の4回だけで、すべて列を離れる人です（調査の `_abandon_and_retry` 4回と同じ）。ゲートは列を離れる人 167回（調査の 168回のうち1回は独立した FIFO の経路です）、独立した FIFO 1,201回です。
+**断り：** 7日分は `prepare_facility_queue` の4回だけで、すべて列を離れる人です（調査の `_abandon_and_retry` 4回と同じ）。ゲートは列を離れる人 167回（調査の `_abandon_and_retry` は 168回で、差の1回は `prepare_independent_facility_queue` の経路と見ていますが、追っていません）、独立した FIFO 1,201回です。
 
 **枝に届いた数：**
 
