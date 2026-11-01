@@ -132,7 +132,7 @@
 
 **7日分は職員の作業が1回も始まりません**（`arrive_`、`complete_` が0回、`history` は空）。作業のある経路の比較はゲートとテストだけです。
 
-**ゲートの行の網羅（kernel ありとなしの合計 / kernel ありだけ。`--coverage` の表のまま）：** `domain/staff.py` 353行のうち 300行 / 303行、`domain/staff_operations.py` 557行のうち 378行 / 391行、`domain/common_operations.py` 282行のうち 213行 / 213行。**「合計」のほうが少なくなっています。** 道具の集計の理由は追っていません。Rust の行の網羅は測っていません。上の枝の件数と `test_staff_rules.py` で見ています。
+**ゲートの行の網羅（kernel ありとなしの合計 / kernel ありだけ）：** `domain/staff.py` 353行のうち 303行（86%）/ 300行（85%）、`domain/staff_operations.py` 557行のうち 391行（70%）/ 378行（68%）、`domain/common_operations.py` 282行のうち 213行（76%）/ 213行（76%）。kernel ありだけでも高いのは、断った tick と保存の検証で Python の規則が動くからです。Rust の行の網羅は測っていません。上の枝の件数と `test_staff_rules.py` で見ています。
 
 ### 影の感度（コピーで変更。`long_generated`、統合前の `ae691e8`）
 
