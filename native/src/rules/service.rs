@@ -408,7 +408,7 @@ pub(crate) fn set_agent<'py>(
 /// The facilities `arbitrate` has anything to do at, in ID order, as `(facility, resource_id)`. An
 /// empty queue does nothing in the Python rule.
 #[pyfunction]
-fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
+pub(crate) fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
     let mut due: Vec<(Arc<str>, &'static str)> = EntityStore::with_rows(&entities_of(&manager.world)?, |rows| {
@@ -435,7 +435,7 @@ fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, 
 
 /// One pass of `arbitrate`'s loop after the positions: the started event's ID, or None to stop.
 #[pyfunction]
-fn serve_head<'py>(
+pub(crate) fn serve_head<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource_id: &Bound<'py, PyAny>,

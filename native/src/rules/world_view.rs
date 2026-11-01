@@ -1802,14 +1802,14 @@ pub(crate) fn view_of<'py>(view: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Rust
 
 /// `_view_after_movement` of the update phase (experiments/phases/segments.py).
 #[pyfunction]
-fn view_after_movement<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn view_after_movement<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let (data, keys) = build(controller, world)?;
     new_view(world.py(), data, keys, None)
 }
 
 /// `_view_for_proposals` of the propose phase.
 #[pyfunction]
-fn view_for_proposals<'py>(
+pub(crate) fn view_for_proposals<'py>(
     controller: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,

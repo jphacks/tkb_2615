@@ -64,6 +64,7 @@ from sheltersim.events.handlers import (
 )
 from sheltersim.experiments.phases.arbitrate import ArbitratePhase
 from sheltersim.experiments.phases.dispatch import DispatchPhase
+from sheltersim.experiments.phases.driver import install_driver
 from sheltersim.experiments.phases.metrics import MetricsPhase
 from sheltersim.experiments.phases.propose import ProposePhase
 from sheltersim.experiments.phases.sample import SamplePhase
@@ -359,6 +360,12 @@ class OfflineSimulationController(
         self.staff_space = SpaceRouter(staff_graph, self.space.policy)
 
     def __call__(self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom) -> None:
+        self._refresh_config_scopes(world, minute)
+        first, second, third = self._config_scopes()
+        with first, second, third:
+            self._run_phase(phase, world, minute, rng)
+
+    def _refresh_config_scopes(self, world: WorldState, minute: int) -> None:
         # No phase edits model_configs in place, and a phase that swaps the object brings
         # new raw objects, so what was parsed is kept while the object and its values stay
         # the same. Comparing the object too keeps swaps from piling up old configs.
@@ -378,12 +385,13 @@ class OfflineSimulationController(
                 self._model_selections.clear()
                 self._room_routes = {"routes": {}}
                 self._zone_environments = {}
-        with (
+
+    def _config_scopes(self) -> tuple[Any, Any, Any]:
+        return (
             geometry_config_scope(self._parsed_configs),
             selected_models_scope(self._model_selections),
             room_route_scope(self._room_routes),
-        ):
-            self._run_phase(phase, world, minute, rng)
+        )
 
     def _run_phase(
         self, phase: TickPhase, world: WorldState, minute: int, rng: KeyedRandom
@@ -405,6 +413,7 @@ class OfflineSimulationController(
 
 
 install_segments(OfflineSimulationController)
+install_driver(OfflineSimulationController)
 
 
 def run_scenario(

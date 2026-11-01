@@ -141,7 +141,7 @@ impl ProposalRow {
 
 /// `_propose_due`, whose proposals the rest of the propose phase reads as rows.
 #[pyfunction]
-fn propose_rows<'py>(
+pub(crate) fn propose_rows<'py>(
     controller: &Bound<'py, PyAny>,
     view: &Bound<'py, PyAny>,
     rng: &Bound<'py, PyAny>,
@@ -239,7 +239,7 @@ fn sink_of<'py>(controller: &Bound<'py, PyAny>) -> PyResult<Sink<'py>> {
 
 /// `_observed_state`. A sink in Python may read the document as a dict, so it gets one.
 #[pyfunction]
-fn observed_row<'py>(
+pub(crate) fn observed_row<'py>(
     controller: &Bound<'py, PyAny>,
     view: &Bound<'py, PyAny>,
     agent_id: &Bound<'py, PyAny>,
@@ -516,7 +516,7 @@ fn decision_bytes(
 /// `_record_outcome`.
 #[pyfunction]
 #[pyo3(signature = (controller, proposal, *, target_id, next_decision_at, committed, observed_state))]
-fn record_outcome<'py>(
+pub(crate) fn record_outcome<'py>(
     controller: &Bound<'py, PyAny>,
     proposal: &Bound<'py, PyAny>,
     target_id: &Bound<'py, PyAny>,

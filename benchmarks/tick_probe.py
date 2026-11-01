@@ -53,10 +53,13 @@ class Observer(Protocol):
     ) -> None: ...
 
 
-def install(observers: Iterable[Observer]) -> Callable[[], None]:
+def install(observers: Iterable[Observer], *, on_driver: bool = False) -> Callable[[], None]:
     """Make every TickEngine built from now on call the observers; returns the undo.
 
-    Engines are numbered in the order they are built, which a run repeats.
+    Engines are numbered in the order they are built, which a run repeats. A handler in place of
+    the engine's sends each tick through phase_handler, as without the Rust driver. ``on_driver``
+    leaves the handler and watches between the phases of whichever path a tick takes, which leaves
+    the driver of rules/tick.rs running.
     """
     chosen = tuple(observers)
     built = TickEngine.__init__
@@ -68,6 +71,14 @@ def install(observers: Iterable[Observer]) -> Callable[[], None]:
         count[0] += 1
         inner = self.phase_handler
 
+        def watch(phase: TickPhase, before: bool) -> None:
+            minute = self.clock.minute_index
+            for observer in chosen:
+                if before:
+                    observer.before_phase(engine, self.world, minute, phase)
+                else:
+                    observer.after_phase(engine, self.world, minute, phase)
+
         def handler(phase: TickPhase, world: WorldState, minute: int, rng: Any) -> None:
             for observer in chosen:
                 observer.before_phase(engine, world, minute, phase)
@@ -75,7 +86,10 @@ def install(observers: Iterable[Observer]) -> Callable[[], None]:
             for observer in chosen:
                 observer.after_phase(engine, world, minute, phase)
 
-        self.phase_handler = handler
+        if on_driver:
+            self.phase_observer = watch
+        else:
+            self.phase_handler = handler
         for observer in chosen:
             observer.engine_started(engine, self.world)
 

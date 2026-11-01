@@ -154,7 +154,11 @@ class UpdatePhase:
         state = self.world.model_state.get(MOVEMENT_STATE_KEY)
         if state is None:
             return
-        for agent_id in advance_movement(self.world, minute):
+        self._replan_journeys(state, advance_movement(self.world, minute), minute)
+
+    def _replan_journeys(self, state: Any, agent_ids: Any, minute: int) -> None:
+        """The people whose route changed, from the state read before it advanced."""
+        for agent_id in agent_ids:
             journey = dict(state["journeys"].get(agent_id, {}))
             agent = self.world.agents.get(agent_id)
             if not journey or agent is None:

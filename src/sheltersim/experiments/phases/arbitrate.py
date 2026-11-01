@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.world import WorldState
 from sheltersim.domain.care_receipts import (
@@ -38,7 +40,11 @@ class ArbitratePhase:
             self.resource_service.arbitrate(minute, rng, validate_state=False)
 
     def _assign_staff_support(self, world: WorldState, minute: int) -> None:
-        assigned_requests = self.staff_service.assign_pending(minute, validate_state=False)
+        self._record_assigned_support(
+            world, self.staff_service.assign_pending(minute, validate_state=False)
+        )
+
+    def _record_assigned_support(self, world: WorldState, assigned_requests: Any) -> None:
         for request_id in assigned_requests:
             prior = care_receipt_for_request(world, request_id)
             request = world.support_requests.get(request_id)
