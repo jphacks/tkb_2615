@@ -13,10 +13,10 @@
 
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PySet, PyString};
+use pyo3::types::{PyDict, PyList, PyString};
 use std::ptr::{addr_of_mut, null_mut};
 
-use crate::core::tracked::{is_readable_dict_type, is_readable_list_type};
+use crate::core::tracked::is_readable_dict_type;
 
 type Object = *mut ffi::PyObject;
 
@@ -33,12 +33,6 @@ fn is_exact_str(value: Object) -> bool {
 fn is_exact_dict(value: Object) -> bool {
     // SAFETY: value is a live object reached from a dict the caller holds.
     is_readable_dict_type(unsafe { ffi::Py_TYPE(value) })
-}
-
-/// A plain list or a tracked one.
-pub(crate) fn is_exact_list(value: Object) -> bool {
-    // SAFETY: as above.
-    is_readable_list_type(unsafe { ffi::Py_TYPE(value) })
 }
 
 fn is_none(value: Object) -> bool {
@@ -69,10 +63,6 @@ fn exact_number(value: Object) -> Option<f64> {
 
 fn is_count(value: Object) -> bool {
     exact_int(value).is_some_and(|number| number >= 0)
-}
-
-fn is_count_or_none(value: Object) -> bool {
-    is_none(value) || is_count(value)
 }
 
 /// A finite number within lower..=upper; NaN fails the range.
@@ -191,99 +181,6 @@ impl<'py, const N: usize> RecordReader<'py, N> {
             .all(|value| !value.is_null())
             .then_some(values)
     }
-}
-
-/// Whether a relationship key was checked before, or passes the Python check now.
-/// key_ok returns true for a good key, which is remembered.
-fn known_or_good_key(
-    good_keys: &Bound<'_, PySet>,
-    key_ok: &Bound<'_, PyAny>,
-    key: Object,
-) -> PyResult<bool> {
-    if !is_exact_str(key) {
-        return Ok(false);
-    }
-    if contains(good_keys.as_ptr(), key, true) {
-        return Ok(true);
-    }
-    // SAFETY: key is borrowed from the dict being walked.
-    let key = unsafe { Bound::from_borrowed_ptr(good_keys.py(), key) };
-    let good = key_ok.call1((&key,))?.is_truthy()?;
-    if good {
-        good_keys.add(&key)?;
-    }
-    Ok(good)
-}
-
-/// Every body_state_v1 relationship passes validate_body_state's rules. good_keys
-/// holds keys known to parse to a pair of different people of the current agents, so
-/// its holder clears it when the agents change.
-#[pyfunction]
-pub fn body_relationships_valid(
-    relationships: &Bound<'_, PyDict>,
-    good_keys: &Bound<'_, PySet>,
-    key_ok: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        relationships.py(),
-        [
-            "contact_count",
-            "trust",
-            "contact_minutes",
-            "last_contact_minute",
-            "last_interaction",
-            "topic_ids",
-        ],
-    );
-    all_items(relationships.as_ptr(), |key, record| {
-        if !known_or_good_key(good_keys, key_ok, key)? {
-            return Ok(false);
-        }
-        let Some([contacts, trust, contact_minutes, minute, _, topics]) = reader.read(record)
-        else {
-            return Ok(false);
-        };
-        Ok(is_count(contacts)
-            && is_count(contact_minutes)
-            && (is_none(trust) || is_unit(trust))
-            && is_count_or_none(minute)
-            && is_exact_list(topics)
-            && topics_valid(topics))
-    })
-}
-
-pub(crate) fn topics_valid(topics: Object) -> bool {
-    // SAFETY: topics is an exact list, and nothing here runs Python code.
-    unsafe {
-        let count = ffi::PyList_Size(topics);
-        (0..count).all(|index| {
-            let topic = ffi::PyList_GetItem(topics, index);
-            is_exact_str(topic) && ffi::PyUnicode_GetLength(topic) <= 64
-        }) && count <= 32
-    }
-}
-
-/// Every record of body_state_v1 "agents" passes validate_body_state's rules.
-#[pyfunction]
-pub fn body_agents_valid(agents: &Bound<'_, PyDict>) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        agents.py(),
-        [
-            "sleep_debt_minutes",
-            "uncertainty",
-            "reassurance",
-            "discontent",
-            "positive_affect",
-            "negative_affect",
-            "hygiene_need",
-        ],
-    );
-    all_items(agents.as_ptr(), |_, record| {
-        let Some([sleep_debt, rest @ ..]) = reader.read(record) else {
-            return Ok(false);
-        };
-        Ok(is_within(sleep_debt, 0.0, 1440.0) && rest.iter().all(|value| is_unit(*value)))
-    })
 }
 
 /// Every record of movement_v1 "positions" passes validate_movement_runtime_state's

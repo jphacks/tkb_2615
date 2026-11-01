@@ -25,6 +25,7 @@ use crate::core::row::{map_set, Field};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::{field_mirror_of, mirror_of, raw_dict_get, raw_dict_set, NamespaceMirror, Tree};
 use crate::rules::world_view::{view_of, RustView, ViewAgent, ViewZone};
+use crate::state::body_state::{BodyRow, NAME as BODY_STATE};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
 use crate::state::metric_state::MetricRow;
 use crate::state::psychological_distress::{AgentRecord, DistressRow, NAME};
@@ -1236,32 +1237,27 @@ struct Applied<'py> {
     id: Bound<'py, PyString>,
     objects: [Bound<'py, PyAny>; 6],
     floats: [f64; 6],
-    /// `body_state_v1.agents[id]` and what to write to it, if the delta has body values.
-    record: Option<Bound<'py, PyAny>>,
-    body: [Option<Bound<'py, PyAny>>; 7],
+    /// What to write to `body_state_v1.agents[id]`, if the delta has body values.
+    body: Option<[Option<f64>; 7]>,
     changed: u8,
 }
 
-/// `body_state_v1.agents`, if it is a plain dict this kernel may write to with the C API.
-fn plain_body_agents<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+/// The mirror of `body_state_v1`, or None for a world without it. A world that holds something
+/// else there is Python's.
+fn body_mirror<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, NamespaceMirror>>> {
     let py = world.py();
     let table = world.getattr(intern!(py, "model_state"))?;
     if as_readable_dict(&table).is_none() {
         return unsupported("model_state is not readable");
     }
-    let Some(state) = raw_dict_get(&table, intern!(py, "body_state_v1").as_any())? else {
+    let Some(state) = raw_dict_get(&table, intern!(py, BODY_STATE).as_any())? else {
         return Ok(None);
     };
-    if !state.is_exact_instance_of::<PyDict>() {
-        return unsupported("body_state_v1 is not a plain dict");
+    let mirror = mirror_of(world, BODY_STATE)?;
+    if !mirror.try_borrow()?.root_is(&state) {
+        return unsupported("body_state_v1 is not the tree of its row");
     }
-    let Some(agents) = raw_dict_get(&state, intern!(py, "agents").as_any())? else {
-        return Ok(None);
-    };
-    if !agents.is_exact_instance_of::<PyDict>() {
-        return unsupported("the body records are not a plain dict");
-    }
-    Ok(Some(agents))
+    Ok(Some(mirror))
 }
 
 /// `apply_state_deltas`. Everything is checked, by what Python's checks accept without their slow
@@ -1279,7 +1275,7 @@ fn apply_deltas<'py>(
     };
     let world_minute = world.getattr(intern!(py, "minute_index"))?;
     let delta_class = &delta_types(py)?.0;
-    let body_agents = plain_body_agents(world)?;
+    let body_mirror = body_mirror(world)?;
     let names = [
         intern!(py, "toilet_urgency"),
         intern!(py, "hunger"),
@@ -1330,33 +1326,25 @@ fn apply_deltas<'py>(
         for (place, value) in objects.iter().enumerate() {
             floats[place] = unit_float(value)?;
         }
-        let mut body: [Option<Bound<'py, PyAny>>; 7] = Default::default();
+        let mut values: [Option<f64>; 7] = Default::default();
         let mut supplied = false;
         for (place, name) in body_names.iter().enumerate() {
             let value = item(name)?;
             if !value.is_none() {
-                if !value.is_exact_instance_of::<PyFloat>() {
+                let Ok(value) = value.downcast_exact::<PyFloat>() else {
                     return unsupported("a body value is not a float");
-                }
-                body[place] = Some(value);
+                };
+                values[place] = Some(value.value());
                 supplied = true;
             }
         }
-        let record = if supplied {
-            let Some(agents) = &body_agents else {
-                return unsupported("the delta has body values and the world no body records");
-            };
-            let Some(record) = raw_dict_get(agents, id.as_any())? else {
-                return unsupported("the delta has body values and the person no body record");
-            };
-            if !record.is_exact_instance_of::<PyDict>() {
-                return unsupported("a body record is not a plain dict");
-            }
-            Some(record)
-        } else {
-            None
-        };
-        plan.push(Applied { id: id.clone(), objects, floats, record, body, changed: 0 });
+        plan.push(Applied {
+            id: id.clone(),
+            objects,
+            floats,
+            body: supplied.then_some(values),
+            changed: 0,
+        });
     }
     let mut seen = FxHashSet::with_capacity_and_hasher(plan.len(), Default::default());
     for applied in &plan {
@@ -1368,6 +1356,20 @@ fn apply_deltas<'py>(
     let mut ids = Vec::with_capacity(plan.len());
     for applied in &plan {
         ids.push(applied.id.to_str()?.to_owned());
+    }
+
+    if plan.iter().any(|applied| applied.body.is_some()) {
+        let Some(mirror) = &body_mirror else {
+            return unsupported("the delta has body values and the world no body records");
+        };
+        NamespaceMirror::with_row::<BodyRow, _>(mirror, |row| {
+            for (applied, id) in plan.iter().zip(&ids) {
+                if applied.body.is_some() && !row.agents.contains_key(id.as_str()) {
+                    return unsupported("the delta has body values and the person no body record");
+                }
+            }
+            Ok(())
+        })?;
     }
 
     // Every person first: from here on nothing may be refused. No Python runs in here.
@@ -1431,13 +1433,43 @@ fn apply_deltas<'py>(
                 raw_setattr(&agent, names[5], applied.objects[5].as_ptr())?;
             }
         }
-        if let Some(record) = &applied.record {
-            for (name, value) in body_names.iter().zip(&applied.body) {
-                if let Some(value) = value {
-                    raw_dict_set(record, name.as_any(), value)?;
+    }
+    if let Some(mirror) = &body_mirror {
+        NamespaceMirror::with_row_tree::<BodyRow, _>(mirror, |row, tree| {
+            let records = tree.child(intern!(py, "agents"))?;
+            for (applied, id) in plan.iter().zip(&ids) {
+                let Some(values) = &applied.body else {
+                    continue;
+                };
+                let record = row
+                    .agents
+                    .get_mut(id.as_str())
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("a body record left the row"))?;
+                let tree = records.child(&applied.id)?;
+                if let Some(value) = values[0] {
+                    record.set_sleep_debt_minutes(&tree, value)?;
+                }
+                if let Some(value) = values[1] {
+                    record.set_uncertainty(&tree, value)?;
+                }
+                if let Some(value) = values[2] {
+                    record.set_reassurance(&tree, value)?;
+                }
+                if let Some(value) = values[3] {
+                    record.set_discontent(&tree, value)?;
+                }
+                if let Some(value) = values[4] {
+                    record.set_positive_affect(&tree, value)?;
+                }
+                if let Some(value) = values[5] {
+                    record.set_negative_affect(&tree, value)?;
+                }
+                if let Some(value) = values[6] {
+                    record.set_hygiene_need(&tree, value)?;
                 }
             }
-        }
+            Ok(())
+        })?;
     }
     Ok(())
 }

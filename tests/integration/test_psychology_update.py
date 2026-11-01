@@ -451,11 +451,11 @@ def test_a_delta_of_ints_is_left_to_python_which_accepts_it(generated_scenario: 
     assert world.agents[delta.agent_id].needs.hunger == 1
 
 
-def test_a_tracked_body_namespace_is_left_to_python(generated_scenario: Any) -> None:
+def test_a_body_namespace_without_a_row_is_left_to_python(generated_scenario: Any) -> None:
     world = WorldState.from_scenario(generated_scenario)
     world.model_state["body_state_v1"] = type("OtherDict", (dict,), {})(create_body_state(world))
     deltas = _deltas_of(world, random.Random(4), body=True)
-    with pytest.raises(native.Unsupported, match="not a plain dict"):
+    with pytest.raises(native.Unsupported, match="no row"):
         _rules().apply_deltas(None, world, deltas)
 
 

@@ -22,7 +22,6 @@ mod eventlog;
 mod history;
 mod records;
 mod validation;
-mod watch;
 
 // The `state` and `rules` modules, found by build.rs.
 include!(concat!(env!("OUT_DIR"), "/lanes.rs"));
@@ -284,13 +283,9 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(checkpoint::record_json, module)?)?;
     module.add_function(wrap_pyfunction!(history::same_json_items, module)?)?;
     module.add_class::<history::HistoryPins>()?;
-    module.add_function(wrap_pyfunction!(validation::body_relationships_valid, module)?)?;
-    module.add_function(wrap_pyfunction!(validation::body_agents_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::movement_positions_valid, module)?)?;
     module.add_function(wrap_pyfunction!(validation::world_agents_valid, module)?)?;
     module.add_class::<validation::ValuesSnapshot>()?;
-    module.add_function(wrap_pyfunction!(watch::install_dict_watcher, module)?)?;
-    module.add_class::<watch::RecordWatch>()?;
     module.add_function(wrap_pyfunction!(contacts::fsum, module)?)?;
     module.add_class::<eventlog::EventStore>()?;
     module.add_function(wrap_pyfunction!(eventlog::split_json_array, module)?)?;
