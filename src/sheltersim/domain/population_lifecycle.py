@@ -24,6 +24,7 @@ from sheltersim.contracts.presence import (
     PresenceState,
     PresenceTransition,
 )
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import AGENT_DYNAMICS_STATE_KEY
 from sheltersim.domain.body_state import BODY_STATE_KEY
@@ -112,6 +113,7 @@ def initialize_population_lifecycle_state(world: WorldState) -> dict[str, Any]:
     return state
 
 
+@kernel_first("population_lifecycle", "validate_population_lifecycle_state")
 def validate_population_lifecycle_state(world: WorldState) -> None:
     """Validate exact schema, archived identities, pending admission, and bounded JSON."""
     state = world.model_state.get(POPULATION_LIFECYCLE_STATE_KEY)
@@ -295,7 +297,6 @@ def apply_population_presence_command(
     if POPULATION_LIFECYCLE_STATE_KEY not in world.model_state:
         raise EventApplicationError("population lifecycle contract is not installed")
     candidate = MutableWorldState.from_dict(deepcopy(world.to_dict()))
-    state = candidate.model_state[POPULATION_LIFECYCLE_STATE_KEY]
     minute = event.due_minute
     if minute != candidate.minute_index:
         raise EventApplicationError(
@@ -308,6 +309,29 @@ def apply_population_presence_command(
                 "temporary exit dropped: the person was not free before the expected return"
             )
         raise EventApplicationError("expected return minute precedes the departure event")
+    receipt = _apply_presence_action(world, candidate, event, typed, ids)
+    try:
+        validate_population_lifecycle_state(candidate)
+        candidate.validate()
+        validate_simulator_extensions(candidate)
+    except (TypeError, KeyError, ValueError) as exc:
+        raise EventApplicationError(f"population command failed validation: {exc}") from exc
+    world.__dict__.clear()
+    world.__dict__.update(candidate.__dict__)
+    return receipt
+
+
+@kernel_first("population_lifecycle", "apply_presence_action")
+def _apply_presence_action(
+    world: WorldState,
+    candidate: WorldState,
+    event: ScheduledEvent,
+    typed: PopulationPresenceCommand,
+    ids: tuple[str, ...],
+) -> dict[str, Any]:
+    """Run a typed command on the candidate copy; `world` reads what a deferral writes back."""
+    state = candidate.model_state[POPULATION_LIFECYCLE_STATE_KEY]
+    minute = event.due_minute
     if typed.action == "temporary_exit":
         agent_id = ids[0]
         agent = candidate.agents.get(agent_id)
@@ -506,17 +530,10 @@ def apply_population_presence_command(
             "minute": minute,
             "action": "reunited",
         }
-    try:
-        validate_population_lifecycle_state(candidate)
-        candidate.validate()
-        validate_simulator_extensions(candidate)
-    except (TypeError, KeyError, ValueError) as exc:
-        raise EventApplicationError(f"population command failed validation: {exc}") from exc
-    world.__dict__.clear()
-    world.__dict__.update(candidate.__dict__)
     return receipt
 
 
+@kernel_first("population_lifecycle", "admit_pending_returns")
 def admit_pending_returns(world: WorldState, minute: int) -> tuple[str, ...]:
     """Admit same-ID returnees in stable request order when destination capacity opens."""
     state = world.model_state.get(POPULATION_LIFECYCLE_STATE_KEY)
@@ -582,6 +599,7 @@ def admit_pending_returns(world: WorldState, minute: int) -> tuple[str, ...]:
     return tuple(admitted)
 
 
+@kernel_first("population_lifecycle", "complete_presence_relocation")
 def complete_presence_relocation(world: WorldState, event: ScheduledEvent) -> None:
     """Commit household/location receipts after the existing movement handler arrives."""
     state = world.model_state.get(POPULATION_LIFECYCLE_STATE_KEY)
@@ -629,6 +647,7 @@ def complete_presence_relocation(world: WorldState, event: ScheduledEvent) -> No
     validate_population_lifecycle_state(world)
 
 
+@kernel_first("population_lifecycle", "current_household_id")
 def current_household_id(world: WorldState, agent_id: str) -> str | None:
     """Resolve the mutable household ledger without rewriting immutable profile traits."""
     presence = world.model_state.get(PRESENCE_NAMESPACE)
@@ -1239,6 +1258,7 @@ def _defer_while_busy(world: WorldState, event: ScheduledEvent, agent_id: str) -
     raise EventSuppressed(f"population exit waits until the person is free: {reason}")
 
 
+@kernel_first("population_lifecycle", "zone_has_room")
 def _zone_has_room(world: WorldState, zone_id: str, *, excluding: str | None = None) -> bool:
     from sheltersim.domain.temporary_spaces import effective_zone_capacity, incoming_travelers
 
