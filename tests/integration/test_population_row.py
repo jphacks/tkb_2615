@@ -298,10 +298,26 @@ def test_the_rule_a_memo_skips_passes_on_a_finished_run(finished_world) -> None:
 
 
 def test_a_pending_arrival_is_read_at_every_check(finished_world) -> None:
+    # Its rule reads the event queue, the clock and the presence, none of which the stamp covers.
     world = _checked(finished_world)
     state = world.model_state["population_dynamics_v1"]
-    # A broken one: the rule reads its fields, so the skip must not apply.
-    state["pending_arrivals"].append({"broken": True})
+    state["pending_arrivals"].append(
+        {
+            "profile": {"id": "waiting-person"},
+            "traits": {"age_years": 30, "household_role": "adult", "languages": ["ja"]},
+            "zone_id": next(iter(world.zones)),
+            "created_minute": 0,
+            "event_id": "event",
+        }
+    )
+    world.validate_after_tick()
+    world.validate_after_tick()
+    assert not _memo(world).dynamics_unchanged
+
+
+def test_a_broken_pending_arrival_stops_the_check(finished_world) -> None:
+    world = _checked(finished_world)
+    world.model_state["population_dynamics_v1"]["pending_arrivals"].append({"broken": True})
     with pytest.raises((StateInvariantError, ValueError, KeyError)):
         world.validate_after_tick()
 
