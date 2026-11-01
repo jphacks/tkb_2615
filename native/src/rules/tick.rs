@@ -54,6 +54,7 @@ static PYTHON_PATH_ONLY: AtomicBool = AtomicBool::new(false);
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static KERNELS_REFUSED: AtomicU64 = AtomicU64::new(0);
 static REFUSALS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new());
+static KERNEL_REASONS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
 fn refuse<T>(reason: &'static str) -> PyResult<T> {
     if let Ok(mut refusals) = REFUSALS.lock() {
@@ -66,6 +67,9 @@ fn refuse<T>(reason: &'static str) -> PyResult<T> {
 fn refused(py: Python<'_>, error: &PyErr) -> bool {
     if error.is_instance_of::<Unsupported>(py) {
         KERNELS_REFUSED.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut reasons) = KERNEL_REASONS.lock() {
+            *reasons.entry(error.value(py).to_string()).or_default() += 1;
+        }
         true
     } else {
         false
@@ -506,7 +510,7 @@ fn python_path_only(value: bool) {
     PYTHON_PATH_ONLY.store(value, Ordering::Relaxed);
 }
 
-/// What has run in this process: `(counts, refused ticks by reason)`.
+/// What has run in this process: `(counts, refused ticks and refused kernels by reason)`.
 #[pyfunction]
 fn stats<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
     let counts = PyDict::new(py);
@@ -516,6 +520,11 @@ fn stats<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDic
     if let Ok(refusals) = REFUSALS.lock() {
         for (reason, times) in refusals.iter() {
             reasons.set_item(*reason, *times)?;
+        }
+    }
+    if let Ok(refusals) = KERNEL_REASONS.lock() {
+        for (reason, times) in refusals.iter() {
+            reasons.set_item(format!("kernel: {reason}"), *times)?;
         }
     }
     Ok((counts, reasons))
