@@ -668,8 +668,10 @@ pub(crate) enum AppliedOutcome {
     No,
     /// Applied, and the record holds this very object.
     ThisEvent,
-    /// Applied, in a record that has no object yet or holds another one of the same ID.
+    /// Applied, in a record that holds another object of the same ID, with no bytes to read.
     AnotherObject,
+    /// Applied, in a record of another object or none yet: the event its bytes hold.
+    SavedRow(EventRow),
 }
 
 /// What a Rust rule does with the log: no Python record is made or read.
@@ -683,13 +685,14 @@ impl EventStore {
         if !self.entries[index].applied {
             return Ok(AppliedOutcome::No);
         }
-        let Some(record) = &self.handles[index].record else {
-            return Ok(AppliedOutcome::AnotherObject);
-        };
-        Ok(if record.bind(py).getattr(intern!(py, "event"))?.is(event) {
-            AppliedOutcome::ThisEvent
-        } else {
-            AppliedOutcome::AnotherObject
+        if let Some(record) = &self.handles[index].record {
+            if record.bind(py).getattr(intern!(py, "event"))?.is(event) {
+                return Ok(AppliedOutcome::ThisEvent);
+            }
+        }
+        Ok(match self.saved_document(py, index) {
+            Some((row, ..)) => AppliedOutcome::SavedRow(row),
+            None => AppliedOutcome::AnotherObject,
         })
     }
 
@@ -711,6 +714,47 @@ impl EventStore {
         }
         let written = event.record_json(realized_minute, status, detail)?;
         Ok(self.add(event.index_fields(realized_minute, status), Handles::default(), Some(written)))
+    }
+
+    /// `EventLog.append` of an outcome of an event object, with no record object: its bytes come
+    /// from the same writer as a record's, and Python makes the record when it reads one. 3, with
+    /// nothing changed, for a value the writer refuses, which needs Python's record and encoder.
+    pub(crate) fn append_outcome(
+        &mut self,
+        event: &Bound<'_, PyAny>,
+        realized_minute: i64,
+        status: EventStatus,
+        detail: Option<&str>,
+    ) -> PyResult<u8> {
+        let py = event.py();
+        let Some((record_type, event_type)) = &self.types else {
+            return Ok(3);
+        };
+        if !event.get_type().is(event_type.bind(py)) || record_type.is_none(py) {
+            return Ok(3);
+        }
+        let fields = fields_of_outcome(event, realized_minute, status == EventStatus::Applied)?;
+        if self.by_id.contains_key(fields.event_id.as_str()) {
+            return Ok(1);
+        }
+        if self.sequences.contains(&fields.sequence) {
+            return Ok(2);
+        }
+        let detail = match detail {
+            Some(detail) => PyString::new(py, detail).into_any(),
+            None => py.None().into_bound(py),
+        };
+        let written = crate::checkpoint::encode_outcome(
+            event,
+            realized_minute.into_pyobject(py)?.as_any(),
+            PyString::new(py, status.as_str()).as_any(),
+            &detail,
+        )
+        .unwrap_or(None);
+        let Some(written) = written else {
+            return Ok(3);
+        };
+        Ok(self.add(fields, Handles::default(), Some(written.into_boxed_slice())))
     }
 
     pub(crate) fn has_event_id(&self, event_id: &str) -> bool {
@@ -804,8 +848,14 @@ impl EventRow {
 fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
     let py = record.py();
     let event = record.getattr(intern!(py, "event"))?;
-    let payload = event.getattr(intern!(py, "payload"))?;
     let status: String = record.getattr(intern!(py, "status"))?.getattr(intern!(py, "_value_"))?.extract()?;
+    let minute = record.getattr(intern!(py, "realized_minute"))?.extract()?;
+    fields_of_outcome(&event, minute, status == "applied")
+}
+
+fn fields_of_outcome(event: &Bound<'_, PyAny>, minute: i64, applied: bool) -> PyResult<Fields> {
+    let py = event.py();
+    let payload = event.getattr(intern!(py, "payload"))?;
     let mut provenance_objects = Vec::new();
     // isinstance(value, collections.abc.Mapping), as the Python EventLog checks. Nearly every
     // value is a str, which the costly check would only reject.
@@ -828,8 +878,8 @@ fn fields_of_record(record: &Bound<'_, PyAny>) -> PyResult<Fields> {
     let mut fields = Fields {
         event_id: event.getattr(intern!(py, "event_id"))?.extract()?,
         sequence: event.getattr(intern!(py, "sequence"))?.extract()?,
-        minute: record.getattr(intern!(py, "realized_minute"))?.extract()?,
-        applied: status == "applied",
+        minute,
+        applied,
         request_id: None,
         agent_id: None,
         support_kind: None,

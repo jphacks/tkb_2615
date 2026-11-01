@@ -942,7 +942,7 @@ fn item_document<'py>(
 
 /// `record_social_event`.
 #[pyfunction]
-fn record_social_event<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<()> {
+pub(crate) fn record_social_event<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
     if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());

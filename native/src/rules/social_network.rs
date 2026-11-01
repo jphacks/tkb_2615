@@ -352,7 +352,7 @@ fn required<'py>(
 /// Whatever the Python rule would skip or raise on, other than an event type it ignores, says
 /// Unsupported, and the Python rule runs. Nothing is written before that is known.
 #[pyfunction]
-fn observe_event<'py>(
+pub(crate) fn observe_event<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,

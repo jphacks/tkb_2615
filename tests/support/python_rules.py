@@ -47,6 +47,19 @@ PORTED_NAMES = frozenset(
         # policies/information.py: rules/information.rs
         "_transmission_probability",
         "_sender_sharing_factor",
+        # experiments/phases/dispatch.py, the rules it calls: rules/dispatch.rs. An event type's
+        # handler is read at each event, and a patch of a class's `apply` shows there.
+        "_dispatch_due_events",
+        "_record_applied_outcomes",
+        "_refresh_space_after_geometry_change",
+        "_interrupt_trips_on_closed_routes",
+        "_consider_social_contact_events",
+        "effect_event_guard_or_suppress",
+        "should_apply_effect_guard",
+        "record_social_event",
+        "observe_event",
+        "record_applied_action_completion",
+        "learn_facility",
     }
 )
 
@@ -63,6 +76,8 @@ PORTED_METHODS = frozenset(
         ("InformationSpreadPolicy", "update"),
         ("HazardInformationPolicy", "update"),
         ("EvidenceAwareInformationPolicy", "update"),
+        ("EventDispatcher", "dispatch_due"),
+        ("EventDispatcher", "settle"),
     }
 )
 

@@ -18,6 +18,7 @@ from sheltersim import native
 
 # Name of a step's method -> (the module of native/src/rules/, the name of its kernel).
 SEGMENTS: dict[str, tuple[str, str]] = {
+    "_run_dispatch_phase": ("dispatch", "run_phase"),
     "_view_after_movement": ("world_view", "view_after_movement"),
     "_view_for_proposals": ("world_view", "view_for_proposals"),
     "_propose_due": ("behavior", "propose_due"),

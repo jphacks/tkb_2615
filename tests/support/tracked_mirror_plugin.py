@@ -36,6 +36,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_information_row.py",
         "test_capture_rows.py",
         "test_event_rows.py",
+        "test_dispatch_rows.py",
         "test_action_lifecycle_rows.py",
         "test_social_propagation_row.py",
         "test_movement_row.py",

@@ -483,10 +483,25 @@ pub(crate) fn encode_record(
     if !event.get_type().is(event_type) {
         return Ok(None);
     }
+    encode_outcome(
+        &event,
+        &record.getattr("realized_minute")?,
+        &record.getattr("status")?.getattr("value")?,
+        &record.getattr("detail")?,
+    )
+}
+
+/// The same bytes from the event and its outcome, for a rule that makes no record object.
+pub(crate) fn encode_outcome(
+    event: &Bound<'_, PyAny>,
+    realized_minute: &Bound<'_, PyAny>,
+    status: &Bound<'_, PyAny>,
+    detail: &Bound<'_, PyAny>,
+) -> PyResult<Option<Vec<u8>>> {
     let mut encoder = Encoder { out: Vec::with_capacity(1024) };
     // Both objects' keys in sorted order.
     encoder.out.push(b'{');
-    if !write_field(&mut encoder, "detail", &record.getattr("detail")?)? {
+    if !write_field(&mut encoder, "detail", detail)? {
         return Ok(None);
     }
     encoder.out.extend_from_slice(b",\"event\":{");
@@ -504,11 +519,11 @@ pub(crate) fn encode_record(
         }
     }
     encoder.out.extend_from_slice(b"},");
-    if !write_field(&mut encoder, "realized_minute", &record.getattr("realized_minute")?)? {
+    if !write_field(&mut encoder, "realized_minute", realized_minute)? {
         return Ok(None);
     }
     encoder.out.push(b',');
-    if !write_field(&mut encoder, "status", &record.getattr("status")?.getattr("value")?)? {
+    if !write_field(&mut encoder, "status", status)? {
         return Ok(None);
     }
     encoder.out.push(b'}');

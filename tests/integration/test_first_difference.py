@@ -334,7 +334,10 @@ def test_the_order_changes_inside_phases_at_each_named_place(
         probe.close()
 
     assert {
-        "EventDispatcher.dispatch_due",
+        "EventDispatcher.dispatch_one",
+        "OfflineSimulationController._run_dispatch_phase",
+    } & set(probe.fired)
+    assert {
         "ProposePhase._apply_proposal",
         "ToiletServiceManager.arbitrate",
         "StaffService.assign_pending",
