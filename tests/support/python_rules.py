@@ -17,6 +17,11 @@ import pytest
 # Names that mean a ported function wherever they are patched.
 PORTED_NAMES = frozenset(
     {
+        # events/effects.py: rules/effects.rs, through `kernel_first`.
+        "should_apply_effect_guard",
+        "has_active_facility_modifier",
+        "has_pending_facility_modifier",
+        "validate_effect_program_state",
         # domain/movement.py: rules/movement.rs. Inside `advance_movement` a patch reaches only
         # its Python rule, `advance_movement.__wrapped__`, which a test calls by that name.
         "advance_movement",
@@ -96,6 +101,18 @@ PORTED_NAMES = frozenset(
         "observe_event",
         "record_applied_action_completion",
         "learn_facility",
+        # events/handlers.py, domain/care_receipts.py, domain/facilities.py, domain/staff.py:
+        # rules/care_receipts.rs, rules/toilet.rs, rules/support.rs, rules/travel_completion.rs
+        "append_applied_care_transition",
+        "make_care_transition_record",
+        "care_source_ids_for_agent",
+        "support_kind_for_agent",
+        "complete_toilet_service",
+        "timeout_support_request",
+        "complete_support_task",
+        "_finish_stopped_journey",
+        "_schedule_room_approach",
+        "_reject_room_approach",
         # domain/resources.py: rules/resources.rs, state/resource_ledger.rs
         "apply_resource_operation",
         "resource_metric_values",
@@ -150,6 +167,11 @@ PORTED_METHODS = frozenset(
         ("ResourceServiceManager", "request"),
         ("ResourceServiceManager", "record_request_outcome"),
         ("ShortestTravelTimePolicy", "route"),
+        ("ToiletServiceManager", "request"),
+        ("ToiletServiceManager", "_facilities_to_serve"),
+        ("ToiletServiceManager", "_has_room"),
+        ("ToiletServiceManager", "_start_head"),
+        ("StaffService", "request"),
     }
 )
 

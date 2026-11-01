@@ -90,6 +90,11 @@ pub(crate) fn is_identifier(text: &str) -> bool {
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
 
+/// The contract's `SupportKind`.
+pub(crate) fn is_support_kind(text: &str) -> bool {
+    SUPPORT_KINDS.contains(&text)
+}
+
 impl CareHead {
     /// What `CareRequestState` and `SharedOperationsState` ask of a head under this key.
     fn is_valid(&self, key: &str) -> bool {

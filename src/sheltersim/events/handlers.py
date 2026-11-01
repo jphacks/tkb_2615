@@ -1844,6 +1844,7 @@ class ToiletServiceCompletionHandler:
 
     after_complete: Callable[[WorldState, ScheduledEvent], None] | None = None
 
+    @kernel_first("toilet", "complete")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         facility_id = event.payload.get("facility_id")
         agent_id = event.payload.get("agent_id")
@@ -2156,6 +2157,7 @@ class AgentTravelCompletionHandler:
             world, event, agent_id, purpose, facility_id, destination_zone_id, origin_zone_id
         )
 
+    @kernel_first("travel_completion", "after_arrival")
     def _after_arrival(
         self,
         world: WorldState,
@@ -2166,7 +2168,7 @@ class AgentTravelCompletionHandler:
         destination_zone_id: str,
         origin_zone_id: Any,
     ) -> None:
-        """What a walk to a service leads to. rules/travel_completion.rs calls it until M4."""
+        """What a walk to a service leads to. rules/travel_completion.rs has the kernel."""
         if (
             purpose in {"toilet_request", "resource_request"}
             and "facility_geometry" in world.model_configs
@@ -2833,6 +2835,7 @@ class StaffSupportCompletionHandler:
     cooldown_minutes: int = 30
     require_colocated: bool = False
 
+    @kernel_first("support", "complete_support")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         values = tuple(
             event.payload.get(key) for key in ("request_id", "agent_id", "staff_id", "task_id")
@@ -3259,6 +3262,7 @@ class SupportRequestTimeoutHandler:
 
     cooldown_minutes: int = 30
 
+    @kernel_first("support", "timeout")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         request_id = event.payload.get("request_id")
         agent_id = event.payload.get("agent_id")
@@ -3284,5 +3288,10 @@ if native.available():
     native.rules("dispatch").install_table(
         (SocialInteractionHandler, SocialInteractionHandler.apply),
         (AgentTravelCompletionHandler, AgentTravelCompletionHandler.apply),
+        (ToiletServiceCompletionHandler, ToiletServiceCompletionHandler.apply),
+        (ResourceServiceCompletionHandler, ResourceServiceCompletionHandler.apply),
+        (SupportRequestTimeoutHandler, SupportRequestTimeoutHandler.apply),
+        (StaffSupportCompletionHandler, StaffSupportCompletionHandler.apply),
+        AgentTravelCompletionHandler._after_arrival,
         EventDispatcher,
     )

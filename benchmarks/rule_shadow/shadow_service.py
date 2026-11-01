@@ -40,6 +40,7 @@ GUARDED = (
     "agent_dynamics",
     "service",
     "travel",
+    "common_operations",
 )
 
 

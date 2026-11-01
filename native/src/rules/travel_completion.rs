@@ -2,27 +2,37 @@
 //! row and the entity rows, decides, and writes the task, the person's row and object. Nothing is
 //! drawn and nothing is scheduled here.
 //!
-//! What a walk leads to stays Python until M4: `handler._after_arrival` (the approach inside a room,
-//! `ToiletServiceManager.request`, `ResourceServiceManager.request`), and what the queue walks ask
-//! of `domain/movement.py` and `domain/facility_queues.py`. Those are called with no borrow held.
+//! What a walk leads to is `after_arrival` here (the approach inside a room, the toilet's and the
+//! service's queue). What it refuses, having changed nothing, is `handler._after_arrival`, as are
+//! what the queue walks ask of `domain/movement.py` and `domain/facility_queues.py`. Those are
+//! called with no borrow held.
 //!
 //! A walk the rule refuses says Unsupported before any change, and the Python rule says why in its
 //! own text. So do `sleep_bed` and `presence_relocation`, which write `movement_v1` and
 //! `population_lifecycle_v1` (docs/rust-port/lanes/m3-dispatch.md).
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyBool, PyDict, PyString};
 
-use crate::core::row::{attribute, exact_str, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::raw_dict_get;
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
-use crate::state::events::{EventRef, EventRow};
+use crate::rules::travel::{approach_route, plan_room_approach, write_travel};
+use crate::rules::{service, toilet};
+use crate::state::events::{EventRef, EventRow, EventWriter};
 use crate::Unsupported;
+
+const QUEUES_KEY: &str = "facility_queues_v1";
+static ARRIVALS_RAN: AtomicU64 = AtomicU64::new(0);
+static ARRIVALS_REFUSED: AtomicU64 = AtomicU64::new(0);
+static ARRIVAL_REFUSALS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
 /// What the rule reads of a walk's event. `origin` is `origin_zone_id` when a str, or else the
 /// first of the route.
@@ -242,12 +252,90 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
     Ok(())
 }
 
+/// `AgentTravelCompletionHandler._after_arrival`, where no rejection follows. A rejection reads the
+/// event and is the Python rule's, which then runs from the start.
+fn arrive<'py>(
+    handler: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    agent_id: &str,
+    purpose: &str,
+    facility_id: &str,
+    destination: &str,
+) -> PyResult<()> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    if exact_dict(&table)?.contains(QUEUES_KEY)? {
+        return unsupported("an independent FIFO may be here");
+    }
+    let is_toilet = purpose == "toilet_request";
+    if !is_toilet && purpose != "resource_request" {
+        return Ok(());
+    }
+    let configs = attribute(world, intern!(py, "model_configs"))?;
+    if exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))? {
+        let Some((route, points)) = approach_route(world, agent_id, facility_id)? else {
+            return unsupported("a blocked room is the Python rule's");
+        };
+        if route.minutes > 0 {
+            let writer = EventWriter::of(world)?;
+            let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+            let (agent_arc, facility_arc, origin): (Arc<str>, Arc<str>, Arc<str>) =
+                (Arc::from(agent_id), Arc::from(facility_id), Arc::from(destination));
+            let Some(planned) = plan_room_approach(world, &writer, &agent_arc, &facility_arc, purpose, route, &points, minute, &origin)? else {
+                return unsupported("a blocked room is the Python rule's");
+            };
+            return write_travel(world, &writer, planned);
+        }
+    }
+    let (agent, facility) = (PyString::new(py, agent_id), PyString::new(py, facility_id));
+    // A method set on the manager (a test's patch) is the Python rule's to call.
+    let own_request = |manager: &Bound<'py, PyAny>| -> PyResult<()> {
+        if raw_dict_get(&manager.getattr(intern!(py, "__dict__"))?, intern!(py, "request").as_any())?.is_some() {
+            return unsupported("the manager's request is another function");
+        }
+        Ok(())
+    };
+    if is_toilet {
+        // `validate_request_state`: only the False that the controller gives.
+        let validate = attribute(handler, intern!(py, "validate_request_state"))?;
+        if !validate.is(PyBool::new(py, false).as_any()) {
+            return unsupported("the world's whole validation is Python's");
+        }
+        own_request(&attribute(handler, intern!(py, "toilet_service"))?)?;
+        toilet::queue_up(world, agent.as_any(), facility.as_any())?;
+    } else {
+        let manager = attribute(handler, intern!(py, "resource_service"))?;
+        own_request(&manager)?;
+        service::queue_up(&manager, agent.as_any(), facility.as_any())?;
+    }
+    Ok(())
+}
+
+/// `_after_arrival`, called from Python.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn after_arrival<'py>(
+    handler: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    event: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    purpose: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    destination_zone_id: &Bound<'py, PyAny>,
+    origin_zone_id: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let _ = (event, origin_zone_id);
+    arrive(handler, world, exact_str(agent_id)?, exact_str(purpose)?, exact_str(facility_id)?, exact_str(destination_zone_id)?)
+}
+
 /// `AgentTravelCompletionHandler.apply` of a walk. `object` gives the event's object, for Python.
+/// `direct` asks `_after_arrival`'s kernel with no Python between.
 pub(crate) fn apply_event<'py>(
     handler: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     event: EventRef<'_, 'py>,
     object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+    direct: bool,
 ) -> PyResult<()> {
     let py = world.py();
     let walk = Walk::read(event)?;
@@ -374,6 +462,21 @@ pub(crate) fn apply_event<'py>(
 
     if matches!(&**purpose, "toilet_request" | "resource_request") {
         let facility = facility_id.map(|id| &**id).unwrap_or_default();
+        if direct {
+            match arrive(handler, world, agent_id, purpose, facility, destination) {
+                Ok(()) => {
+                    ARRIVALS_RAN.fetch_add(1, Ordering::Relaxed);
+                    return Ok(());
+                }
+                Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                    ARRIVALS_REFUSED.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(mut refusals) = ARRIVAL_REFUSALS.lock() {
+                        *refusals.entry(error.value(py).to_string()).or_insert(0) += 1;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let origin = walk.origin.as_deref();
         handler
             .call_method1(
@@ -397,10 +500,17 @@ fn apply<'py>(handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bo
     if EventRow::from_event(event)?.is_none() {
         return unsupported("the event has no row");
     }
-    apply_event(handler, world, EventRef::Object(event), &|| Ok(event.clone()))
+    apply_event(handler, world, EventRef::Object(event), &|| Ok(event.clone()), false)
+}
+
+/// How often `direct` found its way: `(ran, refused, reasons)`.
+pub(crate) fn arrival_counts() -> (u64, u64, BTreeMap<String, u64>) {
+    let reasons = ARRIVAL_REFUSALS.lock().map(|refusals| refusals.clone()).unwrap_or_default();
+    (ARRIVALS_RAN.load(Ordering::Relaxed), ARRIVALS_REFUSED.load(Ordering::Relaxed), reasons)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply, m)?)?;
+    m.add_function(wrap_pyfunction!(after_arrival, m)?)?;
     Ok(())
 }

@@ -23,7 +23,7 @@ use crate::rules::movement::{
 use crate::rules::movement_geometry::{Geo, Pt};
 use crate::rules::service::{active_task_class, set_agent};
 use crate::state::entities::{entities_of, Activity, Entities, EntityStore, FacilityRow};
-use crate::state::events::{EventKind, EventRow, EventWriter};
+use crate::state::events::{EventKind, EventRef, EventRow, EventWriter};
 use crate::state::movement::{Journey, MovementRow, Point};
 use crate::Unsupported;
 
@@ -273,6 +273,10 @@ pub(crate) struct PlannedTrip {
     changes: Option<Changes>,
 }
 
+const APPROACH_SOURCE: &str = "ASM-SPATIAL-MOVEMENT-V2";
+const APPROACH_POLICY: &str = "spatial-route-and-room-waypoint-v2";
+const APPROACH_EVENT_SOURCE: &str = "agent-facility-approach-v2";
+
 struct Names {
     agent_id: Arc<str>,
     task_id: Arc<str>,
@@ -475,7 +479,101 @@ pub(crate) fn plan_travel(world: &Bound<'_, PyAny>, writer: &EventWriter<'_>, tr
     Ok(Some(PlannedTrip { agent_id, task_id, task_kind, target_id, minute, due, event, changes }))
 }
 
-/// The writes of `_schedule_travel`.
+/// `_schedule_room_approach` of `events/handlers.py`, changing nothing. None is its False.
+pub(crate) fn plan_room_approach(
+    world: &Bound<'_, PyAny>,
+    writer: &EventWriter<'_>,
+    agent_id: &Arc<str>,
+    facility_id: &Arc<str>,
+    purpose: &str,
+    route: Route,
+    points: &[Pt],
+    minute: i64,
+    origin_zone_id: &Arc<str>,
+) -> PyResult<Option<PlannedTrip>> {
+    let py = world.py();
+    let store = entities_of(world)?;
+    if route.minutes >= EXACT_INT {
+        return unsupported("a journey has no plain duration");
+    }
+    let Some(due) = minute.checked_add(route.minutes) else {
+        return unsupported("a due minute out of range");
+    };
+    if due >= writer.duration() {
+        return Ok(None);
+    }
+    let sequence = writer.next_sequence()?;
+    let event_id: Arc<str> = Arc::from(format!("agent-facility-approach-complete-{sequence}"));
+    let task_id: Arc<str> = Arc::from(format!("agent-facility-approach-{sequence}"));
+    {
+        let past = writer.log().borrow();
+        let task_is_taken = EntityStore::with_rows(&store, |rows| Ok(rows.active_tasks.get(&task_id).is_some()))?;
+        if past.has_event_id(&event_id) || past.has_sequence(sequence) || writer.queue().borrow().has_event(&event_id) || task_is_taken {
+            return unsupported("the approach's identity is taken");
+        }
+    }
+    let task_kind = if purpose == "toilet_request" { "travel_to_toilet" } else { "travel_to_resource" };
+    let names = &*NAMES;
+    let purpose_arc: Arc<str> = Arc::from(purpose);
+    let mut payload = IndexMap::with_capacity(9);
+    payload.insert(names.agent_id.clone(), V::Str(agent_id.clone()));
+    payload.insert(names.task_id.clone(), V::Str(task_id.clone()));
+    payload.insert(names.purpose.clone(), V::Str(purpose_arc.clone()));
+    payload.insert(names.destination_zone_id.clone(), V::Str(route.destination.clone()));
+    payload.insert(names.facility_id.clone(), V::Str(facility_id.clone()));
+    payload.insert(names.origin_zone_id.clone(), V::Str(origin_zone_id.clone()));
+    payload.insert(names.route_zone_ids.clone(), strings(&route.zone_ids));
+    payload.insert(names.route_edge_ids.clone(), strings(&route.edge_ids));
+    payload.insert(names.travel_minutes.clone(), V::Int(route.minutes));
+    let mut provenance = IndexMap::with_capacity(3);
+    provenance.insert(names.source_type.clone(), V::Str(names.assumption.clone()));
+    provenance.insert(names.source_id.clone(), V::Str(Arc::from(APPROACH_SOURCE)));
+    provenance.insert(names.policy_version.clone(), V::Str(Arc::from(APPROACH_POLICY)));
+    let Some(event) = EventRow::new(
+        event_id.clone(),
+        EventKind::Completion,
+        due,
+        0,
+        sequence,
+        names.event_type.clone(),
+        payload,
+        Some(Arc::from(APPROACH_EVENT_SOURCE)),
+        None,
+        provenance,
+    ) else {
+        return unsupported("the event's values are not what an event takes");
+    };
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let changes = if exact_dict(&table)?.contains(KEY)? {
+        let mirror = mirror_held(world)?;
+        let scene = Scene::of(world)?;
+        let journey = Journey {
+            event_id,
+            task_id: task_id.clone(),
+            purpose: purpose_arc,
+            facility_id: Some(facility_id.clone()),
+            destination_zone_id: route.destination.clone(),
+            route_zone_ids: route.zone_ids,
+            route_edge_ids: route.edge_ids.clone(),
+            route_points: points.iter().map(|point| Point { x: point.x, y: point.y }).collect(),
+            started_minute: minute,
+            due_minute: due,
+            queue_id: None,
+            support_request_id: None,
+            support_staff_id: None,
+        };
+        Some(NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
+            EntityStore::with_rows(&store, |rows| {
+                plan_start(&scene, row, rows, agent_id, journey, &route.origin, points, &route.edge_ids, minute, route.minutes)
+            })
+        })?)
+    } else {
+        None
+    };
+    Ok(Some(PlannedTrip { agent_id: agent_id.clone(), task_id, task_kind, target_id: facility_id.clone(), minute, due, event, changes }))
+}
+
+/// The writes of `_schedule_travel` and `_schedule_room_approach`.
 pub(crate) fn write_travel(world: &Bound<'_, PyAny>, writer: &EventWriter<'_>, trip: PlannedTrip) -> PyResult<()> {
     let py = world.py();
     let store = entities_of(world)?;
@@ -547,6 +645,55 @@ fn schedule_travel<'py>(
     };
     write_travel(&world, &writer, planned)?;
     Ok(true)
+}
+
+/// `_schedule_return_to_initial_zone` of `experiments/phases/dispatch.py`.
+pub(crate) fn schedule_return<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<()> {
+    let py = world.py();
+    let Some(agent_id) = event.text("agent_id")? else {
+        return Ok(());
+    };
+    let found = EntityStore::with_rows(&entities_of(world)?, |rows| {
+        Ok(rows.agents.get(&*agent_id).map(|agent| (agent.zone_id.clone(), agent.profile.initial_zone_id.clone())))
+    })?;
+    let Some((zone_id, destination)) = found else {
+        return Ok(());
+    };
+    if zone_id == destination {
+        return Ok(());
+    }
+    let graph = rows_of(controller)?;
+    let Some(route) = route_for(world, &graph, &zone_id, &destination, &agent_id)? else {
+        return Ok(());
+    };
+    let writer = EventWriter::of(world)?;
+    let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+    let planned = plan_travel(
+        world,
+        &writer,
+        Trip {
+            agent_id,
+            route,
+            points: Vec::new(),
+            purpose: "return",
+            facility_id: None,
+            minute,
+            causation_id: Some(event.event_id()?),
+            support_request_id: None,
+            support_staff_id: None,
+        },
+    )?;
+    if let Some(planned) = planned {
+        write_travel(world, &writer, planned)?;
+    }
+    Ok(())
+}
+
+/// `_schedule_return_to_initial_zone`, called from Python.
+#[pyfunction]
+#[pyo3(name = "schedule_return")]
+fn schedule_return_step<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    schedule_return(controller, world, EventRef::Object(event))
 }
 
 // ---- The choice of a facility -------------------------------------------------------------------
@@ -711,5 +858,6 @@ pub(crate) fn approach_route(world: &Bound<'_, PyAny>, agent_id: &str, facility_
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(route, m)?)?;
     m.add_function(wrap_pyfunction!(schedule_travel, m)?)?;
+    m.add_function(wrap_pyfunction!(schedule_return_step, m)?)?;
     Ok(())
 }
