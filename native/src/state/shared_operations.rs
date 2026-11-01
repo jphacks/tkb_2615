@@ -149,13 +149,21 @@ pub(crate) struct Receipt {
     pub(crate) minute: Option<i64>,
     pub(crate) event_id: Option<Arc<str>>,
     pub(crate) verified: bool,
+    /// Its rule also reads the retained `staff_operations_v1.history`, so a tick's rules read it
+    /// again as long as it is recent.
+    pub(crate) reads_staff_history: bool,
     pub(crate) bytes: Box<[u8]>,
 }
 
 fn receipt_from(value: &Bound<'_, PyAny>) -> Result<Receipt, Misfit> {
     let py = value.py();
-    let mut receipt =
-        Receipt { minute: None, event_id: None, verified: false, bytes: encode(value)?.into_boxed_slice() };
+    let mut receipt = Receipt {
+        minute: None,
+        event_id: None,
+        verified: false,
+        reads_staff_history: true,
+        bytes: encode(value)?.into_boxed_slice(),
+    };
     if let Some(record) = as_readable_dict(value) {
         if let Some(minute) = record.get_item(intern!(py, "minute"))? {
             receipt.minute = exact_int(&minute).ok();
@@ -164,6 +172,11 @@ fn receipt_from(value: &Bound<'_, PyAny>) -> Result<Receipt, Misfit> {
             if let Ok(event_id) = event_id.downcast_exact::<PyString>() {
                 receipt.event_id = Some(Arc::from(event_id.to_str()?));
             }
+        }
+        if let Some(event_type) = record.get_item(intern!(py, "event_type"))? {
+            receipt.reads_staff_history = !event_type
+                .downcast_exact::<PyString>()
+                .is_ok_and(|text| text.to_str().is_ok_and(|text| text != "staff_operation_transition"));
         }
     }
     Ok(receipt)
@@ -178,6 +191,14 @@ pub(crate) struct Receipts {
 
 impl Receipts {
     /// Where `records_since_previous_tick` starts.
+    /// `validate_shared_operations_state` of this tick passed, reading these.
+    fn recent_passed(&mut self, minute_index: i64) {
+        let start = self.recent_start(minute_index);
+        for item in self.items.iter_mut().skip(start) {
+            item.verified = !item.reads_staff_history;
+        }
+    }
+
     pub(crate) fn recent_start(&self, minute_index: i64) -> usize {
         let mut start = self.items.len();
         while start > 0 {
@@ -372,9 +393,24 @@ fn validate_tick(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     Ok(true)
 }
 
+/// The Python rules have just accepted this world's state at its minute, for a tick.
+#[pyfunction]
+fn recent_passed(world: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    if namespace_is_absent(world, intern!(py, NAME))? {
+        return Ok(());
+    }
+    let minute = exact_int(&world.getattr(intern!(py, "minute_index"))?)?;
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror_of(world, NAME)?, |row| {
+        row.history.recent_passed(minute);
+        Ok(())
+    })
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add("ROW", Py::new(py, RowType::new("shared_operations", load_row::<SharedOperationsRow>))?)?;
     m.add_function(wrap_pyfunction!(validate_tick, m)?)?;
+    m.add_function(wrap_pyfunction!(recent_passed, m)?)?;
     Ok(())
 }

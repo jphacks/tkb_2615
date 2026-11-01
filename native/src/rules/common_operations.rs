@@ -177,6 +177,11 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
     }
     let writer = EventWriter::of(world)?;
     let mirror = mirror_of(world, NAME)?;
+    let table = attribute(world, intern!(py, "model_state"))?;
+    match exact_dict(&table)?.get_item(NAME)? {
+        Some(state) if mirror.try_borrow()?.root_is(&state) => {}
+        _ => return unsupported("the world holds another document than the row's"),
+    }
     let world_minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
     let field = |name: &Bound<'py, PyString>| attribute(record, name);
     let minute = exact_int(&field(intern!(py, "minute"))?)?;
@@ -306,6 +311,7 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
         minute: Some(minute),
         event_id: Some(event_id.clone()),
         verified: true,
+        reads_staff_history: false,
         bytes: encoder.out.into_boxed_slice(),
     };
     let tree_document = document.to_py(py)?;

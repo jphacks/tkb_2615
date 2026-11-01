@@ -452,7 +452,6 @@ def support_required_skills(world: WorldState, request_id: str) -> set[str]:
     return _CARE_SKILL_ALTERNATIVES.get(_support_kind(world, request_id), {"support"})
 
 
-@kernel_first("staff", "wait_reason_codes")
 def support_wait_reason_codes(
     world: WorldState,
     request_id: str,
@@ -621,7 +620,6 @@ def _support_route_wait_reasons(
     return reasons, route_is_feasible
 
 
-@kernel_first("staff", "waited_minutes")
 def support_waited_minutes(world: WorldState, request_id: str, *, minute: int | None = None) -> int:
     """Return elapsed wait, stopping at service start once a resident arrives."""
     request = world.support_requests.get(request_id)

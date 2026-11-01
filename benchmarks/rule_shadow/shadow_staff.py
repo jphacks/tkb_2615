@@ -71,8 +71,7 @@ def prepare(output: str) -> None:
     assign_kernel = rules.assign_operations
     relief_kernel = rules.relief
     pending_kernel = rules.assign_pending
-    reasons_kernel = rules.wait_reason_codes
-    waited_kernel = rules.waited_minutes
+    snapshot_kernel = rules.wait_snapshot
 
     def update_operations(world: Any, minute: Any) -> None:
         recorder.seen["update.calls"] += 1
@@ -96,7 +95,10 @@ def prepare(output: str) -> None:
         if text(before) != text(state) or order != list(state["zones"]):
             recorder.differ(f"update at {minute}: {text(before)[:300]} and {text(state)[:300]}")
         recorder.seen["update.values_compared"] += values_in(before)
-        if recorder.seen["update.calls"] % ROW_CHECK_EVERY == 0 and not world._core.mirror(KEY).verify():
+        if (
+            recorder.seen["update.calls"] % ROW_CHECK_EVERY == 0
+            and not world._core.mirror(KEY).verify()
+        ):
             recorder.differ(f"update at {minute}: the row and the tree")
         recorder.seen["update.zones_with_people"] += sum(
             zone["sanitation"] < 1.0 for zone in state["zones"].values()
@@ -128,10 +130,7 @@ def prepare(output: str) -> None:
         world = service.world
         metrics_before = dict(world.metric_state)
         requests = list(world.unsettled_support_requests())
-        copies = {
-            item.id: replace_request(item)
-            for item in requests
-        }
+        copies = {item.id: replace_request(item) for item in requests}
         try:
             result = pending_kernel(service, minute, validate_state=validate_state)
         except unsupported as reason:
@@ -184,47 +183,38 @@ def prepare(output: str) -> None:
             **{field.name: getattr(item, field.name) for field in fields(SupportRequestState)}
         )
 
-    def wait_reason_codes(
-        world: Any, request_id: Any, *, minute: Any = None, staff_memo: Any = None
-    ) -> Any:
-        recorder.seen["reasons.calls"] += 1
+    def wait_snapshot(world: Any, active_support: Any, sample_minute: Any) -> Any:
+        recorder.seen["snapshot.calls"] += 1
         try:
-            result = reasons_kernel(world, request_id, minute=minute, staff_memo=staff_memo)
+            result = snapshot_kernel(world, active_support, sample_minute)
         except unsupported as reason:
-            recorder.reasons[f"reasons: {reason}"] += 1
+            recorder.reasons[f"snapshot: {reason}"] += 1
             raise
-        recorder.seen["reasons.kernel_ran"] += 1
-        expected = staff().support_wait_reason_codes.__wrapped__(world, request_id, minute=minute)
-        if expected != result:
-            recorder.differ(f"reasons of {request_id} at {minute}: {result!r} and {expected!r}")
-        else:
-            recorder.seen["reasons.values_compared"] += len(result)
-            for reason_code in result:
-                recorder.seen[f"reasons.{reason_code}"] += 1
-        return result
+        recorder.seen["snapshot.kernel_ran"] += 1
+        from sheltersim.experiments import metrics
 
-    def waited_minutes(world: Any, request_id: Any, *, minute: Any = None) -> Any:
-        recorder.seen["waited.calls"] += 1
-        try:
-            result = waited_kernel(world, request_id, minute=minute)
-        except unsupported as reason:
-            recorder.reasons[f"waited: {reason}"] += 1
-            raise
-        recorder.seen["waited.kernel_ran"] += 1
-        expected = staff().support_waited_minutes.__wrapped__(world, request_id, minute=minute)
+        expected = metrics._support_wait_snapshot.__wrapped__(world, active_support, sample_minute)
         if text(expected) != text(result):
-            recorder.differ(f"waited of {request_id} at {minute}: {result!r} and {expected!r}")
-        recorder.seen["waited.values_compared"] += 1
+            recorder.differ(
+                f"snapshot at {sample_minute}: {text(result)[:300]} and {text(expected)[:300]}"
+            )
+        else:
+            recorder.seen["snapshot.values_compared"] += values_in(expected[0]) + len(expected[1])
+            for detail in expected[0].values():
+                for reason_code in detail["reason_codes"]:
+                    recorder.seen[f"snapshot.{reason_code}"] += 1
+            recorder.seen["snapshot.no_qualified_people"] += len(expected[1])
         return result
 
     rules.update_operations = update_operations
     rules.assign_operations = read_only(
         "assign", assign_kernel, lambda: operations().assign_staff_operations
     )
-    rules.relief = read_only("relief", relief_kernel, lambda: operations().schedule_staff_operation_relief)
+    rules.relief = read_only(
+        "relief", relief_kernel, lambda: operations().schedule_staff_operation_relief
+    )
     rules.assign_pending = assign_pending
-    rules.wait_reason_codes = wait_reason_codes
-    rules.waited_minutes = waited_minutes
+    rules.wait_snapshot = wait_snapshot
 
     # domain/staff_operations.py registers `validate` when it is imported, later than this.
     state_rules = native.state("staff_operations")
@@ -303,9 +293,14 @@ def _prepare_common(native: Any, recorder: Recorder) -> None:
         state = world.model_state[SHARED]
         after = _comparable(state, len(before["history"]))
         if text(before) != text(after):
-            recorder.differ(f"record of {record.event_id}: {text(before)[-400:]} and {text(after)[-400:]}")
+            recorder.differ(
+                f"record of {record.event_id}: {text(before)[-400:]} and {text(after)[-400:]}"
+            )
         recorder.seen["record.values_compared"] += values_in(before)
-        if recorder.seen["record.calls"] % ROW_CHECK_EVERY == 0 and not world._core.mirror(SHARED).verify():
+        if (
+            recorder.seen["record.calls"] % ROW_CHECK_EVERY == 0
+            and not world._core.mirror(SHARED).verify()
+        ):
             recorder.differ(f"record of {record.event_id}: the row and the tree")
 
     inside = [False]

@@ -29,8 +29,10 @@ from sheltersim.core.world import WorldState
 from sheltersim.domain.geometry_overlay import parsed_facility_geometry
 from sheltersim.events.models import EventStatus
 
-# What accepts a tick's state with no replay of the history, in native/src/state/shared_operations.rs.
+# native/src/state/shared_operations.rs: what accepts a tick's state with no replay of the history,
+# and what tells the row that these rules accepted its recent receipts.
 _TICK_VALID = native.state("shared_operations").validate_tick if native.available() else None
+_TICK_PASSED = native.state("shared_operations").recent_passed if native.available() else None
 
 _CARE_TRANSITIONS = {
     None: {"requested"},
@@ -72,6 +74,7 @@ def validate_shared_operations_state(
     if tick_memo is not None:
         history = state.get("history") if isinstance(state, dict) else None
         if isinstance(history, list) and tick_memo.no_new_operations(state, history):
+            _tell_the_row_they_passed(world, validate_event_history, history_memo)
             return
     # Per-tick validation parses only the records from the tick that just ended (each
     # was checked against its event when appended); the run-boundary validation
@@ -267,6 +270,19 @@ def validate_shared_operations_state(
         replay_memo.keep(
             (SHARED_OPERATIONS_KEY, "history"), len(history), (seen_events, care, last_minute)
         )
+    _tell_the_row_they_passed(world, validate_event_history, history_memo)
+
+
+def _tell_the_row_they_passed(
+    world: WorldState, validate_event_history: bool, history_memo: Any
+) -> None:
+    """A tick's kernels trust the recent receipts these rules have just passed."""
+    if validate_event_history or history_memo is not None or _TICK_PASSED is None:
+        return
+    try:
+        _TICK_PASSED(world)
+    except native.Unsupported:
+        pass
 
 
 def _truncated(state: Any) -> bool:

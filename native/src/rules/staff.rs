@@ -11,19 +11,20 @@ use std::sync::Arc;
 
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyInt, PyList, PySet, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyInt, PyList, PyString, PyTuple};
 use rustc_hash::FxHashMap;
 
 use crate::core::mathx::{py_fsum, py_max};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, namespace_is_absent, unsupported};
 use crate::core::value::V;
-use crate::core::world_core::{field_mirror_of, mirror_of, raw_dict_get, raw_dict_set, NamespaceMirror};
+use crate::core::world_core::{field_mirror_of, mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::staff_dynamics::{is_available, on_shift, staff_status};
 use crate::state::body_state::{BodyRow, NAME as BODY_STATE};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
 use crate::state::metric_state::MetricRow;
 use crate::state::staff_dynamics::{StaffDynamicsRow, NAME as STAFF_DYNAMICS};
 use crate::state::staff_operations::{Phase, StaffOperationsRow, NAME};
+use crate::Unsupported;
 
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
 const DEFAULT_KIND: &str = "emotional_support";
@@ -65,6 +66,17 @@ fn minute_of(world: &Bound<'_, PyAny>) -> PyResult<i64> {
     exact_int(&attribute(world, intern!(world.py(), "minute_index"))?)
 }
 
+/// The mirror of a namespace, unless the world holds something else there (a store past
+/// `NamespaceTable`), which only the Python rules read as it is.
+fn mirror_held<'py>(world: &Bound<'py, PyAny>, name: &str) -> PyResult<Bound<'py, NamespaceMirror>> {
+    let table = table_of(world)?;
+    let mirror = mirror_of(world, name)?;
+    match exact_dict(&table)?.get_item(name)? {
+        Some(state) if mirror.try_borrow()?.root_is(&state) => Ok(mirror),
+        _ => unsupported("the world holds another document than the row's"),
+    }
+}
+
 // ---- What the rules read about the staff ---------------------------------------------------------
 
 /// What `staff_is_available` and `staff_dynamics_*` answer for one member at one minute, and what
@@ -90,8 +102,8 @@ fn workers_at(world: &Bound<'_, PyAny>, minute: i64) -> PyResult<Vec<Worker>> {
     let py = world.py();
     let status = staff_status(world)?;
     let dynamics =
-        if namespace_is_absent(world, intern!(py, STAFF_DYNAMICS))? { None } else { Some(mirror_of(world, STAFF_DYNAMICS)?) };
-    let operations = if namespace_is_absent(world, intern!(py, NAME))? { None } else { Some(mirror_of(world, NAME)?) };
+        if namespace_is_absent(world, intern!(py, STAFF_DYNAMICS))? { None } else { Some(mirror_held(world, STAFF_DYNAMICS)?) };
+    let operations = if namespace_is_absent(world, intern!(py, NAME))? { None } else { Some(mirror_held(world, NAME)?) };
     let store = entities_of(world)?;
     let mut workers = EntityStore::with_rows(&store, |rows| {
         Ok(rows
@@ -217,6 +229,24 @@ fn is_urgent(priorities: Option<&Bound<'_, PyDict>>, id: &Bound<'_, PyAny>) -> P
 
 // ---- StaffService.assign_pending ------------------------------------------------------------------
 
+/// Of the qualified staff of a kind: none at all, one has a task, one is not working now.
+/// Unsupported if one could take the request.
+fn kind_exposure(workers: &[Worker], kind: &str) -> PyResult<(bool, bool, bool)> {
+    let required = required_skills(kind);
+    let (mut any, mut busy, mut off_shift) = (false, false, false);
+    for worker in workers {
+        if worker.skills.iter().any(|skill| required.contains(&&**skill)) {
+            if !worker.has_task && worker.available && worker.can_start {
+                return unsupported("a free worker can take a request");
+            }
+            any = true;
+            busy |= worker.has_task;
+            off_shift |= !worker.on_shift || !worker.available;
+        }
+    }
+    Ok((!any, busy, off_shift))
+}
+
 /// `StaffService.assign_pending` when every pending request stays pending: it records the attempt
 /// and the wait's reason on each, and the minute's exposure. Unsupported as soon as a request has
 /// a qualified free worker or a priority, because taking it needs a route.
@@ -247,65 +277,62 @@ fn assign_pending<'py>(
     // The plan: which requests are pending, what each may be served by.
     struct Pending<'py> {
         object: Bound<'py, PyAny>,
-        id: Arc<str>,
+        id: Bound<'py, PyAny>,
+        is_pending: bool,
         same_reason: bool,
         same_minute: bool,
     }
-    let mut pending: Vec<Pending<'py>> = Vec::new();
+    let id_name = intern!(py, "id");
+    let mut requests: Vec<Pending<'py>> = Vec::new();
+    for request in open.try_iter()? {
+        let object = request?;
+        let id = attribute(&object, id_name)?;
+        exact_str(&id)?;
+        requests.push(Pending { object, id, is_pending: false, same_reason: false, same_minute: false });
+    }
+    EntityStore::with_rows(&store, |rows| {
+        for request in &mut requests {
+            let Some(row) = rows.support_requests.get(exact_str(&request.id)?) else {
+                return unsupported("a request has no row");
+            };
+            request.is_pending = row.status == RequestStatus::Pending;
+            request.same_reason = row.last_assignment_wait_reason_code.as_deref() == Some(WAIT_REASON);
+            request.same_minute = row.last_assignment_attempt_minute == Some(at);
+        }
+        Ok(())
+    })?;
+    requests.retain(|request| request.is_pending);
+    let mut exposures: Vec<(String, (bool, bool, bool))> = Vec::new();
     let mut no_qualified = 0.0;
     let mut busy = 0.0;
     let mut off_shift = 0.0;
     let listener_name = intern!(py, "_write_listener");
-    let id_name = intern!(py, "id");
-    for request in open.try_iter()? {
-        let request = request?;
-        let id_object = attribute(&request, id_name)?;
-        let id = exact_str(&id_object)?;
-        let Some((is_pending, same_reason, same_minute)) = EntityStore::with_rows(&store, |rows| {
-            Ok(rows.support_requests.get(id).map(|row| {
-                (
-                    row.status == RequestStatus::Pending,
-                    row.last_assignment_wait_reason_code.as_deref() == Some(WAIT_REASON),
-                    row.last_assignment_attempt_minute == Some(at),
-                )
-            }))
-        })?
-        else {
-            return unsupported("a request has no row");
-        };
-        if !is_pending {
-            continue;
-        }
-        if !raw_dict_get(&map, &id_object)?.is_some_and(|object| object.is(&request)) {
+    for request in &requests {
+        if !raw_dict_get(&map, &request.id)?.is_some_and(|object| object.is(&request.object)) {
             return unsupported("the request is not the world's");
         }
-        if !attribute(&request, listener_name)?.is_none() {
+        if !attribute(&request.object, listener_name)?.is_none() {
             return unsupported("a pending request reports its writes");
         }
-        let kind = kinds.kind_of(&id_object)?;
+        let kind = kinds.kind_of(&request.id)?;
         let kind = match &kind {
             Some(kind) => exact_str(kind)?,
             None => DEFAULT_KIND,
         };
-        let required = required_skills(kind);
-        let qualifies = |worker: &&Worker| worker.skills.iter().any(|skill| required.contains(&&**skill));
-        if workers.iter().filter(qualifies).any(|worker| !worker.has_task && worker.available && worker.can_start) {
-            return unsupported("a free worker can take a request");
-        }
-        if is_urgent(priorities.as_ref(), &id_object)? {
+        let exposure = match exposures.iter().find(|(known, _)| known == kind) {
+            Some((_, exposure)) => *exposure,
+            None => {
+                let exposure = kind_exposure(&workers, kind)?;
+                exposures.push((kind.to_owned(), exposure));
+                exposure
+            }
+        };
+        if is_urgent(priorities.as_ref(), &request.id)? {
             return unsupported("an urgent request may preempt a task");
         }
-        let mut qualified = workers.iter().filter(qualifies).peekable();
-        if qualified.peek().is_none() {
-            no_qualified += 1.0;
-        }
-        if qualified.clone().any(|worker| worker.has_task) {
-            busy += 1.0;
-        }
-        if qualified.any(|worker| !worker.on_shift || !worker.available) {
-            off_shift += 1.0;
-        }
-        pending.push(Pending { object: request, id: Arc::from(id), same_reason, same_minute });
+        no_qualified += f64::from(u8::from(exposure.0));
+        busy += f64::from(u8::from(exposure.1));
+        off_shift += f64::from(u8::from(exposure.2));
     }
     let metrics = field_mirror_of(&world, intern!(py, "metric_state"))?;
     let record_metrics = NamespaceMirror::with_row::<MetricRow, _>(&metrics, |row| {
@@ -322,21 +349,26 @@ fn assign_pending<'py>(
             map_set(row, tree, NO_QUALIFIED_METRIC, sum)
         })?;
     }
-    let attempt_name = intern!(py, "last_assignment_attempt_minute");
-    let reason_name = intern!(py, "last_assignment_wait_reason_code");
-    let reason = intern!(py, WAIT_REASON);
-    for request in &pending {
-        if request.same_minute && request.same_reason {
-            continue;
-        }
-        EntityStore::with_rows(&store, |rows| {
-            let Some(row) = rows.support_requests.get_mut(&request.id) else {
+    EntityStore::with_rows(&store, |rows| {
+        let reason: Arc<str> = Arc::from(WAIT_REASON);
+        for request in &requests {
+            if request.same_minute && request.same_reason {
+                continue;
+            }
+            let Some(row) = rows.support_requests.get_mut(exact_str(&request.id)?) else {
                 return unsupported("a request has no row");
             };
             row.last_assignment_attempt_minute = Some(at);
-            row.last_assignment_wait_reason_code = Some(Arc::from(WAIT_REASON));
-            Ok(())
-        })?;
+            if !request.same_reason {
+                row.last_assignment_wait_reason_code = Some(reason.clone());
+            }
+        }
+        Ok(())
+    })?;
+    let attempt_name = intern!(py, "last_assignment_attempt_minute");
+    let reason_name = intern!(py, "last_assignment_wait_reason_code");
+    let reason = intern!(py, WAIT_REASON);
+    for request in &requests {
         if !request.same_minute {
             raw_setattr(&request.object, attempt_name, minute.as_ptr())?;
         }
@@ -358,79 +390,29 @@ fn assign_pending<'py>(
     Ok(PyTuple::empty(py))
 }
 
-// ---- support_wait_reason_codes, support_waited_minutes --------------------------------------------
+// ---- What the metrics read of each open request ---------------------------------------------------
 
-fn answer<'py>(py: Python<'py>, reasons: &[&str]) -> PyResult<Bound<'py, PyTuple>> {
-    PyTuple::new(py, reasons)
+/// What `_support_wait_snapshot` needs of the qualified staff of one kind.
+struct KindWait {
+    kind: String,
+    qualified: bool,
+    /// `support_wait_reason_codes` of a pending request of this kind, when no qualified worker is free.
+    reasons: Vec<&'static str>,
 }
 
-/// `support_wait_reason_codes` where no qualified worker is free, so no route is read. Otherwise
-/// Unsupported. A `staff_memo` gets the entry the Python rule would keep for this kind, and beside
-/// it the answer under `(None, kind)`, a key the Python rule never asks for.
-#[pyfunction]
-#[pyo3(signature = (world, request_id, *, minute=None, staff_memo=None))]
-fn wait_reason_codes<'py>(
-    world: &Bound<'py, PyAny>,
-    request_id: &Bound<'py, PyAny>,
-    minute: Option<&Bound<'py, PyAny>>,
-    staff_memo: Option<&Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyTuple>> {
-    let py = world.py();
-    let id = exact_str(request_id)?;
-    let store = entities_of(world)?;
-    let state = EntityStore::with_rows(&store, |rows| {
-        let Some(request) = rows.support_requests.get(id) else {
-            return Ok(None);
-        };
-        let moving = rows.agents.get(&request.agent_id).is_some_and(|agent| agent.activity == Activity::Moving);
-        Ok(Some((request.status, moving)))
-    })?;
-    let Some((status, moving)) = state else {
-        return answer(py, &["request_missing"]);
-    };
-    match status {
-        RequestStatus::Assigned => {
-            return answer(py, &[if moving { "resident_travel" } else { "support_in_progress" }]);
-        }
-        RequestStatus::Pending => {}
-        _ => return answer(py, &["request_closed"]),
-    }
-    let table = table_of(world)?;
-    let kind = CareKinds::of(&table)?.kind_of(request_id)?;
-    let kind_name = match &kind {
-        Some(kind) => exact_str(kind)?,
-        None => DEFAULT_KIND,
-    };
-    let memo = match staff_memo {
-        Some(memo) if !memo.is_none() => Some(memo.downcast_exact::<PyDict>().map_err(|_| {
-            crate::Unsupported::new_err("the memo is not a plain dict")
-        })?),
-        _ => None,
-    };
-    let kind_object = PyString::new(py, kind_name);
-    let answer_key = PyTuple::new(py, [py.None().into_bound(py), kind_object.clone().into_any()])?;
-    if let Some(memo) = memo {
-        if let Some(known) = memo.get_item(&answer_key)? {
-            return Ok(known.downcast_into_exact::<PyTuple>()?);
-        }
-        if memo.contains(&kind_object)? {
-            return unsupported("the Python rule keeps this kind's entry");
-        }
-    }
-    let sample = match minute {
-        Some(minute) if !minute.is_none() => exact_int(minute)?,
-        _ => minute_of(world)?,
-    };
-    let required = required_skills(kind_name);
-    let workers = workers_at(world, sample)?;
-    let qualified: Vec<&Worker> =
-        workers.iter().filter(|worker| worker.skills.iter().any(|skill| required.contains(&&**skill))).collect();
+fn kind_wait(workers: &[Worker], kind: &str, sample: i64) -> PyResult<KindWait> {
+    let required = required_skills(kind);
+    let mut qualified = false;
     let mut unavailable = false;
     let mut staff_busy = false;
     let mut other_operation = false;
     let mut resting = false;
     let mut off_shift = false;
-    for worker in &qualified {
+    for worker in workers {
+        if !worker.skills.iter().any(|skill| required.contains(&&**skill)) {
+            continue;
+        }
+        qualified = true;
         if !worker.has_task && worker.available && worker.can_start && worker.on_shift {
             return unsupported("a qualified worker is free, so routes are read");
         }
@@ -444,8 +426,8 @@ fn wait_reason_codes<'py>(
         }
     }
     // Sorted, as `tuple(sorted(blockers))`.
-    let mut reasons: Vec<&str> = Vec::with_capacity(5);
-    if qualified.is_empty() {
+    let mut reasons = Vec::with_capacity(5);
+    if !qualified {
         reasons.push("no_qualified_staff");
     } else {
         if staff_busy {
@@ -467,61 +449,103 @@ fn wait_reason_codes<'py>(
             reasons.push("no_route_to_qualified_staff");
         }
     }
-    let result = answer(py, &reasons)?;
-    if let Some(memo) = memo {
-        let map = world.getattr(intern!(py, "staff"))?;
-        let objects = PyList::empty(py);
-        for worker in &qualified {
-            let Some(object) = raw_dict_get(&map, PyString::new(py, &worker.id).as_any())? else {
-                return unsupported("a worker has no object");
-            };
-            objects.append(object)?;
-        }
-        let blockers = if qualified.is_empty() {
-            PySet::empty(py)?
-        } else {
-            let names = reasons.iter().filter(|reason| **reason != "no_route_to_qualified_staff");
-            PySet::new(py, names.copied())?
-        };
-        let entry = PyTuple::new(py, [objects.into_any(), blockers.into_any(), PyList::empty(py).into_any()])?;
-        raw_dict_set(memo.as_any(), kind_object.as_any(), entry.as_any())?;
-        raw_dict_set(memo.as_any(), answer_key.as_any(), result.as_any())?;
-    }
-    Ok(result)
+    Ok(KindWait { kind: kind.to_owned(), qualified, reasons })
 }
 
-/// `support_waited_minutes`.
+/// `_support_wait_snapshot` in `experiments/metrics.py`: `support_waited_minutes` and
+/// `support_wait_reason_codes` of each request, and who waits with no qualified staff at all.
+/// Unsupported as soon as a pending request has a qualified free worker, whose routes are read.
 #[pyfunction]
-#[pyo3(signature = (world, request_id, *, minute=None))]
-fn waited_minutes(
-    world: &Bound<'_, PyAny>,
-    request_id: &Bound<'_, PyAny>,
-    minute: Option<&Bound<'_, PyAny>>,
-) -> PyResult<i64> {
-    let id = exact_str(request_id)?;
-    let sample = match minute {
-        Some(minute) if !minute.is_none() => exact_int(minute)?,
-        _ => minute_of(world)?,
-    };
-    EntityStore::with_rows(&entities_of(world)?, |rows| {
-        let Some(request) = rows.support_requests.get(id) else {
-            return Ok(0);
-        };
-        let mut endpoint = sample;
-        if request.status == RequestStatus::Assigned {
+fn wait_snapshot<'py>(
+    world: &Bound<'py, PyAny>,
+    active_support: &Bound<'py, PyAny>,
+    sample_minute: &Bound<'py, PyAny>,
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyList>)> {
+    let py = world.py();
+    let sample = exact_int(sample_minute)?;
+    let list = active_support.downcast_exact::<PyList>().map_err(|_| Unsupported::new_err("the requests are not a list"))?;
+    let table = table_of(world)?;
+    let kinds = CareKinds::of(&table)?;
+    let store = entities_of(world)?;
+    // (agent, request, the object's ID, its minutes, the index of its kind, or its one reason).
+    struct Row<'py> {
+        agent: Arc<str>,
+        id: Bound<'py, PyAny>,
+        waited: i64,
+        reason: Result<usize, &'static str>,
+    }
+    let mut waits: Vec<KindWait> = Vec::new();
+    let mut workers: Option<Vec<Worker>> = None;
+    let mut output: Vec<Row<'py>> = Vec::with_capacity(list.len());
+    let id_name = intern!(py, "id");
+    for request in list.iter() {
+        let id_object = attribute(&request, id_name)?;
+        let id = exact_str(&id_object)?;
+        let read = EntityStore::with_rows(&store, |rows| {
+            let Some(request) = rows.support_requests.get(id) else {
+                return unsupported("a request has no row");
+            };
             let agent = rows.agents.get(&request.agent_id);
-            let task = rows.active_tasks.get(request.task_id.as_deref().unwrap_or(""));
-            if let (Some(agent), Some(task)) = (agent, task) {
-                if agent.activity != Activity::Moving {
+            let moving = agent.is_some_and(|agent| agent.activity == Activity::Moving);
+            let mut endpoint = sample;
+            if request.status == RequestStatus::Assigned {
+                let task = rows.active_tasks.get(request.task_id.as_deref().unwrap_or(""));
+                if let (Some(_), false, Some(task)) = (agent, moving, task) {
                     endpoint = sample.min(task.start_minute);
                 }
             }
-        }
-        let Some(waited) = endpoint.checked_sub(request.requested_minute) else {
-            return unsupported("the wait does not fit an i64");
+            let Some(waited) = endpoint.checked_sub(request.requested_minute) else {
+                return unsupported("the wait does not fit an i64");
+            };
+            Ok((request.agent_id.clone(), request.status, moving, waited.max(0)))
+        })?;
+        let (agent, status, moving, waited) = read;
+        let reason = match status {
+            RequestStatus::Assigned => Err(if moving { "resident_travel" } else { "support_in_progress" }),
+            RequestStatus::Pending => {
+                let kind = kinds.kind_of(&id_object)?;
+                let kind = match &kind {
+                    Some(kind) => exact_str(kind)?,
+                    None => DEFAULT_KIND,
+                };
+                match waits.iter().position(|wait| wait.kind == kind) {
+                    Some(index) => Ok(index),
+                    None => {
+                        if workers.is_none() {
+                            workers = Some(workers_at(world, sample)?);
+                        }
+                        waits.push(kind_wait(workers.as_deref().unwrap_or(&[]), kind, sample)?);
+                        Ok(waits.len() - 1)
+                    }
+                }
+            }
+            _ => Err("request_closed"),
         };
-        Ok(waited.max(0))
-    })
+        output.push(Row { agent, id: id_object, waited, reason });
+    }
+    // `sorted(active_support, key=agent_id)`, stable.
+    let mut order: Vec<usize> = (0..output.len()).collect();
+    order.sort_by(|first, second| output[*first].agent.as_bytes().cmp(output[*second].agent.as_bytes()));
+    let details = PyDict::new(py);
+    for index in &order {
+        let row = &output[*index];
+        let detail = PyDict::new(py);
+        detail.set_item(intern!(py, "request_id"), &row.id)?;
+        detail.set_item(intern!(py, "waited_minutes"), row.waited)?;
+        let reasons = match row.reason {
+            Ok(kind) => PyList::new(py, &waits[kind].reasons)?,
+            Err(reason) => PyList::new(py, [reason])?,
+        };
+        detail.set_item(intern!(py, "reason_codes"), reasons)?;
+        details.set_item(&*row.agent, detail)?;
+    }
+    let mut no_qualified: Vec<&str> = output
+        .iter()
+        .filter(|row| matches!(row.reason, Ok(kind) if !waits[kind].qualified))
+        .map(|row| &*row.agent)
+        .collect();
+    no_qualified.sort_unstable();
+    Ok((details, PyList::new(py, no_qualified)?))
 }
 
 // ---- domain/staff_operations.py --------------------------------------------------------------------
@@ -587,7 +611,7 @@ fn update_operations(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyR
     }
     let at = exact_int(minute)?;
     let zones = world_zones(world)?;
-    let mirror = mirror_of(world, NAME)?;
+    let mirror = mirror_held(world, NAME)?;
     let loads = EntityStore::with_rows(&entities_of(world)?, |rows| {
         let mut loads: FxHashMap<&str, i64> = FxHashMap::default();
         for (_, agent) in rows.agents.iter() {
@@ -639,7 +663,7 @@ fn every_fatigue_is_finite(world: &Bound<'_, PyAny>) -> PyResult<()> {
     if namespace_is_absent(world, intern!(world.py(), STAFF_DYNAMICS))? {
         return Ok(());
     }
-    NamespaceMirror::with_row::<StaffDynamicsRow, _>(&mirror_of(world, STAFF_DYNAMICS)?, |row| {
+    NamespaceMirror::with_row::<StaffDynamicsRow, _>(&mirror_held(world, STAFF_DYNAMICS)?, |row| {
         if row.staff.values().all(|record| record.fatigue.is_finite()) {
             Ok(())
         } else {
@@ -686,7 +710,7 @@ fn assign_operations<'py>(
     let repairers = has(&["maintenance", "repair"]);
     let outreach = has(&["support", "information"]);
     let patrol = has(&["support", "patrol"]);
-    let mirror = mirror_of(world, NAME)?;
+    let mirror = mirror_held(world, NAME)?;
     every_fatigue_is_finite(world)?;
     NamespaceMirror::with_row::<StaffOperationsRow, _>(&mirror, |row| {
         // `state["staff"][staff_id]` raises for one without a record.
@@ -723,7 +747,7 @@ fn assign_operations<'py>(
         if !outreach && !patrol {
             return Ok(());
         }
-        let body = if namespace_is_absent(world, intern!(py, BODY_STATE))? { None } else { Some(mirror_of(world, BODY_STATE)?) };
+        let body = if namespace_is_absent(world, intern!(py, BODY_STATE))? { None } else { Some(mirror_held(world, BODY_STATE)?) };
         let mut people: FxHashMap<Arc<str>, ZonePeople> = FxHashMap::default();
         EntityStore::with_rows(&store, |rows| {
             let mut read = |body: Option<&BodyRow>| {
@@ -806,7 +830,7 @@ fn relief<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResul
     if next >= duration {
         return Ok(done);
     }
-    NamespaceMirror::with_row::<StaffOperationsRow, _>(&mirror_of(world, NAME)?, |row| {
+    NamespaceMirror::with_row::<StaffOperationsRow, _>(&mirror_held(world, NAME)?, |row| {
         if row.staff.values().any(|record| record.phase != Phase::Idle) {
             return unsupported("a staff member has a task");
         }
@@ -818,8 +842,7 @@ fn relief<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResul
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(assign_pending, m)?)?;
-    m.add_function(wrap_pyfunction!(wait_reason_codes, m)?)?;
-    m.add_function(wrap_pyfunction!(waited_minutes, m)?)?;
+    m.add_function(wrap_pyfunction!(wait_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(update_operations, m)?)?;
     m.add_function(wrap_pyfunction!(assign_operations, m)?)?;
     m.add_function(wrap_pyfunction!(relief, m)?)?;
