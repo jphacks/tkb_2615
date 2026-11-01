@@ -515,3 +515,29 @@ def test_random_values_written_on_appending_restore_to_the_record() -> None:
         assert state.saved_row_copy(raw) == event
     assert log.all_encoded()
     assert _NativeEventLog.from_saved(log.items_bytes(0, 2000)).records_from(0) == records
+
+
+def test_a_rule_cannot_record_a_minute_the_record_refuses() -> None:
+    world = _world()
+    event = _event("minus", 0)
+    with pytest.raises(ValueError, match="realized_minute must be a non-negative integer"):
+        native.state("events").record_row(world, event, -1, "applied")
+    assert len(world.event_log) == 0
+
+
+def test_a_rule_does_not_start_from_a_counter_it_could_overflow() -> None:
+    world = _world()
+    world.id_counters["event"] = 2**62
+    assert native.state("events").allocate_sequence(world) == 2**62
+    with pytest.raises(native.Unsupported):
+        native.state("events").allocate_sequence(world)
+    assert world.id_counters["event"] == 2**62 + 1
+
+
+def test_a_sequence_whose_counter_would_not_fit_is_left_to_python() -> None:
+    world = _world()
+    event = _event("last", 2**63 - 1)
+    with pytest.raises(native.Unsupported):
+        native.state("events").schedule_row(world, event)
+    assert len(world.event_queue) == 0
+    assert "event" not in world.id_counters or world.id_counters["event"] == 0

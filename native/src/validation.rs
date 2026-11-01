@@ -263,49 +263,6 @@ pub(crate) fn topics_valid(topics: Object) -> bool {
     }
 }
 
-/// Every record of agent_dynamics_v1 "agents" passes validate_agent_dynamics_state's
-/// rules for these facilities.
-#[pyfunction]
-pub fn agent_dynamics_valid(
-    agents: &Bound<'_, PyDict>,
-    facilities: &Bound<'_, PyDict>,
-) -> PyResult<bool> {
-    let mut reader = RecordReader::new(
-        agents.py(),
-        [
-            "known_facility_ids",
-            "last_action",
-            "last_target_id",
-            "last_decision_minute",
-            "decision_due_minute",
-            "decision_reason",
-        ],
-    );
-    let mut hashes: Vec<ffi::Py_hash_t> = Vec::new();
-    all_items(agents.as_ptr(), |_, record| {
-        let Some([known, _, _, last, due, _]) = reader.read(record) else {
-            return Ok(false);
-        };
-        if !is_exact_list(known) || !is_count(due) || !is_count_or_none(last) {
-            return Ok(false);
-        }
-        hashes.clear();
-        // SAFETY: known is an exact list, and hashing an exact str runs no Python code.
-        unsafe {
-            for index in 0..ffi::PyList_Size(known) {
-                let facility = ffi::PyList_GetItem(known, index);
-                if !contains(facilities.as_ptr(), facility, false) {
-                    return Ok(false);
-                }
-                hashes.push(ffi::PyObject_Hash(facility));
-            }
-        }
-        // IDs with equal hashes are treated as repeats; Python decides those.
-        hashes.sort_unstable();
-        Ok(hashes.windows(2).all(|pair| pair[0] != pair[1]))
-    })
-}
-
 /// Every record of movement_v1 "positions" passes validate_movement_runtime_state's
 /// rules for these zones and edges.
 #[pyfunction]

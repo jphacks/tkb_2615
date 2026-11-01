@@ -399,3 +399,13 @@ def test_the_indexes_still_refuse_repeated_identities_and_unknown_events() -> No
         queue.remove("e-1")
     queue.schedule(_event("e-1", 1, due_minute=5))
     assert queue.pending()[0].due_minute == 5
+
+
+def test_the_ids_at_a_minute_are_those_of_its_records() -> None:
+    log = EventLog()
+    for sequence, (name, minute) in enumerate((("a", 3), ("b", 4), ("c", 3))):
+        event = ScheduledEvent(name, EventKind.ENDOGENOUS, minute, 0, sequence, "record")
+        log.append(EventLogRecord(event, minute, EventStatus.APPLIED))
+    assert log.event_ids_at_minute(3) == ["a", "c"]
+    assert log.event_ids_at_minute(9) == []
+    assert log.event_ids_at_minute(3) == [item.event.event_id for item in log.at_minute(3)]

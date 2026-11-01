@@ -334,8 +334,8 @@ def test_a_user_subclass_goes_to_the_python_code_while_tracked_ones_do_not() -> 
     assert native.canonical_json(_Overriding(a=1)) is None
     assert native.canonical_json({"a": _Overriding(a=1)}) is None
     assert native.canonical_json(_OverridingList([1])) is None
-    assert native.agent_dynamics_valid(TrackedDict(), {})
-    assert not native.agent_dynamics_valid(_Overriding(), {})
+    assert native.social_relationships_valid(TrackedDict(), set(), lambda key: True)
+    assert not native.social_relationships_valid(_Overriding(), set(), lambda key: True)
     assert native.same_json_items(TrackedList([{"a": 1}]), [{"a": 1}], 0, 1)
     assert not native.same_json_items(_OverridingList([{"a": 1}]), [{"a": 1}], 0, 1)
     assert not native.same_json_items([_Overriding(a=1)], [{"a": 1}], 0, 1)
