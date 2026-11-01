@@ -65,6 +65,19 @@ fn valid_id<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a str> {
     }
 }
 
+/// One operation's values, read from its event or given by a rule that hasn't made the event.
+pub(crate) struct Operation<'a> {
+    pub(crate) operation: &'a str,
+    pub(crate) warehouse_id: &'a str,
+    pub(crate) resource_id: &'a str,
+    pub(crate) index: usize,
+    pub(crate) quantity: i64,
+    pub(crate) reservation_id: Option<&'a str>,
+    pub(crate) agent_id: Option<&'a str>,
+    pub(crate) source_id: &'a str,
+    pub(crate) event_id: &'a str,
+}
+
 /// `apply_resource_operation`.
 #[pyfunction]
 fn apply_operation<'py>(
@@ -105,7 +118,6 @@ fn apply_operation<'py>(
         0
     };
 
-    let (resources, agents, zones) = world_inputs(world)?;
     let (reservation_object, agent_object) = if has_reservation {
         (
             Some(required_field(&payload, intern!(py, "reservation_id"))?),
@@ -116,22 +128,59 @@ fn apply_operation<'py>(
     };
     let reservation_id = reservation_object.as_ref().map(valid_id).transpose()?;
     let agent_id = agent_object.as_ref().map(valid_id).transpose()?;
-    if let Some(agent) = &agent_object {
-        if raw_dict_get(&agents, agent)?.is_none() {
-            return unsupported("an unknown person");
-        }
-    }
 
     let source_object = attribute(event, intern!(py, "source_id"))?;
     let source_id = valid_id(&source_object)?;
     let event_object = attribute(event, intern!(py, "event_id"))?;
     let event_id = valid_id(&event_object)?;
+    apply_planned(
+        world,
+        &mirror,
+        &Operation {
+            operation: operation_text,
+            warehouse_id,
+            resource_id,
+            index,
+            quantity,
+            reservation_id,
+            agent_id,
+            source_id,
+            event_id,
+        },
+    )
+}
+
+/// The operation on the row and the tree; Unsupported, with nothing changed, for what the Python
+/// rule turns down. Every ID is checked by the caller to be a stable ID.
+pub(crate) fn apply_planned<'py>(
+    world: &Bound<'py, PyAny>,
+    mirror: &Bound<'py, NamespaceMirror>,
+    planned: &Operation<'_>,
+) -> PyResult<()> {
+    let py = world.py();
+    let &Operation {
+        operation: operation_text,
+        warehouse_id,
+        resource_id,
+        index,
+        quantity,
+        reservation_id,
+        agent_id,
+        source_id,
+        event_id,
+    } = planned;
+    let (resources, agents, zones) = world_inputs(world)?;
+    if let Some(agent) = agent_id {
+        if raw_dict_get(&agents, PyString::new(py, agent).as_any())?.is_none() {
+            return unsupported("an unknown person");
+        }
+    }
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
     if minute < 0 {
         return unsupported("a minute before the Run");
     }
 
-    let (record, change) = NamespaceMirror::with_row_tree::<LedgerRow, _>(&mirror, |row, tree| {
+    let (record, change) = NamespaceMirror::with_row_tree::<LedgerRow, _>(mirror, |row, tree| {
         // Plan: nothing changes until the record is known.
         if &*row.warehouse_id != warehouse_id
             || minute < row.audit.last_minute
@@ -266,14 +315,14 @@ fn apply_operation<'py>(
     let path = ["accounts", RESOURCE_IDS[index], "reservations"];
     match &change {
         ReservationChange::Insert(new) => {
-            NamespaceMirror::write_through(&mirror, &path, &new.reservation_id, &Field::to_py(new, py)?)?;
+            NamespaceMirror::write_through(mirror, &path, &new.reservation_id, &Field::to_py(new, py)?)?;
         }
         ReservationChange::Remove => {
-            NamespaceMirror::remove_through(&mirror, &path, reservation_id.unwrap_or_default())?;
+            NamespaceMirror::remove_through(mirror, &path, reservation_id.unwrap_or_default())?;
         }
         ReservationChange::Reduce(_) | ReservationChange::None => {}
     }
-    NamespaceMirror::append_through(&mirror, &["audit"], &Field::to_py(&record, py)?)?;
+    NamespaceMirror::append_through(mirror, &["audit"], &Field::to_py(&record, py)?)?;
 
     // A new dict, like the Python rule: whoever holds the old one keeps the old values.
     let next_resources = as_readable_dict(&resources).map_or_else(

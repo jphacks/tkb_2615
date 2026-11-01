@@ -705,11 +705,20 @@ fn progress_physical_queue_head_to_service<'py>(
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<bool> {
     given_queue_id(queue_id)?;
+    head_to_service(world, facility_id, exact_bool(resource)?, plain_minute(minute)?)
+}
+
+/// That rule: false has written nothing, and Unsupported changes nothing.
+pub(crate) fn head_to_service<'py>(
+    world: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    resource: bool,
+    minute: i64,
+) -> PyResult<bool> {
     if no_geometry(world)? {
         return Ok(false);
     }
     let facility_name = exact_str(facility_id)?;
-    let (resource, minute) = (exact_bool(resource)?, plain_minute(minute)?);
     let store = entities_of(world)?;
     let geo = Geo::of(world)?;
     if geo.layout.is_none() {

@@ -45,7 +45,7 @@ const FLOAT_EXACT_INT: u64 = 1 << 53;
 
 /// `state["staff_status"]` of `operational_events_v1`, or None without that namespace: the input
 /// of `staff_is_available` in `domain/operational.py`.
-fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+pub(crate) fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     let Some(state) = exact_dict(&table)?.get_item(intern!(py, "operational_events_v1"))? else {
@@ -64,7 +64,7 @@ fn staff_status<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, Py
 }
 
 /// `staff_is_available`.
-fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyString>) -> PyResult<bool> {
+pub(crate) fn is_available(status: Option<&Bound<'_, PyAny>>, id: &Bound<'_, PyString>) -> PyResult<bool> {
     let Some(status) = status else {
         return Ok(true);
     };
@@ -345,7 +345,7 @@ fn operation_is_idle(world: &Bound<'_, PyAny>, id: &Bound<'_, PyString>) -> PyRe
 
 /// `staff_dynamics_is_available`.
 #[pyfunction(name = "is_available")]
-fn is_available_now(
+pub(crate) fn is_available_now(
     world: &Bound<'_, PyAny>,
     staff_id: &Bound<'_, PyAny>,
     minute: &Bound<'_, PyAny>,
