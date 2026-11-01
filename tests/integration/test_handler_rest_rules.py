@@ -1,8 +1,8 @@
 """The rest of events/handlers.py's kernels against their Python rules, on copies of a world.
 
-benchmarks/rule_shadow/shadow_handlers_rest.py does this on the gate's runs; 7 days hold almost none of
-these events, so here each rule also runs on Scenarios made to reach it, with the branches those may
-not reach and the values that change a result (docs/rust-port/lanes/m6-handlers-rest.md).
+benchmarks/rule_shadow/shadow_handlers_rest.py does this on the gate's runs; 7 days hold almost none
+of these events, so here each rule also runs on Scenarios made to reach it, with the branches those
+may not reach and the values that change a result (docs/rust-port/lanes/m6-handlers-rest.md).
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def _copies(world: WorldState) -> tuple[WorldState, WorldState]:
 
 
 class _Comparing:
-    """A dispatcher's handler that compares the kernel with the Python rule, then runs the real one."""
+    """A handler that compares the kernel with the Python rule, then runs the real one."""
 
     def __init__(self, handler: Any, seen: Counter[str]) -> None:
         self.handler = handler
@@ -355,7 +355,7 @@ def test_a_patched_handler_is_what_the_loop_calls(
     assert world.event_log.find("delivery-now").status is EventStatus.APPLIED
 
 
-# ---- Care that a selected formula decides ---------------------------------------------------------
+# ---- Care that a selected formula decides --------------------------------------------------
 
 
 def _assigned_care(world: WorldState, kind: str) -> tuple[ScheduledEvent, str]:

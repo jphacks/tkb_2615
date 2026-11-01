@@ -1087,7 +1087,103 @@ pub(crate) fn add_rejected(metrics: &Bound<'_, NamespaceMirror>) -> PyResult<()>
     add_one(metrics, "support_request_rejected_count")
 }
 
+/// `care_source_ids_for_agent`, past a step's first change: refused here, it is asked of Python.
+fn sources_or_python(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<Vec<Arc<str>>> {
+    let py = world.py();
+    match source_ids_of(world, agent_id) {
+        Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            let listed = py.import("sheltersim.domain.care_receipts")?.getattr("care_source_ids_for_agent")?.call1((world, agent_id))?;
+            let mut sources = Vec::new();
+            for source in listed.try_iter()? {
+                sources.push(Arc::<str>::from(source?.extract::<String>()?));
+            }
+            Ok(sources)
+        }
+        other => other,
+    }
+}
+
+/// `append_applied_care_transition`, past a step's first change: refused here, Python appends it.
+fn append_or_python(world: &Bound<'_, PyAny>, transition: Transition) -> PyResult<()> {
+    let py = world.py();
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("request_id", &*transition.request_id)?;
+    kwargs.set_item("agent_id", &*transition.agent_id)?;
+    kwargs.set_item("household_id", transition.household_id.as_deref())?;
+    kwargs.set_item("support_kind", &*transition.support_kind)?;
+    kwargs.set_item("status", transition.status)?;
+    kwargs.set_item("staff_id", transition.staff_id.as_deref())?;
+    kwargs.set_item("causation_id", transition.causation_id.as_deref())?;
+    kwargs.set_item("source_ids", PyTuple::new(py, transition.source_ids.iter().map(|source| &**source))?)?;
+    match append(world, transition) {
+        Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            py.import("sheltersim.domain.care_receipts")?.getattr("append_applied_care_transition")?.call((world,), Some(&kwargs))?;
+            Ok(())
+        }
+        other => other,
+    }
+}
+
+/// `_assign_staff_support`: the service's assignment, then the receipts of what it assigned. `prior`
+/// and the rest are read on the objects, as what the service called may have written them.
+#[pyfunction]
+fn assign_staff_support<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("validate_state", false)?;
+    let assigned = attribute(controller, intern!(py, "staff_service"))?.call_method(intern!(py, "assign_pending"), (minute,), Some(&kwargs))?;
+    if assigned.is_empty().unwrap_or(false) {
+        return Ok(());
+    }
+    let table = attribute(world, intern!(py, "model_state"))?;
+    for request_id in assigned.try_iter()? {
+        let request_id = request_id?;
+        let id = exact_str(&request_id).map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("a request ID is not a str"))?;
+        let state = get(&table, SHARED)?;
+        let requests = if state.is_instance_of::<PyDict>() { get(&state, "support_requests")? } else { py.None().into_bound(py) };
+        let prior = if requests.is_instance_of::<PyDict>() { get(&requests, id)? } else { py.None().into_bound(py) };
+        let request = get(&attribute(world, intern!(py, "support_requests"))?, id)?;
+        if !prior.is_instance_of::<PyDict>() || request.is_none() {
+            continue;
+        }
+        let staff = attribute(&request, intern!(py, "assigned_staff_id"))?;
+        if staff.is_none() {
+            continue;
+        }
+        let agent_id: String = attribute(&request, intern!(py, "agent_id"))?.extract()?;
+        let household: Option<String> = get(&prior, "household_id")?.extract()?;
+        let kind: String = prior.get_item("support_kind")?.extract()?;
+        let staff: String = staff.extract()?;
+        let task: Option<String> = attribute(&request, intern!(py, "task_id"))?.extract()?;
+        let transition = |status: &'static str| -> PyResult<Transition> {
+            Ok(Transition {
+                request_id: Arc::from(id),
+                agent_id: Arc::from(agent_id.as_str()),
+                household_id: household.as_deref().map(Arc::from),
+                support_kind: Arc::from(kind.as_str()),
+                status,
+                staff_id: Some(Arc::from(staff.as_str())),
+                causation_id: task.as_deref().map(Arc::from),
+                source_ids: sources_or_python(world, &agent_id)?,
+                outcome: None,
+            })
+        };
+        append_or_python(world, transition("assigned")?)?;
+        let seeking = EntityStore::with_rows(&entities_of(world)?, |rows| {
+            Ok(rows.agents.get(agent_id.as_str()).map(|agent| agent.activity == Activity::SeekingHelp))
+        })?;
+        let Some(seeking) = seeking else {
+            return Err(pyo3::exceptions::PyKeyError::new_err(agent_id.clone()));
+        };
+        if seeking {
+            append_or_python(world, transition("started")?)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(assign_staff_support, m)?)?;
     m.add_function(wrap_pyfunction!(timeout, m)?)?;
     m.add_function(wrap_pyfunction!(complete_support, m)?)?;
     m.add_function(wrap_pyfunction!(record_interrupted_step, m)?)?;

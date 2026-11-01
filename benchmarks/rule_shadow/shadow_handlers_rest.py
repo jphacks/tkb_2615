@@ -1,12 +1,12 @@
 """Compare the rest of events/handlers.py's kernels with their Python rules at each call.
 
-Handlers that copy the world and rare in-place ones: each call runs the Python rule on one copy of the
-world and the kernel on another, and compares their outcomes and `to_dict()` as JSON text, in which a
-float keeps its bits, 1 differs from 1.0 and the key order shows. Every row must write the bytes of its
+Handlers that copy the world and rare in-place ones: each call runs the Python rule on one copy of
+the world and the kernel on another, and compares their outcomes and canonical documents as JSON
+text, in which a float keeps its bits and 1 differs from 1.0. Every row must write the bytes of its
 tree on the kernel's copy. Then the kernel runs on the real world.
 
-A refusal of what the Python rule applied is a difference: the world's validation can turn down a wrong
-result, and the Python rule then quietly gets it right, which no hash would ever see.
+A refusal of what the Python rule applied is a difference: the world's validation can turn down a
+wrong result, and the Python rule then quietly gets it right, which no hash would ever see.
 
 Also here: the other social events (`complaint_response`, `cooperation`, `information_reaction`, an
 untyped one), the walks to a bed and of a relocation, `_reject_room_approach`, `ingest`, and which
@@ -16,6 +16,7 @@ requests `_consider_due_complaints` asks the policy about.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +33,7 @@ HANDLERS = (
     ("handlers", "facility_outage", "FacilityOutageHandler"),
     ("handlers", "facility_recovery", "FacilityRecoveryHandler"),
     ("handlers", "infrastructure", "InfrastructureEventHandler"),
+    ("handlers", "service_cancellation", "ResourceServiceCancellationHandler"),
     ("handlers", "delivery_delay", "DeliveryDelayHandler"),
     ("handlers", "water_outage", "WaterOutageHandler"),
     ("handlers", "water_restoration", "WaterRestorationHandler"),
@@ -71,9 +73,13 @@ def _outcome(call: Any) -> tuple[str, Any]:
 
 
 def _worlds(world: Any) -> tuple[Any, Any]:
-    from sheltersim.core.world import WorldState
+    """Two copies. A world in the middle of a phase need not pass `to_dict`'s validation."""
+    from sheltersim.core.world import StateInvariantError, WorldState
 
-    document = world.to_dict()
+    try:
+        document = world.to_dict()
+    except StateInvariantError:
+        return copy.deepcopy(world), copy.deepcopy(world)
     return WorldState.from_dict(document), WorldState.from_dict(document)
 
 
@@ -92,6 +98,18 @@ def compare_worlds(recorder: Recorder, label: str, python_world: Any, kernel_wor
             recorder.differ(f"{label}: the row of {name} is not its tree")
 
 
+def _on(handler: Any, world: Any) -> Any:
+    """A handler with a service manager gets the manager of this copy of the world."""
+    changes = {}
+    for name in ("service", "resource_service", "toilet_service"):
+        manager = getattr(handler, name, None)
+        if manager is not None:
+            copied = copy.copy(manager)
+            copied.world = world
+            changes[name] = copied
+    return dataclasses.replace(handler, **changes) if changes else handler
+
+
 def _shadow(recorder: Recorder, label_of: Any, kernel: Any, rule: Any) -> Any:
     """`kernel(handler, world, event, *rest)` and `rule()(handler, copy, event, *rest)`."""
 
@@ -105,8 +123,8 @@ def _shadow(recorder: Recorder, label_of: Any, kernel: Any, rule: Any) -> Any:
         except Exception as raised:  # noqa: BLE001 - both rules copy the world first
             recorder.reasons[f"{label}: the copy raised {type(raised).__name__}"] += 1
             return kernel(handler, world, event, *rest)
-        expected = _outcome(lambda: rule()(handler, python_world, event, *rest))
-        actual = _outcome(lambda: kernel(handler, kernel_world, event, *rest))
+        expected = _outcome(lambda: rule()(_on(handler, python_world), python_world, event, *rest))
+        actual = _outcome(lambda: kernel(_on(handler, kernel_world), kernel_world, event, *rest))
         if actual[0] == "Unsupported":
             recorder.reasons[f"{label}: {actual[1]}"] += 1
             if expected[0] == "applied":

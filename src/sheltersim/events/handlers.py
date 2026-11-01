@@ -2365,6 +2365,7 @@ class ResourceServiceCancellationHandler:
 
     service: ResourceServiceManager
 
+    @kernel_first("handlers", "service_cancellation")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         if world.schema_version != 6:
             raise EventApplicationError("resource service cancellation requires WorldState v6")
@@ -3320,6 +3321,7 @@ if native.available():
                 FacilityOutageHandler,
                 FacilityRecoveryHandler,
                 InfrastructureEventHandler,
+                ResourceServiceCancellationHandler,
                 DeliveryDelayHandler,
                 WaterOutageHandler,
                 WaterRestorationHandler,

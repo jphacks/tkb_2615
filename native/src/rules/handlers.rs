@@ -1057,6 +1057,325 @@ fn interrupt_support_task<'py>(
     )
 }
 
+// ---- A resource service cancelled or interrupted -----------------------------------------------------
+//
+// The manager's small helpers and the queue's rules (`domain/facility_queues.py`) are called by name:
+// what they hold is the state of other lanes' rules.
+
+fn service_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import("sheltersim.domain.resource_service")
+}
+
+/// `ResourceServiceManager.resource_for_facility`.
+fn resource_for(kind: &Bound<'_, PyAny>) -> Option<&'static str> {
+    crate::rules::service::resource_of(exact_str(kind).ok()?)
+}
+
+/// `self.world.agents[task.agent_id or ""]`, and the same of the facility.
+fn or_empty<'py>(map: &Bound<'py, PyAny>, key: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    if key.is_truthy()? {
+        map.get_item(key)
+    } else {
+        map.get_item("")
+    }
+}
+
+/// `ResourceServiceManager.cancel`.
+#[pyfunction]
+pub(crate) fn cancel_service<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = manager.py();
+    let world = attribute(manager, intern!(py, "world"))?;
+    struct Active<'py> {
+        resource_id: &'static str,
+        staff: Bound<'py, PyAny>,
+    }
+    let plan = (|| -> PyResult<_> {
+        let payload = attribute(event, intern!(py, "payload"))?;
+        let task_id = get(&payload, "task_id")?;
+        if exact_str(&task_id)?.is_empty() || !fields_are(&payload, &["task_id", "reason"])? {
+            return unsupported("the cancellation is for the Python rule to judge");
+        }
+        let reason = payload.get_item("reason")?;
+        let reason = exact_str(&reason)?.to_owned();
+        if !matches!(reason.as_str(), "operator_cancelled" | "facility_stopped" | "staff_unavailable") {
+            return unsupported("the cancellation is for the Python rule to judge");
+        }
+        if manager.call_method0("_cancelled_task_ids")?.contains(&task_id)? {
+            return unsupported("the task was already cancelled");
+        }
+        let task = attribute(&world, intern!(py, "active_tasks"))?.call_method1(intern!(py, "get"), (&task_id,))?;
+        if task.is_none() {
+            return unsupported("no active task");
+        }
+        let kind = attribute(&task, intern!(py, "kind"))?;
+        let queued = text_is(&kind, "resource_service_queue");
+        if !queued && !text_is(&kind, "resource_service_water") && !text_is(&kind, "resource_service_food") {
+            return unsupported("the task is another kind");
+        }
+        let agent = or_empty(&attribute(&world, intern!(py, "agents"))?, attribute(&task, intern!(py, "agent_id"))?)?;
+        let facility = or_empty(&attribute(&world, intern!(py, "facilities"))?, attribute(&task, intern!(py, "resource_id"))?)?;
+        let agent_id = attribute(&agent, intern!(py, "id"))?;
+        let mut active = None;
+        if queued {
+            if !attribute(&facility, intern!(py, "resource_queue_agent_ids"))?.contains(&agent_id)? {
+                return unsupported("the queue has no such person");
+            }
+        } else {
+            let Some(resource_id) = resource_for(&attribute(&facility, intern!(py, "kind"))?) else {
+                return unsupported("not a resource facility");
+            };
+            if !attribute(&facility, intern!(py, "resource_active_agent_ids"))?.contains(&agent_id)? {
+                return unsupported("the facility has no such slot");
+            }
+            let staff_key = attribute(&task, intern!(py, "staff_id"))?;
+            let staff = attribute(&world, intern!(py, "staff"))?.call_method1(intern!(py, "get"), (if staff_key.is_truthy()? { staff_key } else { PyString::new(py, "").into_any() },))?;
+            let reservation = table_of(&world)?.get_item("resource_ledger_v1")?.get_item("accounts")?.get_item(resource_id)?.get_item("reservations")?.call_method1(intern!(py, "get"), (&task_id,))?;
+            if staff.is_none()
+                || !attribute(&staff, intern!(py, "active_task_id"))?.eq(&task_id)?
+                || !attribute(&staff, intern!(py, "work_queue"))?.eq(PyList::new(py, [&task_id])?)?
+                || !reservation.is_instance_of::<PyDict>()
+                || !get(&reservation, "agent_id")?.eq(&agent_id)?
+                || !get_is(&reservation, "resource_id", resource_id)?
+                || !manager.call_method0("_service_reservation_ids")?.contains(&task_id)?
+            {
+                return unsupported("the cancellation does not match its reservation");
+            }
+            active = Some(Active { resource_id, staff });
+        }
+        let warehouse = if active.is_some() { Some(manager.call_method0("_warehouse_id")?) } else { None };
+        Ok((task_id, agent, agent_id, facility, active, warehouse, reason))
+    })();
+    let (task_id, agent, agent_id, facility, active, warehouse, reason) = refused_by_python(py, plan)?;
+    let event_id = attribute(event, intern!(py, "event_id"))?;
+    let facility_id = attribute(&facility, intern!(py, "id"))?;
+    let module = service_module(py)?;
+
+    // Write.
+    match active {
+        None => {
+            attribute(&facility, intern!(py, "resource_queue_agent_ids"))?.call_method1("remove", (&agent_id,))?;
+            manager.call_method1("_clear_queue_stall", (&facility_id,))?;
+        }
+        Some(Active { resource_id, staff }) => {
+            let payload = PyDict::new(py);
+            payload.set_item("warehouse_id", warehouse)?;
+            payload.set_item("resource_id", resource_id)?;
+            payload.set_item("reservation_id", &task_id)?;
+            payload.set_item("agent_id", &agent_id)?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("causation_id", &event_id)?;
+            let release = manager.call_method("_audit_event", ("release", payload), Some(&kwargs))?;
+            if let Err(error) = module.getattr("apply_resource_operation")?.call1((&world, &release, "release")) {
+                if error.is_instance_of::<pyo3::exceptions::PyValueError>(py) {
+                    let failed = models(py)?.getattr(intern!(py, "EventApplicationError"))?;
+                    let text = format!("resource reservation release rejected: {}", error.value(py).str()?);
+                    return Err(PyErr::from_value(failed.call1((text,))?));
+                }
+                return Err(error);
+            }
+            manager.call_method1("_record_internal_event", (&release,))?;
+            manager.call_method1("_remove_service_reservation", (&task_id,))?;
+            attribute(&facility, intern!(py, "resource_active_agent_ids"))?.call_method1("remove", (&agent_id,))?;
+            manager.call_method1("_release_staff", (staff,))?;
+        }
+    }
+    let interrupted = reason == "staff_unavailable";
+    let status_kwargs = PyDict::new(py);
+    status_kwargs.set_item("status", if interrupted { "interrupted" } else { "cancelled" })?;
+    let request = module.getattr("finish_facility_queue_service")?.call((&world, &task_id), Some(&status_kwargs))?;
+    if !request.is_none() {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("transition", if interrupted { "interrupted" } else { "cancelled" })?;
+        kwargs.set_item("task_id", &task_id)?;
+        kwargs.set_item("causation_id", &event_id)?;
+        module.getattr("record_queue_transition")?.call((&world, request), Some(&kwargs))?;
+    }
+    attribute(&world, intern!(py, "active_tasks"))?.del_item(&task_id)?;
+    let activities = py.import("sheltersim.domain.models")?.getattr("Activity")?;
+    agent.setattr(intern!(py, "activity"), activities.getattr("IDLE")?)?;
+    agent.setattr(intern!(py, "target_id"), py.None())?;
+    manager.call_method0("_cancelled_task_ids")?.call_method1("append", (&task_id,))?;
+    manager.call_method1("_increment_metric", ("resource_service_cancelled_count",))?;
+    Ok(())
+}
+
+/// `ResourceServiceManager.cancel`, counted.
+#[pyfunction]
+fn cancel<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    counted(manager.py(), "resource_service_cancel", cancel_service(manager, event))
+}
+
+/// `ResourceServiceCancellationHandler.apply`.
+#[pyfunction]
+fn service_cancellation<'py>(handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 {
+        return unsupported("resource service cancellation requires WorldState v6");
+    }
+    attribute(handler, intern!(py, "service"))?.call_method1(intern!(py, "cancel"), (event,))?;
+    Ok(())
+}
+
+/// `ResourceServiceManager.interrupt_for_staff`.
+#[pyfunction]
+#[pyo3(signature = (manager, staff_id, *, causation_event))]
+fn interrupt_for_staff<'py>(manager: &Bound<'py, PyAny>, staff_id: &Bound<'py, PyAny>, causation_event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = manager.py();
+    let world = attribute(manager, intern!(py, "world"))?;
+    let plan = (|| -> PyResult<_> {
+        let id = exact_str(staff_id)?;
+        let mut tasks = Vec::new();
+        for task in attribute(&world, intern!(py, "active_tasks"))?.call_method0(intern!(py, "values"))?.try_iter()? {
+            let task = task?;
+            if task_is(&task, id, &["resource_service_water", "resource_service_food"])? {
+                tasks.push(task);
+            }
+        }
+        if tasks.is_empty() {
+            return Ok(None);
+        }
+        let [task] = tasks.as_slice() else {
+            return unsupported("the staff member owns several services");
+        };
+        let task_id = attribute(task, intern!(py, "id"))?;
+        let module = service_module(py)?;
+        let prior = module.getattr("facility_queue_request_for_task")?.call1((&world, &task_id))?;
+        let (agent_key, resource_key) = (attribute(task, intern!(py, "agent_id"))?, attribute(task, intern!(py, "resource_id"))?);
+        if agent_key.is_none() || resource_key.is_none() {
+            return unsupported("the service has incomplete ownership");
+        }
+        let agent = attribute(&world, intern!(py, "agents"))?.call_method1(intern!(py, "get"), (&agent_key,))?;
+        let facility = attribute(&world, intern!(py, "facilities"))?.call_method1(intern!(py, "get"), (&resource_key,))?;
+        let staff = attribute(&world, intern!(py, "staff"))?.call_method1(intern!(py, "get"), (id,))?;
+        if agent.is_none() || facility.is_none() || staff.is_none() {
+            return unsupported("the service has inconsistent state");
+        }
+        let agent_id = attribute(&agent, intern!(py, "id"))?;
+        let in_service = py.import("sheltersim.domain.models")?.getattr("Activity")?.getattr("IN_SERVICE")?;
+        if !attribute(&agent, intern!(py, "zone_id"))?.eq(attribute(&facility, intern!(py, "zone_id"))?)?
+            || !attribute(&agent, intern!(py, "activity"))?.is(&in_service)
+            || !attribute(&staff, intern!(py, "active_task_id"))?.eq(&task_id)?
+            || !attribute(&staff, intern!(py, "work_queue"))?.eq(PyList::new(py, [&task_id])?)?
+            || !attribute(&staff, intern!(py, "busy_until"))?.eq(attribute(task, intern!(py, "due_minute"))?)?
+            || !attribute(&facility, intern!(py, "resource_active_agent_ids"))?.contains(&agent_id)?
+        {
+            return unsupported("the service has inconsistent state");
+        }
+        let Some(resource_id) = resource_for(&attribute(&facility, intern!(py, "kind"))?) else {
+            return unsupported("not a resource facility");
+        };
+        let table = table_of(&world)?;
+        let reservation = table.get_item("resource_ledger_v1")?.get_item("accounts")?.get_item(resource_id)?.get_item("reservations")?.call_method1(intern!(py, "get"), (&task_id,))?;
+        if !reservation.is_instance_of::<PyDict>()
+            || !get(&reservation, "agent_id")?.eq(&agent_id)?
+            || !get_is(&reservation, "resource_id", resource_id)?
+            || !manager.call_method0("_service_reservation_ids")?.contains(&task_id)?
+        {
+            return unsupported("the reservation is inconsistent");
+        }
+        let counters = attribute(&world, intern!(py, "id_counters"))?;
+        let next = manager.call_method1("_next_queue_task_id", (counters.call_method1(intern!(py, "get"), ("resource_task", 0))?,))?;
+        let (queue_task_id, next_counter) = (next.get_item(0)?, next.get_item(1)?);
+        let now = attribute(&world, intern!(py, "minute_index"))?;
+        // The last time this person queued here, or now.
+        let mut queued_at = now.clone();
+        let history = table.get_item("resource_service_v1")?.get_item("request_history")?;
+        for record in history.call_method0("__reversed__")?.try_iter()? {
+            let record = record?;
+            if record.get_item("agent_id")?.eq(&agent_id)?
+                && record.get_item("facility_id")?.eq(attribute(&facility, intern!(py, "id"))?)?
+                && text_is(&record.get_item("outcome")?, "queued")
+            {
+                queued_at = record.get_item("minute")?;
+                break;
+            }
+        }
+        let sequence = exact_int(&counters.call_method1(intern!(py, "get"), ("event", 0))?)?;
+        let details = PyDict::new(py);
+        details.set_item("action", "staff_interrupted")?;
+        details.set_item("staff_id", id)?;
+        let provenance = manager.call_method("_provenance", (), Some(&details))?;
+        let payload = PyDict::new(py);
+        payload.set_item("task_id", &task_id)?;
+        payload.set_item("reason", "staff_unavailable")?;
+        let id_text = format!("resource-service-cancel-{sequence}");
+        let cancellation = new_event(
+            py,
+            NewEvent {
+                event_id: &id_text,
+                kind: "ENDOGENOUS",
+                due_minute: exact_int(&now)?,
+                priority: 0,
+                sequence,
+                event_type: "resource_service_cancel",
+                payload: payload.into_any(),
+                source_id: Some(attribute(manager, intern!(py, "config"))?.get_item("source_id")?),
+                causation_id: Some(attribute(causation_event, intern!(py, "event_id"))?),
+                provenance,
+            },
+        )?;
+        manager.call_method1("_ensure_event_identity_free", (&cancellation,))?;
+        Ok(Some((agent, agent_id, facility, prior, queue_task_id, next_counter, queued_at, cancellation, sequence, resource_id, counters)))
+    })();
+    let Some((agent, agent_id, facility, prior, queue_task_id, next_counter, queued_at, cancellation, sequence, resource_id, counters)) = counted(py, "interrupt_for_staff", refused_by_python(py, plan))? else {
+        return Ok(());
+    };
+
+    // Write.
+    if exact_int(&world.call_method0(intern!(py, "allocate_event_sequence"))?)? != sequence {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("event sequence changed during service interruption"));
+    }
+    manager.call_method1(intern!(py, "cancel"), (&cancellation,))?;
+    manager.call_method1("_record_internal_event", (&cancellation,))?;
+    let activities = py.import("sheltersim.domain.models")?.getattr("Activity")?;
+    let facility_id = attribute(&facility, intern!(py, "id"))?;
+    agent.setattr(intern!(py, "activity"), activities.getattr("QUEUED")?)?;
+    agent.setattr(intern!(py, "target_id"), &facility_id)?;
+    let task_kwargs = PyDict::new(py);
+    task_kwargs.set_item("id", &queue_task_id)?;
+    task_kwargs.set_item("kind", "resource_service_queue")?;
+    task_kwargs.set_item("agent_id", &agent_id)?;
+    task_kwargs.set_item("resource_id", &facility_id)?;
+    task_kwargs.set_item("start_minute", &queued_at)?;
+    task_kwargs.set_item("due_minute", &queued_at)?;
+    let queued_task = crate::rules::service::active_task_class(py)?.call((), Some(&task_kwargs))?;
+    counters.set_item("resource_task", next_counter)?;
+    attribute(&world, intern!(py, "active_tasks"))?.set_item(&queue_task_id, queued_task)?;
+    attribute(&facility, intern!(py, "resource_queue_agent_ids"))?.call_method1("insert", (0, &agent_id))?;
+    if !prior.is_none() {
+        let module = service_module(py)?;
+        let queue_id = prior.get_item("queue_id")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("queue_id", &queue_id)?;
+        kwargs.set_item("request_id", &queue_task_id)?;
+        kwargs.set_item("task_id", &queue_task_id)?;
+        kwargs.set_item("agent_id", &agent_id)?;
+        kwargs.set_item("service_kind", prior.get_item("service_kind")?)?;
+        kwargs.set_item("requested_minute", &queued_at)?;
+        module.getattr("enqueue_facility_queue")?.call((&world,), Some(&kwargs))?;
+        let queues = table_of(&world)?.get_item("facility_queues_v1")?;
+        let queued = queues.get_item("queues")?.get_item(&queue_id)?.get_item("queued_request_ids")?;
+        queued.call_method1("remove", (&queue_task_id,))?;
+        queued.call_method1("insert", (0, &queue_task_id))?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("transition", "requeued")?;
+        kwargs.set_item("task_id", &queue_task_id)?;
+        kwargs.set_item("causation_id", attribute(causation_event, intern!(py, "event_id"))?)?;
+        module.getattr("record_queue_transition")?.call((&world, queues.get_item("requests")?.get_item(&queue_task_id)?), Some(&kwargs))?;
+    }
+    manager.call_method1("_clear_queue_stall", (&facility_id,))?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("agent_id", &agent_id)?;
+    kwargs.set_item("action", if resource_id == "water_ml" { "fetch_water" } else { "collect_meal" })?;
+    kwargs.set_item("outcome", "queued")?;
+    kwargs.set_item("reason", "arrived_at_facility")?;
+    kwargs.set_item("facility_id", &facility_id)?;
+    kwargs.set_item("origin_zone_id", attribute(&agent, intern!(py, "zone_id"))?)?;
+    kwargs.set_item("detail", "service_requeued_after_staff_unavailable")?;
+    manager.call_method("record_request_outcome", (), Some(&kwargs))?;
+    Ok(())
+}
+
 // ---- InfrastructureEventHandler --------------------------------------------------------------------
 
 fn infrastructure_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -1572,5 +1891,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(staff_unavailable, m)?)?;
     m.add_function(wrap_pyfunction!(staff_restoration, m)?)?;
     m.add_function(wrap_pyfunction!(infrastructure, m)?)?;
+    m.add_function(wrap_pyfunction!(cancel, m)?)?;
+    m.add_function(wrap_pyfunction!(service_cancellation, m)?)?;
+    m.add_function(wrap_pyfunction!(interrupt_for_staff, m)?)?;
     Ok(())
 }
