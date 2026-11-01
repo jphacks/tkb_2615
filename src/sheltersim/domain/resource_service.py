@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from sheltersim import native
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.facility_queues import (
     FACILITY_QUEUES_STATE_KEY,
@@ -85,6 +88,7 @@ class ResourceServiceManager:
         ):
             raise ValueError("WorldState v6 requires resource service and ledger state")
 
+    @kernel_first("service", "request")
     def request(
         self,
         agent_id: str,
@@ -199,10 +203,7 @@ class ResourceServiceManager:
         if minute != world.minute_index:
             raise ValueError("resource service arbitration minute must match WorldState")
         started: list[ScheduledEvent] = []
-        for facility in sorted(world.facilities.values(), key=lambda item: item.id):
-            resource_id = self.resource_for_facility(facility.kind)
-            if resource_id is None:
-                continue
+        for facility, resource_id in self._facilities_to_serve():
             if facility_has_independent_queues(world, facility.id):
                 started.extend(self._arbitrate_independent_facility(facility, resource_id, minute))
                 continue
@@ -212,130 +213,141 @@ class ResourceServiceManager:
                     world, facility.id, resource=True, minute=minute
                 ):
                     break
-                agent_id = facility.resource_queue_agent_ids[0]
-                queue_task = self._queue_task(facility.id, agent_id)
-                self._assert_service_task_id_available(queue_task.id)
-                if resource_id == "water_ml" and water_service_blocked(world, facility.id):
-                    self._record_queue_stall(facility.id, agent_id, "water_outage")
+                event_id = self._serve_head(facility.id, resource_id, minute)
+                if event_id is None:
                     break
-                operational_capacity = physical_service_capacity(
-                    world, facility.id, min(facility.capacity, facility.working_units)
-                )
-                if len(facility.resource_active_agent_ids) >= operational_capacity:
-                    self._record_queue_stall(
-                        facility.id, facility.resource_queue_agent_ids[0], "capacity"
-                    )
-                    break
-                skill = self.config[
-                    "water_staff_skill" if resource_id == "water_ml" else "meal_staff_skill"
-                ]
-                staff_member = next(
-                    (
-                        person
-                        for person in sorted(world.staff.values(), key=lambda item: item.id)
-                        if person.zone_id == facility.zone_id
-                        and skill in person.skills
-                        and person.active_task_id is None
-                        and staff_is_available(world, person.id)
-                        and staff_dynamics_is_available(world, person.id, minute)
-                    ),
-                    None,
-                )
-                if staff_member is None:
-                    self._record_queue_stall(facility.id, agent_id, "staff")
-                    break
-                account = world.model_state[RESOURCE_LEDGER_KEY]["accounts"][resource_id]
-                quantity = self.config[
-                    "water_ml_per_service"
-                    if resource_id == "water_ml"
-                    else "food_meal_units_per_service"
-                ]
-                if account["remaining"] - account["reserved"] < quantity:
-                    self._record_queue_stall(facility.id, agent_id, "stock")
-                    break
-                service_minutes = self.config["service_minutes"]
-                due_minute = minute + service_minutes
-                if due_minute >= world.duration_minutes:
-                    self._record_queue_stall(facility.id, agent_id, "run_end")
-                    break
-                if progress_physical_queue_head_to_service(
-                    world, facility.id, resource=True, minute=minute
-                ):
-                    break
-                completion_sequence = world.id_counters.get("event", 0)
-                completion_event = ScheduledEvent(
-                    event_id=f"resource-service-complete-{completion_sequence}",
-                    kind=EventKind.COMPLETION,
-                    due_minute=due_minute,
-                    priority=0,
-                    sequence=completion_sequence,
-                    event_type="resource_service_complete",
-                    payload={
-                        "facility_id": facility.id,
-                        "agent_id": agent_id,
-                        "task_id": queue_task.id,
-                        "resource_id": resource_id,
-                        "reservation_id": queue_task.id,
-                        "quantity": quantity,
-                        "staff_id": staff_member.id,
-                    },
-                    source_id=queue_task.id,
-                    causation_id=queue_task.id,
-                    provenance=self._provenance(
-                        action="service_scheduled",
-                        service_minutes=service_minutes,
-                    ),
-                )
-                self._ensure_event_identity_free(completion_event)
-                if world.allocate_event_sequence() != completion_sequence:
-                    raise StateInvariantError("event sequence changed during resource preflight")
-                reservation_event = self._audit_event(
-                    "reserve",
-                    {
-                        "warehouse_id": self._warehouse_id(),
-                        "resource_id": resource_id,
-                        "reservation_id": queue_task.id,
-                        "agent_id": agent_id,
-                        "quantity": quantity,
-                    },
-                    causation_id=queue_task.id,
-                )
-                try:
-                    apply_resource_operation(world, reservation_event, "reserve")
-                except ValueError as exc:
-                    raise StateInvariantError(
-                        f"resource reservation failed atomically: {exc}"
-                    ) from exc
-                self._record_internal_event(reservation_event)
-                self._service_reservation_ids().append(queue_task.id)
-                self._service_reservation_ids().sort()
-                self._clear_queue_stall(facility.id)
-
-                facility.resource_queue_agent_ids.pop(0)
-                facility.resource_active_agent_ids.append(agent_id)
-                active_task = ActiveTask(
-                    id=queue_task.id,
-                    kind="resource_service_water"
-                    if resource_id == "water_ml"
-                    else "resource_service_food",
-                    agent_id=agent_id,
-                    resource_id=facility.id,
-                    start_minute=minute,
-                    due_minute=due_minute,
-                    staff_id=staff_member.id,
-                )
-                world.active_tasks[active_task.id] = active_task
-                staff_member.active_task_id = active_task.id
-                staff_member.work_queue[:] = [active_task.id]
-                staff_member.busy_until = due_minute
-                world.agents[agent_id].activity = Activity.IN_SERVICE
-                world.agents[agent_id].target_id = facility.id
-                world.schedule_event(completion_event)
-                self._record_queue_wait(minute - queue_task.start_minute, resource_id)
-                started.append(completion_event)
+                started.append(world.event_queue.find(event_id))
         if validate_state:
             world.validate()
         return tuple(started)
+
+    @kernel_first("service", "facilities_to_serve")
+    def _facilities_to_serve(self) -> list[tuple[Any, str]]:
+        """The resource facilities in ID order, with the resource of each."""
+        return [
+            (facility, resource_id)
+            for facility in sorted(self.world.facilities.values(), key=lambda item: item.id)
+            if (resource_id := self.resource_for_facility(facility.kind)) is not None
+        ]
+
+    @kernel_first("service", "serve_head")
+    def _serve_head(self, facility_id: str, resource_id: str, minute: int) -> str | None:
+        """The queue's head starts its service, if nothing holds it: the event's ID, or None."""
+        world = self.world
+        facility = world.facilities[facility_id]
+        agent_id = facility.resource_queue_agent_ids[0]
+        queue_task = self._queue_task(facility.id, agent_id)
+        self._assert_service_task_id_available(queue_task.id)
+        if resource_id == "water_ml" and water_service_blocked(world, facility.id):
+            self._record_queue_stall(facility.id, agent_id, "water_outage")
+            return None
+        operational_capacity = physical_service_capacity(
+            world, facility.id, min(facility.capacity, facility.working_units)
+        )
+        if len(facility.resource_active_agent_ids) >= operational_capacity:
+            self._record_queue_stall(facility.id, facility.resource_queue_agent_ids[0], "capacity")
+            return None
+        skill = self.config[
+            "water_staff_skill" if resource_id == "water_ml" else "meal_staff_skill"
+        ]
+        staff_member = next(
+            (
+                person
+                for person in sorted(world.staff.values(), key=lambda item: item.id)
+                if person.zone_id == facility.zone_id
+                and skill in person.skills
+                and person.active_task_id is None
+                and staff_is_available(world, person.id)
+                and staff_dynamics_is_available(world, person.id, minute)
+            ),
+            None,
+        )
+        if staff_member is None:
+            self._record_queue_stall(facility.id, agent_id, "staff")
+            return None
+        account = world.model_state[RESOURCE_LEDGER_KEY]["accounts"][resource_id]
+        quantity = self.config[
+            "water_ml_per_service" if resource_id == "water_ml" else "food_meal_units_per_service"
+        ]
+        if account["remaining"] - account["reserved"] < quantity:
+            self._record_queue_stall(facility.id, agent_id, "stock")
+            return None
+        service_minutes = self.config["service_minutes"]
+        due_minute = minute + service_minutes
+        if due_minute >= world.duration_minutes:
+            self._record_queue_stall(facility.id, agent_id, "run_end")
+            return None
+        if progress_physical_queue_head_to_service(
+            world, facility.id, resource=True, minute=minute
+        ):
+            return None
+        completion_sequence = world.id_counters.get("event", 0)
+        completion_event = ScheduledEvent(
+            event_id=f"resource-service-complete-{completion_sequence}",
+            kind=EventKind.COMPLETION,
+            due_minute=due_minute,
+            priority=0,
+            sequence=completion_sequence,
+            event_type="resource_service_complete",
+            payload={
+                "facility_id": facility.id,
+                "agent_id": agent_id,
+                "task_id": queue_task.id,
+                "resource_id": resource_id,
+                "reservation_id": queue_task.id,
+                "quantity": quantity,
+                "staff_id": staff_member.id,
+            },
+            source_id=queue_task.id,
+            causation_id=queue_task.id,
+            provenance=self._provenance(
+                action="service_scheduled",
+                service_minutes=service_minutes,
+            ),
+        )
+        self._ensure_event_identity_free(completion_event)
+        if world.allocate_event_sequence() != completion_sequence:
+            raise StateInvariantError("event sequence changed during resource preflight")
+        reservation_event = self._audit_event(
+            "reserve",
+            {
+                "warehouse_id": self._warehouse_id(),
+                "resource_id": resource_id,
+                "reservation_id": queue_task.id,
+                "agent_id": agent_id,
+                "quantity": quantity,
+            },
+            causation_id=queue_task.id,
+        )
+        try:
+            apply_resource_operation(world, reservation_event, "reserve")
+        except ValueError as exc:
+            raise StateInvariantError(f"resource reservation failed atomically: {exc}") from exc
+        self._record_internal_event(reservation_event)
+        self._service_reservation_ids().append(queue_task.id)
+        self._service_reservation_ids().sort()
+        self._clear_queue_stall(facility.id)
+
+        facility.resource_queue_agent_ids.pop(0)
+        facility.resource_active_agent_ids.append(agent_id)
+        active_task = ActiveTask(
+            id=queue_task.id,
+            kind="resource_service_water" if resource_id == "water_ml" else "resource_service_food",
+            agent_id=agent_id,
+            resource_id=facility.id,
+            start_minute=minute,
+            due_minute=due_minute,
+            staff_id=staff_member.id,
+        )
+        world.active_tasks[active_task.id] = active_task
+        staff_member.active_task_id = active_task.id
+        staff_member.work_queue[:] = [active_task.id]
+        staff_member.busy_until = due_minute
+        world.agents[agent_id].activity = Activity.IN_SERVICE
+        world.agents[agent_id].target_id = facility.id
+        world.schedule_event(completion_event)
+        self._record_queue_wait(minute - queue_task.start_minute, resource_id)
+        return completion_event.event_id
 
     def _arbitrate_independent_facility(
         self, facility: object, resource_id: str, minute: int
@@ -520,6 +532,7 @@ class ResourceServiceManager:
             return
         self._record_queue_stall(facility_id, *stalls[0])
 
+    @kernel_first("service", "complete")
     def complete(self, event: ScheduledEvent) -> None:
         """Consume one completed reservation, relieve its need, and release staff/slot."""
         payload = event.payload
@@ -805,6 +818,7 @@ class ResourceServiceManager:
             return "food_meal_units"
         return None
 
+    @kernel_first("service", "record_request_outcome")
     def record_request_outcome(
         self,
         *,
@@ -1061,3 +1075,7 @@ class ResourceServiceManager:
 
     def _increment_metric(self, key: str) -> None:
         self.world.metric_state[key] = self.world.metric_state.get(key, 0.0) + 1.0
+
+
+if native.available():
+    register_rust_validator(SERVICE_STATE_KEY, native.state("resource_service").validate)

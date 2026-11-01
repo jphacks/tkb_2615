@@ -345,7 +345,7 @@ fn operation_is_idle(world: &Bound<'_, PyAny>, id: &Bound<'_, PyString>) -> PyRe
 
 /// `staff_dynamics_is_available`.
 #[pyfunction(name = "is_available")]
-fn is_available_now(
+pub(crate) fn is_available_now(
     world: &Bound<'_, PyAny>,
     staff_id: &Bound<'_, PyAny>,
     minute: &Bound<'_, PyAny>,
