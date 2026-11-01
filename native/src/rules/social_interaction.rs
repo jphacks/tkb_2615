@@ -6,7 +6,7 @@
 //!
 //! Everything else says Unsupported before any change, and the Python rule runs and says what it
 //! says: a suppressed or failed event, whose text is the event's `detail`, and the other types of
-//! interaction, which read the event log (lane E) or `TypedMessage` and are 0.3% of social events
+//! interaction, which read the event log (lane E) or `TypedMessage` and are 0.2% of social events
 //! at the gate (docs/rust-port/lanes/m3-social-network.md).
 
 use std::sync::Arc;
