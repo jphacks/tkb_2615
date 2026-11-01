@@ -73,6 +73,7 @@ PORTED_METHODS = frozenset(
     {
         ("WorldView", "from_world"),
         ("WorldView", "after_state_update"),
+        ("_IndexedMetricSink", "record_decision"),
         ("UtilityBehaviorPolicy", "propose"),
         ("PriorityRuleBehaviorPolicy", "propose"),
         ("StressPropagationPolicy", "update"),

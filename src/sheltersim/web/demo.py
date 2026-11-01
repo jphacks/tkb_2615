@@ -193,6 +193,8 @@ class _MetricSink:
     """Minimal artifact sink used by the normal offline controller in this demo."""
 
     trace_level = TraceLevel.OFF
+    # See experiments/timeline.py.
+    decision_sink = "silent"
 
     def __init__(self, metrics: MetricsRecorder) -> None:
         self.metrics = metrics

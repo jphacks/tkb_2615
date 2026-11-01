@@ -113,10 +113,18 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/decisions.rs`: `propose_rows(controller, view, rng)`, `observed_row(controller, view,
+  agent_id)` and `record_outcome(controller, proposal, *, target_id, next_decision_at, committed,
+  observed_state)` replace the steps `_propose_due`, `_observed_state` and `_record_outcome`. A
+  `ProposalRow` answers what `_apply_proposal`'s Python body reads and makes the `ActionProposal`
+  for anything else. `record_outcome` appends the `_IndexedMetricSink` record as JSON bytes
+  (`decision_sink` in a sink's own class says what it may do), then calls `commit_action` and
+  `remember_decision`. Unsupported comes before anything is appended; after that, a rule that
+  refuses runs in Python on its own. A trace or a sink of another class is Unsupported.
 - `rules/behavior.rs`: `propose_due(controller, view, rng)` and `observed_state(controller, view,
-  agent_id)` replace the steps `_propose_due` and `_observed_state` of the propose phase. They read
-  the snapshot of `rules/world_view.rs`, so a tick makes no Python view of the people for them, and
-  return the Python `ActionProposal`s and the snapshot dict. They run for `UtilityBehaviorPolicy`
+  agent_id)` compute the proposals and the snapshot `rules/decisions.rs` keeps as rows, here as the
+  Python `ActionProposal`s and the snapshot dict. They read the snapshot of `rules/world_view.rs`, so
+  a tick makes no Python view of the people for them. They run for `UtilityBehaviorPolicy`
   and `PriorityRuleBehaviorPolicy` (the exact classes) with a `CounterRNG`. They write nothing, so
   `Unsupported` at any point runs the Python step: a view Python made (or a partial one), another
   class, and anything `ActionCandidate` and `ActionProposal` would turn down.
