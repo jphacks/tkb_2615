@@ -97,7 +97,7 @@ fn record_proposal(
 
 /// `agent_knows_facility`.
 #[pyfunction]
-fn agent_knows_facility(
+pub(crate) fn agent_knows_facility(
     world: &Bound<'_, PyAny>,
     agent_id: &Bound<'_, PyAny>,
     facility_id: &Bound<'_, PyAny>,

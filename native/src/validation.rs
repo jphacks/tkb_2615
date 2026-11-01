@@ -61,7 +61,7 @@ fn exact_number(value: Object) -> Option<f64> {
     exact_int(value).map(|number| number as f64)
 }
 
-fn is_count(value: Object) -> bool {
+pub(crate) fn is_count(value: Object) -> bool {
     exact_int(value).is_some_and(|number| number >= 0)
 }
 
@@ -70,7 +70,7 @@ fn is_within(value: Object, lower: f64, upper: f64) -> bool {
     exact_number(value).is_some_and(|number| (lower..=upper).contains(&number))
 }
 
-fn is_unit(value: Object) -> bool {
+pub(crate) fn is_unit(value: Object) -> bool {
     is_within(value, 0.0, 1.0)
 }
 

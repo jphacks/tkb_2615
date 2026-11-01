@@ -49,6 +49,10 @@ PORTED_NAMES = frozenset(
         # domain/common_operations.py: rules/common_operations.rs, likewise.
         "_event_payload_matches",
         "_validate_observed_state_changes",
+        # experiments/metrics.py: rules/metrics.rs. core/world.py: rules/tick_validation.rs.
+        "_snapshot_fields",
+        "_validate_entity_rules",
+        "_validate_event_rules",
         # policies/world_view.py: rules/world_view.rs
         "_view_state_hash",
         "_zone_environment",
@@ -96,6 +100,10 @@ PORTED_NAMES = frozenset(
         "apply_resource_operation",
         "resource_metric_values",
         "_validate_audit_record",
+        # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
+        "reserve_sleep_bed",
+        "release_sleep_bed",
+        "capture_social_state_context",
     }
 )
 
@@ -115,6 +123,12 @@ PORTED_METHODS = frozenset(
         ("EvidenceAwareInformationPolicy", "update"),
         ("EventDispatcher", "dispatch_due"),
         ("EventDispatcher", "settle"),
+        ("ResourceServiceManager", "_serve_head"),
+        ("ResourceServiceManager", "_facilities_to_serve"),
+        ("ResourceServiceManager", "complete"),
+        ("ResourceServiceManager", "request"),
+        ("ResourceServiceManager", "record_request_outcome"),
+        ("ShortestTravelTimePolicy", "route"),
     }
 )
 
@@ -132,6 +146,7 @@ def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
         return
     from sheltersim import native
     from sheltersim.core import state_mirror
+    from sheltersim.core import world as world_module
     from sheltersim.experiments import metrics
     from sheltersim.experiments.phases.segments import SEGMENTS
     from sheltersim.experiments.runner import OfflineSimulationController
@@ -145,3 +160,5 @@ def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         metrics, "_support_wait_snapshot", metrics._support_wait_snapshot.__wrapped__
     )
+    monkeypatch.setattr(metrics, "_snapshot_fields", metrics._snapshot_fields.__wrapped__)
+    monkeypatch.setattr(world_module, "_entity_rules_kernel", None)
