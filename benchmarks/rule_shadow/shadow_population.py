@@ -36,7 +36,6 @@ def prepare(output: str) -> None:
     if not native.available():
         return
     from sheltersim.core import state_mirror, tick_validation
-    from sheltersim.domain.population import validate_population_dynamics_state
 
     recorder = Recorder(output, "population")
     begin = tick_validation.TickValidationMemo.begin
@@ -92,6 +91,9 @@ def prepare(output: str) -> None:
             if seen[name] != now[name]:
                 recorder.differ(f"{flag} at {world.minute_index}, but its bytes changed")
         if self.dynamics_unchanged:
+            # Here: shadow_population_rules.py replaces this rule's kernel before it is imported.
+            from sheltersim.domain.population import validate_population_dynamics_state
+
             try:
                 validate_population_dynamics_state(world)
             except Exception as error:  # noqa: BLE001 - only compared with the skip

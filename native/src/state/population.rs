@@ -5,7 +5,8 @@
 //! Their row is a `V` (docs/rust-port/step3-design.md). A tick reads them often and, in most Runs,
 //! never writes them, so what owning them gives is the mirror's generation: the check at the end
 //! of a tick knows they are unchanged without encoding or comparing them (`core/tick_validation.py`).
-//! Their rules are Python's; docs/rust-port/lanes/m6-population.md says which and why.
+//! The rules of the population_* ones are `rules/population.rs` and `rules/population_lifecycle.rs`;
+//! docs/rust-port/lanes/m6-population.md and m6-population-rules.md say which and why.
 
 use pyo3::prelude::*;
 

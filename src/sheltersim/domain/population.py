@@ -19,6 +19,7 @@ from sheltersim.contracts.presence import (
     PresenceState,
     PresenceTransition,
 )
+from sheltersim.core.kernels import kernel_first
 from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import (
@@ -88,6 +89,7 @@ register_rust_validator(
 )
 
 
+@kernel_first("population", "validate_population_dynamics_state")
 def validate_population_dynamics_state(world: WorldState) -> None:
     """Validate dynamic profile snapshots, admission order, and immutable history."""
     state = world.model_state.get(POPULATION_DYNAMICS_STATE_KEY)
@@ -272,6 +274,7 @@ def validate_population_dynamics_state(world: WorldState) -> None:
         PersonTraits.model_validate(pending["traits"])
 
 
+@kernel_first("population", "queue_arrivals")
 def queue_arrivals(
     world: WorldState,
     *,
@@ -560,6 +563,7 @@ def _schedule_arrival_approach_completion(
     world.schedule_event(completion)
 
 
+@kernel_first("population", "apply_arrival_approach_completion")
 def apply_arrival_approach_completion(world: WorldState, event: ScheduledEvent) -> None:
     """Commit the APPLIED arrival at the entrance and retain its event-linked history."""
     expected = {"program_id", "effect_id", "agent_id", "arrival_event_id", "route_id", "zone_id"}
@@ -688,6 +692,7 @@ def _generated_arrival_context(items: list[dict[str, Any]]) -> dict[str, dict[st
     return contexts
 
 
+@kernel_first("population", "admit_pending_arrivals")
 def admit_pending_arrivals(world: WorldState, minute: int) -> tuple[str, ...]:
     """Admit waiting synthetic residents in event/ID order when space opens."""
     state = world.model_state.get(POPULATION_DYNAMICS_STATE_KEY)
@@ -738,6 +743,7 @@ def admit_pending_arrivals(world: WorldState, minute: int) -> tuple[str, ...]:
     return tuple(admitted)
 
 
+@kernel_first("population", "queue_departures")
 def queue_departures(
     world: WorldState,
     *,
@@ -1214,6 +1220,7 @@ def _event_agent_ids(event: ScheduledEvent) -> set[str]:
     }
 
 
+@kernel_first("population", "schedule_population_retry")
 def schedule_population_retry(
     world: WorldState,
     event: ScheduledEvent,
@@ -1271,6 +1278,7 @@ def _state(world: WorldState) -> dict[str, Any]:
     return world.model_state[POPULATION_DYNAMICS_STATE_KEY]
 
 
+@kernel_first("population", "zone_has_room")
 def _zone_has_room(world: WorldState, zone_id: str) -> bool:
     from sheltersim.domain.temporary_spaces import effective_zone_capacity, incoming_travelers
 
@@ -1282,6 +1290,7 @@ def _zone_has_room(world: WorldState, zone_id: str) -> bool:
     return occupancy + incoming_travelers(world, zone_id) < capacity
 
 
+@kernel_first("population", "choose_admission_target")
 def _choose_admission_target(
     world: WorldState, item: dict[str, Any]
 ) -> tuple[str, str | None] | None:

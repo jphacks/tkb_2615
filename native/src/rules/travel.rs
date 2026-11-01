@@ -178,6 +178,17 @@ impl RouteRows {
     }
 }
 
+/// `SpaceRouter(ZoneGraph.from_states(zones, edges)).route(...)` with nothing closed, for a rule
+/// that has no controller: `edge_capacities` are refused, which read every trip under way.
+pub(crate) fn world_route(world: &Bound<'_, PyAny>, origin: &Arc<str>, destination: &Arc<str>) -> PyResult<Option<Route>> {
+    let py = world.py();
+    let graph = py.import("sheltersim.domain.zones")?.getattr("ZoneGraph")?.call_method1(
+        intern!(py, "from_states"),
+        (attribute(world, intern!(py, "zones"))?, attribute(world, intern!(py, "zone_edges"))?),
+    )?;
+    read_graph(&graph)?.shortest(&HashSet::new(), origin, destination)
+}
+
 /// `_route`, for a person in the world.
 pub(crate) fn route_for<'py>(
     world: &Bound<'py, PyAny>,
@@ -210,7 +221,7 @@ pub(crate) fn route_for<'py>(
     Ok(Some(route))
 }
 
-fn route_class(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+pub(crate) fn route_class(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     py.import("sheltersim.policies.space")?.getattr("ZoneRoute")
 }
 

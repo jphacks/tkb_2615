@@ -219,6 +219,21 @@ impl<'py> Scene<'py> {
         Ok(Some(plain_point(&beds.get_item(index)?)?))
     }
 
+    /// What `stationary` would refuse for a person idle in this zone, for a plan that makes one.
+    pub(crate) fn check_idle_point(&self, zone_id: &str) -> PyResult<()> {
+        let py = self.world.py();
+        if self.geo.layout.is_some() {
+            self.geo.zone_center(zone_id)?;
+        } else if let Some(zone) = exact_dict(&self.zones)?.get_item(zone_id)? {
+            let x = attribute(&zone, intern!(py, "display_x"))?;
+            let y = attribute(&zone, intern!(py, "display_y"))?;
+            if !x.is_none() && !y.is_none() && !usable(exact_float(&x)?, exact_float(&y)?) {
+                return unsupported("a display point is not a usable point");
+            }
+        }
+        Ok(())
+    }
+
     /// `_set_stationary_position`'s record. A person in a queue slot reads the people ahead, so
     /// `slots` is what they are read from, or None where who walked first would matter.
     fn stationary(&self, agent_id: &str, agent: &AgentRow, slots: Option<(&MovementRow, &Entities)>) -> PyResult<Position> {
@@ -1210,7 +1225,7 @@ pub(crate) fn route_points_of(value: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<
     route_points=None, queue_id=None, support_request_id=None, support_staff_id=None
 ))]
 #[allow(clippy::too_many_arguments)]
-fn start_movement<'py>(
+pub(crate) fn start_movement<'py>(
     world: &Bound<'py, PyAny>,
     agent_id: &Bound<'py, PyAny>,
     route: &Bound<'py, PyAny>,
@@ -1424,7 +1439,7 @@ fn movement_model(raw: Option<Bound<'_, PyAny>>) -> PyResult<MovementModel> {
 
 /// `route_with_movement_time`.
 #[pyfunction]
-fn route_with_movement_time<'py>(
+pub(crate) fn route_with_movement_time<'py>(
     world: &Bound<'py, PyAny>,
     agent_id: &Bound<'py, PyAny>,
     route: &Bound<'py, PyAny>,
