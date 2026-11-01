@@ -6,9 +6,9 @@ one directly, are checked in tests/unit/domain/test_geometry_overlay.py.
 
 from __future__ import annotations
 
-import pytest
-
 import math
+
+import pytest
 
 from sheltersim.contracts.extensions import point_in_polygon
 from sheltersim.core.world import WorldState

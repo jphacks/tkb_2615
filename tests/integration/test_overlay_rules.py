@@ -1,8 +1,8 @@
 """rules/overlay.rs and rules/facility_queues.rs against their Python rules, on copies of a world.
 
-The 7-day Run reaches almost none of these, so what is compared here and by the shadow over the gate
-is all that is compared (docs/rust-port/lanes/m6-overlay.md). Values next to a limit or a coefficient
-are chosen so a change of 1% shows.
+The 7-day Run reaches almost none of these, so what is compared here and by the shadow over the
+gate is all that is compared (docs/rust-port/lanes/m6-overlay.md). Values next to a limit or a
+coefficient are chosen so a change of 1% shows.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def queued(generated_scenario_with_split_queues: Any) -> WorldState:
     return _world(generated_scenario_with_split_queues)
 
 
-# ---- Temporary spaces -----------------------------------------------------------------------------
+# ---- Temporary spaces ----------------------------------------------------------------------------
 
 
 def _space(space_id: str, zone_id: str, *, active: bool = True, people: int = 5) -> dict[str, Any]:
@@ -141,16 +141,22 @@ def test_a_space_registers_and_expires_as_the_python_rule_does(spaces: WorldStat
     _same(spaces, _rules().register_temporary_space, register, _space("a", zone), event_id="e1")
     register(spaces, _space("a", zone), event_id="e1")
     assert (
-        _same(spaces, _rules().expire_temporary_space, expire, "a", event_id="e2", causation_id="e1")
+        _same(
+            spaces, _rules().expire_temporary_space, expire, "a", event_id="e2", causation_id="e1"
+        )
         is True
     )
     assert (
-        _same(spaces, _rules().expire_temporary_space, expire, "b", event_id="e2", causation_id=None)
+        _same(
+            spaces, _rules().expire_temporary_space, expire, "b", event_id="e2", causation_id=None
+        )
         is False
     )
     expire(spaces, "a", event_id="e2", causation_id="e1")
     assert (
-        _same(spaces, _rules().expire_temporary_space, expire, "a", event_id="e3", causation_id=None)
+        _same(
+            spaces, _rules().expire_temporary_space, expire, "a", event_id="e3", causation_id=None
+        )
         is False
     )
 
@@ -289,10 +295,12 @@ def test_the_check_of_spaces_takes_nothing_the_python_rule_refuses(
         _rules().validate_spaces(spaces)
 
 
-# ---- Rooms and beds -------------------------------------------------------------------------------
+# ---- Rooms and beds ------------------------------------------------------------------------------
 
 
-def _room_record(world: WorldState, room_id: str, *, people: int = 2, beds: int = 1) -> dict[str, Any]:
+def _room_record(
+    world: WorldState, room_id: str, *, people: int = 2, beds: int = 1
+) -> dict[str, Any]:
     geometry = world.model_configs["facility_geometry"]
     sleeping = next(zone for zone in geometry["zones"] if zone["zone_id"] == ROOM_ZONE)
     left = min(point["x"] for point in sleeping["polygon"])
@@ -414,7 +422,9 @@ def test_a_room_s_intake_is_the_python_rule_s(world: WorldState) -> None:
     room_rule = geometry_overlay.available_temporary_room.__wrapped__
     point = _rules().room_admission_point(world, room)
     assert point == point_rule(world, room) and point is not None
-    assert _rules().available_temporary_room(world, ROOM_ZONE) == room_rule(world, ROOM_ZONE) == room
+    assert (
+        _rules().available_temporary_room(world, ROOM_ZONE) == room_rule(world, ROOM_ZONE) == room
+    )
     admit = geometry_overlay.admit_to_temporary_room.__wrapped__
     first, second, third = list(world.agents)[:3]
     options = {"room_id": room, "minute": 0, "event_id": "e1"}
@@ -426,7 +436,9 @@ def test_a_room_s_intake_is_the_python_rule_s(world: WorldState) -> None:
         position["point"] = {"x": point.x + offset, "y": point.y}
         assert _rules().room_admission_point(world, room) == point_rule(world, room)
     admit(world, agent_id=second, **options)
-    assert _rules().available_temporary_room(world, ROOM_ZONE) == room_rule(world, ROOM_ZONE) is None
+    assert (
+        _rules().available_temporary_room(world, ROOM_ZONE) == room_rule(world, ROOM_ZONE) is None
+    )
     release = geometry_overlay.release_temporary_room_admission.__wrapped__
     assert (
         _same(world, _rules().release_temporary_room_admission, release, first) is True
@@ -448,7 +460,7 @@ def test_a_large_room_inspects_as_many_points_as_the_python_rule(world: WorldSta
     assert _rules().room_admission_point(world, room) == rule(world, room)
 
 
-# ---- A facility placed during a Run ---------------------------------------------------------------
+# ---- A facility placed during a Run --------------------------------------------------------------
 
 
 def test_a_placement_is_the_python_rule_s(world: WorldState) -> None:
@@ -509,7 +521,7 @@ def test_no_free_point_is_refused_and_the_python_rule_says_so(world: WorldState)
     pytest.fail("the zone had room for every toilet")
 
 
-# ---- Changes of the floor plan --------------------------------------------------------------------
+# ---- Changes of the floor plan -------------------------------------------------------------------
 
 
 def _event(
@@ -716,7 +728,7 @@ def test_a_bed_is_checked_against_its_target(world: WorldState) -> None:
         _rules().validate_overlay(world)
 
 
-# ---- The temporary-room branch of a decision ------------------------------------------------------
+# ---- The temporary-room branch of a decision -----------------------------------------------------
 
 
 def _controller(world: WorldState) -> Any:
@@ -786,7 +798,7 @@ def test_sleep_past_the_run_s_end_releases_the_bed(world: WorldState) -> None:
     assert not ours.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]["bed_reservations"]
 
 
-# ---- Independent queues ---------------------------------------------------------------------------
+# ---- Independent queues --------------------------------------------------------------------------
 
 
 def _queue_ids(world: WorldState) -> list[str]:
@@ -816,9 +828,9 @@ def test_the_row_of_the_queues_is_its_tree(queued: WorldState) -> None:
     assert mirror.row_json() == native.canonical_json(
         queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]
     )
-    queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]["queues"][
-        "toilet_01-left-fifo"
-    ]["last_stall"] = 7
+    queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]["queues"]["toilet_01-left-fifo"][
+        "last_stall"
+    ] = 7
     assert mirror.tainted is not None
     with pytest.raises(native.Unsupported):
         _rules("facility_queues").queue_agent_ids(queued, "toilet_01-left-fifo")
@@ -828,6 +840,7 @@ def test_reads_of_the_queues_are_the_python_rule_s(queued: WorldState) -> None:
     rules = _rules("facility_queues")
     tasks = _line_up(queued, "toilet_01", "toilet_01-left-fifo", ["A001", "A002"])
     _line_up(queued, "toilet_01", "toilet_01-right-fifo", ["A003"])
+
     def rule(name: str) -> Any:
         return getattr(facility_queues, name).__wrapped__
 
@@ -895,9 +908,15 @@ def test_writes_of_the_queues_are_the_python_rule_s(queued: WorldState) -> None:
     _same(queued, rules.enqueue, enqueue, **options)
     _refused(queued, rules.enqueue, enqueue, **{**options, "request_id": tasks[0]})
     _refused(queued, rules.enqueue, enqueue, **{**options, "queue_id": "none"})
-    _same(queued, rules.mark_stall, facility_queues.mark_stall.__wrapped__, queue, tasks[0], "staff")
-    _same(queued, rules.mark_stall, facility_queues.mark_stall.__wrapped__, "none", tasks[0], "staff")
-    _same(queued, rules.start_service, facility_queues.start_service.__wrapped__, tasks[0], "active")
+    _same(
+        queued, rules.mark_stall, facility_queues.mark_stall.__wrapped__, queue, tasks[0], "staff"
+    )
+    _same(
+        queued, rules.mark_stall, facility_queues.mark_stall.__wrapped__, "none", tasks[0], "staff"
+    )
+    _same(
+        queued, rules.start_service, facility_queues.start_service.__wrapped__, tasks[0], "active"
+    )
     for status in ("completed", "abandoned"):
         _same(
             queued,
@@ -908,7 +927,11 @@ def test_writes_of_the_queues_are_the_python_rule_s(queued: WorldState) -> None:
         )
     assert (
         _same(
-            queued, rules.finish_service, facility_queues.finish_service.__wrapped__, "none", status="x"
+            queued,
+            rules.finish_service,
+            facility_queues.finish_service.__wrapped__,
+            "none",
+            status="x",
         )
         is None
     )
@@ -1075,7 +1098,9 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
         ours, theirs = _copy(world), _copy(world)
         managers = ResourceServiceManager(ours), ResourceServiceManager(theirs)
         if quantity is not None:
-            key = "water_ml_per_service" if resource == "water_ml" else "food_meal_units_per_service"
+            key = (
+                "water_ml_per_service" if resource == "water_ml" else "food_meal_units_per_service"
+            )
             for each in managers:
                 each.config[key] = quantity
         expected = method(managers[1], facility_id, resource, queue_id, minute)
@@ -1105,7 +1130,12 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
     # Its stall records: the head's kept, or the first queue's new.
     stalls = [(agent_id, "staff")]
     previous = {"agent_id": agent_id, "reason": "staff"}
-    for wanted, known in ((stalls, None), (stalls, previous), ([], None), (stalls, {"agent_id": "A", "reason": "stock"})):
+    for wanted, known in (
+        (stalls, None),
+        (stalls, previous),
+        ([], None),
+        (stalls, {"agent_id": "A", "reason": "stock"}),
+    ):
         ours, theirs = _copy(queued), _copy(queued)
         ResourceServiceManager._record_independent_queue_stall.__wrapped__(
             ResourceServiceManager(theirs), facility_id, list(wanted), known
@@ -1132,7 +1162,9 @@ def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: Wor
     geometry = queued.model_configs["facility_geometry"]
     queue_state = queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]
     request = next(iter(queue_state["requests"].values()))
-    point = next(item for item in geometry["service_points"] if item["queue_id"] == request["queue_id"])
+    point = next(
+        item for item in geometry["service_points"] if item["queue_id"] == request["queue_id"]
+    )
     queued.model_state["movement_v1"]["positions"]["A001"]["point"] = point["point_m"]
     for _ in range(30):
         manager.arbitrate(queued.minute_index, validate_state=False)

@@ -18,12 +18,12 @@ SHELTERSIM_DISPATCH_COUNT_ONLY=1 only writes `overlay.stats()`, for a plain run.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from typing import Any
 
 from shadow_effects import report_stats
 from shadow_kit import Recorder, text, values_in
-from shadow_movement import _Twin
 
 OVERLAY_MODULE = "sheltersim.domain.geometry_overlay"
 SPACES_MODULE = "sheltersim.domain.temporary_spaces"
@@ -74,13 +74,6 @@ WRITERS = {
         ("place_installed_facility", OVERLAY_MODULE, "place_installed_facility"),
         ("apply_geometry_change", OVERLAY_MODULE, "apply_geometry_change"),
     ),
-    "facility_queues": (
-        ("enqueue", QUEUES_MODULE, "enqueue"),
-        ("start_service", QUEUES_MODULE, "start_service"),
-        ("finish_service", QUEUES_MODULE, "finish_service"),
-        ("mark_stall", QUEUES_MODULE, "mark_stall"),
-        ("record_queue_transition", QUEUES_MODULE, "record_queue_transition"),
-    ),
     "queues": (
         (
             "prepare_independent_facility_queue",
@@ -89,6 +82,13 @@ WRITERS = {
         ),
     ),
 }
+QUEUE_WRITERS = (
+    "enqueue",
+    "start_service",
+    "finish_service",
+    "mark_stall",
+    "record_queue_transition",
+)
 # (kernel, method of ResourceServiceManager)
 SERVICE_WRITERS = (
     ("serve_independent_head", "_serve_independent_head"),
@@ -130,7 +130,31 @@ def _unwrapped(rule: Any) -> Any:
 
 
 def _on_copy(first: Any) -> bool:
-    return isinstance(first, _Twin) or isinstance(getattr(first, "world", None), _Twin)
+    """Whether a rule of another shadow runs on its stand-in for a world: the Python rules then."""
+    from sheltersim.core.world import WorldState
+
+    if isinstance(first, dict):
+        return False
+    return not isinstance(getattr(first, "world", first), WorldState)
+
+
+class _QueueStandIn:
+    """What the rules of domain/facility_queues.py read of a world, as plain copies.
+
+    Those rules run in the middle of others, on a world that isn't valid yet, so it can't be copied
+    through `to_dict`.
+    """
+
+    def __init__(self, world: Any) -> None:
+        self.model_state = {QUEUES_KEY: json.loads(json.dumps(world.model_state[QUEUES_KEY]))}
+        self.model_configs = world.model_configs
+        self.minute_index = world.minute_index
+        self.next_sequence = world.id_counters.get("event", 0)
+        self.event_log = []
+
+    def allocate_event_sequence(self) -> int:
+        self.next_sequence += 1
+        return self.next_sequence - 1
 
 
 def _verify(recorder: Recorder, world: Any, where: str) -> None:
@@ -195,7 +219,11 @@ def prepare(output: str) -> None:
 
         world = getattr(first, "world", first)
         where = f"{label} at {world.minute_index}"
-        document = world.to_dict()
+        try:
+            document = world.to_dict()
+        except Exception:  # noqa: BLE001 - in the middle of another rule, nothing to copy
+            recorder.seen[f"{label}.world_not_copyable"] += 1
+            return
         python_world = WorldState.from_dict(document)
         kernel_world = WorldState.from_dict(document)
         expected = python_rule(rule, build(python_world), *arguments, **options)
@@ -253,6 +281,46 @@ def prepare(output: str) -> None:
                 recorder.reasons[f"{label}: {reason}"] += 1
                 raise
             recorder.seen[f"{label}.kernel_ran"] += 1
+            return result
+
+        return run
+
+    def queue_writer(label: str, kernel: Any) -> Any:
+        def run(world: Any, *arguments: Any, **options: Any) -> Any:
+            if inside[0] or _on_copy(world):
+                raise unsupported("a shadow's Python rule")
+            recorder.seen[f"{label}.calls"] += 1
+            if QUEUES_KEY not in world.model_state:
+                return kernel(world, *arguments, **options)
+            stand_in = _QueueStandIn(world)
+            before = len(world.event_log.records)
+            expected = python_rule(
+                _unwrapped(_rule(QUEUES_MODULE, label)), stand_in, *arguments, **options
+            )
+            try:
+                result = kernel(world, *arguments, **options)
+            except unsupported as reason:
+                recorder.reasons[f"{label}: {reason}"] += 1
+                if expected[0] == "ok":
+                    recorder.seen[f"{label}.refused_a_success"] += 1
+                raise
+            recorder.seen[f"{label}.kernel_ran"] += 1
+            where = f"{label} at {world.minute_index}"
+            mine = world.model_state[QUEUES_KEY]
+            if expected[0] != "ok":
+                recorder.differ(f"{where}: the kernel took what Python turned down: {expected}")
+            elif text(_plain(result)) != text(expected[1]):
+                recorder.differ(f"{where}: {result!r:.200} is not {expected[1]!r:.200}")
+            elif text(mine) != text(stand_in.model_state[QUEUES_KEY]):
+                recorder.differ(f"{where}: the state differs")
+            else:
+                recorder.seen[f"{label}.values_compared"] += values_in(mine)
+            records = list(world.event_log.records)[before:]
+            if world.id_counters.get("event", 0) != stand_in.next_sequence or json.dumps(
+                [record.to_dict() for record in records], sort_keys=True
+            ) != json.dumps([record.to_dict() for record in stand_in.event_log], sort_keys=True):
+                recorder.differ(f"{where}: the log or the sequence differs")
+            _verify(recorder, world, where)
             return result
 
         return run
@@ -319,6 +387,11 @@ def prepare(output: str) -> None:
                 kernel_name,
                 writer(kernel_name, getattr(rules, kernel_name), rule_module, rule_name),
             )
+    queue_rules = native.rules("facility_queues")
+    for kernel_name in QUEUE_WRITERS:
+        setattr(
+            queue_rules, kernel_name, queue_writer(kernel_name, getattr(queue_rules, kernel_name))
+        )
     service = native.rules("service")
     for kernel_name, method in SERVICE_WRITERS:
         setattr(

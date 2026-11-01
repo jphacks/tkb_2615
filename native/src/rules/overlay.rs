@@ -2129,16 +2129,20 @@ pub(crate) fn apply_change(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, e
     if let Some(source) = row.source_id.as_deref().filter(|source| !source.is_empty()) {
         sources.push(source);
     }
-    if let Some(V::Map(parameters)) = payload.get("parameters") {
-        if let Some(list) = parameters.get("source_ids") {
-            for item in list_of(list)? {
-                if let V::Str(item) = item {
-                    if !item.is_empty() {
-                        sources.push(item);
+    match payload.get("parameters") {
+        Some(V::Map(parameters)) => {
+            if let Some(list) = parameters.get("source_ids") {
+                for item in list_of(list)? {
+                    if let V::Str(item) = item {
+                        if !item.is_empty() {
+                            sources.push(item);
+                        }
                     }
                 }
             }
         }
+        None => {}
+        _ => return unsupported("the parameters are another value"),
     }
     if let V::Map(provenance) = &row.provenance {
         match provenance.get("effect_program_v1") {

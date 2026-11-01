@@ -18,8 +18,6 @@ import pytest
 from sheltersim import native
 from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.world import WorldState
-from sheltersim.domain import geometry_overlay
-from sheltersim.events import effects
 from sheltersim.events.effects import (
     DEFAULT_PRIMITIVE_REGISTRY,
     EFFECT_EVENT_TYPES,
