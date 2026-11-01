@@ -17,6 +17,24 @@ import pytest
 # Names that mean a ported function wherever they are patched.
 PORTED_NAMES = frozenset(
     {
+        # domain/movement.py: rules/movement.rs. Inside `advance_movement` a patch reaches only
+        # its Python rule, `advance_movement.__wrapped__`, which a test calls by that name.
+        "advance_movement",
+        "start_movement",
+        "finish_movement",
+        "route_with_movement_time",
+        "route_is_physically_clear",
+        "plan_in_room_route",
+        "facility_approach_route",
+        "_plan_in_room_route",
+        "_queue_slot_position",
+        "_set_stationary_position",
+        "_room_path_is_clear",
+        "_route_point",
+        "_point_along_polyline",
+        "_reserved_bed_point",
+        "_facility_move_invalidated_journey",
+        "_zone_center",
         # policies/world_view.py: rules/world_view.rs
         "_view_state_hash",
         "_zone_environment",
