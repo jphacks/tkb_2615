@@ -104,7 +104,7 @@ Rust の読みとして足したもの（Python の規則は他の呼び手の�
 
 **断り：** ゲートは `queue_departures` の「忙しい」54回と `apply_presence_action` の「忙しい」20回だけです。**7日分は0回です。**
 
-このレーンのテストと、人の出入りに触れる既存の26ファイルも影の下で動かしました。`current_household_id` など読む規則を含めて比べた数はゲートより多く、書き手は `queue_arrivals` 27回、`apply_presence_action` 29回、`admit_pending_returns` 24回、`complete_presence_relocation` 4回などです。影の違いは4件で、**このレーンの影のものは0件です。** 2件は `test_population_row.py` がわざと木の外に書くテストで、M6 の影が報告したものです。残り2件は `shadow_tick_validation` の `rows_valid`（`body_dynamics` の設定）で、基準でも出るかは確かめていません。影の下では、kernel が動いたことを数えるテストなど48件が失敗します。影を付けない回はすべて通るので、影が Python を動かすせいと見ていますが、1件ずつは確かめていません。
+このレーンのテストと、人の出入りに触れる既存のテスト、合わせて26ファイルも影の下で動かしました。`current_household_id` など読む規則を含めて比べた数はゲートより多く、書き手は `queue_arrivals` 27回、`apply_presence_action` 29回、`admit_pending_returns` 24回、`complete_presence_relocation` 4回などです。影の違いは4件で、**このレーンの影のものは0件です。** 2件は `test_population_row.py` がわざと木の外に書くテストで、M6 の影が報告したものです。残り2件は `shadow_tick_validation` の `rows_valid`（`body_dynamics` の設定）で、基準でも出るかは確かめていません。影の下では、kernel が動いたことを数えるテストなど48件が失敗します。影を付けない回はすべて通るので、影が Python を動かすせいと見ていますが、1件ずつは確かめていません。
 
 ### 感度（コピーで変更）
 
