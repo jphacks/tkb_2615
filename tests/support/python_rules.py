@@ -143,6 +143,8 @@ PORTED_METHODS = frozenset(
         ("ShortestTravelTimePolicy", "route"),
         ("ToiletServiceManager", "request"),
         ("ToiletServiceManager", "_facilities_to_serve"),
+        ("ToiletServiceManager", "_has_room"),
+        ("ToiletServiceManager", "_start_head"),
         ("StaffService", "request"),
     }
 )

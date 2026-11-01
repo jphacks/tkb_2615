@@ -287,6 +287,37 @@ def prepare(output: str) -> None:
         return result
 
     toilet.facilities_to_serve = facilities_to_serve
+    room_kernel = toilet.has_room
+
+    def has_room(manager: Any, facility_id: Any) -> Any:
+        if _is_copy((manager,)):
+            raise unsupported("a shadow's copy")
+        recorder.seen["toilet_has_room.calls"] += 1
+        try:
+            result = room_kernel(manager, facility_id)
+        except unsupported as reason:
+            recorder.reasons[f"toilet_has_room: {reason}"] += 1
+            raise
+        recorder.seen["toilet_has_room.kernel_ran"] += 1
+        if result is not type(manager)._has_room.__wrapped__(manager, facility_id):
+            recorder.differ(f"toilet_has_room {facility_id}: {result!r}")
+        return result
+
+    toilet.has_room = has_room
+
+    def start_rule(twin: Any, manager: Any, *arguments: Any) -> Any:
+        return type(manager)._start_head.__wrapped__(toilet_stand_in(manager, twin), *arguments)
+
+    def start_detail(result: Any, _arguments: Any, _options: Any) -> None:
+        recorder.seen[f"toilet_start.{'started' if result else 'run_end'}"] += 1
+
+    toilet.start_head = compared(
+        "toilet_start",
+        toilet.start_head,
+        start_rule,
+        lambda manager, *_: manager.world,
+        detail=start_detail,
+    )
 
     support = native.rules("support")
 

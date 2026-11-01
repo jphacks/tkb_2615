@@ -271,7 +271,7 @@ fn water_is_blocked(table: &Bound<'_, PyAny>, facility_id: &str, zone_id: &str) 
 }
 
 /// `physical_service_capacity`, for a facility's own queue.
-fn service_capacity(world: &Bound<'_, PyAny>, table: &Bound<'_, PyAny>, facility_id: &str, configured: i64) -> PyResult<i64> {
+pub(crate) fn service_capacity(world: &Bound<'_, PyAny>, table: &Bound<'_, PyAny>, facility_id: &str, configured: i64) -> PyResult<i64> {
     let py = world.py();
     let configs = attribute(world, intern!(py, "model_configs"))?;
     if !exact_dict(table)?.contains(MOVEMENT_KEY)? || !exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))? {

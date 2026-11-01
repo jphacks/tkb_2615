@@ -15,6 +15,7 @@ import pytest
 
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
+from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain import care_receipts
 from sheltersim.domain.facilities import ToiletServiceManager
@@ -160,6 +161,62 @@ def test_the_facilities_to_serve_leave_out_only_an_empty_queue(generated_scenari
     assert native.rules("toilet").facilities_to_serve(manager) == [world.facilities[facility_id]]
     python_rule = ToiletServiceManager._facilities_to_serve.__wrapped__(manager)
     assert world.facilities[facility_id] in python_rule
+
+
+def _queued(world: WorldState, controller: Any) -> tuple[str, str]:
+    agent_id = _idle_person(world)
+    facility_id = _toilet(world)
+    world.facilities[facility_id].queue_agent_ids.clear()
+    world.facilities[facility_id].active_agent_ids.clear()
+    native.rules("toilet").request(
+        controller.toilet_service, agent_id, facility_id, validate_state=False
+    )
+    return agent_id, facility_id
+
+
+def test_the_head_s_start_is_python_s(generated_scenario: Any) -> None:
+    world, controller = _run(generated_scenario, 5)
+    agent_id, facility_id = _queued(world, controller)
+    world.minute_index += 3
+    twin = copy.deepcopy(world)
+    rng = CounterRNG(world.seed)
+    manager = controller.toilet_service
+    assert native.rules("toilet").has_room(manager, facility_id) is True
+    event_id = native.rules("toilet").start_head(manager, facility_id, world.minute_index, rng)
+    expected = ToiletServiceManager._start_head.__wrapped__(
+        _manager_on(controller, twin), facility_id, twin.minute_index, rng
+    )
+    assert event_id == expected
+    assert world.agents[agent_id].activity is Activity.IN_SERVICE
+    assert world.metric_state["toilet_wait_max_minutes"] >= 3.0
+    _same_world(world, twin)
+
+
+def test_a_head_that_cannot_finish_stays_in_line(generated_scenario: Any) -> None:
+    world, controller = _run(generated_scenario, 5)
+    agent_id, facility_id = _queued(world, controller)
+    world.duration_minutes = world.minute_index + 1
+    before = _bytes(world)
+    rng = CounterRNG(world.seed)
+    result = native.rules("toilet").start_head(
+        controller.toilet_service, facility_id, world.minute_index, rng
+    )
+    assert result is None
+    assert world.agents[agent_id].activity is Activity.QUEUED
+    assert _bytes(world) == before
+
+
+def test_another_random_source_is_python_s(generated_scenario: Any) -> None:
+    world, controller = _run(generated_scenario, 5)
+    _, facility_id = _queued(world, controller)
+
+    class Other(CounterRNG):
+        pass
+
+    with pytest.raises(native.Unsupported, match="CounterRNG"):
+        native.rules("toilet").start_head(
+            controller.toilet_service, facility_id, world.minute_index, Other(1)
+        )
 
 
 # ---- ToiletServiceCompletionHandler --------------------------------------------------------------
