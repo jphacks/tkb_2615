@@ -53,6 +53,20 @@ def _bytes(world: WorldState) -> str:
     return json.dumps(parts, ensure_ascii=False)
 
 
+def _same_bytes(first: str, second: str) -> None:
+    """Without pytest's diff of the two, which takes far too long on a whole world."""
+    if first != second:
+        place = next(
+            (at for at, pair in enumerate(zip(first, second)) if pair[0] != pair[1]),
+            min(len(first), len(second)),
+        )
+        pytest.fail(f"they differ at {place}: {first[place - 80 : place + 80]!r}")
+
+
+def _same_world(first: WorldState, second: WorldState) -> None:
+    _same_bytes(_bytes(first), _bytes(second))
+
+
 def _plain(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
@@ -72,7 +86,7 @@ def _same(world: WorldState, kernel: Any, rule: Any, *arguments: Any, **options:
     expected = rule(theirs, *arguments, **options)
     result = kernel(ours, *arguments, **options)
     assert json.dumps(_plain(result)) == json.dumps(_plain(expected))
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     for name in ("geometry_overlay_v1", "temporary_spaces_v1", "facility_queues_v1"):
         mirror = ours.model_state._mirrors.get(name)
         if mirror is not None and name in ours.model_state:
@@ -86,7 +100,7 @@ def _refused(world: WorldState, kernel: Any, rule: Any, *arguments: Any, **optio
     before = _bytes(world)
     with pytest.raises(native.Unsupported):
         kernel(world, *arguments, **options)
-    assert _bytes(world) == before
+    _same_bytes(_bytes(world), before)
     with pytest.raises((ValueError, KeyError, TypeError, AttributeError)):
         rule(_copy(world), *arguments, **options)
 
@@ -772,7 +786,7 @@ def test_sleep_in_a_room_is_the_python_step_s(world: WorldState, at_bed: bool) -
     kernel = native.rules("proposals").apply_effect
     result = kernel(_controller(ours), _sleep_proposal(ours, agent_id))
     assert tuple(result) == tuple(theirs_result)
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     assert ours.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]["bed_reservations"]
     assert result[0] is not None
     assert [repr(event) for event in ours.event_queue.pending()] == [
@@ -794,7 +808,7 @@ def test_sleep_past_the_run_s_end_releases_the_bed(world: WorldState) -> None:
         _controller(ours), _sleep_proposal(ours, agent_id)
     )
     assert tuple(result) == tuple(expected)
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     assert not ours.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]["bed_reservations"]
 
 
@@ -1085,7 +1099,7 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
         ResourceServiceManager(ours), agent_id, facility_id, validate_state=False
     )
     assert repr(our_receipt) == repr(theirs_receipt)
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     manager.request(agent_id, facility_id, validate_state=False)
     # Each stop and the start of a service, on a world that walks no further.
     queued.model_state["movement_v1"]["positions"][agent_id]["point"] = queued.model_configs[
@@ -1106,7 +1120,7 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
         expected = method(managers[1], facility_id, resource, queue_id, minute)
         result = kernel.serve_independent_head(managers[0], facility_id, resource, queue_id, minute)
         assert tuple(result) == tuple(expected)
-        assert _bytes(ours) == _bytes(theirs)
+        _same_world(ours, theirs)
         assert [repr(event) for event in ours.event_queue.pending()] == [
             repr(event) for event in theirs.event_queue.pending()
         ]
@@ -1143,7 +1157,7 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
         kernel.record_independent_stall(
             ResourceServiceManager(ours), facility_id, list(wanted), known
         )
-        assert _bytes(ours) == _bytes(theirs)
+        _same_world(ours, theirs)
 
 
 def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: WorldState) -> None:
@@ -1182,7 +1196,7 @@ def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: Wor
     ours, theirs = _copy(queued), _copy(queued)
     ResourceServiceManager.complete.__wrapped__(ResourceServiceManager(theirs), event)
     _rules("service").complete(ResourceServiceManager(ours), event)
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     assert not ours.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]["requests"]
 
 
@@ -1209,7 +1223,7 @@ def test_a_toilet_fifo_is_the_python_rule_s(queued: WorldState) -> None:
             _toilet(ours), agent_id, "toilet_01", validate_state=False, **options
         )
         assert repr(result) == repr(expected)
-        assert _bytes(ours) == _bytes(theirs)
+        _same_world(ours, theirs)
 
     same_request(queued, "A001", queue_id=queue)
     same_request(queued, "A001")
@@ -1223,7 +1237,7 @@ def test_a_toilet_fifo_is_the_python_rule_s(queued: WorldState) -> None:
         expected = method(_toilet(theirs), "toilet_01", queue, minute, rng)
         result = kernel.serve_independent_head(_toilet(ours), "toilet_01", queue, minute, rng)
         assert result == expected
-        assert _bytes(ours) == _bytes(theirs)
+        _same_world(ours, theirs)
         return ours, result
 
     # Each stop: the walk, a point with no place, the Run's end, no skilled staff.
@@ -1266,7 +1280,7 @@ def test_a_toilet_fifo_is_the_python_rule_s(queued: WorldState) -> None:
     handler = ToiletServiceCompletionHandler()
     ToiletServiceCompletionHandler.apply.__wrapped__(handler, theirs, event)
     kernel.complete(handler, ours, event)
-    assert _bytes(ours) == _bytes(theirs)
+    _same_world(ours, theirs)
     assert ours.staff[member.id].active_task_id is None
 
 
