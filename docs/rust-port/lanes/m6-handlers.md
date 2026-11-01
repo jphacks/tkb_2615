@@ -79,14 +79,14 @@ dispatch が Python に渡していたイベントのうち、7日分に現れ�
 | `DeliveryDelayHandler`、`WaterOutageHandler`、`WaterRestorationHandler` | 3、4、25 | 0 |
 | `FacilityOutageHandler`、`FacilityRecoveryHandler` | 9、25 | 0 |
 | `InfrastructureEventHandler`（`power_*`、`extreme_*`、`equipment_*`、`environmental_*`） | 10 | 0 |
-| `EffectProgram*`：**レーン M6 effects と population の範囲** | 164 | 0 |
+| `EffectProgram*`：**レーン M6 effects と population の範囲** | 179 | 0 |
 
 ほかに：
 
 - `staff_support_complete` の型付きのケアと `hygiene_support`（ゲート 8）、`make_facility_recovery_record`、`make_staff_operation_record`、`make_staff_handoff_record`、`make_staff_support_continuity_record`、`ingest_applied_shared_operation_records`、`care_history_*`、`explicit_care_dependents`。
 - `ToiletServiceManager._arbitrate_independent_facility`、`arbitrate` の Python のループ、独立した FIFO の `request` の枝、`_reject_room_approach`。
 - `_consider_due_complaints`（7日分 10,080回、1回 17 µs）：待っている依頼の索引が Python の `_tick_memo` にあります。行を全部読むと、依頼が増えるので今より遅くなる見込みで、**作っていません**（見込みで、測っていません）。
-- `_assign_staff_support`（賦課を取った tick のループ。手順は Python、受領記録は kernel）、`assign_pending` の割り当ての本体。
+- `_assign_staff_support`（依頼を取った tick のループ。手順は Python、受領記録は kernel）、`assign_pending` の割り当ての本体。
 - `consider_*`、`_prioritize_support_request`（LLM の境界。Python のままの予定です）、`record_support_request`。
 - `_finish_stopped_journey` の `sleep_bed`。
 
@@ -177,11 +177,11 @@ kernel が本当に動いた回数（直接呼ぶ素の回、`SHELTERSIM_DISPATC
 
 **7日分の断りは0件です。** 残る Python の8件は `resource_delivery` です。`seek` の断りは7日分で1回（Run の最後の分）だけです。
 
-断りの理由（ゲート）：独立した FIFO 134 + 65 + 71 + 600、`verified` でない直近の記録 37 + 20 + 4 + 81 + 241、ケアの式が決める種類 8、部屋の経路 7、タスクなし 1 + 10、Run の最後の分の依頼 2、`a value is not a str` 13（`sleep_bed`、`presence_relocation` の歩きの `facility_id` が None で、Python の入口から呼んだ場合です）。
+断りの理由（ゲート）：独立した FIFO 134 + 65 + 71 + 600、`verified` でない直近の記録 37 + 20 + 4 + 81 + 241、ケアの式が決める種類 8、部屋の経路 7、タスクなし 1 + 10、Run の最後の分の依頼 2、`a value is not a str` 13（`sleep_bed`、`presence_relocation` の 13回と同じ数で、`facility_id` が None の歩きと見ています。シナリオは追っていません）。
 
 `rule_shadow`（**`shadow_dispatch`、`shadow_handlers`、`shadow_proposals`、`shadow_service` だけ**。全部の影は時間がかかるので動かしていません）：
 
-| kernel が動いた / 呼び出し | ゲート×3 | 7日分 |
+| kernel が動いた / 呼び出し | ゲート | 7日分 |
 |---|---:|---:|
 | `after_arrival` | 9,664 / 9,818 | 11,537 / 11,537 |
 | `append_transition` | 2,206 / 2,447 | 789 / 789 |
