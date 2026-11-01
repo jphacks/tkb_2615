@@ -47,6 +47,10 @@ PORTED_NAMES = frozenset(
         # policies/information.py: rules/information.rs
         "_transmission_probability",
         "_sender_sharing_factor",
+        # domain/resources.py: rules/resources.rs, state/resource_ledger.rs
+        "apply_resource_operation",
+        "resource_metric_values",
+        "_validate_audit_record",
     }
 )
 

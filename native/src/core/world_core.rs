@@ -749,7 +749,24 @@ impl NamespaceMirror {
         Self::store(slf, &node, key.as_any(), value)
     }
 
-    /// The list at this path of the tree, from the root through dicts, or None for a detached
+    /// del d[key] in the tree from Rust, after the row took it out. See `write_through`.
+    pub(crate) fn delete_through(slf: &Bound<'_, Self>, path: &[&str], key: &str) -> PyResult<()> {
+        let py = slf.py();
+        let Some(node) = Self::list_at(slf, path)? else {
+            return Ok(());
+        };
+        let key = PyString::new(py, key);
+        let Some(old) = raw_dict_get(&node, key.as_any())? else {
+            return Ok(());
+        };
+        // SAFETY: node is a live dict subclass, whose override this call means not to run.
+        if unsafe { ffi::PyDict_DelItem(node.as_ptr(), key.as_ptr()) } != 0 {
+            return Err(PyErr::fetch(py));
+        }
+        Self::release_value(slf, &old, py.None().bind(py))
+    }
+
+    /// The list or dict at this path of the tree, from the root through dicts, or None for a detached
     /// namespace. `path` leads to a list.
     fn list_at<'py>(slf: &Bound<'py, Self>, path: &[&str]) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = slf.py();
