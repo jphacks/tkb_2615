@@ -47,3 +47,59 @@ Rust が `social_network_v1` を型付きの行で持ち、書き手を一緒に
 
 **証明できないもの：** 追跡する木の節点への `dict.__setitem__` は行に届きません。[t-tick-validation.md](t-tick-validation.md) の穴と同じで、このレーンで広がっても狭まってもいません。
 
+## 費用
+
+`tick_budget.py`（`fork-b1` の 9600分から480 tick、3回、同時実行、スレッドの CPU 時間）。**基準との比 0.964**（1.062、0.964、0.949）、A/A 1.020（1.025、1.008、1.020）、状態は3つとも一致。load average 約 27〜36。予算の +10% の中です。
+
+部品（同じ条件で基準とレーンを同時に3回。計測の枠の分を含みます）：
+
+| µs/tick | 基準 | レーン | 回/tick |
+|---:|---:|---:|---:|
+| 検証 `validate_social_network_state` | 144、148、144 | 24、28、26 | 1 |
+| `SocialInteractionHandler.apply`（抑止で Python に行く分を含む） | 178、201、185 | 80、101、87 | 6.6 |
+| `capture_social_state_context` | 122、131、126 | 56、63、61 | 6.6 |
+| `observe_event` | 78、87、86 | 53、56、55 | 6.3 |
+| tick 全体 | 9,005、9,765、9,613 | 8,771、9,254、9,250 | |
+
+4つで約 310 µs/tick、tick の約 3% 減ります。tick 全体の差（約 310 µs）とは合いますが、部品の足し算で、A/A の揺れと同じ程度の差です。
+
+## 結果
+
+2026-11-01、WSL2、16コア、ほかのレーンと同時。コードは `3788de1` です。
+
+| 確認 | 結果 |
+|---|---|
+| `gate_all_paths.py --expect` | 55シナリオ、問題0件 |
+| `--reversed-order`（段階の終わりと段階の途中）に `rule_shadow` | 55シナリオ、3変種すべて問題0件、違い0件 |
+| 7日分に `rule_shadow` | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。`--expect` と一致、違い0件 |
+| `tracked_mirror_gate.py` | **動かしていません。** `state_mirror.py` は登録の1行だけです |
+
+`rule_shadow`（上段は3変種の合計なので、ゲート1回分はおよそ3分の1。下段は7日分）：
+
+| | ゲート×3 | 7日分 |
+|---|---:|---:|
+| `observe_event` kernel が動いた / `Unsupported` | 105,681 / 0 | 54,061 / 0 |
+| 比べた値 | 1,622,622 | 864,976 |
+| `apply` kernel が動いた | 87,738 | 54,061 |
+| `apply` `Unsupported`：Python が抑止 | 12,354 | 2,736 |
+| `apply` `Unsupported`：ほかの種類 | 246 | 0 |
+| `apply` 比べた値 | 526,428 | 324,366 |
+| `capture_context` 動いた / `Unsupported` | 100,221 / 0 | 56,797 / 0 |
+| `validate_context` 動いた / `Unsupported` | 268,257 / 0 | 170,391 / 0 |
+| 検証 受け入れ / 断り | 105,183 / 0 | 10,434 / 0 |
+| 検証の壊した写しの確認（1% の範囲外と、表を通らない木） | 102回、すべて断り | 20回、すべて断り |
+| 伝播の接触の記録 | 559,980 | 22,462 |
+
+- **道具の確認：** コピーで本人の relief の配分を 0.25→0.2525、相手の trust の配分を 0.5→0.505 に変えると（`long_generated`）、`rule_shadow` が35分目から `apply` と `observe` の違いを報告し、ゲートも `world_hash`、`events_hash` で失敗します。
+- **順序の比較：** `social_propagation_shadow._text` は、順序を逆にする回（`SHELTERSIM_GATE_REVERSE`）だけキーの順序を見ません。修正前は逆順のゲートで 1,920 件の誤報がありました（コーディネーターの計測）。修正後は0件です。順方向の回は順序を見たままです（テストで固定）。
+- **`--coverage`（行。kernel ありとなしの合計 / kernel ありだけ）：** `domain/social_network.py` 158/180 行（88%）/ 70/180（39%）、`domain/social_dialogue.py` 102/119（86%）/ 73/119（61%）、`events/handlers.py` 1091/1406（78%）/ 1077/1406（77%）。`--coverage` は `3788de1` の1つ前のマージ（レーン H の前）の値です。
+- 両モードの全テスト：Rust あり 3187件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2002件成功、1191件 skip。
+- `ruff`、`cargo clippy`（`disallowed_methods`）：問題なし。
+
+## 確かめていないこと
+
+- **Windows と macOS では動かしていません。** `Tree::list_remove_first`（`PyList_SetSlice`）は stable ABI の中です。
+- `cooperation` の +0.01 と `information_reaction` の枝は、ゲートでも少ない回数です（ハンドラーでは2回と22回）。`observe_event` の枝は `test_observe_event_computes_trust_when_the_body_has_no_record` が補います。
+- `shared_message_ids` の上限 64 の枝がゲートで通った回数は数えていません。テストが確かめます。
+- `apply` の行と objects の一致は 500 回に1回だけ確かめます。ゲート×3 で3回、7日分は500回ごとの回数を `apply` と `observe` の共通の数で数えるので、`observe` が先に当たると0回に見えます。全体の一致は保存の `verify` とテストに頼ります。
+- `body_state_v1` が行になったあとの動作は、このブランチでは試していません（木の読みは同じ形です）。
