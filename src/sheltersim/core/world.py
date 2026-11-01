@@ -1373,8 +1373,9 @@ class WorldState:
             for value in self.resources.values()
         ):
             raise StateInvariantError("resource inventory must contain non-negative integers")
-        if RESOURCE_LEDGER_KEY in self.model_state and not rust_validated(
-            self, RESOURCE_LEDGER_KEY
+        # The kernel answers for the state of a tick; replaying the audit trail stays in Python.
+        if RESOURCE_LEDGER_KEY in self.model_state and (
+            validate_event_history or not rust_validated(self, RESOURCE_LEDGER_KEY)
         ):
             try:
                 population_state = self.model_state.get("population_dynamics_v1", {})

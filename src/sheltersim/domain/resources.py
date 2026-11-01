@@ -6,7 +6,10 @@ import re
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 
 if TYPE_CHECKING:
     from sheltersim.events.models import ScheduledEvent
@@ -500,6 +503,7 @@ def _validate_audit_record(record: Any, ledger: dict[str, Any]) -> None:
             raise ResourceLedgerError(f"resource audit {name} must be non-negative")
 
 
+@kernel_first("resources", "apply_operation")
 def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) -> None:
     """Apply one inventory event to detached candidates, then commit atomically."""
     if RESOURCE_LEDGER_KEY not in world.model_state:
@@ -643,6 +647,7 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
     world.resources = resources
 
 
+@kernel_first("resources", "metric_values")
 def resource_metric_values(world: Any, *, tick_memo: Any = None) -> dict[str, int] | None:
     """Return optional KPI columns for ledger-enabled scenarios.
 
@@ -667,5 +672,15 @@ def resource_metric_values(world: Any, *, tick_memo: Any = None) -> dict[str, in
     return result
 
 
+@kernel_first("resources", "reservation_id_was_used")
+def reservation_id_was_used(world: Any, reservation_id: str) -> bool:
+    """Whether this ID ever reserved anything: the list is only appended to, and never read back."""
+    return reservation_id in world.model_state[RESOURCE_LEDGER_KEY]["used_reservation_ids"]
+
+
 def _valid_id(value: Any) -> bool:
     return isinstance(value, str) and _STABLE_ID.fullmatch(value) is not None
+
+
+if native.available():
+    register_rust_validator(RESOURCE_LEDGER_KEY, native.state("resource_ledger").validate)

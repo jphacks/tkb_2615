@@ -35,7 +35,11 @@ from sheltersim.domain.movement import (
 )
 from sheltersim.domain.operational import staff_is_available, water_service_blocked
 from sheltersim.domain.queueing import prepare_facility_queue, prepare_independent_facility_queue
-from sheltersim.domain.resources import RESOURCE_LEDGER_KEY, apply_resource_operation
+from sheltersim.domain.resources import (
+    RESOURCE_LEDGER_KEY,
+    apply_resource_operation,
+    reservation_id_was_used,
+)
 from sheltersim.domain.staff_dynamics import staff_dynamics_is_available
 from sheltersim.events.models import (
     EventApplicationError,
@@ -857,8 +861,7 @@ class ResourceServiceManager:
             )
 
     def _reservation_id_is_in_use(self, reservation_id: str) -> bool:
-        ledger = self.world.model_state[RESOURCE_LEDGER_KEY]
-        if reservation_id in ledger["used_reservation_ids"]:
+        if reservation_id_was_used(self.world, reservation_id):
             return True
         return any(
             event.event_type == "resource_reserve"

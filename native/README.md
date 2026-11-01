@@ -199,6 +199,13 @@ each OS, because both call the same libm.
   `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
   Python rules through `recent_passed(world)`, checked the recent receipts.
   `rules.common_operations.record_shared_operation(world, record)` appends a `CareTransitionReceipt`.
+- `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
+  (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each
+  record, with the newest of each resource kept typed for the check. A record the rules would turn
+  down, or a write into a record already there, taints the namespace. `validate` answers for the
+  check of a tick; the replay of a save stays in Python. `rules.resources.apply_operation(world,
+  event, operation)`, `metric_values(world, *, tick_memo=None)` and `reservation_id_was_used(world,
+  id)` are `kernel_first` (`docs/rust-port/lanes/m4-resources.md`).
 
 - `state.body_state.ROW`: Rust owns `body_state_v1` (`src/state/body_state.rs`): the records and
   relationships typed, the history as the canonical bytes of each item. `rules.body_state.
