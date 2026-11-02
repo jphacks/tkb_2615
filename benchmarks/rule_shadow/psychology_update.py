@@ -3,8 +3,8 @@
 sitecustomize.py installs this. Each `_psychology_update` runs the Python rules on the same view
 first (`explain_update`, and `deltas_without_traces` where the model has it), then the kernel, and
 compares every field as the text of JSON. With a trace the rows of `TraceRows`, as the objects they
-make, are compared with `explain_update`'s, and each `_record_psychology_trace` compares the document
-and the contributions with what the Python step gives the sink for `explain_update`'s result. Each
+make, are compared with `explain_update`'s, and each `_record_psychology_trace` compares the
+document and the contributions with what the Python step gives the sink for that result. Each
 `_apply_state_deltas` runs `apply_state_deltas` on a plain stand-in of the people and their body
 records first, then the kernel on the world, and compares every value and the rows.
 """
@@ -30,13 +30,14 @@ _EXPLAINED = "_shadow_explained"
 
 
 def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -> None:
+    from shadow_kit import captured, values_in
+
     from sheltersim import native
     from sheltersim.core.engine import TraceLevel
     from sheltersim.domain.models import Activity
     from sheltersim.experiments.phases.update import UpdatePhase
     from sheltersim.experiments.runner import OfflineSimulationController
     from sheltersim.policies.psychology import apply_state_deltas
-    from shadow_kit import captured, values_in
 
     rules = native.rules("psychology")
     trace_rules = native.rules("trace")

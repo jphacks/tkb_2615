@@ -24,6 +24,8 @@ from typing import Any
 
 
 def install(output: str) -> None:
+    from shadow_kit import captured, values_in
+
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.core.engine import TraceLevel
@@ -38,7 +40,6 @@ def install(output: str) -> None:
     from sheltersim.experiments.runner import OfflineSimulationController
     from sheltersim.policies.information import EvidenceAwareInformationPolicy
     from sheltersim.policies.world_view import WorldView
-    from shadow_kit import captured, values_in
 
     if not native.available():
         return

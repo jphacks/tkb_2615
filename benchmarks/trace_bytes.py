@@ -3,8 +3,8 @@
 The gate compares hashes of the state; the files a Run keeps, its traces among them, are compared
 here, byte by byte. Each gate scenario runs in two processes, under SHELTERSIM_NATIVE=1 and =0, and
 every file of a Run's folder is compared. The gate selects each model of the registry with no trace,
-so each is also run here with a full trace (`--models`). The Rust side says how many ticks its driver
-took and which it refused. See docs/rust-port/lanes/l6-trace.md.
+so each is also run here with a full trace (`--models`). The Rust side says how many ticks its
+driver took and which it refused. See docs/rust-port/lanes/l6-trace.md.
 
     python benchmarks/trace_bytes.py --output DIR [--only NAME] [--models] [--jobs N]
 """

@@ -28,6 +28,8 @@ def _text(value: Any) -> str:
 
 
 def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -> None:
+    from shadow_kit import captured, values_in
+
     from sheltersim import native
     from sheltersim.core.engine import TraceLevel
     from sheltersim.core.rng import CounterRNG
@@ -36,7 +38,6 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
     from sheltersim.experiments.phases.update import UpdatePhase
     from sheltersim.experiments.runner import OfflineSimulationController
     from sheltersim.policies.social import SOCIAL_RUNTIME_STATE_KEY
-    from shadow_kit import captured, values_in
 
     rules = native.rules("social_propagation")
     kernel = rules.update_social_propagation
