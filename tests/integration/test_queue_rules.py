@@ -274,13 +274,7 @@ def test_each_default_limit_and_the_threshold_are_where_someone_gives_up(
     world, facility, _ = lined_up(below)
     _same_after(world, "prepare_facility_queue", facility, resource=resource, minute=limit - 1)
     world, facility, person = lined_up(below)
-    assert "gives up" in _refuses(
-        world, "prepare_facility_queue", facility, resource=resource, minute=limit
-    )
-    twin = copy.deepcopy(world)
-    queueing.prepare_facility_queue(world, facility, resource=resource, minute=limit)
-    _rule("prepare_facility_queue")(twin, facility, resource=resource, minute=limit)
-    assert _bytes(world) == _bytes(twin)
+    _same_after(world, "prepare_facility_queue", facility, resource=resource, minute=limit)
     assert world.metric_state["facility_queue_abandon_count"] == 1.0
     assert world.agents[person].next_decision_at == limit + 15
     world, facility, _ = lined_up(0.8)
@@ -304,17 +298,144 @@ def test_a_config_s_limit_and_threshold_are_read(generated_scenario: Any) -> Non
     world, toilet = lined_up(0.4)
     _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=49)
     world, toilet = lined_up(0.4)
-    assert "gives up" in _refuses(
-        world, "prepare_facility_queue", toilet, resource=False, minute=50
-    )
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=50)
+    assert world.metric_state["facility_queue_abandon_count"] == 1.0
+    assert world.agents[_people_who_left(world)[0]].next_decision_at == 53
     world, toilet = lined_up(0.5)
     _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=50)
     world, toilet = lined_up(0.4, 1)
-    assert "gives up" in _refuses(
-        world, "prepare_facility_queue", toilet, resource=False, minute=50
-    )
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=50)
+    assert world.metric_state["facility_queue_abandon_count"] == 1.0
     world, toilet = lined_up(0.4, 0)
     _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=50)
+
+
+def _people_who_left(world: WorldState) -> list[str]:
+    return [
+        record.event.payload["agent_id"]
+        for record in world.event_log.records
+        if record.event.event_type == "facility_queue_abandon"
+    ]
+
+
+def _waited_long(world: WorldState, need: float = 0.1, **config: Any) -> WorldState:
+    world.model_configs["facility_queues"] = {
+        "schema_version": 1,
+        "abandon_after_minutes_by_service": {"toilet": 50, "water": 50, "meal": 50},
+        **config,
+    }
+    for agent in world.agents.values():
+        agent.needs.toilet_urgency = need
+        agent.needs.hydration_need = need
+        agent.needs.hunger = need
+    return world
+
+
+def _away_from_the_middle(world: WorldState, agent_id: str, distance: float = 0.3) -> None:
+    """Someone in their zone but not at its middle, who walks back when they leave."""
+    agent = world.agents[agent_id]
+    center = movement._zone_center(movement._geometry(world), agent.zone_id)
+    world.model_state[KEY]["positions"][agent_id]["point"] = {
+        "x": center.x + distance,
+        "y": center.y,
+    }
+
+
+def test_someone_who_gives_up_walks_back_as_the_python_rule_says(generated_scenario: Any) -> None:
+    world = _waited_long(_world(generated_scenario), retry_delay_minutes=7)
+    toilet = _facility(world, "toilet")
+    first, second, third = _people(world, 3)
+    _line_up(world, toilet, [first, second, third])
+    _away_from_the_middle(world, second)
+    _away_from_the_middle(world, third, 0.6)
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert world.facilities[toilet].queue_agent_ids == []
+    assert _people_who_left(world) == [first, second, third]
+    assert world.agents[first].activity is Activity.IDLE
+    assert world.agents[second].activity is Activity.MOVING
+    assert world.agents[second].target_id == world.agents[second].zone_id
+    assert world.agents[second].next_decision_at == 67
+    assert world.model_state[KEY]["journeys"][second]["purpose"] == "queue_abandon"
+    walks = [
+        event.event_id
+        for event in world.event_queue.pending()
+        if event.event_id.startswith("queue-abandon-arrival-")
+    ]
+    assert len(walks) == 2
+
+
+def test_only_those_past_their_limit_give_up_and_the_rest_keep_their_order(
+    generated_scenario: Any,
+) -> None:
+    world = _waited_long(_world(generated_scenario))
+    toilet = _facility(world, "toilet")
+    first, second, third = _people(world, 3)
+    _line_up(world, toilet, [first, second, third], starts=[5, 30, 5])
+    world.agents[first].needs.toilet_urgency = 0.9
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert world.facilities[toilet].queue_agent_ids == [first, second]
+    assert _people_who_left(world) == [third]
+
+
+def test_no_way_out_leaves_someone_in_line(generated_scenario: Any, monkeypatch: Any) -> None:
+    world = _waited_long(_world(generated_scenario))
+    toilet = _facility(world, "toilet")
+    person = _people(world, 1)[0]
+    _line_up(world, toilet, [person])
+    # Far outside the zone's polygon, so no path starts here.
+    _away_from_the_middle(world, person, 10_000.0)
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert world.facilities[toilet].queue_agent_ids == [person]
+    assert _people_who_left(world) == []
+
+
+def test_a_walk_past_the_end_of_the_run_leaves_someone_in_line(generated_scenario: Any) -> None:
+    world = _waited_long(_world(generated_scenario))
+    toilet = _facility(world, "toilet")
+    person = _people(world, 1)[0]
+    _line_up(world, toilet, [person])
+    _away_from_the_middle(world, person)
+    world.duration_minutes = 61
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert world.facilities[toilet].queue_agent_ids == [person]
+
+
+def test_giving_up_with_no_position_or_no_movement_state(generated_scenario: Any) -> None:
+    world = _waited_long(_world(generated_scenario))
+    toilet = _facility(world, "toilet")
+    person = _people(world, 1)[0]
+    _line_up(world, toilet, [person])
+    world.model_state[KEY]["positions"][person]["point"] = None
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert _people_who_left(world) == [person]
+    assert world.agents[person].activity is Activity.IDLE
+
+
+def test_giving_up_drops_a_stall_that_is_no_longer_the_head_s(generated_scenario: Any) -> None:
+    world = _waited_long(_world(generated_scenario))
+    world.duration_minutes = 2000
+    water = _facility(world, "water_station")
+    first, second = _people(world, 2)
+    _line_up(world, water, [first, second], resource=True, starts=[10, 40])
+    world.agents[second].needs.hydration_need = 0.9
+    world.model_state["resource_service_v1"]["stall_state"][water] = {
+        "agent_id": first,
+        "reason": "staff",
+    }
+    _same_after(world, "prepare_facility_queue", water, resource=True, minute=60)
+    assert _people_who_left(world) == [first]
+    assert world.model_state["resource_service_v1"]["stall_state"] == {}
+
+
+def test_giving_up_takes_its_retry_delay_from_the_config(generated_scenario: Any) -> None:
+    """A 1% change of the default 15 shows here: the Run's configs all write theirs."""
+    world = _waited_long(_world(generated_scenario))
+    toilet = _facility(world, "toilet")
+    person = _people(world, 1)[0]
+    _line_up(world, toilet, [person])
+    world.model_configs["facility_queues"].pop("retry_delay_minutes", None)
+    _same_after(world, "prepare_facility_queue", toilet, resource=False, minute=60)
+    assert world.agents[person].next_decision_at == 75
 
 
 def test_the_reference_fifo_keeps_the_order_of_starts_and_nobody_gives_up(

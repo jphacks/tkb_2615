@@ -1,4 +1,4 @@
-//! `domain/common_operations.py`: `record_shared_operation` of a care receipt. The plan makes every
+//! `domain/common_operations.py`: `record_shared_operation`. The plan makes every
 //! check of the Python rule, and says Unsupported before it changes anything for what fails one or
 //! for any other kind of receipt, so the Python rule then runs and raises its own text. The Python
 //! rule stays as the comparison base (docs/rust-port/lanes/m4-staff.md).
@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyString, PyTuple, PyType};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PySlice, PyString, PyTuple, PyType};
 
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, unsupported, Field};
 use crate::core::tracked::as_readable_dict;
@@ -170,10 +170,10 @@ fn state_changes(world: &Bound<'_, PyAny>, changes: &Bound<'_, PyAny>) -> PyResu
 
 /// `record_shared_operation(world, record)` of a `CareTransitionReceipt`.
 #[pyfunction]
-fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>) -> PyResult<()> {
+pub(crate) fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
     if !record.get_type().is(care_receipt_class(py)?) {
-        return unsupported("another kind of receipt");
+        return record_other(world, record);
     }
     let writer = EventWriter::of(world)?;
     let mirror = mirror_of(world, NAME)?;
@@ -262,8 +262,299 @@ fn record_shared_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, P
         return unsupported("the receipt does not match its event");
     }
 
-    let plan = plan_record(&writer, &mirror, &record)?;
+    let plan = plan_record(world, &writer, &mirror, &record)?;
     write_record(py, &mirror, &record, &document, plan)
+}
+
+/// What the contract says of the recent receipts when some were not checked here: a restored or
+/// forwarded one. `SharedOperationsState.model_validate({**state, "history": recent})`.
+fn recent_receipts_hold(world: &Bound<'_, PyAny>, mirror: &Bound<'_, NamespaceMirror>, minute: i64) -> PyResult<()> {
+    let py = world.py();
+    let start = NamespaceMirror::with_row::<SharedOperationsRow, _>(mirror, |row| {
+        Ok(if row.history.recent_verified(minute).is_some() { None } else { Some(row.history.recent_start(minute)) })
+    })?;
+    let Some(start) = start else {
+        return Ok(());
+    };
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let Some(state) = exact_dict(&table)?.get_item(NAME)? else {
+        return unsupported("no shared operations");
+    };
+    let history = state.get_item("history")?;
+    let recent = history.get_item(PySlice::new(py, start as isize, history.len()? as isize, 1))?;
+    let document = PyDict::new(py);
+    document.call_method1(intern!(py, "update"), (&state,))?;
+    document.set_item("history", recent)?;
+    py.import(intern!(py, "sheltersim.contracts.operations"))?
+        .getattr("SharedOperationsState")?
+        .call_method1("model_validate", (document,))
+        .map_err(|_| Unsupported::new_err("the recent receipts are not what the contract takes"))?;
+    Ok(())
+}
+
+/// `record_shared_operation` of what isn't a care receipt. These are few in a Run, so the checks
+/// read Python's objects, and the writes go through the namespace's containers as the rule's do.
+fn record_other<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let contracts = py.import(intern!(py, "sheltersim.contracts.operations"))?;
+    let is_a = |name: &str| -> PyResult<bool> { record.is_instance(&contracts.getattr(name)?) };
+    let (continuity, handoff, recovery, operation) =
+        (is_a("StaffSupportContinuityReceipt")?, is_a("StaffHandoffReceipt")?, is_a("FacilityRecoveryReceipt")?, is_a("StaffOperationReceipt")?);
+    if !(continuity || handoff || recovery || operation) {
+        return unsupported("an unknown kind of receipt");
+    }
+    let mirror = mirror_of(world, NAME)?;
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let state = match exact_dict(&table)?.get_item(NAME)? {
+        Some(state) if mirror.try_borrow()?.root_is(&state) => state,
+        _ => return unsupported("the world holds another document than the row's"),
+    };
+    let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+    let field = |name: &Bound<'py, PyString>| attribute(record, name);
+    if exact_int(&field(intern!(py, "minute"))?)? != minute {
+        return unsupported("the receipt's minute is not the world's");
+    }
+    let event_id_object = field(intern!(py, "event_id"))?;
+    let event_id = exact_str(&event_id_object)?;
+    recent_receipts_hold(world, &mirror, minute)?;
+    let log = attribute(world, intern!(py, "event_log"))?;
+    let event_record = log.call_method1(intern!(py, "find"), (event_id,))?;
+    if event_record.is_none() || !event_is(&event_record, "applied")? || exact_int(&attribute(&event_record, intern!(py, "realized_minute"))?)? != minute {
+        return unsupported("the receipt's event is not applied at this minute");
+    }
+    let event = attribute(&event_record, intern!(py, "event"))?;
+    if !attribute(&event, intern!(py, "event_type"))?.eq(field(intern!(py, "event_type"))?)? {
+        return unsupported("the receipt's event is of another type");
+    }
+    let (over_limit, recorded, valid) = NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
+        let start = row.history.recent_start(minute);
+        let recorded = row.history.items.iter().skip(start).any(|item| item.event_id.as_deref() == Some(event_id));
+        Ok((row.history.items.len() + 1 > MAX_HISTORY, recorded, row.header_is_valid()))
+    })?;
+    if recorded || !valid {
+        return unsupported("the event already has a receipt, or the state is not one the contract takes");
+    }
+    let options = PyDict::new(py);
+    options.set_item("mode", "json")?;
+    let common = record.call_method("model_dump", (), Some(&options))?;
+    // `_event_payload_matches`.
+    let expected = PyDict::new(py);
+    expected.call_method1(intern!(py, "update"), (&common,))?;
+    let payload = event.call_method0(intern!(py, "payload_dict"))?;
+    if continuity && !payload.contains("cause_type")? && text_of(&field(intern!(py, "cause_type"))?) == Some("staff_unavailable".to_owned()) {
+        expected.del_item("cause_type")?;
+    }
+    let source = attribute(&event, intern!(py, "source_id"))?;
+    if !payload.eq(&expected)?
+        || !attribute(&event, intern!(py, "causation_id"))?.eq(field(intern!(py, "causation_id"))?)?
+        || !(source.is_none() || field(intern!(py, "source_ids"))?.contains(&source)?)
+    {
+        return unsupported("the receipt does not match its event");
+    }
+    let heads = state.get_item("support_requests")?;
+    let new_head = if continuity {
+        let request_id = field(intern!(py, "request_id"))?;
+        let prior = heads.call_method1(intern!(py, "get"), (&request_id,))?;
+        check_continuity(world, record, &prior, &request_id)?;
+        if text_of(&field(intern!(py, "status"))?).as_deref() == Some("requeued") {
+            let head = PyDict::new(py);
+            head.set_item("request_id", &request_id)?;
+            head.set_item("agent_id", field(intern!(py, "agent_id"))?)?;
+            head.set_item("household_id", prior.call_method1(intern!(py, "get"), ("household_id",))?)?;
+            head.set_item("support_kind", prior.get_item("support_kind")?)?;
+            head.set_item("status", "requested")?;
+            head.set_item("created_minute", prior.get_item("created_minute")?)?;
+            head.set_item("updated_minute", minute)?;
+            head.set_item("latest_event_id", event_id)?;
+            if exact_int(&prior.get_item("created_minute")?)? > minute {
+                return unsupported("the update precedes the creation");
+            }
+            Some((request_id, Some(head)))
+        } else {
+            Some((request_id, None))
+        }
+    } else {
+        None
+    };
+    if handoff {
+        check_handoff(world, record)?;
+    }
+    if recovery {
+        let facility = get_of(&attribute(world, intern!(py, "facilities"))?, &field(intern!(py, "facility_id"))?)?;
+        let units = exact_int(&field(intern!(py, "working_units"))?)?;
+        if facility.is_none() || units > exact_int(&attribute(&facility, intern!(py, "capacity"))?)? || exact_int(&attribute(&facility, intern!(py, "working_units"))?)? != units {
+            return unsupported("the facility recovery does not match the facility");
+        }
+    }
+    if operation {
+        check_staff_operation(world, record, state.get_item("history_truncated")?.is_truthy()?)?;
+        state_changes(world, &field(intern!(py, "state_changes"))?)?;
+    }
+
+    // Write.
+    if let Some((request_id, head)) = new_head {
+        match head {
+            Some(head) => heads.set_item(request_id, head)?,
+            None => {
+                heads.call_method1(intern!(py, "pop"), (request_id, py.None()))?;
+            }
+        }
+    }
+    let history = state.get_item("history")?;
+    history.call_method1(intern!(py, "append"), (common,))?;
+    if over_limit {
+        state.set_item("history_truncated", true)?;
+        history.del_item(PySlice::new(py, 0, (history.len()? - MAX_HISTORY) as isize, 1))?;
+    }
+    Ok(())
+}
+
+fn text_of(value: &Bound<'_, PyAny>) -> Option<String> {
+    exact_str(value).ok().map(str::to_owned)
+}
+
+fn get_of<'py>(map: &Bound<'py, PyAny>, key: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    map.call_method1(intern!(map.py(), "get"), (key,))
+}
+
+/// `record.status is EventStatus.<wanted>`.
+fn event_is(record: &Bound<'_, PyAny>, wanted: &str) -> PyResult<bool> {
+    let py = record.py();
+    Ok(text_of(&attribute(record, intern!(py, "status"))?.getattr(intern!(py, "_value_"))?).as_deref() == Some(wanted))
+}
+
+/// The branch of `StaffSupportContinuityReceipt`.
+fn check_continuity<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>, prior: &Bound<'py, PyAny>, request_id: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let field = |name: &Bound<'py, PyString>| attribute(record, name);
+    let refused = || unsupported("the continuity receipt does not match the interrupted request");
+    if prior.is_none() {
+        return refused();
+    }
+    let request = get_of(&attribute(world, intern!(py, "support_requests"))?, request_id)?;
+    if request.is_none() {
+        return refused();
+    }
+    let log = attribute(world, intern!(py, "event_log"))?;
+    let cause = log.call_method1(intern!(py, "find"), (field(intern!(py, "causation_id"))?,))?;
+    if cause.is_none() {
+        return refused();
+    }
+    let previous_staff = field(intern!(py, "previous_staff_id"))?;
+    let cause_event = attribute(&cause, intern!(py, "event"))?;
+    let cause_payload = attribute(&cause_event, intern!(py, "payload"))?;
+    let cause_of = |key: &str| cause_payload.call_method1(intern!(py, "get"), (key,));
+    let cause_type = text_of(&field(intern!(py, "cause_type"))?);
+    let event_type = text_of(&attribute(&cause_event, intern!(py, "event_type"))?);
+    let cause_matches = match cause_type.as_deref() {
+        Some("route_unreachable") => {
+            event_is(&cause, "suppressed")?
+                && event_type.as_deref() == Some("agent_travel_complete")
+                && text_of(&cause_of("purpose")?).as_deref() == Some("staff_support_travel")
+                && cause_of("request_id")?.eq(request_id)?
+                && cause_of("staff_id")?.eq(&previous_staff)?
+        }
+        Some("staff_unavailable" | "staff_shift_change") => event_is(&cause, "applied")? && event_type == cause_type && cause_of("staff_id")?.eq(&previous_staff)?,
+        _ => false,
+    };
+    let prior_status = text_of(&prior.get_item("status")?);
+    let agent_id = field(intern!(py, "agent_id"))?;
+    if !matches!(prior_status.as_deref(), Some("assigned" | "started"))
+        || !prior.get_item("agent_id")?.eq(&agent_id)?
+        || !attribute(&request, intern!(py, "agent_id"))?.eq(&agent_id)?
+        || !attribute(&request, intern!(py, "assigned_staff_id"))?.is_none()
+        || !attribute(&request, intern!(py, "task_id"))?.is_none()
+        || !cause_matches
+        || attribute(world, intern!(py, "active_tasks"))?.contains(field(intern!(py, "task_id"))?)?
+    {
+        return refused();
+    }
+    let expected = if text_of(&field(intern!(py, "status"))?).as_deref() == Some("requeued") { "pending" } else { "unresolved" };
+    if text_of(&attribute(&request, intern!(py, "status"))?.getattr(intern!(py, "value"))?).as_deref() != Some(expected) {
+        return unsupported("the continuity receipt's status disagrees with the request");
+    }
+    let prior_event = log.call_method1(intern!(py, "find"), (prior.get_item("latest_event_id")?,))?;
+    if prior_event.is_none() || !attribute(&attribute(&prior_event, intern!(py, "event"))?, intern!(py, "payload"))?.call_method1(intern!(py, "get"), ("staff_id",))?.eq(&previous_staff)? {
+        return unsupported("the continuity receipt does not match its previous assignment");
+    }
+    Ok(())
+}
+
+/// The branch of `StaffHandoffReceipt`.
+fn check_handoff<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let field = |name: &Bound<'py, PyString>| attribute(record, name);
+    let task = get_of(&attribute(world, intern!(py, "active_tasks"))?, &field(intern!(py, "task_id"))?)?;
+    let status = text_of(&field(intern!(py, "status"))?);
+    let holds = |wanted: &Bound<'py, PyAny>| -> PyResult<bool> { Ok(!task.is_none() && attribute(&task, intern!(py, "staff_id"))?.eq(wanted)?) };
+    let fits = match status.as_deref() {
+        Some("reassigned") => holds(&field(intern!(py, "replacement_staff_id"))?)?,
+        Some("unfilled") => !task.is_none() && attribute(&task, intern!(py, "staff_id"))?.is_none(),
+        Some("rejected") => holds(&field(intern!(py, "previous_staff_id"))?)?,
+        _ => true,
+    };
+    if !fits {
+        return unsupported("the handoff does not match the active task");
+    }
+    Ok(())
+}
+
+/// `_validate_staff_operation_receipt`.
+fn check_staff_operation<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>, history_truncated: bool) -> PyResult<()> {
+    let py = world.py();
+    let field = |name: &Bound<'py, PyString>| attribute(record, name);
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let operations = exact_dict(&table)?.get_item("staff_operations_v1")?;
+    let history = match &operations {
+        Some(operations) if operations.is_instance_of::<PyDict>() => get_of(operations, PyString::new(py, "history").as_any())?,
+        _ => py.None().into_bound(py),
+    };
+    let rows: Vec<Bound<'py, PyAny>> = if history.is_none() { Vec::new() } else { history.try_iter()?.collect::<PyResult<_>>()? };
+    let rows: Vec<_> = rows.into_iter().filter(|row| row.is_instance_of::<PyDict>()).collect();
+    let (task_id, minute) = (field(intern!(py, "task_id"))?, field(intern!(py, "minute"))?);
+    let of = |row: &Bound<'py, PyAny>, key: &str| row.call_method1(intern!(py, "get"), (key,));
+    let mut matches = Vec::new();
+    for row in &rows {
+        if of(row, "task_id")?.eq(&task_id)? && of(row, "complete_minute")?.eq(&minute)? {
+            matches.push(row);
+        }
+    }
+    let Some(row) = matches.first() else {
+        let minute = exact_int(&minute)?;
+        let mut all_later = !rows.is_empty();
+        for row in &rows {
+            let complete = row.call_method1(intern!(py, "get"), ("complete_minute", 0))?;
+            all_later = all_later && exact_int(&complete)? > minute;
+        }
+        // `history and ...`: an empty history, or one only of what isn't a dict, has no later row.
+        if history_truncated && all_later {
+            return Ok(());
+        }
+        return unsupported("the receipt has no matching retained completion");
+    };
+    if matches.len() != 1 {
+        return unsupported("the receipt matches duplicate completion history");
+    }
+    for (key, name) in [
+        ("staff_id", intern!(py, "staff_id")),
+        ("task_kind", intern!(py, "task_kind")),
+        ("target_id", intern!(py, "target_id")),
+        ("target_zone_id", intern!(py, "target_zone_id")),
+        ("reason", intern!(py, "reason")),
+        ("status", intern!(py, "status")),
+        ("start_minute", intern!(py, "start_minute")),
+        ("arrival_minute", intern!(py, "arrival_minute")),
+        ("travel_minutes", intern!(py, "travel_minutes")),
+    ] {
+        if !of(row, key)?.eq(field(name)?)? {
+            return unsupported("the receipt disagrees with retained completion history");
+        }
+    }
+    let causes = row.call_method1(intern!(py, "get"), ("causation_event_ids", PyTuple::empty(py)))?;
+    if !causes.contains(field(intern!(py, "causation_id"))?)? {
+        return unsupported("the receipt disagrees with retained completion history");
+    }
+    Ok(())
 }
 
 /// What `record_shared_operation` holds of a care receipt, as `model_dump(mode="json")` gives it.
@@ -319,11 +610,13 @@ pub(crate) struct PlannedRecord {
 
 /// The checks of `record_shared_operation` on the row. Unsupported for what fails one; nothing changes.
 pub(crate) fn plan_record(
+    world: &Bound<'_, PyAny>,
     writer: &EventWriter<'_>,
     mirror: &Bound<'_, NamespaceMirror>,
     record: &CareRecord,
 ) -> PyResult<PlannedRecord> {
     let (event_id, request_id, minute) = (&record.event_id, &record.request_id, record.minute);
+    recent_receipts_hold(world, mirror, minute)?;
     let first_request = if record.status == CareStatus::Requested {
         writer.log().borrow().first_care_request_event_of(request_id).map(Arc::<str>::from)
     } else {
@@ -333,10 +626,8 @@ pub(crate) fn plan_record(
         if !row.header_is_valid() {
             return unsupported("the state is not one the contract takes");
         }
-        let Some(mut recent) = row.history.recent_verified(minute) else {
-            return unsupported("a recent receipt was not checked here");
-        };
-        if recent.any(|item| item.event_id.as_deref() == Some(&**event_id)) {
+        let start = row.history.recent_start(minute);
+        if row.history.items.iter().skip(start).any(|item| item.event_id.as_deref() == Some(&**event_id)) {
             return unsupported("the event already has a receipt");
         }
         let prior = row.support_requests.map.get(request_id);

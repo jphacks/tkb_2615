@@ -19,16 +19,16 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
+use pyo3::types::{PyBool, PyDict, PyList, PyString, PyTuple, PyType};
 
 use crate::core::census;
-use crate::core::row::{attribute, exact_int, unsupported};
+use crate::core::row::{attribute, exact_int, exact_str, unsupported};
 use crate::core::world_core::raw_dict_get;
-use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, replan, service, social_propagation, staff, staff_dynamics, support, toilet, trace, world_view};
+use crate::rules::movement_geometry::Geo;
+use crate::rules::{decisions, dispatch, facility_queues, information, metrics, movement, proposals, proximity, psychology, queues, replan, service, social_propagation, staff, staff_dynamics, support, toilet, trace, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
-const QUEUES: &str = "facility_queues_v1";
 
 /// What Python gives once.
 struct Table {
@@ -196,7 +196,7 @@ impl<'py> Tick<'_, 'py> {
         Ok(())
     }
 
-    /// `manager.arbitrate`, by the method. Its Python loop serves an independent FIFO.
+    /// `manager.arbitrate`, by the method, of a manager of another class.
     fn arbitrate_in_python(&self, manager: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = self.py();
         let options = PyDict::new(py);
@@ -217,19 +217,39 @@ impl<'py> Tick<'_, 'py> {
         })
     }
 
+    fn prepare_independent_queue(&self, queue_id: &Bound<'py, PyAny>, resource: bool) -> PyResult<()> {
+        let py = self.py();
+        let flag = PyBool::new(py, resource).to_owned().into_any();
+        or_rule!(py, queues::prepare_independent_facility_queue(self.world, queue_id, self.minute, &flag), {
+            let options = PyDict::new(py);
+            options.set_item(intern!(py, "minute"), self.minute)?;
+            options.set_item(intern!(py, "resource"), resource)?;
+            rule_of(self.table.facilities.bind(py).as_any(), intern!(py, "prepare_independent_facility_queue"))?
+                .call((self.world, queue_id), Some(&options))
+                .map(|_| ())
+        })
+    }
+
     /// `progress_physical_queue_positions` or `progress_physical_queue_head_to_service`.
     fn progress_queue(&self, facility_id: &Bound<'py, PyAny>, resource: bool, head: bool) -> PyResult<bool> {
+        self.progress_fifo(facility_id, resource, head, None)
+    }
+
+    fn progress_fifo(&self, facility_id: &Bound<'py, PyAny>, resource: bool, head: bool, queue_id: Option<&Bound<'py, PyAny>>) -> PyResult<bool> {
         let py = self.py();
         let flag = PyBool::new(py, resource).to_owned().into_any();
         let kernel = if head {
-            queues::progress_physical_queue_head_to_service(self.world, facility_id, &flag, self.minute, None)
+            queues::progress_physical_queue_head_to_service(self.world, facility_id, &flag, self.minute, queue_id)
         } else {
-            queues::progress_physical_queue_positions(self.world, facility_id, &flag, self.minute, None)
+            queues::progress_physical_queue_positions(self.world, facility_id, &flag, self.minute, queue_id)
         };
         or_rule!(py, kernel, {
             let options = PyDict::new(py);
             options.set_item(intern!(py, "resource"), resource)?;
             options.set_item(intern!(py, "minute"), self.minute)?;
+            if let Some(queue_id) = queue_id {
+                options.set_item(intern!(py, "queue_id"), queue_id)?;
+            }
             let name = if head { intern!(py, "progress_physical_queue_head_to_service") } else { intern!(py, "progress_physical_queue_positions") };
             rule_of(self.table.facilities.bind(py).as_any(), name)?
                 .call((self.world, facility_id), Some(&options))?
@@ -237,8 +257,87 @@ impl<'py> Tick<'_, 'py> {
         })
     }
 
-    /// `ToiletServiceManager.arbitrate` of a world with no independent FIFO. Nothing reads what it
-    /// returns here, so the started events aren't looked up.
+    /// The queues of a facility with independent ones, each with the check of its signed point.
+    fn independent_queues(&self, facility_id: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyTuple>>> {
+        if !facility_queues::has_independent(self.world, exact_str(facility_id)?)? {
+            return Ok(None);
+        }
+        facility_queues::queue_ids_for_facility(self.world, facility_id).map(Some)
+    }
+
+    /// `raise StateInvariantError(f"{label} queue {queue_id!r} lost its signed point")`, as needed.
+    fn check_signed_point(&self, queue_id: &Bound<'py, PyAny>, label: &str) -> PyResult<()> {
+        let py = self.py();
+        if facility_queues::point_of(&*Geo::of(self.world)?, exact_str(queue_id)?).is_some() {
+            return Ok(());
+        }
+        let class = py.import(intern!(py, "sheltersim.core.world"))?.getattr(intern!(py, "StateInvariantError"))?;
+        let text = format!("{label} queue {} lost its signed point", queue_id.repr()?);
+        Err(PyErr::from_value(class.call1((text,))?))
+    }
+
+    fn queue_has_people(&self, queue_id: &Bound<'py, PyAny>) -> PyResult<bool> {
+        let id = exact_str(queue_id)?;
+        let queued = facility_queues::with_queues(self.world, |row| match row.queues.get(id) {
+            Some(queue) => Ok(!queue.queued_request_ids.is_empty()),
+            None => unsupported("no such queue"),
+        })?;
+        queued.ok_or_else(|| Unsupported::new_err("no queue state"))
+    }
+
+    /// `ToiletServiceManager._arbitrate_independent_facility`.
+    fn arbitrate_independent_toilets(&self, manager: &Bound<'py, PyAny>, id: &Bound<'py, PyAny>, queues: &Bound<'py, PyTuple>) -> PyResult<()> {
+        let py = self.py();
+        for queue_id in queues.iter() {
+            self.prepare_independent_queue(&queue_id, false)?;
+            self.check_signed_point(&queue_id, "service")?;
+            while self.queue_has_people(&queue_id)? {
+                if self.progress_fifo(id, false, false, Some(&queue_id))? {
+                    break;
+                }
+                let started = or_rule!(py, toilet::serve_independent_head(manager, id, &queue_id, self.minute, self.rng).map(|event| event.map(Bound::into_any)), {
+                    rule_of(manager, intern!(py, "_serve_independent_head"))?.call1((manager, id, &queue_id, self.minute, self.rng)).map(|event| Some(event).filter(|event| !event.is_none()))
+                })?;
+                if started.is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `ResourceServiceManager._arbitrate_independent_facility`.
+    fn arbitrate_independent_resources(&self, manager: &Bound<'py, PyAny>, id: &Bound<'py, PyAny>, resource: &Bound<'py, PyAny>, queues: &Bound<'py, PyTuple>) -> PyResult<()> {
+        let py = self.py();
+        let stalls = PyList::empty(py);
+        let table = attribute(self.world, intern!(py, "model_state"))?;
+        let previous = table.get_item(intern!(py, "resource_service_v1"))?.get_item(intern!(py, "stall_state"))?.call_method1(intern!(py, "get"), (id,))?;
+        for queue_id in queues.iter() {
+            self.prepare_independent_queue(&queue_id, true)?;
+            self.check_signed_point(&queue_id, "resource")?;
+            while self.queue_has_people(&queue_id)? {
+                if self.progress_fifo(id, true, false, Some(&queue_id))? {
+                    break;
+                }
+                let served = or_rule!(py, service::serve_independent_head(manager, id, resource, &queue_id, self.minute).map(Bound::into_any), {
+                    rule_of(manager, intern!(py, "_serve_independent_head"))?.call1((manager, id, resource, &queue_id, self.minute))
+                })?;
+                let (started, stall) = (served.get_item(0)?, served.get_item(1)?);
+                if !stall.is_none() {
+                    stalls.append(stall)?;
+                }
+                if started.is_none() {
+                    break;
+                }
+            }
+        }
+        or_rule!(py, service::record_independent_stall(manager, id, stalls.as_any(), &previous), {
+            rule_of(manager, intern!(py, "_record_independent_queue_stall"))?.call1((manager, id, &stalls, &previous)).map(|_| ())
+        })
+    }
+
+    /// `ToiletServiceManager.arbitrate`. Nothing reads what it returns here, so the started events
+    /// aren't looked up.
     fn arbitrate_toilets(&self, manager: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = self.py();
         let minute = self.minute;
@@ -247,6 +346,10 @@ impl<'py> Tick<'_, 'py> {
         })?;
         for facility in due.try_iter()? {
             let id = facility?.getattr(intern!(py, "id"))?;
+            if let Some(queues) = self.independent_queues(&id)? {
+                self.arbitrate_independent_toilets(manager, &id, &queues)?;
+                continue;
+            }
             self.prepare_queue(&id, false)?;
             loop {
                 let room = or_rule!(py, toilet::has_room(manager, &id), {
@@ -266,7 +369,7 @@ impl<'py> Tick<'_, 'py> {
         Ok(())
     }
 
-    /// `ResourceServiceManager.arbitrate` of a world with no independent FIFO.
+    /// `ResourceServiceManager.arbitrate`.
     fn arbitrate_resources(&self, manager: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = self.py();
         let due = or_rule!(py, service::facilities_to_serve(manager).map(Bound::into_any), {
@@ -276,6 +379,10 @@ impl<'py> Tick<'_, 'py> {
             let item = item?;
             let (facility, resource) = (item.get_item(0)?, item.get_item(1)?);
             let id = facility.getattr(intern!(py, "id"))?;
+            if let Some(queues) = self.independent_queues(&id)? {
+                self.arbitrate_independent_resources(manager, &id, &resource, &queues)?;
+                continue;
+            }
             self.prepare_queue(&id, true)?;
             while facility.getattr(intern!(py, "resource_queue_agent_ids"))?.is_truthy()? {
                 if self.progress_queue(&id, true, false)? {
@@ -303,17 +410,15 @@ impl<'py> Tick<'_, 'py> {
             rule_of(module, intern!(py, "update_staff_operations"))?.call1((world, minute)).map(|_| ())
         })?;
         // `_arbitrate_services`.
-        let table = attribute(world, intern!(py, "model_state"))?;
-        let independent = raw_dict_get(&table, intern!(py, QUEUES).as_any())?.is_some();
         let toilets = controller.getattr(intern!(py, "toilet_service"))?;
-        if independent || !toilets.get_type().is(self.table.toilet.bind(py)) {
+        if !toilets.get_type().is(self.table.toilet.bind(py)) {
             self.arbitrate_in_python(&toilets)?;
         } else {
             self.arbitrate_toilets(&toilets)?;
         }
         let resources = controller.getattr(intern!(py, "resource_service"))?;
         if !resources.is_none() {
-            if independent || !resources.get_type().is(self.table.resource.bind(py)) {
+            if !resources.get_type().is(self.table.resource.bind(py)) {
                 self.arbitrate_in_python(&resources)?;
             } else {
                 self.arbitrate_resources(&resources)?;

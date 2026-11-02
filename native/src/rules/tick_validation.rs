@@ -1094,10 +1094,13 @@ fn population_dynamics(world: &Bound<'_, PyAny>) -> PyResult<bool> {
         || !version_is_one
         || !text_is(intern!(py, "policy_version"), POPULATION_POLICY_VERSION)?
         || !text_is(intern!(py, "source_id"), POPULATION_SOURCE_ID)?
-        || !no_context
-        || !exact_list(&pending)?.is_empty()
     {
         return unsupported("the population state is the Python rule's");
+    }
+    if !no_context || !exact_list(&pending)?.is_empty() {
+        // Someone waits, or has a context: `validate_population_dynamics_state` reads those.
+        crate::rules::population::validate_population_dynamics_state(world)?;
+        return Ok(true);
     }
     let initial = exact_list(&initial)?;
     let mut seen: FxHashSet<&str> = FxHashSet::default();

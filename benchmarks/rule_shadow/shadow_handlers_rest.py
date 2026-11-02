@@ -137,7 +137,8 @@ def _shadow(recorder: Recorder, label_of: Any, kernel: Any, rule: Any) -> Any:
             recorder.seen[f"{label}.kernel_ran"] += 1
             if text(actual) != text(expected):
                 recorder.differ(f"{label}: {actual!r:.300} is not {expected!r:.300}")
-            elif actual[0] == "applied":
+            elif actual[0] in ("applied", "suppressed"):
+                # A suppressed event may leave a retry behind.
                 compare_worlds(recorder, label, python_world, kernel_world)
         return kernel(handler, world, event, *rest)
 
@@ -203,6 +204,30 @@ def prepare(output: str) -> None:
         walks.reject_room_approach,
         lambda: handlers().AgentTravelCompletionHandler._reject_room_approach.__wrapped__,
     )
+
+    closures = native.rules("staff_operation_events")
+    interrupt_trips_kernel = closures.interrupt_trips
+
+    def interrupt_trips(world: Any, event: Any) -> Any:
+        from sheltersim.domain import staff_operations
+
+        recorder.seen["interrupt_trips.calls"] += 1
+        python_world, kernel_world = _worlds(world)
+        rule = staff_operations.interrupt_staff_trips_on_closed_routes.__wrapped__
+        expected = rule(python_world, event)
+        try:
+            actual = interrupt_trips_kernel(kernel_world, event)
+        except native.Unsupported as reason:
+            recorder.reasons[f"interrupt_trips: {reason}"] += 1
+            raise
+        recorder.seen["interrupt_trips.kernel_ran"] += 1
+        recorder.seen["interrupt_trips.people"] += len(actual)
+        if actual != expected:
+            recorder.differ(f"interrupt_trips: {actual!r:.300} is not {expected!r:.300}")
+        compare_worlds(recorder, "interrupt_trips", python_world, kernel_world)
+        return interrupt_trips_kernel(world, event)
+
+    closures.interrupt_trips = interrupt_trips
 
     receipts = native.rules("care_receipts")
     ingest_kernel = receipts.ingest

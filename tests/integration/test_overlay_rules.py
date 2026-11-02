@@ -15,7 +15,13 @@ import pytest
 
 from sheltersim import native
 from sheltersim.core.world import WorldState
-from sheltersim.domain import facility_queues, geometry_overlay, queueing, temporary_spaces
+from sheltersim.domain import (
+    facility_queues,
+    geometry_overlay,
+    movement,
+    queueing,
+    temporary_spaces,
+)
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.resource_service import ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
@@ -1007,16 +1013,26 @@ def test_a_fifo_keeps_its_order_and_only_a_wait_ends_it(queued: WorldState) -> N
     rule = queueing.prepare_independent_facility_queue.__wrapped__
     _same(queued, prepare, rule, "toilet_01-left-fifo", minute=queued.minute_index, resource=False)
     _same(queued, prepare, rule, "none", minute=queued.minute_index, resource=False)
-    # Past the toilet's default wait, with a low need: the kernel leaves it to the Python rule.
+    queued.minute_index = 119
+    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=119, resource=False)
+    # Past the toilet's default wait, with a low need: this person leaves the queue.
     queued.agents["A002"].needs.toilet_urgency = 0.1
     queued.active_tasks[tasks[1]].start_minute = 0
     queued.minute_index = 121
-    before = _bytes(queued)
-    with pytest.raises(native.Unsupported):
-        prepare(queued, "toilet_01-left-fifo", minute=121, resource=False)
-    assert _bytes(queued) == before
-    queued.minute_index = 119
-    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=119, resource=False)
+    center = movement._zone_center(movement._geometry(queued), queued.agents["A002"].zone_id)
+    queued.model_state["movement_v1"]["positions"]["A002"]["point"] = {"x": center.x, "y": center.y}
+    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=121, resource=False)
+    prepare(queued, "toilet_01-left-fifo", minute=121, resource=False)
+    state = queued.model_state["facility_queues_v1"]
+    assert tasks[1] not in state["queues"]["toilet_01-left-fifo"]["queued_request_ids"]
+    assert "A002" not in queued.facilities["toilet_01"].queue_agent_ids
+    transitions = [
+        record.event.payload
+        for record in queued.event_log.records
+        if record.event.event_type == "facility_queue_transition"
+        and record.event.payload["transition"] == "abandoned"
+    ]
+    assert [(item["agent_id"], item["wait_minutes"]) for item in transitions] == [("A002", 121)]
 
 
 @pytest.mark.parametrize("queue_id", ["toilet_01-left-fifo", "toilet_01-right-fifo"])
@@ -1158,6 +1174,111 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
             ResourceServiceManager(ours), facility_id, list(wanted), known
         )
         _same_world(ours, theirs)
+
+
+def _serving(queued: WorldState) -> tuple[str, str]:
+    """Someone in service at an independent queue: the task's ID and the staff member's."""
+    facility_id, _ = _resource_queues(queued)
+    zone = queued.facilities[facility_id].zone_id
+    for agent_id in ("A001", "A002"):
+        queued.agents[agent_id].zone_id = zone
+        queued.model_state["movement_v1"]["positions"][agent_id]["zone_id"] = zone
+    manager = ResourceServiceManager(queued)
+    manager.request("A001", facility_id, validate_state=False)
+    for staff in queued.staff.values():
+        staff.zone_id = zone
+    queue_state = queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]
+    request = next(iter(queue_state["requests"].values()))
+    point = next(
+        item
+        for item in queued.model_configs["facility_geometry"]["service_points"]
+        if item["queue_id"] == request["queue_id"]
+    )
+    queued.model_state["movement_v1"]["positions"]["A001"]["point"] = point["point_m"]
+    for _ in range(30):
+        manager.arbitrate(queued.minute_index, validate_state=False)
+        for task in queued.active_tasks.values():
+            if task.kind in ("resource_service_water", "resource_service_food"):
+                return task.id, task.staff_id
+        queued.minute_index += 1
+    pytest.fail("the service never started")
+
+
+def test_a_service_interrupted_goes_back_first_in_its_fifo_as_the_python_rule_says(
+    queued: WorldState,
+) -> None:
+    _, staff_id = _serving(queued)
+    facility_id, _ = _resource_queues(queued)
+    # Someone else waits, so going back first in line shows.
+    ResourceServiceManager(queued).request("A002", facility_id, validate_state=False)
+    cause = ScheduledEvent(
+        event_id="staff-away",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="staff_unavailable",
+        payload={"staff_id": staff_id},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.interrupt_for_staff.__wrapped__(
+        ResourceServiceManager(theirs), staff_id, causation_event=cause
+    )
+    _rules("handlers").interrupt_for_staff(
+        ResourceServiceManager(ours), staff_id, causation_event=cause
+    )
+    _same_world(ours, theirs)
+    assert ours.id_counters == theirs.id_counters
+    records = [
+        record.event.payload
+        for record in ours.event_log.records
+        if record.event.event_type == "facility_queue_transition"
+    ]
+    assert [item["transition"] for item in records[-2:]] == ["interrupted", "requeued"]
+    assert records[-1]["queue_position"] == 1
+
+
+@pytest.mark.parametrize("reason", ["operator_cancelled", "facility_stopped", "staff_unavailable"])
+def test_a_cancelled_service_is_the_python_rule_s(queued: WorldState, reason: str) -> None:
+    task_id, _ = _serving(queued)
+    event = ScheduledEvent(
+        event_id="cancel-it",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="resource_service_cancel",
+        payload={"task_id": task_id, "reason": reason},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.cancel.__wrapped__(ResourceServiceManager(theirs), event)
+    _rules("handlers").cancel(ResourceServiceManager(ours), event)
+    _same_world(ours, theirs)
+    assert task_id in ours.model_state["resource_service_v1"]["cancelled_task_ids"]
+
+
+def test_a_cancelled_place_in_a_queue_is_the_python_rule_s(queued: WorldState) -> None:
+    facility_id, _ = _resource_queues(queued)
+    zone = queued.facilities[facility_id].zone_id
+    queued.agents["A001"].zone_id = zone
+    queued.model_state["movement_v1"]["positions"]["A001"]["zone_id"] = zone
+    receipt = ResourceServiceManager(queued).request("A001", facility_id, validate_state=False)
+    event = ScheduledEvent(
+        event_id="cancel-place",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="resource_service_cancel",
+        payload={"task_id": receipt.queue_task_id, "reason": "operator_cancelled"},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.cancel.__wrapped__(ResourceServiceManager(theirs), event)
+    _rules("handlers").cancel(ResourceServiceManager(ours), event)
+    _same_world(ours, theirs)
 
 
 def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: WorldState) -> None:

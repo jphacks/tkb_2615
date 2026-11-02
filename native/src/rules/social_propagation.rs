@@ -20,7 +20,7 @@ use std::sync::Arc;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyInt, PyList, PyString, PyTuple, PyType};
+use pyo3::types::{PyDict, PyInt, PyList, PyString, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 use rustc_hash::FxBuildHasher;
 
@@ -29,7 +29,7 @@ use crate::contacts::{
     Basis, Bucket,
 };
 use crate::core::mathx::{py_fsum, py_max, py_min, py_sum};
-use crate::core::row::{Field, IdMap};
+use crate::core::row::{namespace_is_absent, Field, IdMap};
 use crate::core::rng::{start_draw_log, take_draw_log, KeyedDraws};
 use crate::core::tracked::{as_readable_dict, as_readable_list};
 use crate::core::world_core::{mirror_of, NamespaceMirror};
@@ -681,7 +681,11 @@ pub(crate) fn update_social_propagation<'py>(
     }
     let seed = seed.str()?;
     let mirror = mirror_of(world, NAME)?;
-    let Plan { stresses, contacts, cooldowns, observed, trace } =
+    // The first tick of a Run: `_read_runtime_state(None)`, and this step makes the namespace.
+    let first_use = namespace_is_absent(world, intern!(py, NAME))?;
+    let Plan { stresses, contacts, cooldowns, observed, trace } = if first_use {
+        plan(seed.to_str()?, minute_value, &settings, &people, &neighbors, &IdMap::default(), &IdMap::default(), sink.is_some())?
+    } else {
         NamespaceMirror::with_row::<SocialRow, _>(&mirror, |row| {
             if row.schema_version != SCHEMA_VERSION {
                 return unsupported("another schema version");
@@ -696,7 +700,8 @@ pub(crate) fn update_social_propagation<'py>(
                 &row.agent_cooldown_until,
                 sink.is_some(),
             )
-        })?;
+        })?
+    };
 
     // The deltas first: they run a little Python, and nothing is written yet. A delta that keeps
     // its stress is itself, since a delta is frozen. The people are in id order, as the Python
@@ -711,6 +716,13 @@ pub(crate) fn update_social_propagation<'py>(
     }
     let final_deltas = PyTuple::new(py, final_deltas)?;
 
+    if first_use {
+        let state = PyDict::new(py);
+        state.set_item(intern!(py, "schema_version"), SCHEMA_VERSION)?;
+        state.set_item(intern!(py, "contacts"), PyDict::new(py))?;
+        state.set_item(intern!(py, "agent_cooldown_until"), PyDict::new(py))?;
+        world.getattr(intern!(py, "model_state"))?.set_item(NAME, state)?;
+    }
     // The row and the tree. The namespace's dict gets the order of the Python rule's new one too.
     NamespaceMirror::with_row_tree::<SocialRow, _>(&mirror, |row, tree| {
         tree.order_keys([

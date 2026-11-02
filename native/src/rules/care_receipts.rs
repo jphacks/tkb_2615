@@ -183,7 +183,7 @@ pub(crate) fn plan_transition(
         Some(state) if mirror.try_borrow()?.root_is(&state) => {}
         _ => return unsupported("the world holds another document than the row's"),
     }
-    let plan = plan_record(writer, &mirror, &record)?;
+    let plan = plan_record(world, writer, &mirror, &record)?;
     let detail = format!("care transition {status_text} recorded after state application");
     Ok(PlannedTransition { record, document, row, plan, detail })
 }
@@ -800,7 +800,14 @@ fn ingest<'py>(world: &Bound<'py, PyAny>, outcomes: &Bound<'py, PyAny>) -> PyRes
         }
         let adapter = module.getattr(intern!(py, "_operation_record_adapter"))?.call0()?;
         let receipt = adapter.call_method1(intern!(py, "validate_python"), (attribute(&event, intern!(py, "payload"))?,))?;
-        shared.getattr(intern!(py, "record_shared_operation"))?.call1((world, receipt))?;
+        match crate::rules::common_operations::record_shared_operation(world, &receipt) {
+            // What only the rule's text can say. Nothing of this receipt was written.
+            Err(error) if !first && error.is_instance_of::<Unsupported>(py) => {
+                crate::core::census::caught(py, "__wrapped__ record_shared_operation (after writes)", &error);
+                shared.getattr(intern!(py, "record_shared_operation"))?.getattr(intern!(py, "__wrapped__"))?.call1((world, receipt))?;
+            }
+            other => other?,
+        }
         first = false;
     }
     Ok(())

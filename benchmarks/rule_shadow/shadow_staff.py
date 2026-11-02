@@ -354,7 +354,8 @@ def _prepare_common(native: Any, recorder: Recorder) -> None:
             raise
         recorder.seen["record.kernel_ran"] += 1
         recorder.seen[f"record.{record.status}"] += 1
-        recorder.seen["record.with_state_changes"] += bool(record.state_changes)
+        recorder.seen[f"record.{type(record).__name__}"] += 1
+        recorder.seen["record.with_state_changes"] += bool(getattr(record, "state_changes", ()))
         table = dict(world.model_state)
         table[SHARED] = before
         try:

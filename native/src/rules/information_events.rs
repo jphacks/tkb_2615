@@ -520,7 +520,7 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
         let Some(wanted_rank) = belief_rank(belief_text) else {
             return unsupported("the belief is for the Python rule to judge");
         };
-        let (truth, claim_source, sender_belief, sender_source, sender_event, previous, pressure) = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
+        let found = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
             let Some(message) = row.messages.get(&*message_id) else {
                 return unsupported("an unknown message");
             };
@@ -531,13 +531,13 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
                 return unsupported("a person has no beliefs");
             };
             let Some(known) = sender.get(&*message_id) else {
-                return unsupported("the sender no longer knows the message");
+                return Ok(None);
             };
             if !known.parses() {
                 return unsupported("a belief is for the Python rule to read");
             }
             let previous = recipient.get(&*message_id).map(prior_of).transpose()?;
-            Ok((
+            Ok(Some((
                 message.truth_status.clone(),
                 message.source_id.clone(),
                 known.belief.clone(),
@@ -545,16 +545,20 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
                 known.last_event_id.clone(),
                 previous,
                 row.query_pressure.get(&*recipient_id).copied(),
-            ))
+            )))
         })?;
+        // What no longer applies is suppressed, with the rule's text.
+        let Some((truth, claim_source, sender_belief, sender_source, sender_event, previous, pressure)) = found else {
+            return Ok(Err("contact sender no longer knows the message"));
+        };
         if &*sender_belief != belief_text {
-            return unsupported("the sender's belief changed");
+            return Ok(Err("contact sender belief changed before transmission"));
         }
         let Some(basis) = contact_basis(world, &sender_id, &recipient_id)? else {
-            return unsupported("no longer in a contact zone");
+            return Ok(Err("Agents are no longer in a modeled contact zone"));
         };
         if !get_is(&payload, "contact_basis", basis)? {
-            return unsupported("the sampled basis is not current");
+            return Ok(Err("sampled contact basis is no longer current"));
         }
         let contact_minutes = exact_int(&payload.get_item("contact_minutes")?)?;
         if contact_minutes < exact_int(&config.getattr(intern!(py, "minimum_contact_minutes"))?)? {
@@ -630,9 +634,12 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
         } else {
             None
         };
-        Ok((state, message_id, recipient_id, record, next, !heard && accepted))
+        Ok(Ok((state, message_id, recipient_id, record, next, !heard && accepted)))
     })();
-    let (state, message_id, recipient_id, record, next, delivered) = counted(py, "contact", refused_by_python(py, plan))?;
+    let (state, message_id, recipient_id, record, next, delivered) = match counted(py, "contact", refused_by_python(py, plan))? {
+        Ok(planned) => planned,
+        Err(text) => return crate::rules::population::suppressed(py, text.to_owned()),
+    };
     state.get_item("beliefs")?.get_item(&*recipient_id)?.set_item(&*message_id, record.to_py(py)?)?;
     if let Some(next) = next {
         state.get_item("query_pressure")?.set_item(&*recipient_id, next)?;

@@ -1014,7 +1014,17 @@ impl<'py> Phase<'_, 'py> {
         }
         for outcome in outcomes.iter_mut().filter(applied) {
             if &*outcome.event_type == "effect_program_geometry" {
-                controller.call_method1(intern!(py, "_interrupt_trips_of_event"), (world, outcome.event(py)?))?;
+                let event = outcome.event(py)?;
+                let done = self.direct
+                    && match crate::rules::staff_operation_events::interrupt_trips_of_event(world, &event) {
+                        Ok(()) => true,
+                        // Those already stopped are idle, and the rule passes over them.
+                        Err(error) if error.is_instance_of::<Unsupported>(py) => false,
+                        Err(error) => return Err(error),
+                    };
+                if !done {
+                    controller.call_method1(intern!(py, "_interrupt_trips_of_event"), (world, event))?;
+                }
             }
         }
         self.admit_returns()?;

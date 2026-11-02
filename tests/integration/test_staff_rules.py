@@ -20,7 +20,10 @@ from sheltersim import native
 from sheltersim.contracts.operations import SHARED_OPERATIONS_KEY, NumericStateChange
 from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.world import WorldState
-from sheltersim.domain.care_receipts import make_care_transition_record
+from sheltersim.domain.care_receipts import (
+    make_care_transition_record,
+    make_facility_recovery_record,
+)
 from sheltersim.domain.common_operations import (
     _TICK_PASSED,
     _TICK_VALID,
@@ -788,9 +791,12 @@ def test_a_restored_receipt_is_read_by_the_python_rule_once_and_then_trusted() -
     copied = copy.deepcopy(world)
     assert not _TICK_VALID(copied)
     kernel = native.rules("common_operations").record_shared_operation
-    with pytest.raises(native.Unsupported):
-        kernel(copied, _receipt(copied, 2, "requested"))
-    copied.model_state[SHARED]["support_requests"].clear()
+    # What the kernel did not check, the contract does, as in the Python rule.
+    twin = copy.deepcopy(copied)
+    kernel(copied, _receipt(copied, 2, "requested"))
+    record_shared_operation.__wrapped__(twin, _receipt(twin, 2, "requested"))
+    assert _mirror(copied, SHARED).verify()
+    assert json.dumps(copied.model_state[SHARED]) == json.dumps(twin.model_state[SHARED])
     world_two = copy.deepcopy(world)
     assert not _TICK_VALID(world_two)
     validate_shared_operations_state(world_two, validate_event_history=False)
@@ -798,6 +804,61 @@ def test_a_restored_receipt_is_read_by_the_python_rule_once_and_then_trusted() -
     world_two.minute_index = 4
     kernel(world_two, _receipt(world_two, 3, "requested"))
     assert _mirror(world_two, SHARED).verify()
+
+
+def _same_receipt(world: WorldState, record: Any) -> None:
+    """The kernel on the world and the rule on a copy leave the same document."""
+    twin = copy.deepcopy(world)
+    native.rules("common_operations").record_shared_operation(world, record)
+    record_shared_operation.__wrapped__(twin, record)
+    assert _mirror(world, SHARED).verify()
+    assert json.dumps(world.model_state[SHARED]) == json.dumps(twin.model_state[SHARED])
+
+
+def test_a_facility_s_recovery_receipt_is_the_rule_s() -> None:
+    world = _world()
+    world.minute_index = 3
+    facility = next(iter(world.facilities.values()))
+    made = make_facility_recovery_record(
+        world,
+        facility_id=facility.id,
+        component_id="component",
+        status="restored",
+        previous_working_units=0,
+        working_units=facility.working_units,
+        causation_id="cause",
+    )
+    event_record, receipt = made
+    world.event_log.append(event_record)
+    _same_receipt(world, receipt)
+    # The rule turns down a second receipt of one event.
+    with pytest.raises(native.Unsupported):
+        native.rules("common_operations").record_shared_operation(world, receipt)
+    with pytest.raises(ValueError, match="already been recorded"):
+        record_shared_operation.__wrapped__(world, receipt)
+
+
+def test_a_recovery_receipt_of_another_state_is_left_to_the_rule_s_text() -> None:
+    world = _world()
+    world.minute_index = 3
+    facility = next(iter(world.facilities.values()))
+    event_record, receipt = make_facility_recovery_record(
+        world,
+        facility_id=facility.id,
+        component_id="component",
+        status="restored",
+        previous_working_units=0,
+        working_units=facility.working_units,
+        causation_id="cause",
+    )
+    world.event_log.append(event_record)
+    facility.working_units -= 1
+    before = json.dumps(world.model_state[SHARED])
+    with pytest.raises(native.Unsupported):
+        native.rules("common_operations").record_shared_operation(world, receipt)
+    assert json.dumps(world.model_state[SHARED]) == before
+    with pytest.raises(ValueError, match="does not match the applied facility state"):
+        record_shared_operation.__wrapped__(world, receipt)
 
 
 def test_a_passed_staff_receipt_stays_with_the_python_rule() -> None:
