@@ -26,6 +26,8 @@ def prepare(output: str) -> None:
 
     if not native.available():
         return
+    # The driver calls the kernel in Rust: this shadow sees the Python step's call.
+    native.rules("tick").python_path_only(True)
     rules = native.rules("replan")
     recorder = Recorder(output, "replan")
     unsupported = native.Unsupported
@@ -36,6 +38,9 @@ def prepare(output: str) -> None:
         from sheltersim.experiments.phases.update import UpdatePhase
         from sheltersim.experiments.timeline import _MetricSink
 
+        if not agent_ids:
+            # The Python step of `_update_movement` asks at every tick, mostly with nobody.
+            return kernel(controller, state, agent_ids, minute)
         world = controller.world
         recorder.seen["calls"] += 1
         twin = copy.deepcopy(world)
