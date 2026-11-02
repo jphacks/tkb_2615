@@ -16,7 +16,6 @@ import pytest
 
 from sheltersim import native
 from sheltersim.core.state_mirror import field_stamp, namespace_stamp, same_stamp
-from sheltersim.core.tick_validation import TickValidationMemo
 from sheltersim.core.world import StateInvariantError, WorldState
 from sheltersim.domain.population import _append_presence_history, admit_pending_arrivals
 from sheltersim.domain.simulator_state import validate_simulator_extensions
@@ -51,8 +50,9 @@ def _checked(document: dict) -> WorldState:
     return world
 
 
-def _memo(world: WorldState) -> TickValidationMemo:
-    return world.__dict__["_tick_memo"]
+def _unchanged(world: WorldState) -> dict[str, bool]:
+    """What the last check the kernel passed found unchanged (native/src/rules/after_tick.rs)."""
+    return world.__dict__["_tick_memo"].facts()["unchanged"]
 
 
 def _mirror(world: WorldState, name: str) -> Any:
@@ -212,8 +212,10 @@ def test_configs_assigned_whole_are_read_by_equality(finished_world) -> None:
     assert field_stamp(world, "model_configs") is not None
     world.model_configs = copy.deepcopy(world.model_configs)
     assert field_stamp(world, "model_configs") is None
+    # No mirror follows them, so the kernel leaves the tick to the Python check.
+    taken = native.rules("after_tick").stats()[0]
     world.validate_after_tick()
-    assert _memo(world).configs_unchanged
+    assert native.rules("after_tick").stats()[0] == taken
     world.model_configs["resource_service"]["water_ml_per_service"] = -1
     with pytest.raises(StateInvariantError):
         world.validate_after_tick()
@@ -221,21 +223,22 @@ def test_configs_assigned_whole_are_read_by_equality(finished_world) -> None:
 
 def test_the_tick_check_trusts_what_no_write_reached(finished_world) -> None:
     world = _checked(finished_world)
-    memo = _memo(world)
-    assert memo.configs_unchanged
-    assert memo.presence_unchanged
-    assert memo.lifecycle_unchanged
-    assert memo.dynamics_unchanged
-    assert memo.overlay_unchanged
+    assert _unchanged(world) == {
+        "configs": True,
+        "presence": True,
+        "lifecycle": True,
+        "dynamics": True,
+        "overlay": True,
+    }
 
 
 @pytest.mark.parametrize(
     ("name", "flag"),
     [
-        ("population_presence_v1", "presence_unchanged"),
-        ("population_lifecycle_v1", "lifecycle_unchanged"),
-        ("population_dynamics_v1", "dynamics_unchanged"),
-        ("geometry_overlay_v1", "overlay_unchanged"),
+        ("population_presence_v1", "presence"),
+        ("population_lifecycle_v1", "lifecycle"),
+        ("population_dynamics_v1", "dynamics"),
+        ("geometry_overlay_v1", "overlay"),
     ],
 )
 def test_a_write_of_an_equal_value_reads_the_state_again(finished_world, name, flag) -> None:
@@ -244,18 +247,21 @@ def test_a_write_of_an_equal_value_reads_the_state_again(finished_world, name, f
     part = "arrivals" if name == "population_dynamics_v1" else "history"
     state[part] = copy.deepcopy(state[part])
     world.validate_after_tick()
-    assert not getattr(_memo(world), flag)
+    assert not _unchanged(world)[flag]
     world.validate_after_tick()
-    assert getattr(_memo(world), flag)
+    assert _unchanged(world)[flag]
 
 
-def test_a_config_written_with_its_value_needs_no_new_checks(finished_world) -> None:
+def test_a_config_written_with_its_value_is_parsed_again_once(finished_world) -> None:
     world = _checked(finished_world)
     kept = world.model_configs["staff"]
     kept["written"] = 1
     del kept["written"]
     world.validate_after_tick()
-    assert _memo(world).configs_unchanged
+    # A write is a new generation: the configs are parsed again, and the plan is the same.
+    assert not _unchanged(world)["configs"]
+    world.validate_after_tick()
+    assert _unchanged(world)["configs"]
 
 
 @pytest.mark.parametrize(
@@ -312,7 +318,7 @@ def test_a_pending_arrival_is_read_at_every_check(finished_world) -> None:
     )
     world.validate_after_tick()
     world.validate_after_tick()
-    assert not _memo(world).dynamics_unchanged
+    assert not _unchanged(world)["dynamics"]
 
 
 def test_a_broken_pending_arrival_stops_the_check(finished_world) -> None:

@@ -33,6 +33,7 @@ from sheltersim.events.models import EventStatus
 # and what tells the row that these rules accepted its recent receipts.
 _TICK_VALID = native.state("shared_operations").validate_tick if native.available() else None
 _TICK_PASSED = native.state("shared_operations").recent_passed if native.available() else None
+_HISTORY_PASSED = native.state("shared_operations").history_passed if native.available() else None
 
 _CARE_TRANSITIONS = {
     None: {"requested"},
@@ -56,7 +57,6 @@ def validate_shared_operations_state(
     world: WorldState,
     *,
     validate_event_history: bool = True,
-    tick_memo: Any = None,
     history_memo: Any = None,
 ) -> None:
     state = world.model_state.get(SHARED_OPERATIONS_KEY)
@@ -68,14 +68,7 @@ def validate_shared_operations_state(
         and _TICK_VALID is not None
         and rust_accepts(world, SHARED_OPERATIONS_KEY, _TICK_VALID)
     ):
-        if tick_memo is not None:
-            tick_memo.operations_passed_in_rust()
         return
-    if tick_memo is not None:
-        history = state.get("history") if isinstance(state, dict) else None
-        if isinstance(history, list) and tick_memo.no_new_operations(state, history):
-            _tell_the_row_they_passed(world, validate_event_history, history_memo)
-            return
     # Per-tick validation parses only the records from the tick that just ended (each
     # was checked against its event when appended); the run-boundary validation
     # replays the whole history and the care lifecycle.
@@ -276,11 +269,15 @@ def validate_shared_operations_state(
 def _tell_the_row_they_passed(
     world: WorldState, validate_event_history: bool, history_memo: Any
 ) -> None:
-    """A tick's kernels trust the recent receipts these rules have just passed."""
-    if validate_event_history or history_memo is not None or _TICK_PASSED is None:
+    """A tick's kernels trust the receipts these rules have just passed: the recent ones of a tick,
+    or all of them after a replay of the whole history."""
+    if _TICK_PASSED is None or _HISTORY_PASSED is None:
         return
     try:
-        _TICK_PASSED(world)
+        if validate_event_history:
+            _HISTORY_PASSED(world)
+        elif history_memo is None:
+            _TICK_PASSED(world)
     except native.Unsupported:
         pass
 
