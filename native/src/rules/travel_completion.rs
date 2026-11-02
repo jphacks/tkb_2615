@@ -18,6 +18,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
+use crate::core::errors;
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, str_value, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::raw_dict_get;
@@ -51,7 +52,7 @@ struct Walk {
 fn required(event: EventRef<'_, '_>, key: &str) -> PyResult<Arc<str>> {
     match event.text(key)? {
         Some(value) if !value.is_empty() => Ok(value),
-        _ => unsupported("the walk lacks an ID"),
+        _ => Python::with_gil(|py| errors::failed(py, "travel completion requires Agent, task, destination, and purpose")),
     }
 }
 
@@ -446,18 +447,29 @@ pub(crate) fn apply_event<'py>(
 
     let store = entities_of(world)?;
     // The checks before a purpose is looked at, which every walk passes.
-    let known_kinds = EntityStore::with_rows(&store, |rows| {
-        let (Some(task), Some(agent)) = (rows.active_tasks.get(task_id), rows.agents.get(agent_id)) else {
-            return unsupported("no such task or person");
+    // Which of the rule's two checks failed: 1, the task's; 2, the person's.
+    let failed = EntityStore::with_rows(&store, |rows| {
+        let Some(task) = rows.active_tasks.get(task_id) else {
+            return Ok(1);
         };
-        Ok(matches!(
+        if !matches!(
             &*task.kind,
             "travel_to_toilet" | "travel_to_resource" | "travel_return" | "staff_support_travel" | "toilet_queue" | "resource_service_queue"
-        ) && task.agent_id.as_ref() == Some(agent_id)
-            && agent.profile.id == *agent_id)
+        ) {
+            return Ok(1);
+        }
+        let Some(agent) = rows.agents.get(agent_id) else {
+            return Ok(2);
+        };
+        if task.agent_id.as_ref() != Some(agent_id) || agent.profile.id != *agent_id {
+            return Ok(2);
+        }
+        Ok(0)
     })?;
-    if !known_kinds {
-        return unsupported("the walk does not match its task");
+    match failed {
+        1 => return errors::failed(py, "travel completion does not match an active task"),
+        2 => return errors::failed(py, "travel completion Agent does not match its active task"),
+        _ => {}
     }
     if matches!(
         &**purpose,

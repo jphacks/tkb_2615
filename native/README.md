@@ -38,6 +38,12 @@ Checkpoint document) and times them.
   `Unsupported` is a type of its own in `lib.rs`: building one notes its line for
   `benchmarks/rule_shadow/refusal_census.py` (`src/core/census.rs`), off unless that tool turns it
   on. New refusals are counted without doing anything.
+  An event's expected outcome is not a refusal. A kernel raises `EventSuppressed` or
+  `EventApplicationError` itself, with the Python rule's text and in the rule's order of checks,
+  through `src/core/errors.rs` (`errors::suppressed`, `errors::failed`; the type tests of a check,
+  such as `errors::int_not_bool`, say Unsupported only where Rust can't tell). The text is saved, as
+  the event record's `detail`. `benchmarks/rule_shadow/text_check.py` compares each one with the
+  Python rule's while that exists (docs/rust-port/lanes/l8-texts-events.md).
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
   and `rules/information.rs` hold the contact kernels; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
@@ -144,7 +150,8 @@ each OS, because both call the same libm.
 - `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
   `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
   handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
-  modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
+  modules are Python, called by name. The facility modifier raises its suppressed and failed texts
+  itself (`core/errors.rs`); anything else but a success says `Unsupported` with the world as it
   was. `state/effect_program.rs` is the row of `effect_program_v1`.
 
 - `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,

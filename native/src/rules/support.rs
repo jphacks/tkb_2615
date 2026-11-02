@@ -14,6 +14,7 @@ use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors::{self, Outcome};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
@@ -82,21 +83,18 @@ pub(crate) fn timeout_event<'py>(
 ) -> PyResult<Option<&'static str>> {
     let py = world.py();
     let (Some(request_id), Some(agent_id)) = (event.text("request_id")?, event.text("agent_id")?) else {
-        return unsupported("a timeout without its IDs");
+        return errors::failed(py, "support timeout requires request_id and agent_id");
     };
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
     let store = entities_of(world)?;
     let status = EntityStore::with_rows(&store, |rows| {
-        let Some(request) = rows.support_requests.get(&*request_id) else {
-            return unsupported("no such request");
-        };
-        if *request.agent_id != *agent_id {
-            return unsupported("the request is another person's");
-        }
-        Ok(request.status)
+        Ok(rows.support_requests.get(&*request_id).filter(|request| *request.agent_id == *agent_id).map(|request| request.status))
     })?;
+    let Some(status) = status else {
+        return errors::failed(py, format!("support request {} does not match its Agent", errors::repr_str(py, &request_id)?));
+    };
     if status != RequestStatus::Pending {
-        return Ok(Some(NO_LONGER_PENDING));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NO_LONGER_PENDING)));
     }
     let Some(until) = minute.checked_add(cooldown_minutes) else {
         return unsupported("a minute out of range");
@@ -137,8 +135,7 @@ fn timeout<'py>(handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
     let py = handler.py();
     let cooldown = exact_int(&attribute(handler, intern!(py, "cooldown_minutes"))?)?;
     if let Some(text) = timeout_event(world, EventRef::Object(event), cooldown)? {
-        let suppressed = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventSuppressed"))?;
-        return Err(PyErr::from_value(suppressed.call1((text,))?));
+        return errors::suppressed(py, text);
     }
     Ok(())
 }
@@ -306,6 +303,13 @@ enum Care {
 /// `StaffSupportCompletionHandler.apply` up to the receipt: what it returns as a record, planned with
 /// its sequence allocated, or None without a receipt. A kind that a selected care formula decides,
 /// and whatever fails a check, is the Python rule's.
+/// `world.model_state.get(name)` when it is not None.
+fn namespace_of<'py>(world: &Bound<'py, PyAny>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = world.py();
+    let state = attribute(world, intern!(py, "model_state"))?.call_method1(intern!(py, "get"), (name,))?;
+    Ok((!state.is_none()).then_some(state))
+}
+
 pub(crate) fn complete_support_event<'py>(
     handler: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
@@ -313,31 +317,42 @@ pub(crate) fn complete_support_event<'py>(
     event: EventRef<'_, 'py>,
 ) -> PyResult<Option<PlannedTransition>> {
     let py = world.py();
-    let (Some(request_id), Some(agent_id), Some(staff_id), Some(task_id)) =
-        (event.text("request_id")?, event.text("agent_id")?, event.text("staff_id")?, event.text("task_id")?)
-    else {
-        return unsupported("a completion without its IDs");
+    let ids = (event.text("request_id")?, event.text("agent_id")?, event.text("staff_id")?, event.text("task_id")?);
+    let (Some(request_id), Some(agent_id), Some(staff_id), Some(task_id)) = ids else {
+        return errors::failed(py, "staff completion requires request, Agent, staff, and task IDs");
     };
     if request_id.is_empty() || agent_id.is_empty() || staff_id.is_empty() || task_id.is_empty() {
-        return unsupported("a completion without its IDs");
+        return errors::failed(py, "staff completion requires request, Agent, staff, and task IDs");
     }
     let cooldown = exact_int(&attribute(handler, intern!(py, "cooldown_minutes"))?)?;
     let colocated = attribute(handler, intern!(py, "require_colocated"))?.is_truthy()?;
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
     let due = event.due_minute()?;
     let store = entities_of(world)?;
-    let (stress, trust) = EntityStore::with_rows(&store, |rows| {
+    // The checks of the handler, then of `complete_support_task`, in their order: which one failed.
+    enum Failed {
+        NoTask,
+        NotDue,
+        NotAssigned,
+        NotMatching,
+    }
+    let checked = EntityStore::with_rows(&store, |rows| {
         let Some(task) = rows.active_tasks.get(&*task_id) else {
-            return unsupported("no active task");
+            return Ok(Err(Failed::NoTask));
         };
-        let (Some(request), Some(agent), Some(person)) =
-            (rows.support_requests.get(&*request_id), rows.agents.get(&*agent_id), rows.staff.get(&*staff_id))
-        else {
-            return unsupported("no such request, person or staff");
+        if task.due_minute != due {
+            return Ok(Err(Failed::NotDue));
+        }
+        let Some(request) = rows.support_requests.get(&*request_id) else {
+            return Ok(Err(Failed::NotAssigned));
         };
-        if task.due_minute != due
-            || request.status != RequestStatus::Assigned
-            || &*task.kind != "staff_support"
+        if request.status != RequestStatus::Assigned {
+            return Ok(Err(Failed::NotAssigned));
+        }
+        let (Some(agent), Some(person)) = (rows.agents.get(&*agent_id), rows.staff.get(&*staff_id)) else {
+            return Ok(Err(Failed::NotMatching));
+        };
+        if &*task.kind != "staff_support"
             || *request.agent_id != *agent_id
             || request.assigned_staff_id.as_deref() != Some(&*staff_id)
             || request.task_id.as_deref() != Some(&*task_id)
@@ -348,10 +363,28 @@ pub(crate) fn complete_support_event<'py>(
             || (colocated && agent.activity != Activity::SeekingHelp)
             || (colocated && agent.zone_id != person.zone_id)
         {
-            return unsupported("the completion does not match its task");
+            return Ok(Err(Failed::NotMatching));
         }
-        Ok((agent.stress, agent.trust))
+        Ok(Ok((agent.stress, agent.trust)))
     })?;
+    let (stress, trust) = match checked {
+        Ok(values) => values,
+        Err(Failed::NoTask) => {
+            let operational = namespace_of(world, "operational_events_v1")?;
+            if let Some(operational) = operational {
+                if operational.get_item("cancelled_staff_task_ids")?.contains(&*task_id)? {
+                    let text = format!("staff support task {} was cancelled", errors::repr_str(py, &task_id)?);
+                    return errors::suppressed(py, text);
+                }
+            }
+            return errors::failed(py, "staff completion does not match an active due task");
+        }
+        Err(Failed::NotDue) => return errors::failed(py, "staff completion does not match an active due task"),
+        Err(Failed::NotAssigned) => {
+            return errors::failed(py, format!("support request {} is not assigned", errors::repr_str(py, &request_id)?));
+        }
+        Err(Failed::NotMatching) => return errors::failed(py, "support completion does not match its assigned task"),
+    };
     let Some(until) = minute.checked_add(cooldown) else {
         return unsupported("a minute out of range");
     };

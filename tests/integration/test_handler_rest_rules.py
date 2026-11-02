@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from support.paths import SMALL_REPLAY
+from support.world import kernel_says_python_s_text
 
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
@@ -293,7 +294,7 @@ def _event(
 # ---- What a kernel leaves to the Python rule ----------------------------------------------------
 
 
-def test_a_refused_outage_changes_nothing_and_python_says_why(generated_scenario: Any) -> None:
+def test_a_failed_outage_changes_nothing_and_says_python_s_text(generated_scenario: Any) -> None:
     world, _ = _small_world(generated_scenario)
     facility_id = sorted(world.facilities)[0]
     handler = FacilityOutageHandler()
@@ -305,43 +306,26 @@ def test_a_refused_outage_changes_nothing_and_python_says_why(generated_scenario
         ({"facility_id": facility_id, "units_out": 10_000}, "exceeds"),
     ):
         event = _event(world, "facility_outage", payload)
-        before = _bytes(world)
-        with pytest.raises(native.Unsupported):
-            native.rules("handlers").facility_outage(handler, world, event)
-        assert _bytes(world) == before
-        with pytest.raises((EventApplicationError, EventSuppressed), match=text):
-            handler.apply(world, event)
-        assert _bytes(world) == before
+        _, said = kernel_says_python_s_text(handler, world, event)
+        assert text in said
 
 
-def test_a_stale_proximity_sample_is_python_s_to_suppress(generated_scenario: Any) -> None:
+def test_a_stale_proximity_sample_is_failed_in_python_s_text(generated_scenario: Any) -> None:
     world, _ = _small_world(generated_scenario)
-    handler = ProximityContactHandler()
     event = _event(world, "proximity_contact_update", {})
-    with pytest.raises(native.Unsupported):
-        native.rules("handlers").proximity(handler, world, event)
-    with pytest.raises(EventApplicationError):
-        handler.apply(world, event)
+    kernel_says_python_s_text(ProximityContactHandler(), world, event)
 
 
-def test_a_contact_that_no_longer_applies_is_python_s(generated_scenario: Any) -> None:
+def test_a_contact_that_no_longer_applies_says_python_s_text(generated_scenario: Any) -> None:
     world, _ = _small_world(generated_scenario)
-    handler = InformationContactHandler()
     event = _event(world, "information_contact_update", {"message_id": "nothing"})
-    with pytest.raises(native.Unsupported):
-        native.rules("information_events").contact(handler, world, event)
-    with pytest.raises(EventApplicationError):
-        handler.apply(world, event)
+    kernel_says_python_s_text(InformationContactHandler(), world, event)
 
 
-def test_a_restoration_of_no_outage_is_python_s(generated_scenario: Any) -> None:
+def test_a_restoration_of_no_outage_says_python_s_text(generated_scenario: Any) -> None:
     world, _ = _small_world(generated_scenario)
-    handler = WaterRestorationHandler()
     event = _event(world, "water_restored", {"outage_id": "nothing"})
-    before = _bytes(world)
-    with pytest.raises(native.Unsupported):
-        native.rules("handlers").water_restoration(handler, world, event)
-    assert _bytes(world) == before
+    kernel_says_python_s_text(WaterRestorationHandler(), world, event)
 
 
 def test_a_patched_handler_is_what_the_loop_calls(
