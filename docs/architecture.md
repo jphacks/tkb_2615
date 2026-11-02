@@ -79,6 +79,10 @@ Python標準ライブラリのHTTPサーバーがローカルブラウザーア�
 
 ScenarioSpec、WorldState、Checkpoint、EffectProgram、Project recordはそれぞれ個別に版管理します。state変更には互換性テストが必要です。古い永続データを読み続ける場合は明示的な移行を用意します。
 
+モデルの版は、Checkpointの`model_versions`に`model_signatures()`として記録します。Policyと状態契約ごとの署名のほかに、モデル全体の版`engine:model`とRNGの`engine:rng_algorithm`（`CounterRNG.algorithm_id`）の2項目があります（`core/model_version.py`）。全体の版は、Scenarioごとの署名を変えずにすべてのScenarioの結果が変わる変更（libm、RNGのキー、規則の順序）で1か所（`ENGINE_VERSION`）だけ上げます。2項目がない保存（2項目を記録する前の保存）は、版1と`sha256-keyed-v1`で計算されたものとして扱います。これは明示的な規則で、`fixtures/saved_runs/engine-v1-small`で確かめます。
+
+記録した版が今のモデルと違うRunは**閲覧のみ**です。保存した時点はそのまま表示し、保存の間の時刻は直前の保存の時点に丸めて、丸めたことを応答に出します（`saved_point_rounding`。今のモデルで計算し直しません）。続きの計算、分岐、submit、EffectProgramの適用はエラーコード`run_model_view_only`と日本語の説明で止めます。閲覧用に復元した世界には印（`SavedPointView`）があり、`TickEngine`、コントローラー、`BranchRuntime`、`Checkpoint.capture`は印のある世界を受け付けません。閲覧はProviderを呼ばず、乱数も使いません。詳細は[project-persistence.md](project-persistence.md#旧モデルのrun閲覧のみ)です。
+
 ## 永続化とインターフェース
 
 ProjectStoreとTimelineStoreは、ローカルProject、承認済みScenario、Run、Branch、Checkpoint chunk、asset、index付き証拠を保持します。CLI Run成果物にはmanifest、凍結Scenario、event記録、metrics、任意のモデル利用記録が含まれます。formatは有効化した機能によって異なります。APIリファレンスを参照してください。
