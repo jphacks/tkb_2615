@@ -1,6 +1,6 @@
 # Rust 移植の設計（段階B）
 
-ブランチ `feature/rust-port` で進める移植の設計です。計測と経緯は Issue #272 にあります。次の手順（tick の状態と計算を Rust に移す）の設計は [rust-port/step3-design.md](rust-port/step3-design.md)、レーンごとの記録は `rust-port/lanes/` にあります。
+ブランチ `feature/rust-port` で進める移植の設計です。計測と経緯は Issue #272 にあります。次の手順（tick の状態と計算を Rust に移す）の設計は [rust-port/step3-design.md](rust-port/step3-design.md)、レーンごとの記録は `rust-port/lanes/` にあります。Python のモデルを消す計画と断りの実測は [rust-port/step4-plan.md](rust-port/step4-plan.md) にあります。
 
 ## 目的
 

@@ -459,6 +459,7 @@ pub(crate) fn map_set<'py, T: Scalar>(
 // ---- A kernel's inputs -------------------------------------------------------------------------
 
 /// What a kernel returns for anything it does not decide: the Python rule then runs.
+#[track_caller]
 pub(crate) fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }

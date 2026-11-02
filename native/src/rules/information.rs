@@ -33,6 +33,7 @@ use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::information::{belief_rank, ContactRow, InformationRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }
