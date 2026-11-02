@@ -80,7 +80,7 @@ pub(crate) struct Operation<'a> {
 
 /// `apply_resource_operation`.
 #[pyfunction]
-fn apply_operation<'py>(
+pub(crate) fn apply_operation<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     operation: &Bound<'py, PyAny>,

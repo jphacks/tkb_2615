@@ -31,6 +31,7 @@ use crate::core::row::{attribute, exact_int, exact_str, namespace_is_absent, uns
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
+use crate::rules::care_receipts::{facility_recovery_record, handoff_record};
 use crate::rules::staff_dynamics::{is_available, staff_status};
 use crate::state::effect_program::{EffectProgramRow, Program, NAME};
 use crate::rules::overlay;
@@ -65,7 +66,7 @@ fn counted<T>(py: Python<'_>, label: &'static str, result: PyResult<T>) -> PyRes
 }
 
 /// An exception of the stage before any change: the Python rule decides, and raises its own.
-fn refused_by_python<T>(py: Python<'_>, result: PyResult<T>) -> PyResult<T> {
+pub(crate) fn refused_by_python<T>(py: Python<'_>, result: PyResult<T>) -> PyResult<T> {
     result.map_err(|error| {
         if error.is_instance_of::<Unsupported>(py) {
             error
@@ -180,7 +181,7 @@ fn ints_equal(value: &Bound<'_, PyAny>, wanted: i64) -> PyResult<bool> {
 // ---- The transaction -----------------------------------------------------------------------------
 
 /// `MutableWorldState.from_dict(world.to_dict())`.
-fn copy_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn copy_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let py = world.py();
     let class = py.import(intern!(py, "sheltersim.core.world"))?.getattr(intern!(py, "WorldState"))?;
     class.call_method1(intern!(py, "from_dict"), (world.call_method0(intern!(py, "to_dict"))?,))
@@ -192,7 +193,7 @@ fn validate(candidate: &Bound<'_, PyAny>) -> PyResult<()> {
 }
 
 /// `world.__dict__.clear(); world.__dict__.update(candidate.__dict__)`.
-fn swap(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn swap(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     let target = world.getattr(intern!(py, "__dict__"))?;
     let source = candidate.getattr(intern!(py, "__dict__"))?;
@@ -574,7 +575,7 @@ fn should_apply_guard(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyR
 
 /// `has_active_facility_modifier`.
 #[pyfunction]
-fn has_active_modifier(world: &Bound<'_, PyAny>, facility_id: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn has_active_modifier(world: &Bound<'_, PyAny>, facility_id: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = world.py();
     let result = (|| {
         let id = exact_str(facility_id)?;
@@ -618,7 +619,7 @@ fn has_pending_modifier(world: &Bound<'_, PyAny>, facility_id: &Bound<'_, PyAny>
 }
 
 /// `active_facility_outage`: `bool(infrastructure_event_context_ids(world, facility_id))`.
-fn active_outage(world: &Bound<'_, PyAny>, facility_id: &str) -> PyResult<bool> {
+pub(crate) fn active_outage(world: &Bound<'_, PyAny>, facility_id: &str) -> PyResult<bool> {
     let py = world.py();
     let table = model_state(world)?;
     let Some(state) = get_or_none(&table, "infrastructure_v1")? else {
@@ -1180,7 +1181,6 @@ fn geometry(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<
 // ---- EffectProgramStructureHandler ---------------------------------------------------------------
 
 const STAFF_MODULE: &str = "sheltersim.domain.staff_operations";
-const CARE_MODULE: &str = "sheltersim.domain.care_receipts";
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
 
 /// What the operators of a marker with an approved program have in common.
@@ -1435,12 +1435,12 @@ fn staff_handoff_on_copy<'py>(
     Ok((candidate, staff_id.to_string(), replacement_id, task_id, reason_code))
 }
 
-/// `(receipt[0],)` of a `make_*_record`, or None.
-fn receipt_records<'py>(py: Python<'py>, receipt: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    if receipt.is_none() {
-        return Ok(py.None().into_bound(py));
-    }
-    Ok(PyTuple::new(py, [receipt.get_item(0)?])?.into_any())
+/// `(record,)` of a receipt, or None.
+fn receipt_tuple<'py>(py: Python<'py>, record: Option<Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    Ok(match record {
+        Some(record) => PyTuple::new(py, [record])?.into_any(),
+        None => py.None().into_bound(py),
+    })
 }
 
 fn staff_handoff<'py>(
@@ -1454,7 +1454,7 @@ fn staff_handoff<'py>(
         _ => return unsupported("no marker"),
     };
     let sources = str_list(marker, "assumption_ids")?;
-    let sources = PyTuple::new(py, sources.iter().map(|item| &***item))?;
+    let sources: Vec<String> = sources.iter().map(|item| item.to_string()).collect();
     let (candidate, staff_id, replacement_id, task_id, reason_code) = refused_by_python(py, (|| {
         let done = staff_handoff_on_copy(world, event, row)?;
         validate(&done.0)?;
@@ -1462,15 +1462,8 @@ fn staff_handoff<'py>(
     })())?;
     // Past here the world has changed, and what is raised goes on as the Python rule's does.
     swap(world, &candidate)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("task_id", task_id)?;
-    keywords.set_item("previous_staff_id", staff_id)?;
-    keywords.set_item("replacement_staff_id", replacement_id)?;
-    keywords.set_item("reason_code", reason_code)?;
-    keywords.set_item("causation_id", &*row.event_id)?;
-    keywords.set_item("source_ids", sources)?;
-    let receipt = call_rule(py, CARE_MODULE, "make_staff_handoff_record", (world,), Some(&keywords))?;
-    receipt_records(py, receipt)
+    let record = handoff_record(world, &task_id, &staff_id, &replacement_id, &reason_code, &row.event_id, sources)?;
+    receipt_tuple(py, record)
 }
 
 fn facility_repair<'py>(
@@ -1524,16 +1517,9 @@ fn facility_repair<'py>(
         }
     }
     validate(world)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("facility_id", &*facility_id)?;
-    keywords.set_item("component_id", component)?;
-    keywords.set_item("status", "repaired")?;
-    keywords.set_item("previous_working_units", previous)?;
-    keywords.set_item("working_units", attribute(&facility, intern!(py, "working_units"))?)?;
-    keywords.set_item("causation_id", &*row.event_id)?;
-    keywords.set_item("source_ids", PyTuple::new(py, sources)?)?;
-    let receipt = call_rule(py, CARE_MODULE, "make_facility_recovery_record", (world,), Some(&keywords))?;
-    receipt_records(py, receipt)
+    let units = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
+    let record = facility_recovery_record(world, &facility_id, exact_str(&component)?, "repaired", previous, units, &row.event_id, sources)?;
+    receipt_tuple(py, record)
 }
 
 fn program_lists_effect(world: &Bound<'_, PyAny>, payload: &Doc) -> PyResult<bool> {

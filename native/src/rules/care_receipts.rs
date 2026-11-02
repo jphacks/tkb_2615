@@ -13,10 +13,11 @@ use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use crate::core::row::{attribute, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
-use crate::core::world_core::mirror_of;
+use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::rules::common_operations::{plan_record, write_record, CareRecord, PlannedRecord};
+use crate::rules::handlers::{assumption, log_record, new_event, status_member, NewEvent};
 use crate::state::events::{EventKind, EventRow, EventStatus, EventWriter};
-use crate::state::shared_operations::{is_identifier, is_support_kind, CareStatus, NAME};
+use crate::state::shared_operations::{is_identifier, is_support_kind, CareStatus, SharedOperationsRow, NAME};
 use crate::Unsupported;
 
 const SOURCE: &str = "ASM-CARE-TRANSITION-PRODUCER-V1";
@@ -366,7 +367,447 @@ pub(crate) fn source_ids_of(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResul
     Ok(sorted_unique(sources))
 }
 
+// ---- The other records of `domain/care_receipts.py` -------------------------------------------------
+//
+// Each has the same event shape and goes to the dispatcher as a Python record. What the receipt's
+// contract would refuse goes to the Python function by name, so its own error is raised; a caller may
+// be past its first change. The checks here are of the contract's fields only.
+
+const FACILITY_SOURCE: &str = "ASM-FACILITY-RECOVERY-PRODUCER-V1";
+const FACILITY_POLICY: &str = "applied-facility-recovery-v1";
+const HANDOFF_SOURCE: &str = "ASM-STAFF-HANDOFF-PRODUCER-V1";
+const HANDOFF_POLICY: &str = "applied-staff-handoff-v1";
+const OPERATION_SOURCE: &str = "ASM-STAFF-OPERATION-RECEIPT-V1";
+const OPERATION_POLICY: &str = "applied-staff-operation-receipt-v1";
+const CONTINUITY_POLICY: &str = "staff-support-continuity-v1";
+
+struct Receipt<'py, 'a> {
+    event_id: &'a str,
+    sequence: i64,
+    minute: i64,
+    event_type: &'a str,
+    payload: Bound<'py, PyDict>,
+    source: &'a str,
+    causation: &'a str,
+    policy: &'a str,
+    detail: String,
+}
+
+fn receipt_record<'py>(world: &Bound<'py, PyAny>, receipt: Receipt<'py, '_>) -> PyResult<Bound<'py, PyAny>> {
+    let py = world.py();
+    let source = PyString::new(py, receipt.source);
+    let event = new_event(
+        py,
+        NewEvent {
+            event_id: receipt.event_id,
+            kind: "ENDOGENOUS",
+            due_minute: receipt.minute,
+            priority: 0,
+            sequence: receipt.sequence,
+            event_type: receipt.event_type,
+            payload: receipt.payload.into_any(),
+            source_id: Some(source.clone().into_any()),
+            causation_id: Some(PyString::new(py, receipt.causation).into_any()),
+            provenance: assumption(py, source.as_any(), receipt.policy)?.into_any(),
+        },
+    )?;
+    let minute = attribute(world, intern!(py, "minute_index"))?;
+    log_record(py, &event, &minute, "APPLIED", Some(&receipt.detail))
+}
+
+fn header<'py>(py: Python<'py>, record_type: &str, event_type: &str, event_id: &str) -> PyResult<Bound<'py, PyDict>> {
+    let payload = PyDict::new(py);
+    payload.set_item("record_type", record_type)?;
+    payload.set_item("schema_version", 1)?;
+    payload.set_item("event_type", event_type)?;
+    payload.set_item("event_id", event_id)?;
+    Ok(payload)
+}
+
+fn shared_absent(world: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = world.py();
+    Ok(!attribute(world, intern!(py, "model_state"))?.contains(intern!(py, NAME))?)
+}
+
+fn python_receipt<'py>(world: &Bound<'py, PyAny>, name: &str, kwargs: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
+    world.py().import("sheltersim.domain.care_receipts")?.getattr(name)?.call((world,), Some(kwargs))
+}
+
+fn minute_and_sequence(world: &Bound<'_, PyAny>) -> PyResult<(i64, i64)> {
+    let py = world.py();
+    let sequence = exact_int(&world.call_method0(intern!(py, "allocate_event_sequence"))?)?;
+    Ok((exact_int(&attribute(world, intern!(py, "minute_index"))?)?, sequence))
+}
+
+/// `make_facility_recovery_record(...)[0]`, or None without the shared contract.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn facility_recovery_record<'py>(
+    world: &Bound<'py, PyAny>,
+    facility_id: &str,
+    component_id: &str,
+    status: &str,
+    previous: i64,
+    units: i64,
+    causation: &str,
+    source_ids: Vec<String>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = world.py();
+    if shared_absent(world)? {
+        return Ok(None);
+    }
+    let fits = is_identifier(facility_id)
+        && is_identifier(component_id)
+        && is_identifier(causation)
+        && source_ids.iter().all(|source| is_identifier(source))
+        && match status {
+            "degraded" | "outage" | "restored" => units != previous,
+            "repair_started" | "repaired" => true,
+            _ => false,
+        }
+        && previous >= 0
+        && units >= 0
+        && exact_int(&attribute(world, intern!(py, "minute_index"))?)? >= 0;
+    if !fits {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("facility_id", facility_id)?;
+        kwargs.set_item("component_id", component_id)?;
+        kwargs.set_item("status", status)?;
+        kwargs.set_item("previous_working_units", previous)?;
+        kwargs.set_item("working_units", units)?;
+        kwargs.set_item("causation_id", causation)?;
+        kwargs.set_item("source_ids", PyTuple::new(py, &source_ids)?)?;
+        return Ok(Some(python_receipt(world, "make_facility_recovery_record", &kwargs)?.get_item(0)?));
+    }
+    let (minute, sequence) = minute_and_sequence(world)?;
+    let event_id = format!("facility-recovery-transition-{sequence}");
+    let mut sources = source_ids;
+    sources.push(FACILITY_SOURCE.to_owned());
+    sources.sort_unstable();
+    sources.dedup();
+    let payload = header(py, "operations", "facility_recovery_transition", &event_id)?;
+    payload.set_item("facility_id", facility_id)?;
+    payload.set_item("component_id", component_id)?;
+    payload.set_item("status", status)?;
+    payload.set_item("minute", minute)?;
+    payload.set_item("previous_working_units", previous)?;
+    payload.set_item("working_units", units)?;
+    payload.set_item("source_ids", PyList::new(py, &sources)?)?;
+    payload.set_item("causation_id", causation)?;
+    Ok(Some(receipt_record(
+        world,
+        Receipt {
+            event_id: &event_id,
+            sequence,
+            minute,
+            event_type: "facility_recovery_transition",
+            payload,
+            source: FACILITY_SOURCE,
+            causation,
+            policy: FACILITY_POLICY,
+            detail: format!("facility {status} receipt recorded after working-unit update"),
+        },
+    )?))
+}
+
+/// `make_staff_handoff_record(...)[0]`, or None without the shared contract.
+pub(crate) fn handoff_record<'py>(
+    world: &Bound<'py, PyAny>,
+    task_id: &str,
+    previous_staff: &str,
+    replacement: &str,
+    reason_code: &str,
+    causation: &str,
+    source_ids: Vec<String>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = world.py();
+    if shared_absent(world)? {
+        return Ok(None);
+    }
+    let fits = [task_id, previous_staff, replacement, reason_code, causation].iter().all(|id| is_identifier(id))
+        && source_ids.iter().all(|source| is_identifier(source))
+        && replacement != previous_staff
+        && exact_int(&attribute(world, intern!(py, "minute_index"))?)? >= 0;
+    if !fits {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("task_id", task_id)?;
+        kwargs.set_item("previous_staff_id", previous_staff)?;
+        kwargs.set_item("replacement_staff_id", replacement)?;
+        kwargs.set_item("reason_code", reason_code)?;
+        kwargs.set_item("causation_id", causation)?;
+        kwargs.set_item("source_ids", PyTuple::new(py, &source_ids)?)?;
+        return Ok(Some(python_receipt(world, "make_staff_handoff_record", &kwargs)?.get_item(0)?));
+    }
+    let (minute, sequence) = minute_and_sequence(world)?;
+    let event_id = format!("staff-handoff-{sequence}");
+    let mut sources = source_ids;
+    sources.push(HANDOFF_SOURCE.to_owned());
+    sources.sort_unstable();
+    sources.dedup();
+    let payload = header(py, "operations", "staff_handoff", &event_id)?;
+    payload.set_item("task_id", task_id)?;
+    payload.set_item("previous_staff_id", previous_staff)?;
+    payload.set_item("replacement_staff_id", replacement)?;
+    payload.set_item("status", "reassigned")?;
+    payload.set_item("minute", minute)?;
+    payload.set_item("reason_code", reason_code)?;
+    payload.set_item("causation_id", causation)?;
+    payload.set_item("source_ids", PyList::new(py, &sources)?)?;
+    Ok(Some(receipt_record(
+        world,
+        Receipt {
+            event_id: &event_id,
+            sequence,
+            minute,
+            event_type: "staff_handoff",
+            payload,
+            source: HANDOFF_SOURCE,
+            causation,
+            policy: HANDOFF_POLICY,
+            detail: "staff task assignment updated before handoff receipt".to_owned(),
+        },
+    )?))
+}
+
+/// `make_staff_support_continuity_record`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn continuity_record<'py>(
+    world: &Bound<'py, PyAny>,
+    request_id: &str,
+    agent_id: &str,
+    task_id: &str,
+    previous_staff: &str,
+    status: &str,
+    causation: &str,
+    cause_type: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = world.py();
+    let fits = [request_id, agent_id, task_id, previous_staff, causation].iter().all(|id| is_identifier(id))
+        && exact_int(&attribute(world, intern!(py, "minute_index"))?)? >= 0;
+    if !fits {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("request_id", request_id)?;
+        kwargs.set_item("agent_id", agent_id)?;
+        kwargs.set_item("task_id", task_id)?;
+        kwargs.set_item("previous_staff_id", previous_staff)?;
+        kwargs.set_item("status", status)?;
+        kwargs.set_item("causation_id", causation)?;
+        kwargs.set_item("cause_type", cause_type)?;
+        return python_receipt(world, "make_staff_support_continuity_record", &kwargs);
+    }
+    let (minute, sequence) = minute_and_sequence(world)?;
+    let event_id = format!("staff-support-continuity-{sequence}");
+    let payload = header(py, "care", "staff_support_continuity", &event_id)?;
+    payload.set_item("request_id", request_id)?;
+    payload.set_item("agent_id", agent_id)?;
+    payload.set_item("task_id", task_id)?;
+    payload.set_item("previous_staff_id", previous_staff)?;
+    payload.set_item("status", status)?;
+    payload.set_item("cause_type", cause_type)?;
+    payload.set_item("minute", minute)?;
+    payload.set_item("causation_id", causation)?;
+    payload.set_item("source_ids", PyList::new(py, [LIFECYCLE_SOURCE])?)?;
+    receipt_record(
+        world,
+        Receipt {
+            event_id: &event_id,
+            sequence,
+            minute,
+            event_type: "staff_support_continuity",
+            payload,
+            source: LIFECYCLE_SOURCE,
+            causation,
+            policy: CONTINUITY_POLICY,
+            detail: format!("staff support request was {status} after assigned staff became unavailable"),
+        },
+    )
+}
+
+/// What a completed staff operation says, for `make_staff_operation_record`.
+pub(crate) struct OperationOutcome<'py, 'a> {
+    /// The record's document, which holds what the receipt copies.
+    pub(crate) operation: &'a Bound<'py, PyDict>,
+    /// Sorted, as `NumericStateChange` documents.
+    pub(crate) changes: Vec<Bound<'py, PyDict>>,
+    pub(crate) measured: bool,
+    pub(crate) causation: &'a str,
+}
+
+fn number_of(value: &Bound<'_, PyAny>) -> Option<f64> {
+    value.extract::<f64>().ok().filter(|value| value.is_finite())
+}
+
+fn change_fits(change: &Bound<'_, PyDict>) -> PyResult<bool> {
+    let text = |name: &str| -> PyResult<Option<String>> { Ok(change.get_item(name)?.and_then(|value| value.extract().ok())) };
+    Ok(text("entity_id")?.is_some_and(|id| is_identifier(&id))
+        && change.get_item("before")?.is_some_and(|value| number_of(&value).is_some())
+        && change.get_item("after")?.is_some_and(|value| number_of(&value).is_some()))
+}
+
+/// `make_staff_operation_record(...)[0]`, or None without the shared contract.
+pub(crate) fn staff_operation_record<'py>(world: &Bound<'py, PyAny>, outcome: OperationOutcome<'py, '_>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = world.py();
+    if shared_absent(world)? {
+        return Ok(None);
+    }
+    let OperationOutcome { operation, changes, measured, causation } = outcome;
+    let item = |name: &str| -> PyResult<Bound<'py, PyAny>> {
+        operation.get_item(name)?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(name.to_owned()))
+    };
+    let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+    let (task_id, staff_id, kind, target, zone, reason, status) =
+        (item("task_id")?, item("staff_id")?, item("task_kind")?, item("target_id")?, item("target_zone_id")?, item("reason")?, item("status")?);
+    let (start, arrival, travel) = (item("start_minute")?, item("arrival_minute")?, item("travel_minutes")?);
+    let observation = if !changes.is_empty() {
+        "observed_change"
+    } else if measured {
+        "observed_no_change"
+    } else {
+        "not_measured"
+    };
+    let total = changes.len();
+    let sampled = &changes[..total.min(256)];
+    let times_fit = match (exact_int(&start), exact_int(&arrival), exact_int(&travel)) {
+        (Ok(start), Ok(arrival), Ok(travel)) => start >= 0 && travel >= 0 && start <= arrival && arrival <= minute && travel <= arrival - start,
+        _ => false,
+    };
+    let mut changes_fit = true;
+    for change in sampled {
+        changes_fit &= change_fits(change)?;
+    }
+    let reason_fits = exact_str(&reason).is_ok_and(|text| (1..=240).contains(&text.chars().count()));
+    let status_text = exact_str(&status).ok();
+    let id_fits = |value: &Bound<'py, PyAny>| exact_str(value).is_ok_and(is_identifier);
+    let fits = times_fit
+        && changes_fit
+        && reason_fits
+        && id_fits(&task_id)
+        && id_fits(&staff_id)
+        && (target.is_none() || id_fits(&target))
+        && id_fits(&zone)
+        && is_identifier(causation)
+        && minute >= 0
+        && exact_str(&kind).is_ok_and(|kind| matches!(kind, "cleaning" | "maintenance" | "information_outreach" | "intake" | "patrol"))
+        && match status_text {
+            Some("completed") => true,
+            Some("blocked") => total == 0 && measured,
+            _ => false,
+        };
+    if !fits {
+        let contract = py.import("sheltersim.contracts.operations")?.getattr("NumericStateChange")?;
+        let objects: Vec<Bound<'py, PyAny>> = changes.iter().map(|change| contract.call_method1("model_validate", (change,))).collect::<PyResult<_>>()?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("operation", operation)?;
+        kwargs.set_item("state_changes", PyTuple::new(py, objects)?)?;
+        kwargs.set_item("outcome_measured", measured)?;
+        kwargs.set_item("causation_id", causation)?;
+        return Ok(Some(python_receipt(world, "make_staff_operation_record", &kwargs)?.get_item(0)?));
+    }
+    let (minute, sequence) = minute_and_sequence(world)?;
+    let event_id = format!("staff-operation-transition-{sequence}");
+    let payload = header(py, "operations", "staff_operation_transition", &event_id)?;
+    payload.set_item("task_id", task_id)?;
+    payload.set_item("staff_id", staff_id)?;
+    payload.set_item("task_kind", kind)?;
+    payload.set_item("target_id", target)?;
+    payload.set_item("target_zone_id", zone)?;
+    payload.set_item("reason", reason)?;
+    payload.set_item("status", &status)?;
+    payload.set_item("minute", minute)?;
+    payload.set_item("start_minute", start)?;
+    payload.set_item("arrival_minute", arrival)?;
+    payload.set_item("travel_minutes", travel)?;
+    payload.set_item("outcome_observation", observation)?;
+    payload.set_item("state_changes", PyList::new(py, sampled)?)?;
+    payload.set_item("total_state_change_count", total)?;
+    payload.set_item("state_changes_truncated", total > sampled.len())?;
+    payload.set_item("causation_id", causation)?;
+    payload.set_item("source_ids", PyList::new(py, [OPERATION_SOURCE])?)?;
+    let detail = format!("staff operation {} outcome recorded after state application", exact_str(&status)?);
+    Ok(Some(receipt_record(
+        world,
+        Receipt {
+            event_id: &event_id,
+            sequence,
+            minute,
+            event_type: "staff_operation_transition",
+            payload,
+            source: OPERATION_SOURCE,
+            causation,
+            policy: OPERATION_POLICY,
+            detail,
+        },
+    )?))
+}
+
+// ---- ingest_applied_shared_operation_records ---------------------------------------------------------
+
+/// Whether a receipt of this event is among those the Python rule scans: `recent` keeps to the records
+/// of the last tick and the one before them.
+fn receipt_is_recorded(world: &Bound<'_, PyAny>, event_id: &str, recent: bool, minute: i64) -> PyResult<bool> {
+    let mirror = mirror_of(world, NAME)?;
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
+        let start = if recent { row.history.recent_start(minute) } else { 0 };
+        Ok(row.history.items.iter().skip(start).any(|item| item.event_id.as_deref() == Some(event_id)))
+    })
+}
+
+/// `ingest_applied_shared_operation_records`. The receipts' contract stays Python's, and so does
+/// `record_shared_operation` of what isn't a care receipt.
+#[pyfunction]
+fn ingest<'py>(world: &Bound<'py, PyAny>, outcomes: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    if !table.contains(intern!(py, NAME))? {
+        return Ok(());
+    }
+    if !table.get_item(intern!(py, NAME))?.is_instance_of::<PyDict>() {
+        return unsupported("the namespace is another value");
+    }
+    let applied = status_member(py, "APPLIED")?;
+    let module = py.import("sheltersim.domain.care_receipts")?;
+    let shared = py.import("sheltersim.domain.common_operations")?;
+    let mut first = true;
+    for outcome in outcomes.try_iter()? {
+        let outcome = outcome?;
+        let Ok(event) = outcome.getattr(intern!(py, "event")) else {
+            continue;
+        };
+        let status = outcome.getattr(intern!(py, "status")).ok();
+        if !status.is_some_and(|status| status.is(&applied)) || event.is_none() {
+            continue;
+        }
+        let event_type = attribute(&event, intern!(py, "event_type"))?;
+        if !matches!(
+            exact_str(&event_type)?,
+            "care_support_transition" | "staff_support_continuity" | "facility_recovery_transition" | "staff_handoff" | "staff_operation_transition"
+        ) {
+            continue;
+        }
+        let event_id = attribute(&event, intern!(py, "event_id"))?;
+        let minute = attribute(world, intern!(py, "minute_index"))?;
+        let realized = outcome.getattr(intern!(py, "realized_minute")).ok();
+        let recent = realized.is_some_and(|realized| realized.eq(&minute).unwrap_or(false));
+        let recorded = receipt_is_recorded(world, exact_str(&event_id)?, recent, exact_int(&minute)?);
+        // Only the first can be refused: nothing has changed yet.
+        let recorded = match recorded {
+            Err(error) if !first && error.is_instance_of::<Unsupported>(py) => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("the shared operations left their row: {}", error.value(py))));
+            }
+            other => other?,
+        };
+        if recorded {
+            continue;
+        }
+        let adapter = module.getattr(intern!(py, "_operation_record_adapter"))?.call0()?;
+        let receipt = adapter.call_method1(intern!(py, "validate_python"), (attribute(&event, intern!(py, "payload"))?,))?;
+        shared.getattr(intern!(py, "record_shared_operation"))?.call1((world, receipt))?;
+        first = false;
+    }
+    Ok(())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(append_transition, m)?)?;
+    m.add_function(wrap_pyfunction!(ingest, m)?)?;
     Ok(())
 }

@@ -150,7 +150,11 @@ each OS, because both call the same libm.
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
   a Rust function (`social_interaction`, `agent_travel_complete`, `toilet_service_complete`,
   `resource_service_complete`, `support_request_timeout`, `staff_support_complete`) runs it when the registered handler
-  is that class with its `apply` as defined; anything else, and any refused event, calls
+  is that class with its `apply` as defined. The loop calls the other handlers' `apply`, listed in
+  `install_table`, with the Python dispatcher's steps around it: that runs their kernels
+  (`rules/handlers.rs`, `rules/information_events.rs`, `rules/staff_operation_events.rs`,
+  `docs/rust-port/lanes/m6-handlers-rest.md`), or their Python rule on a refusal. An EffectProgram's
+  marked event, a patched handler and any other event a Rust function refused calls
   `controller._dispatch_one_event`. Unsupported only before the first change. `rules/travel_completion.rs`
   is the walk's handler, with `_after_arrival`'s kernel, and `rules/toilet.rs`, `rules/support.rs` and
   `rules/care_receipts.rs` the toilet's service, the support requests and the care receipts
