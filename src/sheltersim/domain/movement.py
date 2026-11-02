@@ -662,6 +662,7 @@ def agent_positions(world: WorldState) -> tuple[AgentPosition, ...]:
     )
 
 
+@kernel_first("movement", "staff_position_snapshots")
 def staff_position_snapshots(
     world: WorldState, *, boundary_minute: int | None = None
 ) -> dict[str, dict[str, Any]]:
@@ -1155,6 +1156,7 @@ def _queue_trips(
     }
 
 
+@kernel_first("movement", "agent_is_at_queue_trip_destination")
 def agent_is_at_queue_trip_destination(
     world: WorldState, agent_id: str, journey: dict[str, Any]
 ) -> bool:
@@ -1173,6 +1175,7 @@ def agent_is_at_queue_trip_destination(
     return current is not None and _distance(destination, current) <= 0.05
 
 
+@kernel_first("movement", "agent_is_at_queue_slot")
 def agent_is_at_queue_slot(
     world: WorldState, agent_id: str, facility_id: str, queue_id: str | None = None
 ) -> bool:
@@ -1188,6 +1191,7 @@ def agent_is_at_queue_slot(
     return target is not None and current is not None and _distance(target, current) <= 0.05
 
 
+@kernel_first("movement", "agent_is_at_facility_service_point")
 def agent_is_at_facility_service_point(
     world: WorldState,
     agent_id: str,

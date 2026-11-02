@@ -41,7 +41,7 @@ use crate::state::movement::{Journey, MovementRow, Point};
 use crate::Unsupported;
 
 const SERVICE_KEY: &str = "resource_service_v1";
-const BLOCKED_METRIC: &str = "physical_queue_route_blocked_count";
+pub(crate) const BLOCKED_METRIC: &str = "physical_queue_route_blocked_count";
 /// `NeedWeightedPhysicalQueuePolicy`: abandon limits and the need that stays in line.
 const LIMIT_TOILET: i64 = 120;
 const LIMIT_WATER: i64 = 240;
@@ -102,6 +102,11 @@ impl Fifo {
                 queued_request_ids: queue.queued_request_ids.clone(),
             })
         })
+    }
+
+    /// `request_for_agent` of this queue.
+    pub(crate) fn request_of(&self, agent_id: &str) -> Option<&QueueRequest> {
+        self.requests.iter().find(|request| &*request.agent_id == agent_id)
     }
 
     pub(crate) fn slot_view(&self) -> (&[Arc<str>], Option<Pt>) {
@@ -854,22 +859,32 @@ fn write_all_leaving(call: &LeaveCall<'_, '_>, leaving: &[Leaving]) -> PyResult<
 // ---- progress_physical_queue_positions and _head_to_service --------------------------------------
 
 /// A route to walk: `_schedule_queue_trip`'s arguments.
-struct Route {
-    agent_id: Arc<str>,
-    index: usize,
-    minutes: i64,
-    path: Arc<[Pt]>,
+pub(crate) struct Route {
+    pub(crate) agent_id: Arc<str>,
+    pub(crate) index: usize,
+    pub(crate) minutes: i64,
+    pub(crate) path: Arc<[Pt]>,
 }
 
 /// What a kernel found to write.
-enum Plan {
+pub(crate) enum Plan {
     Nothing,
     Blocked,
     /// `_schedule_queue_trip` of a route that really walks.
     Trip(Box<Trip>),
 }
 
-struct Trip {
+impl Plan {
+    /// What the plan changes in the movement row, for a caller that writes several together.
+    pub(crate) fn take_changes(&mut self) -> Changes {
+        match self {
+            Plan::Trip(trip) => std::mem::take(&mut trip.changes),
+            _ => Changes::default(),
+        }
+    }
+}
+
+pub(crate) struct Trip {
     agent_id: Arc<str>,
     event: EventRow,
     changes: Changes,
@@ -879,9 +894,9 @@ fn text(value: &str) -> V {
     V::Str(Arc::from(value))
 }
 
-/// `_schedule_queue_trip`, changing nothing.
+/// `_schedule_queue_trip`, changing nothing, taking this event number.
 #[allow(clippy::too_many_arguments)]
-fn plan_trip(
+pub(crate) fn plan_trip(
     scene: &Scene<'_>,
     writer: &EventWriter<'_>,
     row: &MovementRow,
@@ -892,6 +907,7 @@ fn plan_trip(
     minute: i64,
     phase: &'static str,
     fifo: Option<&Fifo>,
+    sequence: i64,
 ) -> PyResult<Plan> {
     let due = minute.checked_add(route.minutes).ok_or_else(|| Unsupported::new_err("a due minute out of range"))?;
     if route.minutes <= 0 || due >= writer.duration() {
@@ -940,7 +956,6 @@ fn plan_trip(
     if route.path.iter().any(|point| !usable(point.x, point.y)) {
         return unsupported("a route point is not a usable point");
     }
-    let sequence = writer.next_sequence()?;
     let event_id: Arc<str> = Arc::from(format!("physical-queue-trip-{sequence}"));
     let purpose: Arc<str> = Arc::from(format!("{}_queue_{phase}", if resource { "resource" } else { "toilet" }));
     let zone = facility.zone_id.clone();
@@ -1015,7 +1030,7 @@ fn add_blocked(world: &Bound<'_, PyAny>) -> PyResult<()> {
     })
 }
 
-fn write_plan<'py>(
+pub(crate) fn write_plan<'py>(
     world: &Bound<'py, PyAny>,
     mirror: &Bound<'py, NamespaceMirror>,
     store: &Bound<'py, EntityStore>,
@@ -1076,7 +1091,8 @@ fn raw_movement_model<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'
 }
 
 /// `facility_queue_slot_route`: the route's minutes and its path, or None for no route.
-fn slot_route(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn slot_route(
     geo: &Geo,
     row: &MovementRow,
     rows: &Entities,
@@ -1186,7 +1202,7 @@ pub(crate) fn progress_physical_queue_positions<'py>(
                 // `list.index`, which a person listed twice would make another place.
                 let place = queue.iter().position(|other| other == agent_id).unwrap_or(index);
                 let route = Route { agent_id: agent_id.clone(), index: place, minutes, path };
-                let plan = plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "position", fifo.as_ref())?;
+                let plan = plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "position", fifo.as_ref(), writer.next_sequence()?)?;
                 return Ok((index == 0, plan));
             }
             Ok((false, Plan::Nothing))
@@ -1267,7 +1283,7 @@ pub(crate) fn head_to_service<'py>(
                 return Ok((false, Plan::Nothing));
             }
             let route = Route { agent_id: agent_id.clone(), index: 0, minutes, path };
-            Ok((true, plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "service", fifo.as_ref())?))
+            Ok((true, plan_trip(&scene, &writer, row, rows, facility_name, resource, route, minute, "service", fifo.as_ref(), writer.next_sequence()?)?))
         })
     })?;
     write_plan(world, &mirror, &store, &writer, facility_id, plan)?;

@@ -3,9 +3,7 @@
 //! drawn and nothing is scheduled here.
 //!
 //! What a walk leads to is `after_arrival` here (the approach inside a room, the toilet's and the
-//! service's queue). What it refuses, having changed nothing, is `handler._after_arrival`, as are
-//! what the queue walks ask of `domain/movement.py` and `domain/facility_queues.py`. Those are
-//! called with no borrow held.
+//! service's queue). What it refuses, having changed nothing, is `handler._after_arrival`.
 //!
 //! A walk the rule refuses says Unsupported before any change, and the Python rule says why in its
 //! own text. `sleep_bed` and `presence_relocation` read `movement_v1` and
@@ -20,10 +18,11 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
-use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_int, exact_str, str_value, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::raw_dict_get;
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore, RequestStatus};
+use crate::rules::movement::{at_queue_slot, at_service_point, at_trip_destination};
 use crate::rules::travel::{approach_route, plan_room_approach, write_travel};
 use crate::rules::effects::refused_by_python;
 use crate::rules::{service, toilet};
@@ -87,15 +86,11 @@ fn is_resource_facility(kind: &str) -> bool {
     matches!(kind, "water_station" | "meal_distribution")
 }
 
-fn movement_module<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyModule>> {
-    py.import(intern!(py, "sheltersim.domain.movement"))
-}
-
 /// Whether `dict.get(key) != expected` cannot be told without the Python rule's comparison. A value
 /// of another type is not equal; only a str subclass could be, and the Python rule then decides.
 fn get_is(dict: &Bound<'_, PyDict>, key: &Bound<'_, PyString>, expected: &str) -> PyResult<bool> {
     Ok(match dict.get_item(key)? {
-        Some(value) => exact_str(&value).is_ok_and(|value| value == expected),
+        Some(value) => str_value(&value) == Some(expected),
         None => false,
     })
 }
@@ -131,7 +126,6 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
     };
     let journey_dict = tree(&journey)?;
 
-    let movement = movement_module(py)?;
     let independent = match facility_id {
         Some(facility) => crate::rules::facility_queues::has_independent(world, facility)?,
         None => false,
@@ -140,16 +134,7 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
         let Some(facility) = facility_id else {
             return Ok(false);
         };
-        let at = match queue {
-            Some(queue) => movement.call_method1(intern!(py, "agent_is_at_queue_slot"), (world, &**agent_id, &**facility, queue))?,
-            None => movement.call_method1(intern!(py, "agent_is_at_queue_slot"), (world, &**agent_id, &**facility))?,
-        };
-        if at.is_truthy()? {
-            return Ok(true);
-        }
-        movement
-            .call_method1(intern!(py, "agent_is_at_queue_trip_destination"), (world, &**agent_id, &journey))?
-            .is_truthy()
+        Ok(at_queue_slot(world, agent_id, facility, queue)? || at_trip_destination(world, agent_id)?)
     };
     let (contains_request, at_destination) = if independent {
         let state = raw_dict_get(&table, intern!(py, "facility_queues_v1").as_any())?
@@ -183,14 +168,9 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
         let at = if position {
             at_slot(Some(queue_id))?
         } else {
-            match request.get_item(intern!(py, "service_point_id"))? {
-                Some(point) if exact_str(&point).is_ok() => movement
-                    .call_method1(
-                        intern!(py, "agent_is_at_facility_service_point"),
-                        (world, &**agent_id, &**facility, point),
-                    )?
-                    .is_truthy()?,
-                _ => false,
+            match request.get_item(intern!(py, "service_point_id"))?.as_ref().and_then(|point| str_value(point)) {
+                Some(point) => at_service_point(world, agent_id, facility, Some(point))?,
+                None => false,
             }
         };
         (Some(contains), at)
@@ -199,9 +179,7 @@ fn check_queue_walk(world: &Bound<'_, PyAny>, row: EventRef<'_, '_>, walk: &Walk
             at_slot(None)?
         } else {
             match facility_id {
-                Some(facility) => movement
-                    .call_method1(intern!(py, "agent_is_at_facility_service_point"), (world, &**agent_id, &**facility))?
-                    .is_truthy()?,
+                Some(facility) => at_service_point(world, agent_id, facility, None)?,
                 None => false,
             }
         };
@@ -358,11 +336,11 @@ fn reject_room_approach<'py>(
 ) -> PyResult<()> {
     let purpose = crate::rules::handlers::get(&attribute(event, intern!(world.py(), "payload"))?, "purpose")?;
     let purpose = if text_is_str(&purpose, "resource_request") { "resource_request" } else { "other" };
-    reject_room(handler, world, purpose, exact_str(agent_id)?, exact_str(facility_id)?, exact_str(origin_zone_id).ok())
+    reject_room(handler, world, purpose, exact_str(agent_id)?, exact_str(facility_id)?, str_value(origin_zone_id))
 }
 
 fn text_is_str(value: &Bound<'_, PyAny>, wanted: &str) -> bool {
-    exact_str(value).is_ok_and(|text| text == wanted)
+    str_value(value) == Some(wanted)
 }
 
 /// The checks of `sleep_bed` before its writes: the bed's point.
@@ -449,7 +427,7 @@ fn after_arrival<'py>(
     origin_zone_id: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
     let _ = event;
-    arrive(handler, world, exact_str(agent_id)?, exact_str(purpose)?, exact_str(facility_id)?, exact_str(destination_zone_id)?, exact_str(origin_zone_id).ok())
+    arrive(handler, world, exact_str(agent_id)?, exact_str(purpose)?, exact_str(facility_id)?, exact_str(destination_zone_id)?, str_value(origin_zone_id))
 }
 
 /// `AgentTravelCompletionHandler.apply` of a walk. `object` gives the event's object, for Python.

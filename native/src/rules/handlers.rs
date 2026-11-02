@@ -19,7 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyList, PyMapping, PyString, PyTuple};
 
 use crate::core::mathx::{hypot, py_is_close};
-use crate::core::row::{attribute, exact_int, exact_str, unsupported};
+use crate::core::row::{attribute, exact_int, exact_str, str_value, unsupported};
 use crate::rules::care_receipts::{continuity_record, facility_recovery_record};
 use crate::rules::effects::{active_outage, copy_of, has_active_modifier, refused_by_python, swap};
 use crate::rules::population as population_rules;
@@ -87,7 +87,7 @@ pub(crate) fn get<'py>(map: &Bound<'py, PyAny>, key: &str) -> PyResult<Bound<'py
 
 /// `value == wanted`, of an exact str. Any other value is not the text.
 pub(crate) fn text_is(value: &Bound<'_, PyAny>, wanted: &str) -> bool {
-    exact_str(value).is_ok_and(|text| text == wanted)
+    str_value(value) == Some(wanted)
 }
 
 pub(crate) fn get_is(map: &Bound<'_, PyAny>, key: &str, wanted: &str) -> PyResult<bool> {
@@ -449,7 +449,7 @@ fn ledger_event_of<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, op
         let service = table.get_item("resource_service_v1")?;
         let reservation = get(&payload, "reservation_id")?;
         if matches!(operation, "release" | "consume")
-            && exact_str(&reservation).is_ok()
+            && str_value(&reservation).is_some()
             && service.get_item("active_reservation_ids")?.contains(&reservation)?
         {
             return unsupported("the reservation is the service's");

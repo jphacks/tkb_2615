@@ -10,7 +10,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 
-use crate::core::row::{attribute, exact_int, exact_str, namespace_is_absent, unsupported};
+use crate::core::row::{attribute, exact_int, exact_str, str_value, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{mirror_of, NamespaceMirror};
@@ -674,9 +674,9 @@ pub(crate) fn staff_operation_record<'py>(world: &Bound<'py, PyAny>, outcome: Op
     for change in sampled {
         changes_fit &= change_fits(change)?;
     }
-    let reason_fits = exact_str(&reason).is_ok_and(|text| (1..=240).contains(&text.chars().count()));
-    let status_text = exact_str(&status).ok();
-    let id_fits = |value: &Bound<'py, PyAny>| exact_str(value).is_ok_and(is_identifier);
+    let reason_fits = str_value(&reason).is_some_and(|text| (1..=240).contains(&text.chars().count()));
+    let status_text = str_value(&status);
+    let id_fits = |value: &Bound<'py, PyAny>| str_value(value).is_some_and(is_identifier);
     let fits = times_fit
         && changes_fit
         && reason_fits
@@ -686,7 +686,7 @@ pub(crate) fn staff_operation_record<'py>(world: &Bound<'py, PyAny>, outcome: Op
         && id_fits(&zone)
         && is_identifier(causation)
         && minute >= 0
-        && exact_str(&kind).is_ok_and(|kind| matches!(kind, "cleaning" | "maintenance" | "information_outreach" | "intake" | "patrol"))
+        && str_value(&kind).is_some_and(|kind| matches!(kind, "cleaning" | "maintenance" | "information_outreach" | "intake" | "patrol"))
         && match status_text {
             Some("completed") => true,
             Some("blocked") => total == 0 && measured,

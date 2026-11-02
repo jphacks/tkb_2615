@@ -234,11 +234,17 @@ each OS, because both call the same libm.
 - `rules.movement`: the movement rules of a tick (`src/rules/movement.rs`, with the floor plan and
   its geometry in `src/rules/movement_geometry.rs`): `advance_movement(world, minute)`,
   `start_movement`, `finish_movement`, `route_with_movement_time`, `route_is_physically_clear`,
-  `plan_in_room_route`, `queue_slot_position`, `facility_approach_route`, and `validate(world)` for
-  `register_rust_validator`. `domain/movement.py` calls them through `kernel_first`.
-  `advance_movement` says Unsupported for a tick in which a queue trip must replan or a person is
-  placed in a queue slot, which depend on the order of the walk. `zone_center` is for the tests.
-  See `docs/rust-port/lanes/m4-movement.md`.
+  `plan_in_room_route`, `queue_slot_position`, `facility_approach_route`,
+  `staff_position_snapshots`, `agent_is_at_queue_slot`, `agent_is_at_queue_trip_destination`,
+  `agent_is_at_facility_service_point`, and `validate(world)` for `register_rust_validator`.
+  `domain/movement.py` calls them through `kernel_first`. A queue trip's replan and a person placed
+  in a queue slot depend on the order of the walk: `advance_movement` then plans a second walk that
+  reads the positions as it leaves them. `zone_center` is for the tests.
+  See `docs/rust-port/lanes/m4-movement.md` and `docs/rust-port/lanes/l3-movement.md`.
+- `rules.replan.replan_journeys(controller, state, agent_ids, minute)`: `_replan_journeys` and
+  `_replan_staff_support_trip` (`src/rules/replan.rs`). It writes each person's stop before it plans
+  their new route, so `Unsupported` comes only before the first person's stop; a later refusal goes
+  to `_replan_in_python` or `_replan_stopped` on the controller, from where it got to.
 - `rules.queues`: a facility's physical queue (`src/rules/queues.rs`):
   `prepare_facility_queue(world, facility_id, *, resource, minute)`,
   `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
@@ -251,12 +257,17 @@ each OS, because both call the same libm.
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
   `validate(world)` accepts a world where no staff member has a task; an active record reads the
   pending events, which is the Python rule's.
-- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
-  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
-  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
-  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
-  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
-  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `rules.staff`: the staff's assignment of `domain/staff.py` and `domain/staff_operations.py`
+  (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`, which is `assign_none`
+  (None hands the step to `assign_work`), `update_operations(world, minute)`,
+  `assign_operations(world, minute, router)`, `relief(world, minute)`, and
+  `wait_snapshot(world, active_support, minute)` for `experiments/metrics.py`. A worker's start plans
+  first and then writes one record at a time. They say Unsupported, before any change, for a value
+  the rows can't hold and for another staff formula. `format_g` is there for the tests.
+  See `docs/rust-port/lanes/m4-staff.md`, `l2-staff.md`.
+- `rules.travel.route`: `_route`, with edge capacities too: it counts the trips under way and records
+  `zone_edge_capacity_wait` as the Python rule does. A rule that plans (`proposals.apply_effect`) holds
+  that record and reserves its sequence on the `EventWriter` until it writes.
 - `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
   `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
   `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
@@ -299,8 +310,8 @@ each OS, because both call the same libm.
   `serve_head` is one pass of `arbitrate`'s loop after the positions; it returns the started event's
   ID, or None to stop. `serve_independent_head` is the same pass of one independent queue.
 - `rules.proposals.apply_effect(controller, proposal)`: `_apply_effect` (`src/rules/proposals.rs`),
-  which returns `(target_id, next_decision_at, committed)`. `seek_help`, `seek_information`, a bed in
-  a temporary room and a trip of no minutes give `Unsupported` before any write.
+  which returns `(target_id, next_decision_at, committed)`. A person the queue turns down at once gives
+  `Unsupported` before any write, and the Python step records the queue's text.
 - `rules.travel`: `route(controller, origin_zone_id, destination_zone_id, agent_id)` and
   `schedule_travel(controller, *, ...)`: `_route` and `_schedule_travel` (`src/rules/travel.rs`).
   Edge capacities and another route policy give `Unsupported`. The graph as rows stays on the

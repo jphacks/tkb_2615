@@ -25,7 +25,7 @@ use crate::core::census;
 use crate::core::row::{attribute, exact_int, exact_str, unsupported};
 use crate::core::world_core::raw_dict_get;
 use crate::rules::movement_geometry::Geo;
-use crate::rules::{decisions, dispatch, facility_queues, information, metrics, movement, proposals, proximity, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, trace, world_view};
+use crate::rules::{decisions, dispatch, facility_queues, information, metrics, movement, proposals, proximity, psychology, queues, replan, service, social_propagation, staff, staff_dynamics, support, toilet, trace, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
@@ -137,7 +137,9 @@ impl<'py> Tick<'_, 'py> {
                 rule_of(self.table.update.bind(py).as_any(), intern!(py, "advance_movement"))?.call1((world, minute))
             })?;
             if moved.is_truthy()? {
-                controller.call_method1(intern!(py, "_replan_journeys"), (state, moved, minute))?;
+                or_rule!(py, replan::replan_journeys(controller, &state, &moved, minute), {
+                    self.python_step(intern!(py, "_replan_journeys"))?.call1((&state, &moved, minute)).map(|_| ())
+                })?;
             }
         }
         let view = or_rule!(py, world_view::view_after_movement(controller, world), {
@@ -436,14 +438,23 @@ impl<'py> Tick<'_, 'py> {
             service.call_method(intern!(py, "assign_pending"), (minute,), Some(&options))?
         };
         if assigned.is_truthy()? {
-            controller.call_method1(intern!(py, "_record_assigned_support"), (world, assigned))?;
+            // The kernel's receipts: past the service's writes nothing goes back to a Python rule.
+            support::record_assigned(world, &assigned).map_err(|error| {
+                if error.is_instance_of::<Unsupported>(py) {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("a receipt of an assignment was refused: {}", error.value(py)))
+                } else {
+                    error
+                }
+            })?;
         }
         let router = controller.getattr(intern!(py, "staff_space"))?;
         or_rule!(py, staff::assign_operations(world, minute, &router).map(|_| ()), {
             rule_of(module, intern!(py, "assign_staff_operations"))?.call1((world, minute, &router)).map(|_| ())
         })?;
-        // The Python part of this phase: it can reach `consider_complaint_response`.
-        controller.call_method1(intern!(py, "_consider_due_complaints"), (minute,))?;
+        // Its decision is the policy's, called through `consider_complaint_response`.
+        or_rule!(py, staff::consider_due_complaints(controller, minute), {
+            self.python_step(intern!(py, "_consider_due_complaints"))?.call1((minute,)).map(|_| ())
+        })?;
         or_rule!(py, staff::relief(world, minute).map(|_| ()), {
             rule_of(module, intern!(py, "schedule_staff_operation_relief"))?.call1((world, minute)).map(|_| ())
         })

@@ -898,10 +898,11 @@ pub(crate) enum PlannedRequest {
     /// It raises `ValueError`: `support_request_rejected_count` is the step's answer.
     Rejected,
     Opens { request_id: Arc<str>, timeout_minute: i64, event: EventRow },
+    /// Asked in a Run's last minute: unresolved at once, with a cooldown until this minute.
+    Closes { request_id: Arc<str>, until: i64 },
 }
 
-/// `StaffService.request`, without the world's whole validation, at this sequence. The case of a
-/// Run's last minute, which closes the request at once, is the Python rule's.
+/// `StaffService.request`, without the world's whole validation, at this sequence.
 pub(crate) fn plan_request(
     service: &Bound<'_, PyAny>,
     world: &Bound<'_, PyAny>,
@@ -941,7 +942,11 @@ pub(crate) fn plan_request(
     };
     let timeout_minute = after_end.min(writer.duration() - 1);
     if timeout_minute == minute {
-        return unsupported("a request closed at once");
+        let cooldown = exact_int(&attribute(service, intern!(py, "cooldown_minutes"))?)?;
+        let Some(until) = minute.checked_add(cooldown) else {
+            return unsupported("a minute out of range");
+        };
+        return Ok(PlannedRequest::Closes { request_id, until });
     }
     let sequence = writer.next_sequence()?;
     let event_id: Arc<str> = Arc::from(format!("support-timeout-{sequence}"));
@@ -1009,6 +1014,39 @@ pub(crate) fn write_request(
     raw_setattr(&agent, intern!(py, "support_request_id"), request_text.as_ptr())?;
     writer.allocate_sequence()?;
     writer.schedule(event)
+}
+
+/// The writes of `StaffService.request` for a request closed at once. The person stays as they are.
+pub(crate) fn write_closed_request(
+    world: &Bound<'_, PyAny>,
+    metrics: &Bound<'_, NamespaceMirror>,
+    agent_id: &str,
+    minute: i64,
+    request_id: &Arc<str>,
+    until: i64,
+) -> PyResult<()> {
+    let py = world.py();
+    let store = entities_of(world)?;
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let agent_text = PyString::new(py, agent_id);
+    let Some(agent) = raw_dict_get(&agents, agent_text.as_any())? else {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("a row has no object"));
+    };
+    let request_text = PyString::new(py, request_id);
+    let request = request_class(py)?.call1((&request_text, &agent_text, minute, minute))?;
+    attribute(world, intern!(py, "support_requests"))?.set_item(&request_text, &request)?;
+    request.setattr(intern!(py, "status"), RequestStatus::Unresolved.member(py)?)?;
+    request.setattr(intern!(py, "resolved_minute"), minute)?;
+    request.setattr(intern!(py, "cooldown_until"), until)?;
+    EntityStore::with_rows(&store, |rows| {
+        let Some(row) = rows.agents.get_mut(agent_id) else {
+            return unsupported("no such agent");
+        };
+        row.support_cooldown_until = until;
+        Ok(())
+    })?;
+    raw_setattr(&agent, intern!(py, "support_cooldown_until"), until.into_pyobject(py)?.as_ptr())?;
+    add_one(metrics, UNRESOLVED_METRIC)
 }
 
 /// `support_kind_for_agent`.
@@ -1104,7 +1142,7 @@ fn sources_or_python(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<Vec<A
 }
 
 /// `append_applied_care_transition`, past a step's first change: refused here, Python appends it.
-fn append_or_python(world: &Bound<'_, PyAny>, transition: Transition) -> PyResult<()> {
+pub(crate) fn append_or_python(world: &Bound<'_, PyAny>, transition: Transition) -> PyResult<()> {
     let py = world.py();
     let kwargs = PyDict::new(py);
     kwargs.set_item("request_id", &*transition.request_id)?;
@@ -1135,6 +1173,13 @@ fn assign_staff_support<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, 
     if assigned.is_empty().unwrap_or(false) {
         return Ok(());
     }
+    record_assigned(world, &assigned)
+}
+
+/// `_record_assigned_support`: the receipts of the requests just assigned. What it writes is not undone,
+/// so what would refuse is an error here (the driver's and `_assign_staff_support`'s callers go on).
+pub(crate) fn record_assigned<'py>(world: &Bound<'py, PyAny>, assigned: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     for request_id in assigned.try_iter()? {
         let request_id = request_id?;
