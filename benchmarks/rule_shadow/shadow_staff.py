@@ -51,6 +51,8 @@ def prepare(output: str) -> None:
 
     if not native.available():
         return
+    # The driver calls these kernels without going through the module.
+    native.rules("tick").python_path_only(True)
     rules = native.rules("staff")
     recorder = Recorder(output, "staff")
     unsupported = native.Unsupported
