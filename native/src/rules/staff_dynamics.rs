@@ -436,27 +436,21 @@ enum Verdict {
     Unknown,
 }
 
-/// `type(value) is int and lower <= value <= upper`.
-fn int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> Verdict {
-    if !value.is_exact_instance_of::<pyo3::types::PyInt>() {
-        return Verdict::Fails;
-    }
-    match value.extract::<i64>() {
-        Ok(value) if (lower..=upper).contains(&value) => Verdict::Passes,
+/// `type(value) is int and lower <= value <= upper` (`errors::exactly_int`).
+fn int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> PyResult<Verdict> {
+    Ok(match errors::exactly_int(value)? {
+        Some(value) if (lower..=upper).contains(&value) => Verdict::Passes,
         _ => Verdict::Fails,
-    }
+    })
 }
 
-/// The Python rule's check `isinstance(value, int) and not isinstance(value, bool) and lower <=
-/// value <= upper`: an int's subclass other than bool is for the Python rule.
-fn plain_int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> Verdict {
-    if value.is_instance_of::<pyo3::types::PyBool>() || !value.is_instance_of::<pyo3::types::PyInt>() {
-        return Verdict::Fails;
-    }
-    if !value.is_exact_instance_of::<pyo3::types::PyInt>() {
-        return Verdict::Unknown;
-    }
-    int_within(value, lower, upper)
+/// `isinstance(value, int) and not isinstance(value, bool) and lower <= value <= upper`
+/// (`errors::int_not_bool`).
+fn plain_int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> PyResult<Verdict> {
+    Ok(match errors::int_not_bool(value)? {
+        Some(value) if (lower..=upper).contains(&value) => Verdict::Passes,
+        _ => Verdict::Fails,
+    })
 }
 
 /// `raise ValueError(text)` of `canonical_staff_dynamics_config`.
@@ -565,7 +559,7 @@ fn canonical_config<'py>(raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>
         (intern!(py, "rest_minutes"), 30, MAX_REST_MINUTES),
     ] {
         let verdict = match raw.get_item(name)? {
-            Some(value) => plain_int_within(&value, 1, upper),
+            Some(value) => plain_int_within(&value, 1, upper)?,
             None => {
                 if (1..=upper).contains(&default) {
                     Verdict::Passes
@@ -586,7 +580,7 @@ fn canonical_config<'py>(raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>
         }
         for (id, limit) in exact_dict(&limits)?.iter() {
             let id_passes = id.is_instance_of::<PyString>() && !id.is_empty()?;
-            if !id_passes || int_within(&limit, 1, MINUTES_PER_DAY) == Verdict::Fails {
+            if !id_passes || int_within(&limit, 1, MINUTES_PER_DAY)? == Verdict::Fails {
                 return config_error("staff_dynamics per-staff work limits must be integer minutes in 1..1440");
             }
             staff_key(&id)?;
@@ -609,7 +603,7 @@ fn canonical_config<'py>(raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>
                         let start = row.get_item(intern!(py, "start_minute"))?;
                         let end = row.get_item(intern!(py, "end_minute"))?;
                         match (start, end, row.len()) {
-                            (Some(start), Some(end), 2) => match (int_within(&start, 0, MINUTES_PER_WEEK), int_within(&end, 0, MINUTES_PER_WEEK)) {
+                            (Some(start), Some(end), 2) => match (int_within(&start, 0, MINUTES_PER_WEEK)?, int_within(&end, 0, MINUTES_PER_WEEK)?) {
                                 (Verdict::Passes, Verdict::Passes) => {
                                     let shift = Shift { start_minute: start.extract()?, end_minute: end.extract()? };
                                     let fits = shift.start_minute < shift.end_minute;

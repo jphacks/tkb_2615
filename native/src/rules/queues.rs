@@ -226,12 +226,12 @@ fn config_errors(raw: &Bound<'_, PyAny>, need_weighted: bool) -> PyResult<()> {
             return config_error("facility_queues config must be an object");
         }
     }
-    let plain_int = |value: &Bound<'_, PyAny>| value.is_exact_instance_of::<pyo3::types::PyInt>();
     if let Some(schema) = config.get_item(intern!(py, "schema_version"))? {
-        if !plain_int(&schema) {
+        // `1.0` and `True` pass the Python rule: for it to decide.
+        let Some(schema) = errors::exactly_int(&schema)? else {
             return unsupported("another schema version");
-        }
-        if schema.extract::<i64>().map_or(true, |schema| schema != 1) {
+        };
+        if schema != 1 {
             return config_error("facility_queues requires schema_version 1");
         }
     }
@@ -249,28 +249,19 @@ fn config_errors(raw: &Bound<'_, PyAny>, need_weighted: bool) -> PyResult<()> {
             limits.push(limit);
         }
     }
-    let within = |value: &Bound<'_, PyAny>, upper: i64| plain_int(value) && value.extract::<i64>().is_ok_and(|value| (1..=upper).contains(&value));
-    if limits.iter().any(|limit| !within(limit, 10080)) {
-        return config_error("queue abandonment limits must be within 1..10080 minutes");
+    let within = |value: &Bound<'_, PyAny>, upper: i64| -> PyResult<bool> { Ok(errors::exactly_int(value)?.is_some_and(|value| (1..=upper).contains(&value))) };
+    for limit in &limits {
+        if !within(limit, 10080)? {
+            return config_error("queue abandonment limits must be within 1..10080 minutes");
+        }
     }
     if let Some(retry) = config.get_item(intern!(py, "retry_delay_minutes"))? {
-        if !within(&retry, 1440) {
+        if !within(&retry, 1440)? {
             return config_error("queue retry delay must be between 1 and 1440 minutes");
         }
     }
     if let Some(threshold) = config.get_item(intern!(py, "persistence_urgency_threshold"))? {
-        let fails = if let Ok(number) = threshold.downcast_exact::<pyo3::types::PyFloat>() {
-            !(0.0..=1.0).contains(&number.value())
-        } else if plain_int(&threshold) {
-            !threshold.extract::<i64>().is_ok_and(|value| (0..=1).contains(&value))
-        } else if threshold.is_instance_of::<pyo3::types::PyBool>()
-            || !(threshold.is_instance_of::<pyo3::types::PyInt>() || threshold.is_instance_of::<pyo3::types::PyFloat>())
-        {
-            true
-        } else {
-            return unsupported("the threshold is a number of another type");
-        };
-        if fails {
+        if !errors::real_number(&threshold)?.is_some_and(|value| (0.0..=1.0).contains(&value)) {
             return config_error("queue persistence threshold must be normalized to 0..1");
         }
     }

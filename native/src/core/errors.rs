@@ -16,11 +16,11 @@ use std::panic::Location;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyBool, PyInt, PyList, PyString, PyType};
+use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString, PyType};
 
 type Site = (&'static str, u32);
 
@@ -102,6 +102,17 @@ pub(crate) fn error(py: Python<'_>, outcome: Outcome, text: impl Into<String>) -
     made.unwrap_or_else(|error| error)
 }
 
+/// `raise ValueError(text)` in the Python rule's words, marked as made here so that a step which turns
+/// a Python call's exception into Unsupported lets it through (a check of `effect_program_v1`).
+pub(crate) fn marked_value_error(py: Python<'_>, text: &str) -> PyErr {
+    let made = (|| -> PyResult<PyErr> {
+        let instance = py.get_type::<pyo3::exceptions::PyValueError>().call1((text,))?;
+        instance.setattr(intern!(py, MARK), true)?;
+        Ok(PyErr::from_value(instance))
+    })();
+    made.unwrap_or_else(|error| error)
+}
+
 /// Whether this error is an outcome made here, rather than one a Python call raised: a step that
 /// turns any exception of a call into Unsupported lets these through.
 pub(crate) fn made_here(py: Python<'_>, error: &PyErr) -> bool {
@@ -166,6 +177,32 @@ pub(crate) fn nonempty_str<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<&
     Ok(str_of(value)?.filter(|text| !text.is_empty()))
 }
 
+/// `not isinstance(value, bool) and isinstance(value, (int, float))`, as `float(value)`: None when it
+/// isn't one. A subclass, or an int a float can't hold exactly, is refused.
+pub(crate) fn real_number(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+    if value.is_instance_of::<PyBool>() || !(value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>()) {
+        return Ok(None);
+    }
+    if let Ok(float) = value.downcast_exact::<PyFloat>() {
+        return Ok(Some(float.value()));
+    }
+    let int = crate::core::row::exact_int(value)?;
+    if !(-(1 << 53)..=1 << 53).contains(&int) {
+        return crate::core::row::unsupported("a number does not fit a float");
+    }
+    Ok(Some(int as f64))
+}
+
+/// `Enum(value)` of a str enum whose values are `members`: Some(the value), None where the Python rule
+/// catches the ValueError or TypeError. A str subclass (a member of the enum itself) is refused.
+pub(crate) fn member_of<'a>(value: &'a Bound<'_, PyAny>, members: &[&str]) -> PyResult<Option<&'a str>> {
+    if !value.is_instance_of::<PyString>() {
+        return Ok(None);
+    }
+    let text = crate::core::row::exact_str(value)?;
+    Ok(members.contains(&text).then_some(text))
+}
+
 /// Turn the record on or off for this process.
 #[pyfunction]
 pub(crate) fn texts_switch(on: bool) {
@@ -214,6 +251,8 @@ pub(crate) fn texts_take(py: Python<'_>) -> PyResult<Bound<'_, PyList>> {
 // Python's, so it is not compared.
 
 static COMPARING: AtomicBool = AtomicBool::new(false);
+/// With the comparison: a difference raises AssertionError at once, so a test or a Run fails.
+static STRICT: AtomicBool = AtomicBool::new(false);
 static STATE: Mutex<Compared> = Mutex::new(Compared { last: None, seen: BTreeMap::new() });
 
 struct Compared {
@@ -271,9 +310,14 @@ macro_rules! python_class {
     };
 }
 
-python_class!(StateInvariantError, "sheltersim.core.world", "StateInvariantError");
-python_class!(ResourceLedgerError, "sheltersim.domain.resources", "ResourceLedgerError");
-python_class!(IneligibleDecisionError, "sheltersim.policies.behavior", "IneligibleDecisionError");
+// Used by `invariant` and `corrupt`, which wait for the step-4 entry (docs/rust-port/lanes/l8-texts-rest.md).
+#[allow(dead_code)]
+mod invariant_class {
+    use super::*;
+    python_class!(StateInvariantError, "sheltersim.core.world", "StateInvariantError");
+}
+#[allow(unused_imports)]
+pub(crate) use invariant_class::StateInvariantError;
 
 /// `raise ValueError(text)` of a Python rule.
 #[track_caller]
@@ -283,16 +327,9 @@ pub(crate) fn value_error(text: impl Into<String>) -> PyErr {
     PyValueError::new_err(text)
 }
 
-/// `raise TypeError(text)` of a Python rule.
-#[track_caller]
-pub(crate) fn type_error(text: impl Into<String>) -> PyErr {
-    let text = text.into();
-    moved(&text);
-    PyTypeError::new_err(text)
-}
-
 /// `raise StateInvariantError(text)` of a Python rule.
 #[track_caller]
+#[allow(dead_code)]
 pub(crate) fn invariant(text: impl Into<String>) -> PyErr {
     StateInvariantError::new_err(text)
 }
@@ -308,6 +345,7 @@ pub(crate) fn relayed(py: Python<'_>, error: PyErr) -> PyErr {
 /// The one exit for a state the Python rules' checks never let through: a `StateInvariantError`
 /// whose text names the namespace and the check. Not the Python rule's text, so it is not compared.
 #[track_caller]
+#[allow(dead_code)]
 pub(crate) fn corrupt(namespace: &str, check: &str) -> PyErr {
     let text = format!("{namespace}: corrupt state: {check}");
     crate::core::census::moved(&text);
@@ -336,7 +374,8 @@ fn described(py: Python<'_>, error: &PyErr) -> String {
 }
 
 /// Count what the Python rule did after the moved error of `site`: the same class and text, or not.
-pub(crate) fn compared(py: Python<'_>, site: Site, rust: &PyErr, python: Option<&PyErr>) {
+/// In strict mode a difference gives the AssertionError to raise instead.
+pub(crate) fn compared(py: Python<'_>, site: Site, rust: &PyErr, python: Option<&PyErr>) -> Option<PyErr> {
     let rust_text = described(py, rust);
     let (verdict, python_text) = match python {
         None => ("python returned", String::new()),
@@ -350,16 +389,25 @@ pub(crate) fn compared(py: Python<'_>, site: Site, rust: &PyErr, python: Option<
             }
         }
     };
+    let failure = (verdict != "same" && STRICT.load(Ordering::Relaxed)).then(|| {
+        pyo3::exceptions::PyAssertionError::new_err(format!(
+            "{}:{}: the kernel raised {rust_text:?} where the Python rule {verdict} {python_text:?}",
+            site.0, site.1
+        ))
+    });
     let rust_text = if verdict == "same" { String::new() } else { rust_text };
     if let Ok(mut state) = STATE.lock() {
         *state.seen.entry((site, verdict, rust_text, python_text)).or_default() += 1;
     }
+    failure
 }
 
 /// Turn the comparison on or off for this process.
 #[pyfunction]
-pub(crate) fn errors_switch(on: bool) {
+#[pyo3(signature = (on, strict=false))]
+pub(crate) fn errors_switch(on: bool, strict: bool) {
     COMPARING.store(on, Ordering::Relaxed);
+    STRICT.store(on && strict, Ordering::Relaxed);
     if let Ok(mut state) = STATE.lock() {
         state.last = None;
     }
@@ -377,8 +425,10 @@ pub(crate) fn errors_compare(py: Python<'_>, error: Bound<'_, PyAny>, rule: Boun
         return Ok(());
     };
     let python = rule.call0().err();
-    compared(py, site, &error, python.as_ref());
-    Ok(())
+    match compared(py, site, &error, python.as_ref()) {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
 }
 
 /// Take the comparisons counted: rows of `(file, line, verdict, rust, python, n)`, and start again.

@@ -94,11 +94,13 @@ macro_rules! or_rule {
             }
             Err(error) => {
                 // A moved error while comparing (core/errors.rs): the Python rule on the same state.
-                if let Some(site) = errors::moved_site($py, &error) {
-                    let result = $rule;
-                    errors::compared($py, site, &error, result.as_ref().err());
+                match errors::moved_site($py, &error) {
+                    Some(site) => {
+                        let result = $rule;
+                        Err(errors::compared($py, site, &error, result.as_ref().err()).unwrap_or(error))
+                    }
+                    None => Err(error),
                 }
-                Err(error)
             }
             other => other,
         }

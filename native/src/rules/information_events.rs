@@ -11,14 +11,16 @@ use std::sync::Arc;
 
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyDict, PyString};
 
+use crate::core::errors;
 use crate::core::mathx::{py_max, py_min};
 use crate::core::rng::{Key, KeyedDraws};
 use crate::core::row::{attribute, exact_float, exact_int, exact_str, unsupported};
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::rules::effects::refused_by_python;
-use crate::rules::handlers::{counted, fields_are, get, get_is, kind_is, number, text_is};
+use crate::rules::handlers::{counted, fields_are, get, kind_is, number, text_is};
 use crate::rules::support::household_of;
 use crate::state::information::{belief_rank, is_stable_id, BeliefRow, InformationRow, NAME, SCHEMA_VERSION};
 
@@ -30,16 +32,20 @@ const MAX_MESSAGES: usize = 1024;
 pub(crate) fn runtime_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, NamespaceMirror>)> {
     let py = world.py();
     let configs = attribute(world, intern!(py, "model_configs"))?;
-    let config = py
+    let config = match py
         .import("sheltersim.domain.models")?
         .getattr("InformationSpreadConfig")?
-        .call_method1("from_mapping", (get(&configs, "information_spread")?,))?;
-    if !config.getattr(intern!(py, "enabled"))?.is_truthy()? {
-        return unsupported("the model is not enabled");
-    }
+        .call_method1("from_mapping", (get(&configs, "information_spread")?,))
+    {
+        Ok(config) => config,
+        Err(error) if error.is_instance_of::<PyValueError>(py) => {
+            return errors::failed(py, format!("invalid information_spread config: {}", error.value(py).str()?));
+        }
+        Err(error) => return Err(error),
+    };
     let state = get(&attribute(world, intern!(py, "model_state"))?, NAME)?;
-    if !state.is_instance_of::<PyDict>() {
-        return unsupported("the model has no state");
+    if !config.getattr(intern!(py, "enabled"))?.is_truthy()? || !state.is_instance_of::<PyDict>() {
+        return errors::failed(py, "information spread is not enabled for this run");
     }
     let mirror = mirror_of(world, NAME)?;
     if !mirror.try_borrow()?.root_is(&state) {
@@ -211,19 +217,24 @@ fn rumor<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &B
         let (config, state, mirror) = runtime_state(world)?;
         let payload = attribute(event, intern!(py, "payload"))?;
         if !fields_are(&payload, &["message_id", "truth_status", "origin_agent_id"])? {
-            return unsupported("the payload has other fields");
+            return errors::failed(py, "information_rumor payload fields do not match");
         }
         let source_value = attribute(event, intern!(py, "source_id"))?;
-        let source: Arc<str> = Arc::from(exact_str(&source_value)?);
+        if source_value.is_none() {
+            return errors::failed(py, "information_rumor requires a source_id");
+        }
         let message_value = payload.get_item("message_id")?;
         let origin_value = payload.get_item("origin_agent_id")?;
-        let message_id: Arc<str> = Arc::from(exact_str(&message_value)?);
-        let origin: Arc<str> = Arc::from(exact_str(&origin_value)?);
+        let (Some(message_id), Some(origin)) = (errors::str_of(&message_value)?, errors::str_of(&origin_value)?) else {
+            return errors::failed(py, "information_rumor requires stable message and Agent IDs");
+        };
+        let (message_id, origin): (Arc<str>, Arc<str>) = (Arc::from(message_id), Arc::from(origin));
         let truth_value = payload.get_item("truth_status")?;
-        let truth = exact_str(&truth_value)?.to_owned();
-        if !matches!(truth.as_str(), "unknown" | "true" | "false") {
-            return unsupported("a truth status for the Python rule to judge");
-        }
+        let Some(truth) = errors::member_of(&truth_value, &["unknown", "true", "false"])? else {
+            return errors::failed(py, "information_rumor truth_status is invalid");
+        };
+        let truth = truth.to_owned();
+        let source: Arc<str> = Arc::from(exact_str(&source_value)?);
         let (taken, messages, has_agent, pressure) = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
             Ok((
                 row.messages.contains_key(&*message_id),
@@ -233,12 +244,18 @@ fn rumor<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &B
             ))
         })?;
         let agent = get(&attribute(world, intern!(py, "agents"))?, &origin)?;
-        let Some(pressure) = pressure else {
+        if taken {
+            return errors::failed(py, "information message ID already exists");
+        }
+        if messages >= MAX_MESSAGES {
+            return errors::failed(py, "information-spread message limit was reached");
+        }
+        if agent.is_none() {
+            return errors::failed(py, "information_rumor references an unknown Agent");
+        }
+        let Some(pressure) = pressure.filter(|_| has_agent) else {
             return unsupported("the person has no record");
         };
-        if taken || messages >= MAX_MESSAGES || agent.is_none() || !has_agent {
-            return unsupported("the rumor is for the Python rule to judge");
-        }
         let zone = attribute(&agent, intern!(py, "zone_id"))?;
         let zone_text = exact_str(&zone)?;
         let event_id_value = attribute(event, intern!(py, "event_id"))?;
@@ -312,34 +329,47 @@ fn correction<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
         let (config, state, mirror) = runtime_state(world)?;
         let payload = attribute(event, intern!(py, "payload"))?;
         if !fields_are(&payload, &["message_id", "zone_id", "belief"])? {
-            return unsupported("the payload has other fields");
+            return errors::failed(py, "information_correction payload fields do not match");
         }
         let source_value = attribute(event, intern!(py, "source_id"))?;
-        let source: Arc<str> = Arc::from(exact_str(&source_value)?);
+        if source_value.is_none() {
+            return errors::failed(py, "information_correction requires a source_id");
+        }
         let message_value = payload.get_item("message_id")?;
         let zone_value = payload.get_item("zone_id")?;
+        let (Some(message_id), Some(_)) = (errors::str_of(&message_value)?, errors::str_of(&zone_value)?) else {
+            return errors::failed(py, "information_correction requires stable message and Zone IDs");
+        };
+        let message_id: Arc<str> = Arc::from(message_id);
         let belief_value = payload.get_item("belief")?;
-        let message_id: Arc<str> = Arc::from(exact_str(&message_value)?);
-        exact_str(&zone_value)?;
-        let belief_text = exact_str(&belief_value)?;
-        if !matches!(belief_text, "verified" | "rejected") || !attribute(world, intern!(py, "zones"))?.contains(&zone_value)? {
-            return unsupported("the correction is for the Python rule to judge");
+        let Some(belief_text) = errors::member_of(&belief_value, &["unknown", "heard", "verified", "rejected"])? else {
+            return errors::failed(py, "information_correction belief is invalid");
+        };
+        if !matches!(belief_text, "verified" | "rejected") {
+            return errors::failed(py, "information_correction must verify or reject a claim");
         }
-        let (truth, origin_event) = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
+        if !attribute(world, intern!(py, "zones"))?.contains(&zone_value)? {
+            return errors::failed(py, "information_correction references an unknown Zone");
+        }
+        let source: Arc<str> = Arc::from(exact_str(&source_value)?);
+        let found = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
             let Some(message) = row.messages.get(&*message_id) else {
-                return unsupported("an unknown message");
+                return Ok(None);
             };
             if !message.parses() {
                 return unsupported("a message is for the Python rule to read");
             }
-            Ok((message.truth_status.clone(), message.origin_event_id.clone()))
+            Ok(Some((message.truth_status.clone(), message.origin_event_id.clone())))
         })?;
-        if !text_is(&attribute(event, intern!(py, "causation_id"))?, &origin_event) {
-            return unsupported("the correction must reference its rumor");
+        let Some((truth, origin_event)) = found else {
+            return errors::failed(py, "information_correction references an unknown message");
+        };
+        if attribute(event, intern!(py, "causation_id"))?.ne(&*origin_event)? {
+            return errors::failed(py, "information_correction must reference its rumor event");
         }
         match &*truth {
-            "true" if belief_text != "verified" => return unsupported("the correction conflicts with the truth"),
-            "false" if belief_text != "rejected" => return unsupported("the correction conflicts with the truth"),
+            "true" if belief_text != "verified" => return errors::failed(py, "information correction conflicts with message truth"),
+            "false" if belief_text != "rejected" => return errors::failed(py, "information correction conflicts with message truth"),
             _ => {}
         }
         let aware = evidence_aware(world)?;
@@ -378,7 +408,7 @@ fn correction<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
             if let Some(previous) = &previous {
                 if matches!(&*previous.belief, "verified" | "rejected") {
                     if previous.belief != belief {
-                        return unsupported("a conflicting verified state");
+                        return errors::failed(py, "conflicting verified information state");
                     }
                     if !aware {
                         continue;
@@ -489,37 +519,44 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
         let (config, state, mirror) = runtime_state(world)?;
         let payload = attribute(event, intern!(py, "payload"))?;
         if !fields_are(&payload, &["message_id", "sender_agent_id", "recipient_agent_id", "belief", "contact_basis", "contact_minutes"])? {
-            return unsupported("the payload has other fields");
+            return errors::failed(py, "information_contact_update payload fields do not match");
         }
-        let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
-        if !kind_is(event, "ENDOGENOUS")? || due != exact_int(&attribute(world, intern!(py, "minute_index"))?)? {
-            return unsupported("the kind or time is for the Python rule to judge");
+        if !kind_is(event, "ENDOGENOUS")? {
+            return errors::failed(py, "information contact updates must be endogenous");
         }
+        let due_value = attribute(event, intern!(py, "due_minute"))?;
+        if due_value.ne(attribute(world, intern!(py, "minute_index"))?)? {
+            return errors::failed(py, "information contact update must run at its due minute");
+        }
+        let due = exact_int(&due_value)?;
         let provenance = attribute(event, intern!(py, "provenance"))?;
         let model = information_model(world)?;
         let aware = text_is(&model, EVIDENCE_AWARE);
-        if !get_is(&provenance, "source_type", "assumption")?
-            || !get_is(&provenance, "source_id", CONTACT_SOURCE)?
-            || !get(&provenance, "policy_version")?.eq(&model)?
+        if get(&provenance, "source_type")?.ne("assumption")?
+            || get(&provenance, "source_id")?.ne(CONTACT_SOURCE)?
+            || get(&provenance, "policy_version")?.ne(&model)?
         {
-            return unsupported("the provenance is for the Python rule to judge");
+            return errors::failed(py, "information contact provenance is missing its assumption ID");
         }
         let message_value = payload.get_item("message_id")?;
         let sender_value = payload.get_item("sender_agent_id")?;
         let recipient_value = payload.get_item("recipient_agent_id")?;
-        let message_id: Arc<str> = Arc::from(exact_str(&message_value)?);
-        let sender_id: Arc<str> = Arc::from(exact_str(&sender_value)?);
-        let recipient_id: Arc<str> = Arc::from(exact_str(&recipient_value)?);
+        let (Some(message_id), Some(sender_id), Some(recipient_id)) =
+            (errors::str_of(&message_value)?, errors::str_of(&sender_value)?, errors::str_of(&recipient_value)?)
+        else {
+            return errors::failed(py, "information contact requires stable claim and Agent IDs");
+        };
+        let (message_id, sender_id, recipient_id): (Arc<str>, Arc<str>, Arc<str>) = (Arc::from(message_id), Arc::from(sender_id), Arc::from(recipient_id));
+        if sender_id == recipient_id {
+            return errors::failed(py, "information contact requires two different Agents");
+        }
         let agents = attribute(world, intern!(py, "agents"))?;
-        if sender_id == recipient_id || !agents.contains(&*sender_id)? || !agents.contains(&*recipient_id)? {
-            return unsupported("the participants are for the Python rule to judge");
+        let known_message = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| Ok(row.messages.contains_key(&*message_id)))?;
+        if !agents.contains(&*sender_id)? || !agents.contains(&*recipient_id)? || !known_message {
+            return errors::failed(py, "information contact references unknown state");
         }
         // The sender's belief and the recipient's, the claim, and the signal.
         let belief_value = payload.get_item("belief")?;
-        let belief_text = exact_str(&belief_value)?;
-        let Some(wanted_rank) = belief_rank(belief_text) else {
-            return unsupported("the belief is for the Python rule to judge");
-        };
         let found = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
             let Some(message) = row.messages.get(&*message_id) else {
                 return unsupported("an unknown message");
@@ -527,7 +564,7 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
             if !message.parses() {
                 return unsupported("a message is for the Python rule to read");
             }
-            let (Some(sender), Some(recipient)) = (row.beliefs.get(&*sender_id), row.beliefs.get(&*recipient_id)) else {
+            let Some(sender) = row.beliefs.get(&*sender_id) else {
                 return unsupported("a person has no beliefs");
             };
             let Some(known) = sender.get(&*message_id) else {
@@ -536,51 +573,52 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
             if !known.parses() {
                 return unsupported("a belief is for the Python rule to read");
             }
-            let previous = recipient.get(&*message_id).map(prior_of).transpose()?;
-            Ok(Some((
-                message.truth_status.clone(),
-                message.source_id.clone(),
-                known.belief.clone(),
-                known.source.clone(),
-                known.last_event_id.clone(),
-                previous,
-                row.query_pressure.get(&*recipient_id).copied(),
-            )))
+            Ok(Some((message.truth_status.clone(), message.source_id.clone(), known.belief.clone(), known.source.clone(), known.last_event_id.clone())))
         })?;
         // What no longer applies is suppressed, with the rule's text.
-        let Some((truth, claim_source, sender_belief, sender_source, sender_event, previous, pressure)) = found else {
+        let Some((truth, claim_source, sender_belief, sender_source, sender_event)) = found else {
             return Ok(Err("contact sender no longer knows the message"));
         };
+        let Some(belief_text) = errors::member_of(&belief_value, &["unknown", "heard", "verified", "rejected"])? else {
+            return errors::failed(py, "information contact belief is invalid");
+        };
+        let wanted_rank = belief_rank(belief_text).expect("a member has a rank");
         if &*sender_belief != belief_text {
             return Ok(Err("contact sender belief changed before transmission"));
         }
         let Some(basis) = contact_basis(world, &sender_id, &recipient_id)? else {
             return Ok(Err("Agents are no longer in a modeled contact zone"));
         };
-        if !get_is(&payload, "contact_basis", basis)? {
+        if get(&payload, "contact_basis")?.ne(basis)? {
             return Ok(Err("sampled contact basis is no longer current"));
         }
-        let contact_minutes = exact_int(&payload.get_item("contact_minutes")?)?;
-        if contact_minutes < exact_int(&config.getattr(intern!(py, "minimum_contact_minutes"))?)? {
-            return unsupported("the duration is below the minimum");
+        let minimum = exact_int(&config.getattr(intern!(py, "minimum_contact_minutes"))?)?;
+        if !errors::int_not_bool(&payload.get_item("contact_minutes")?)?.is_some_and(|minutes| minutes >= minimum) {
+            return errors::failed(py, "information contact duration is below its configured minimum");
         }
-        let probability = number(&get(&provenance, "transmission_probability")?)?;
-        if !(0.0 < probability && probability <= 1.0) {
-            return unsupported("the probability is invalid");
+        if !errors::real_number(&get(&provenance, "transmission_probability")?)?.is_some_and(|probability| 0.0 < probability && probability <= 1.0) {
+            return errors::failed(py, "information contact probability is invalid");
         }
-        if !text_is(&attribute(event, intern!(py, "source_id"))?, &claim_source) || !text_is(&attribute(event, intern!(py, "causation_id"))?, &sender_event) {
-            return unsupported("the provenance does not match the sender");
+        if attribute(event, intern!(py, "source_id"))?.ne(&*claim_source)? || attribute(event, intern!(py, "causation_id"))?.ne(&*sender_event)? {
+            return errors::failed(py, "information contact provenance does not match sender state");
         }
         let correcting = matches!(belief_text, "verified" | "rejected");
         if correcting && !matches!((&*truth, belief_text), ("true", "verified") | ("false", "rejected")) {
-            return unsupported("the correction conflicts with the truth");
+            return errors::failed(py, "transmitted correction conflicts with message truth");
         }
+        let (previous, pressure) = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
+            let Some(recipient) = row.beliefs.get(&*recipient_id) else {
+                return unsupported("a person has no beliefs");
+            };
+            let previous = recipient.get(&*message_id).map(prior_of).transpose()?;
+            Ok((previous, row.query_pressure.get(&*recipient_id).copied()))
+        })?;
         if let Some(prior) = &previous {
             let Some(rank) = belief_rank(&prior.belief) else {
                 return unsupported("a belief is for the Python rule to read");
             };
             if rank >= wanted_rank && !(aware && correcting) {
-                return unsupported("the recipient already has as strong a belief");
+                return Ok(Err("recipient already has an equally strong belief"));
             }
         }
         let event_id_value = attribute(event, intern!(py, "event_id"))?;
@@ -638,7 +676,7 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
     })();
     let (state, message_id, recipient_id, record, next, delivered) = match counted(py, "contact", refused_by_python(py, plan))? {
         Ok(planned) => planned,
-        Err(text) => return crate::rules::population::suppressed(py, text.to_owned()),
+        Err(text) => return errors::suppressed(py, text),
     };
     state.get_item("beliefs")?.get_item(&*recipient_id)?.set_item(&*message_id, record.to_py(py)?)?;
     if let Some(next) = next {

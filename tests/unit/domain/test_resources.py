@@ -604,32 +604,8 @@ def test_the_full_check_rejects_a_reused_reservation_id() -> None:
         _check_full(world)
 
 
-def test_the_tick_memo_still_refuses_bad_reservation_ids() -> None:
-    """The memo checks only IDs it has not seen, by value, so the rules stay the same."""
-    from sheltersim.core.tick_validation import TickValidationMemo
-    from sheltersim.domain.resources import resource_metric_values as metric_values
-
-    # The memo serves the Python rule; the kernel's row keeps its own set.
-    resource_metric_values = getattr(metric_values, "__wrapped__", metric_values)
+def test_a_refused_operation_leaves_no_trace_in_the_ledger() -> None:
     world = _operated_world()
-    memo = TickValidationMemo()
-    world.__dict__["_tick_memo"] = memo
-    ledger = world.model_state[RESOURCE_LEDGER_KEY]
-    assert resource_metric_values(world, tick_memo=memo) == resource_metric_values(world)
-    assert memo._used_ids == ledger["used_reservation_ids"]
-    for bad in (["r-1", "r-2", 3], ["r-1", "r-2", "r-1"], ["r-1", 3], ["r-2", "r-2"]):
-        ledger["used_reservation_ids"] = bad
-        with pytest.raises(ResourceLedgerError):
-            resource_metric_values(world, tick_memo=memo)
-    ledger["used_reservation_ids"] = ["r-1", "r-2"]
-    assert resource_metric_values(world, tick_memo=memo) is not None
-
-
-def test_a_refused_operation_leaves_no_trace_in_the_tick_memo() -> None:
-    from sheltersim.core.tick_validation import TickValidationMemo
-
-    world = _operated_world()
-    world.__dict__["_tick_memo"] = TickValidationMemo()
     _check_state(world)
     _apply(world, 20, "delivery", resource_id="water_ml", quantity=1)
     before = copy.deepcopy(world.model_state[RESOURCE_LEDGER_KEY])

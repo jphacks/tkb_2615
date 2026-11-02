@@ -292,7 +292,6 @@ def validate_resource_ledger_state(
     zone_ids: set[str] | None = None,
     *,
     minute_index: int,
-    tick_memo: Any = None,
 ) -> None:
     """Check current balances, active reservations and the newest audit records.
 
@@ -306,7 +305,6 @@ def validate_resource_ledger_state(
         agent_ids,
         zone_ids,
         check_every_reservation_id=False,
-        tick_memo=tick_memo,
     )
     audit = ledger.get("audit")
     if not isinstance(audit, list):
@@ -344,7 +342,6 @@ def _validate_ledger_balances(
     zone_ids: set[str] | None,
     *,
     check_every_reservation_id: bool = True,
-    tick_memo: Any = None,
 ) -> list[str]:
     """Check the ledger header, balances and active reservations; return used IDs."""
     if not isinstance(ledger, dict) or set(ledger) != _LEDGER_FIELDS:
@@ -374,21 +371,14 @@ def _validate_ledger_balances(
         )
 
     used_ids = ledger.get("used_reservation_ids")
-    # IDs are only appended, so at the end of a tick only the new ones are checked.
-    used_id_set = None
-    if tick_memo is not None and isinstance(used_ids, list):
-        used_id_set = tick_memo.reservation_ids(used_ids)
-    if used_id_set is None:
-        if not isinstance(used_ids, list) or any(
-            not _valid_id(value) if check_every_reservation_id else not isinstance(value, str)
-            for value in used_ids
-        ):
-            raise ResourceLedgerError("resource ledger reservation IDs are invalid")
-        if len(used_ids) != len(set(used_ids)):
-            raise ResourceLedgerError("resource ledger reservation IDs must be unique")
-        used_id_set = set(used_ids)
-        if tick_memo is not None:
-            tick_memo.remember_reservation_ids(used_ids, used_id_set)
+    if not isinstance(used_ids, list) or any(
+        not _valid_id(value) if check_every_reservation_id else not isinstance(value, str)
+        for value in used_ids
+    ):
+        raise ResourceLedgerError("resource ledger reservation IDs are invalid")
+    if len(used_ids) != len(set(used_ids)):
+        raise ResourceLedgerError("resource ledger reservation IDs must be unique")
+    used_id_set = set(used_ids)
 
     for resource_id in RESOURCE_IDS:
         account = accounts[resource_id]
@@ -509,15 +499,12 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
     if RESOURCE_LEDGER_KEY not in world.model_state:
         raise ResourceLedgerError("resource ledger is not enabled for this scenario")
     current = world.model_state[RESOURCE_LEDGER_KEY]
-    # The memo compares the reservation IDs by value and checks only those it has not seen.
-    tick_memo = world.__dict__.get("_tick_memo")
     validate_resource_ledger_state(
         current,
         world.resources,
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
-        tick_memo=tick_memo,
     )
     # Only the accounts change in place; the ID and audit lists are only appended to,
     # so copying the lists (not their records) keeps the candidate detached.
@@ -641,18 +628,14 @@ def apply_resource_operation(world: Any, event: ScheduledEvent, operation: str) 
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
-        tick_memo=tick_memo,
     )
     world.model_state[RESOURCE_LEDGER_KEY] = ledger
     world.resources = resources
 
 
 @kernel_first("resources", "metric_values")
-def resource_metric_values(world: Any, *, tick_memo: Any = None) -> dict[str, int] | None:
-    """Return optional KPI columns for ledger-enabled scenarios.
-
-    ``tick_memo`` is for the tick's own metric capture, on the thread that runs the tick.
-    """
+def resource_metric_values(world: Any) -> dict[str, int] | None:
+    """Return optional KPI columns for ledger-enabled scenarios."""
     ledger = world.model_state.get(RESOURCE_LEDGER_KEY)
     if ledger is None:
         return None
@@ -662,7 +645,6 @@ def resource_metric_values(world: Any, *, tick_memo: Any = None) -> dict[str, in
         set(world.agents),
         set(world.zones),
         minute_index=world.minute_index,
-        tick_memo=tick_memo,
     )
     result: dict[str, int] = {}
     for resource_id in RESOURCE_IDS:

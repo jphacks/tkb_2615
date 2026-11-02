@@ -9,7 +9,15 @@ While the Python rules exist this checks that: with this directory first on PYTH
 
 each entry that falls back to a Python rule (`kernel_first`, `segments.py`, the driver's
 `or_rule!`) also runs the rule after a moved error, on the state the kernel left unchanged, and
-counts whether it raised the same class and text. The rule then runs where it wouldn't have, so a
+counts whether it raised the same class and text. With SHELTERSIM_ERROR_COMPARE_STRICT=1 a
+difference raises AssertionError at once, so a test fails.
+
+text_check.py (lane L8a) does the same for the saved texts of events, EventSuppressed and
+EventApplicationError, including the dispatch loop's direct calls and the rules that change the
+world before they suppress (on a copy). This file compares the other errors, those of the L8b exits
+of core/errors.rs, which come before any change, and also on the paths text_check.py doesn't watch:
+the steps of segments.py and the driver's or_rule!. The two never compare the same error.
+The rule then runs where it wouldn't have, so a
 test that reads the state after the error may see its writes: only the counts are the result.
 docs/rust-port/lanes/l8-texts-rest.md has the numbers.
 """
@@ -54,11 +62,20 @@ def install(output: str) -> None:
     NATIVE = native
     TARGET = Path(output) / f"{os.getpid()}.jsonl"
 
-    def check(python_rule: Any, arguments: tuple, options: dict, error: Exception) -> None:
-        native.errors_compare(error, lambda: python_rule(*arguments, **options))
+    class Check:
+        """kernel_first's `_error_check`: the form of text_check.py's `_outcome_check`."""
 
-    kernels._error_check = check
-    native.errors_switch(True)
+        def before(self, python_rule: Any, arguments: tuple, options: dict) -> None:
+            # These errors come before any change, so the rule runs on the same world after.
+            return None
+
+        def after(
+            self, python_rule: Any, arguments: tuple, options: dict, error: Exception, token: Any
+        ) -> None:
+            native.errors_compare(error, lambda: python_rule(*arguments, **options))
+
+    kernels._error_check = Check()
+    native.errors_switch(True, os.environ.get("SHELTERSIM_ERROR_COMPARE_STRICT") == "1")
     atexit.register(write)
 
 

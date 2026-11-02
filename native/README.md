@@ -38,9 +38,15 @@ Checkpoint document) and times them.
   `Unsupported` is a type of its own in `lib.rs`: building one notes its line for
   `benchmarks/rule_shadow/refusal_census.py` (`src/core/census.rs`), off unless that tool turns it
   on. New refusals are counted without doing anything.
-  `src/core/errors.rs` is the other exit: where the Python rule raises its own error (a
-  `ValueError`, `StateInvariantError`, or the `EventSuppressed` and `EventApplicationError` of an
-  event), a kernel raises that class with that text, in the rule's order of checks and before any
+  An event's expected outcome is not a refusal. A kernel raises `EventSuppressed` or
+  `EventApplicationError` itself, with the Python rule's text and in the rule's order of checks,
+  through `src/core/errors.rs` (`errors::suppressed`, `errors::failed`; the type tests of a check,
+  such as `errors::int_not_bool`, say Unsupported only where Rust can't tell). The text is saved, as
+  the event record's `detail`. `benchmarks/rule_shadow/text_check.py` compares each one with the
+  Python rule's while that exists (docs/rust-port/lanes/l8-texts-events.md).
+  The same file has the exits for the rules' other errors: where the Python rule raises a
+  `ValueError`, a `StateInvariantError` or a class of a contract, a kernel raises that class with
+  that text, in the rule's order of checks and before any
   change, instead of `Unsupported`. A Python call the rule makes too (a contract's
   `model_validate`) has its error relayed as it is. With `errors_switch(True)`
   (`benchmarks/rule_shadow/error_compare.py`) the entries that fall back to a Python rule also run
@@ -57,7 +63,7 @@ Checkpoint document) and times them.
   world's core again after any callback (`core_of`), since a copy-and-swap may have moved it.
   `NamespaceMirror.generation_of(tree)` changes with every write that reaches a tree, from Python
   or from Rust, so a check that read a namespace need not read it again
-  (`state_mirror.namespace_stamp`, `field_stamp`; `core/tick_validation.py`).
+  (`state_mirror.namespace_stamp`, `field_stamp`; `src/rules/after_tick.rs`).
 - `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
   `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`
   (`docs/rust-port/lanes/m6-population.md`).
@@ -153,7 +159,8 @@ each OS, because both call the same libm.
 - `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
   `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
   handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
-  modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
+  modules are Python, called by name. The facility modifier raises its suppressed and failed texts
+  itself (`core/errors.rs`); anything else but a success says `Unsupported` with the world as it
   was. `state/effect_program.rs` is the row of `effect_program_v1`.
 
 - `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,
@@ -287,19 +294,23 @@ each OS, because both call the same libm.
   entity and event rules of `WorldState.validate` at the end of a tick, reading the objects and not
   the entity rows. It has no text: it returns the zones whose capacity is still the Python rule's,
   or says Unsupported and the Python rules run. `population_dynamics(world)` is the validator of
-  that namespace with no one pending. See `docs/rust-port/lanes/m5-metrics.md`.
-- `rules.after_tick`: all of `WorldState.validate_after_tick` on a tick where nothing
-  `TickValidationMemo.begin` compares has moved (`src/rules/after_tick.rs`):
-  `after_tick(world, memo, shadow=False)` returns the zones whose capacity is still the Python
-  rule's, with the memo moved on, or says Unsupported with the memo as it was and the Python check
-  runs. `Plan` is what it reads of `model_configs`, made by `core/tick_validation.py` after a check
-  passed. Validators come from `_RUST_VALIDATORS`; a rule with none is called in Python from there.
-  `install` lists what a patch of sends the tick to the Python check. `stats()` says what ran. See
-  `docs/rust-port/lanes/m6-validate.md`.
+  that namespace with no one pending, `validate_presence(world)` the one of the declared
+  `population_presence_v1`. See `docs/rust-port/lanes/m5-metrics.md`.
+- `rules.after_tick`: all of `WorldState.validate_after_tick` (`src/rules/after_tick.rs`), at every
+  tick of a WorldState v6: `after_tick(world, memo, shadow=False)` returns with the memo
+  (`TickMemo`, in `world.__dict__["_tick_memo"]`) moved on, or says Unsupported with the memo as it
+  was but for the configs' plan, and `validate(validate_event_history=False)` runs with no memo.
+  `Plan` is what it reads of `model_configs`, made by the contracts in `core/tick_validation.py`
+  (`tick_plan`) when the configs change. Validators come from `_RUST_VALIDATORS`; a namespace with
+  none is refused. `TickMemo.unsettled_requests` serves `WorldState.unsettled_support_requests`;
+  `facts()` is for tests and shadows. `install` lists what a patch of sends the tick to the Python
+  check. `stats()` says what ran. See `docs/rust-port/lanes/l7-validate.md`.
 - `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
   (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
-  `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
-  Python rules through `recent_passed(world)`, checked the recent receipts.
+  `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel that
+  appended the recent receipts, or the Python rules through `recent_passed(world)` or
+  `history_passed(world)`, checked them; it compares a recent staff operation receipt with the
+  retained completions of `staff_operations_v1` itself.
   `rules.common_operations.record_shared_operation(world, record)` appends a `CareTransitionReceipt`.
 - `state.resource_ledger.ROW`, `validate`: Rust owns `resource_ledger_v1`
   (`src/state/resource_ledger.rs`): the accounts typed, the audit trail as the canonical bytes of each

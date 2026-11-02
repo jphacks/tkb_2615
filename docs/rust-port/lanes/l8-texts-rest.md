@@ -4,10 +4,11 @@
 
 ## 共通の出口（L8a と共有）
 
-- **`native/src/core/errors.rs` は L8a のファイルです。** 始めたときに L8a のワークツリーにあった版をそのまま写し、後ろに L8b の節を足しました（`value_error`、`type_error`、`invariant`、`StateInvariantError` などの Python のクラス、`relayed`、`corrupt`、比較の `errors_switch`、`errors_compare`、`errors_take`）。名前は重なりません。**マージのときは L8a の最新の版に、この節を足し直してください。**
-- `core/kernels.py` の `kernel_first` は、L8a の `_outcome_check`（`ValueError` のとき）と同じ形の `_error_check`（そのほかの移した文）と `_fell_back`（断りの後に Python の規則が出した例外を数える）を持ちます。`segments.py` も同じ2つを見ます。driver の `or_rule!` は Rust の中で比べます。**どれも道具が入れたときだけ動き、普段は例外の道で属性を1回読むだけです。**
-- **比べ方：** 移した文を作ると、その場所（`#[track_caller]`）と文を覚えます。`SHELTERSIM_ERROR_COMPARE=DIR`（`benchmarks/rule_shadow/error_compare.py`）のとき、Python の規則に戻る入口は、kernel が移した文を出したら、同じ引数・同じ（変わっていない）状態で Python の規則も動かし、クラスと文が同じかを数えます。kernel の直接のテストは、その場で `__wrapped__` と比べます。
-- **断りの棚卸しの追加：** `refusal_census.py` は、断りの後に Python の規則が出した例外（`python_raised`）と、`errors.rs` の文がどこで作られたか（`moved`）も数えます。これで「Python が文を出す断り」を測って選びました（下）。
+- **`native/src/core/errors.rs` は L8a のファイルで、その後ろに L8b の節があります**（`value_error`、`invariant`、`corrupt`、`relayed`、Python のクラス `StateInvariantError`、比較の `errors_switch(on, strict)`、`errors_compare`、`errors_take`）。型の判定は L8a の `exactly_int`、`int_not_bool`、`real_number`、`repr_str` を使います（`staff_dynamics.rs`、`queues.rs`、`overlay.rs`）。`invariant` と `corrupt` は手順4の入口が使うまで呼ばれません。
+- **L8b の文には L8a の印（`_sheltersim_native_outcome`）を付けていません。** `effects.rs` の `refused_by_python` のように Python の呼び出しの例外を `Unsupported` にする段は、L8b の文も `Unsupported` にして Python に決めさせます（前と同じ結果）。
+- `core/kernels.py` の `kernel_first` は3つの印を見ます。L8a の `_outcome_check`（`before`/`after`。イベントの文）、L8b の `_error_check`（同じ形。L8b の文は何も変える前に出るので `before` は何も持ちません）、`_fell_back`（`fell_back(label, refusal, error)`。棚卸しが、断りの後に Python の規則が出した例外を数える）。3つとも `None` なら前と同じ try/except だけです。`segments.py` は `_error_check` と `_fell_back` を、driver の `or_rule!` は Rust の中で比べます。
+- **比べる道具は2つ残しました。比べるものが違うからです。** L8a の `text_check.py` はイベントの保存される文（`EventSuppressed`、`EventApplicationError`）を、ディスパッチの直接の呼び出しと、抑止の前に世界を変える規則（写しの上で）まで含めて比べます。L8b の `error_compare.py`（`SHELTERSIM_ERROR_COMPARE=DIR`、`SHELTERSIM_ERROR_COMPARE_STRICT=1`）は L8b の出口の文（それ以外のクラス）を、`text_check.py` が見ない `segments.py` と driver の `or_rule!` の道でも比べます。同じ例外を両方が比べることはありません（L8b の文は Rust の側で作った場所を覚え、その文のときだけ比べます）。
+- **断りの棚卸しの追加：** `refusal_census.py` は、断りの後に Python の規則が出した例外（`python_raised`）と、L8b の出口の文がどこで作られたか（`moved`）も数えます。これで「Python が文を出す断り」を測って選びました（下）。
 
 ## 選び方（実測）
 

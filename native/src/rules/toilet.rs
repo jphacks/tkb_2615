@@ -13,6 +13,7 @@ use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBool, PyList, PySlice, PyString};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors;
 use crate::core::mathx::py_max;
 use crate::core::rng::{Key, KeyedDraws};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, namespace_is_absent, unsupported};
@@ -602,20 +603,24 @@ fn start_one<'py>(
 /// `ToiletServiceCompletionHandler.apply` up to `after_complete`, with `complete_toilet_service`.
 pub(crate) fn complete_event<'py>(world: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<()> {
     let py = world.py();
-    let (Some(facility_id), Some(agent_id), Some(task_id)) = (event.text("facility_id")?, event.text("agent_id")?, event.text("task_id")?) else {
-        return unsupported("the completion lacks an ID");
+    let ids = (event.text("facility_id")?, event.text("agent_id")?, event.text("task_id")?);
+    let (Some(facility_id), Some(agent_id), Some(task_id)) = ids else {
+        return errors::failed(py, "toilet completion requires facility_id, agent_id, and task_id");
     };
     if facility_id.is_empty() || agent_id.is_empty() || task_id.is_empty() {
-        return unsupported("the completion lacks an ID");
+        return errors::failed(py, "toilet completion requires facility_id, agent_id, and task_id");
     }
     let due = event.due_minute()?;
     let store = entities_of(world)?;
+    let due_task = EntityStore::with_rows(&store, |rows| Ok(rows.active_tasks.get(&*task_id).is_some_and(|task| task.due_minute == due)))?;
+    if !due_task {
+        return errors::failed(py, "toilet completion does not match an active due task");
+    }
     let (staff_id, task_start) = EntityStore::with_rows(&store, |rows| {
         let Some(task) = rows.active_tasks.get(&*task_id) else {
             return unsupported("no active task");
         };
-        if task.due_minute != due
-            || &*task.kind != "toilet_service"
+        if &*task.kind != "toilet_service"
             || task.agent_id.as_deref() != Some(&*agent_id)
             || task.resource_id.as_deref() != Some(&*facility_id)
         {

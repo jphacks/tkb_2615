@@ -121,9 +121,8 @@ def prepare(output: str) -> None:
         recorder.seen["entity.kernel_ran"] += 1
         if left:
             recorder.seen["entity.zones_left_to_python"] += len(left)
-        memo = world.__dict__["_tick_memo"]
         try:
-            pending = world._validate_entity_rules(config, memo)
+            pending = world._validate_entity_rules(config)
             world._validate_event_rules(pending, False)
         except Exception as error:  # noqa: BLE001 - only compared with what the kernel did
             recorder.differ(f"entity: the kernel took what Python turned down: {error}")
@@ -171,3 +170,24 @@ def prepare(output: str) -> None:
 
     check_rules.entity_rules = entity_shadow
     check_rules.population_dynamics = population_shadow
+
+    # The end-of-tick check calls the entity rules inside rules/after_tick.rs, which shadows keep
+    # off, so they are compared here after each check that passed, on every request.
+    from sheltersim.core.world import InitialNeedProfile, NeedState, WorldState
+    from sheltersim.experiments.scenario import ResourceServiceConfig
+
+    validate_after_tick = WorldState.validate_after_tick
+
+    def checked(world: Any) -> None:
+        validate_after_tick(world)
+        if world.schema_version != 6 or "resource_service" not in world.model_configs:
+            return
+        config = ResourceServiceConfig.model_validate(world.model_configs["resource_service"])
+        try:
+            entity_shadow(
+                world, list(world.support_requests.values()), config, InitialNeedProfile, NeedState
+            )
+        except unsupported:
+            pass
+
+    WorldState.validate_after_tick = checked  # type: ignore[method-assign]

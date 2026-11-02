@@ -38,6 +38,8 @@ from typing import Any
 OUTPUT = os.environ.get("SHELTERSIM_RULE_SHADOW")
 # Not a shadow: it counts refusals (refusal_census.py), and needs no comparison to run.
 CENSUS_OUTPUT = os.environ.get("SHELTERSIM_REFUSAL_CENSUS")
+# Not a shadow either: it compares saved outcome texts with the Python rules' (text_check.py).
+TEXT_OUTPUT = os.environ.get("SHELTERSIM_TEXT_CHECK")
 
 
 def _floats(value: Any) -> int:
@@ -159,6 +161,11 @@ def _install(output: str) -> None:
 
 if CENSUS_OUTPUT:
     importlib.import_module("refusal_census").install(CENSUS_OUTPUT)
+
+if TEXT_OUTPUT:
+    importlib.import_module("text_check").install(
+        TEXT_OUTPUT, os.environ.get("SHELTERSIM_TEXT_CHECK_STRICT") == "1"
+    )
 
 # Not a shadow either: it compares the kernels' moved errors with the Python rules'
 # (error_compare.py).

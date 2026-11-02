@@ -3,10 +3,11 @@
 //! care receipt; the other receipts come through the forwarded writes of the Python rule
 //! (docs/rust-port/lanes/m4-staff.md).
 //!
-//! A receipt is its canonical JSON, with what the rules read of it. `verified` says the kernel
-//! itself checked it against its event when it was appended, so that a tick's validation needs
-//! nothing more of it. A forwarded or restored receipt isn't, and the Python rule checks it while
-//! it is among the recent ones.
+//! A receipt is its canonical JSON, with what the rules read of it. `verified` says it was checked
+//! against its contract and its event: by the kernel that appended it, or by the Python rules of a
+//! check that passed. A tick's check then needs nothing more of it, but the retained staff
+//! completions for a staff operation receipt. A receipt restored or written past the kernels isn't,
+//! until the Python rules pass it.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -154,8 +155,8 @@ pub(crate) struct Receipt {
     pub(crate) minute: Option<i64>,
     pub(crate) event_id: Option<Arc<str>>,
     pub(crate) verified: bool,
-    /// Its rule also reads the retained `staff_operations_v1.history`, so a tick's rules read it
-    /// again as long as it is recent.
+    /// Its rule also reads the retained `staff_operations_v1.history`, so a tick's check reads that
+    /// again as long as it is recent (`staff_operations::completion_agrees`).
     pub(crate) reads_staff_history: bool,
     pub(crate) bytes: Box<[u8]>,
 }
@@ -200,7 +201,21 @@ impl Receipts {
     fn recent_passed(&mut self, minute_index: i64) {
         let start = self.recent_start(minute_index);
         for item in self.items.iter_mut().skip(start) {
-            item.verified = !item.reads_staff_history;
+            item.verified = true;
+        }
+    }
+
+    /// The rules have just replayed the whole history and passed it.
+    fn all_passed(&mut self) {
+        for item in self.items.iter_mut() {
+            item.verified = true;
+        }
+    }
+
+    /// The receipt of this event, which the kernel that appended it has checked.
+    pub(crate) fn appended_passed(&mut self, event_id: &str) {
+        if let Some(item) = self.items.iter_mut().rev().find(|item| item.event_id.as_deref() == Some(event_id)) {
+            item.verified = true;
         }
     }
 
@@ -326,6 +341,9 @@ fn validate_tick(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     let mirror = mirror_of(world, NAME)?;
     // (the request, the event that says who has it) of each head with a staff member.
     let mut assigned = Vec::new();
+    // The recent staff operation receipts, which `_validate_staff_operation_receipt` reads again.
+    let mut staff_receipts: Vec<Box<[u8]>> = Vec::new();
+    let mut truncated = false;
     let accepted = NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
         if !row.header_is_valid() || row.history.items.len() > MAX_HISTORY {
             return Ok(false);
@@ -343,7 +361,11 @@ fn validate_tick(world: &Bound<'_, PyAny>) -> PyResult<bool> {
                 return Ok(false);
             }
             seen.push(event_id);
+            if item.reads_staff_history {
+                staff_receipts.push(item.bytes.clone());
+            }
         }
+        truncated = row.history_truncated;
         EntityStore::with_rows(&store, |rows| {
             for (id, head) in &row.support_requests.map {
                 let Some(request) = rows.support_requests.get(id) else {
@@ -366,6 +388,14 @@ fn validate_tick(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     })?;
     if !accepted {
         return Ok(false);
+    }
+    for bytes in &staff_receipts {
+        let Ok(receipt) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+            return Ok(false);
+        };
+        if !crate::state::staff_operations::completion_agrees(world, &receipt, truncated)? {
+            return Ok(false);
+        }
     }
     if !assigned.is_empty() {
         let log = world.getattr(intern!(py, "event_log"))?;
@@ -412,10 +442,24 @@ fn recent_passed(world: &Bound<'_, PyAny>) -> PyResult<()> {
     })
 }
 
+/// The Python rules have just replayed this world's whole history and passed it.
+#[pyfunction]
+fn history_passed(world: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    if namespace_is_absent(world, intern!(py, NAME))? {
+        return Ok(());
+    }
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror_of(world, NAME)?, |row| {
+        row.history.all_passed();
+        Ok(())
+    })
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add("ROW", Py::new(py, RowType::new("shared_operations", load_row::<SharedOperationsRow>))?)?;
     m.add_function(wrap_pyfunction!(validate_tick, m)?)?;
     m.add_function(wrap_pyfunction!(recent_passed, m)?)?;
+    m.add_function(wrap_pyfunction!(history_passed, m)?)?;
     Ok(())
 }

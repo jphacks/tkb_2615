@@ -12,11 +12,11 @@ from typing import Any
 from sheltersim import native
 from sheltersim.contracts.policies import selected_models
 from sheltersim.core import state_mirror
+from sheltersim.core.context import ContextScope
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.save_validation import SaveValidationMemo
 from sheltersim.core.saved_items import SavedItems
 from sheltersim.core.state_mirror import rust_validated
-from sheltersim.core.tick_validation import TickValidationMemo
 from sheltersim.domain.environment import (
     ZONE_ENVIRONMENT_STATE_KEY,
     create_zone_environment_runtime_state,
@@ -90,30 +90,12 @@ def _event_from_document(document: dict[str, Any]) -> ScheduledEvent:
     return ScheduledEvent(**document)
 
 
-# native/src/rules/tick_validation.rs; benchmarks/rule_shadow and the python_rules mark replace it.
+# native/src/rules/after_tick.rs: validate_after_tick in one call, with its memo. The entity rules
+# it calls are native/src/rules/tick_validation.rs; benchmarks/rule_shadow and the python_rules mark
+# replace this one.
 _entity_rules_kernel = native.rules("tick_validation").entity_rules if native.available() else None
-# native/src/rules/after_tick.rs: validate_after_tick on a tick where nothing it compares moved.
 _after_tick_kernel = native.rules("after_tick").after_tick if native.available() else None
-
-
-def _entity_rules_accepted(
-    world: WorldState, tick_memo: TickValidationMemo | None, resource_config: Any
-) -> list[tuple[str, int]] | None:
-    """The zones whose capacity is left to check if the kernel takes the rest of the world's
-    entity and event rules, or None for the Python rules to run. Only at the end of a tick: a
-    save reads everything (validate's docstring)."""
-    if tick_memo is None or _entity_rules_kernel is None or world.schema_version != 6:
-        return None
-    try:
-        return _entity_rules_kernel(
-            world,
-            tick_memo.requests_to_check(world.support_requests),
-            resource_config,
-            InitialNeedProfile,
-            NeedState,
-        )
-    except native.Unsupported:
-        return None
+_TickMemo = native.rules("after_tick").TickMemo if native.available() else None
 
 
 @dataclass
@@ -308,17 +290,15 @@ class WorldState:
         *,
         _in_flight_event: ScheduledEvent | None = None,
         validate_event_history: bool = True,
-        _tick_memo: TickValidationMemo | None = None,
         _history_memo: SaveValidationMemo | None = None,
     ) -> None:
         """Check world invariants, optionally auditing immutable EventLog history.
 
-        _tick_memo is for validate_after_tick only: checks of what it shows unchanged
-        since the last end-of-tick check are skipped. _history_memo is for a Checkpoint
-        capture only: entries of append-only histories that are unchanged since they
-        last passed are not read again (core/save_validation.py).
+        _history_memo is for a Checkpoint capture only: entries of append-only histories
+        that are unchanged since they last passed are not read again
+        (core/save_validation.py). native/src/rules/after_tick.rs stands in front of the
+        per-tick check (validate_event_history=False), so a rule added here belongs there too.
         """
-        configs_unchanged = _tick_memo is not None and _tick_memo.configs_unchanged
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -328,15 +308,10 @@ class WorldState:
                 f"unsupported world-state schema version: {self.schema_version}"
             )
         try:
-            if configs_unchanged:
-                psychology_model = _tick_memo.psychology_model
-            else:
-                psychology_model = selected_models(self.model_configs)["psychology"]
-                if _tick_memo is not None:
-                    _tick_memo.psychology_model = psychology_model
+            psychology_model = selected_models(self.model_configs)["psychology"]
             from sheltersim.contracts.runtime import validate_declared_states
 
-            validate_declared_states(self, tick_memo=_tick_memo)
+            validate_declared_states(self)
         except ValueError as exc:
             raise StateInvariantError(str(exc)) from exc
         extension_keys = {
@@ -361,7 +336,6 @@ class WorldState:
                 validate_simulator_extensions(
                     self,
                     validate_event_history=validate_event_history,
-                    tick_memo=_tick_memo,
                     history_memo=_history_memo,
                 )
             except (ValueError, KeyError, TypeError) as exc:
@@ -373,23 +347,16 @@ class WorldState:
             )
         resource_config = None
         if resource_service_enabled:
-            if configs_unchanged:
-                resource_config = _tick_memo.resource_config
-            else:
-                try:
-                    resource_config = ResourceServiceConfig.model_validate(
-                        self.model_configs["resource_service"]
-                    )
-                except ValueError as exc:
-                    raise StateInvariantError(f"invalid resource_service config: {exc}") from exc
-                if self.model_configs["resource_service"] != resource_config.model_dump(
-                    mode="json"
-                ):
-                    raise StateInvariantError(
-                        "resource_service config must contain the complete canonical v1 values"
-                    )
-                if _tick_memo is not None:
-                    _tick_memo.resource_config = resource_config
+            try:
+                resource_config = ResourceServiceConfig.model_validate(
+                    self.model_configs["resource_service"]
+                )
+            except ValueError as exc:
+                raise StateInvariantError(f"invalid resource_service config: {exc}") from exc
+            if self.model_configs["resource_service"] != resource_config.model_dump(mode="json"):
+                raise StateInvariantError(
+                    "resource_service config must contain the complete canonical v1 values"
+                )
             if RESOURCE_LEDGER_KEY not in self.model_state:
                 raise StateInvariantError("WorldState v6 requires a resource ledger")
             if validate_event_history or not rust_validated(self, "resource_service_v1"):
@@ -563,22 +530,17 @@ class WorldState:
                         )
         elif "resource_service_v1" in self.model_state:
             raise StateInvariantError("resource_service state requires WorldState v6")
-        if configs_unchanged:
-            information_config = _tick_memo.information_config
-        else:
-            try:
-                information_config = InformationSpreadConfig.from_mapping(
-                    self.model_configs.get("information_spread")
+        try:
+            information_config = InformationSpreadConfig.from_mapping(
+                self.model_configs.get("information_spread")
+            )
+        except ValueError as exc:
+            raise StateInvariantError(f"invalid information_spread config: {exc}") from exc
+        if "information_spread" in self.model_configs:
+            if self.model_configs["information_spread"] != information_config.to_dict():
+                raise StateInvariantError(
+                    "information_spread config must contain the complete canonical v1 values"
                 )
-            except ValueError as exc:
-                raise StateInvariantError(f"invalid information_spread config: {exc}") from exc
-            if "information_spread" in self.model_configs:
-                if self.model_configs["information_spread"] != information_config.to_dict():
-                    raise StateInvariantError(
-                        "information_spread config must contain the complete canonical v1 values"
-                    )
-            if _tick_memo is not None:
-                _tick_memo.information_config = information_config
         if information_config.enabled:
             try:
                 if not rust_validated(self, INFORMATION_SPREAD_STATE_KEY):
@@ -623,7 +585,7 @@ class WorldState:
         try:
             if not rust_validated(self, ZONE_ENVIRONMENT_STATE_KEY):
                 validate_zone_environment_runtime_state(
-                    self, validate_event_history=validate_event_history, tick_memo=_tick_memo
+                    self, validate_event_history=validate_event_history
                 )
         except ValueError as exc:
             raise StateInvariantError(f"invalid zone environment state: {exc}") from exc
@@ -633,14 +595,7 @@ class WorldState:
             validate_effect_program_state(self, validate_event_history=validate_event_history)
         except ValueError as exc:
             raise StateInvariantError(f"invalid EffectProgram state: {exc}") from exc
-        # What the kernel accepted is not read again; it leaves the zones it doesn't decide.
-        left_zones = _entity_rules_accepted(self, _tick_memo, resource_config)
-        pending_events: tuple[ScheduledEvent, ...] = ()
-        if left_zones is None:
-            pending_events = self._validate_entity_rules(resource_config, _tick_memo)
-        else:
-            for zone_id, occupancy in left_zones:
-                self._validate_zone_capacity(zone_id, occupancy)
+        pending_events = self._validate_entity_rules(resource_config)
         # The kernel answers for the state of a tick; replaying the audit trail stays in Python.
         if RESOURCE_LEDGER_KEY in self.model_state and (
             validate_event_history or not rust_validated(self, RESOURCE_LEDGER_KEY)
@@ -687,12 +642,11 @@ class WorldState:
                     validate_resource_ledger(*ledger_arguments, history_memo=_history_memo)
                 else:
                     validate_resource_ledger_state(
-                        *ledger_arguments, minute_index=self.minute_index, tick_memo=_tick_memo
+                        *ledger_arguments, minute_index=self.minute_index
                     )
             except ValueError as exc:
                 raise StateInvariantError(f"invalid resource ledger: {exc}") from exc
-        if left_zones is None:
-            self._validate_event_rules(pending_events, validate_event_history)
+        self._validate_event_rules(pending_events, validate_event_history)
 
     def _validate_zone_capacity(self, zone_id: str, occupancy: int) -> None:
         from sheltersim.domain.temporary_spaces import effective_total_zone_capacity
@@ -704,9 +658,7 @@ class WorldState:
                 "physical-room capacity"
             )
 
-    def _validate_entity_rules(
-        self, resource_config: Any, _tick_memo: TickValidationMemo | None
-    ) -> tuple[ScheduledEvent, ...]:
+    def _validate_entity_rules(self, resource_config: Any) -> tuple[ScheduledEvent, ...]:
         """The rules of entities and of the events that serve them; returns the pending events.
 
         native/src/rules/tick_validation.rs stands in front of these and the event rules at the
@@ -1292,11 +1244,7 @@ class WorldState:
 
         requests_by_agent: dict[str, list[SupportRequestState]] = {}
         timeouts_by_request: dict[Any, list[ScheduledEvent]] | None = None
-        for request in (
-            self.support_requests.values()
-            if _tick_memo is None
-            else _tick_memo.requests_to_check(self.support_requests)
-        ):
+        for request in self.support_requests.values():
             if not request.id or request.id not in self.support_requests:
                 raise StateInvariantError("support request mapping key must match its stable ID")
             if request.agent_id not in self.agents:
@@ -1502,46 +1450,39 @@ class WorldState:
             raise StateInvariantError("event ID counter must be greater than scheduled sequences")
 
     def validate_after_tick(self) -> None:
-        """The per-tick validation, skipping what is proven unchanged since the last one.
+        """The per-tick validation: validate(validate_event_history=False), as one Rust call.
 
-        With the rust kernels each world keeps a memo of the last passed check
-        (core/tick_validation.py); it does not outlive a failed one. Without them this
-        is validate(validate_event_history=False).
+        With the rust kernels each world keeps the memo of the last check the kernel passed
+        (native/src/rules/after_tick.rs), which skips what is proven unchanged since; it does not
+        outlive a failed check. A state the kernel doesn't take, and every world without the
+        kernels, gets the Python check, which passes or raises its own text.
         """
-        if not native.available():
+        if _after_tick_kernel is None:
             self.validate(validate_event_history=False)
             return
         memo = self.__dict__.get("_tick_memo")
         # Rules bound past times by the clock, so a memo only holds going forward.
         if memo is None or memo.minute > self.minute_index:
-            memo = self.__dict__["_tick_memo"] = TickValidationMemo()
-        try:
-            with memo.config_scope():
-                left_zones = None
-                if memo.steady is not None:
-                    try:
-                        left_zones = _after_tick_kernel(self, memo)
-                    except native.Unsupported:
-                        pass
-                if left_zones is None:
-                    self._validate_with_memo(memo)
-                else:
-                    for zone_id, occupancy in left_zones:
-                        self._validate_zone_capacity(zone_id, occupancy)
-        except BaseException:
-            del self.__dict__["_tick_memo"]
-            raise
+            memo = self.__dict__["_tick_memo"] = _TickMemo()
+        # The parsed geometry configs are kept across ticks while the configs stand.
+        from sheltersim.domain.geometry_overlay import _CONFIG_SCOPE
 
-    def _validate_with_memo(self, memo: TickValidationMemo) -> None:
-        """validate_after_tick's Python rules, which also make what the kernel needs next tick."""
-        memo.begin(self)
-        self.validate(validate_event_history=False, _tick_memo=memo)
-        memo.commit(self)
+        try:
+            with ContextScope(_CONFIG_SCOPE, memo.geometry_scope):
+                try:
+                    _after_tick_kernel(self, memo)
+                    return
+                except native.Unsupported:
+                    pass
+                self.validate(validate_event_history=False)
+        except BaseException:
+            self.__dict__.pop("_tick_memo", None)
+            raise
 
     def unsettled_support_requests(self) -> Iterable[SupportRequestState]:
         """Every request that is pending or assigned, in the order of support_requests,
         and possibly some that are not, so a caller reads each status. Most requests of
-        a long Run are settled; the last end-of-tick check knows which (core/tick_validation.py).
+        a long Run are settled; the last end-of-tick check knows which.
         """
         memo = self.__dict__.get("_tick_memo")
         unsettled = None if memo is None else memo.unsettled_requests(self.support_requests)

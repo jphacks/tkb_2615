@@ -17,15 +17,17 @@ Rule = TypeVar("Rule", bound=Callable[..., Any])
 
 # benchmarks/rule_shadow/text_check.py sets this to compare a kernel's expected outcome
 # (EventSuppressed, EventApplicationError: saved texts) with what the Python rule raises for the
-# same input: check(python_rule, arguments, options, error). None, nothing is called.
-Check = Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any], Exception], None]
-_outcome_check: Check | None = None
-# benchmarks/rule_shadow/error_compare.py sets this to compare any other error a kernel raised in a
-# Python rule's words (native/src/core/errors.rs) with the rule's: check(python_rule, arguments,
-# options, error). benchmarks/rule_shadow/refusal_census.py sets the second to count what the
-# Python rule raised after a refusal: seen(label, refusal, error). None, nothing is called.
-_error_check: Check | None = None
-_fell_back: Callable[[str, Exception, Exception], None] | None = None
+# same input. It has before(python_rule, arguments, options) -> token, called before the kernel,
+# and after(python_rule, arguments, options, error, token) on a ValueError of the kernel. None:
+# nothing is called.
+_outcome_check: Any = None
+# benchmarks/rule_shadow/error_compare.py sets this, in the same form, to compare the kernels' other
+# errors in a Python rule's words (ValueError, StateInvariantError, a contract's: the exits of lane
+# L8b in native/src/core/errors.rs) with the rule's. Those come before any change, so its before()
+# keeps nothing. benchmarks/rule_shadow/refusal_census.py sets the last to count what the Python
+# rule raised after a refusal: fell_back(label, refusal, error). None: nothing is called.
+_error_check: Any = None
+_fell_back: Any = None
 
 
 def kernel_first(module: str, name: str) -> Callable[[Rule], Rule]:
@@ -47,26 +49,50 @@ def kernel_first(module: str, name: str) -> Callable[[Rule], Rule]:
 
         @wraps(python_rule)
         def run(*arguments: Any, **options: Any) -> Any:
-            try:
-                return kernel(*arguments, **options)
-            except unsupported as refusal:
+            check = _outcome_check
+            other = _error_check
+            seen = _fell_back
+            if check is None and other is None and seen is None:
                 try:
+                    return kernel(*arguments, **options)
+                except unsupported:
                     return python_rule(*arguments, **options)
-                except Exception as error:
-                    seen = _fell_back
-                    if seen is not None:
-                        seen(label, refusal, error)
-                    raise
-            except Exception as error:
-                if isinstance(error, ValueError):
-                    check = _outcome_check
-                    if check is not None:
-                        check(python_rule, arguments, options, error)
-                other = _error_check
-                if other is not None:
-                    other(python_rule, arguments, options, error)
-                raise
+            return _checked(
+                kernel, python_rule, label, check, other, seen, unsupported, arguments, options
+            )
 
         return run  # type: ignore[return-value]
 
     return decorate
+
+
+def _checked(
+    kernel: Any,
+    python_rule: Any,
+    label: str,
+    check: Any,
+    other: Any,
+    seen: Any,
+    unsupported: type[Exception],
+    arguments: tuple[Any, ...],
+    options: dict[str, Any],
+) -> Any:
+    """`run` of kernel_first while a tool watches it: the same result, and the tools' calls."""
+    token = None if check is None else check.before(python_rule, arguments, options)
+    mine = None if other is None else other.before(python_rule, arguments, options)
+    try:
+        return kernel(*arguments, **options)
+    except unsupported as refusal:
+        if seen is None:
+            return python_rule(*arguments, **options)
+        try:
+            return python_rule(*arguments, **options)
+        except Exception as error:
+            seen.fell_back(label, refusal, error)
+            raise
+    except Exception as error:
+        if check is not None and isinstance(error, ValueError):
+            check.after(python_rule, arguments, options, error, token)
+        if other is not None:
+            other.after(python_rule, arguments, options, error, mine)
+        raise

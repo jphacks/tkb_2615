@@ -175,7 +175,13 @@ def install(output: str) -> None:
 
     from sheltersim.core import kernels
 
-    kernels._fell_back = native.census_fell_back
+    class FellBack:
+        """kernel_first's `_fell_back`: what the Python rule raised after a refusal."""
+
+        def fell_back(self, label: str, refusal: Exception, error: Exception) -> None:
+            native.census_fell_back(label, refusal, error)
+
+    kernels._fell_back = FellBack()
 
     from sheltersim.core.engine import TickEngine
     from sheltersim.core.world import WorldState

@@ -138,3 +138,35 @@ def live_checkpoint_world() -> Any:
     assert world.event_queue.pending()
     assert world.event_log.records
     return world
+
+
+# The attribute an outcome a kernel made carries (native/src/core/errors.rs).
+NATIVE_OUTCOME = "_sheltersim_native_outcome"
+
+
+def kernel_says_python_s_text(handler: Any, world: Any, event: Any) -> tuple[str, str]:
+    """The handler's kernel raises its Python rule's outcome itself, with the same class and text.
+
+    `handler.apply` runs the kernel first; the outcome must be the kernel's own (not a refusal the
+    Python rule then worded), the world must be as it was, and the Python rule on a copy made
+    before must raise the same class with the same text. The class name and text, for the caller.
+    (docs/rust-port/lanes/l8-texts-events.md)
+    """
+    import copy
+
+    from sheltersim.events.models import EventApplicationError, EventSuppressed
+
+    def text(state: Any) -> str:
+        return state._canonical_text(state._canonical_data())
+
+    twin = copy.deepcopy(world)
+    before = text(world)
+    with pytest.raises((EventSuppressed, EventApplicationError)) as made:
+        handler.apply(world, event)
+    assert getattr(made.value, NATIVE_OUTCOME, False), f"the kernel refused: {made.value}"
+    assert text(world) == before
+    with pytest.raises((EventSuppressed, EventApplicationError)) as said:
+        type(handler).apply.__wrapped__(handler, twin, event)
+    assert type(made.value) is type(said.value)
+    assert str(made.value) == str(said.value)
+    return type(made.value).__name__, str(made.value)
