@@ -245,6 +245,7 @@ pub(crate) fn raise_noted<T>(py: Python<'_>, outcome: Outcome, text: &str) -> Py
         Ok(PyErr::from_value(instance))
     })();
     Err(made.unwrap_or_else(|error| error))
+}
 
 // ---- The other errors of the Python rules (lane L8b, docs/rust-port/lanes/l8-texts-rest.md) -------
 //
