@@ -43,6 +43,8 @@ DRIVEN_STEPS = (
     "_run_arbitrate_phase",
     "_arbitrate_services",
     "_assign_staff_support",
+    "_record_assigned_support",
+    "_consider_due_complaints",
     "_run_sample_phase",
     "_sample_information_contacts",
     "_sample_proximity_contacts",

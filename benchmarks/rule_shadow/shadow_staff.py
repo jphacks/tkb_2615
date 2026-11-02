@@ -1,9 +1,11 @@
 """Compare every kernel of native/src/rules/staff.rs with its Python rule at each call.
 
 A kernel runs on the world, and when it takes the call the Python rule runs on a twin of the world:
-copies of what the rule writes, and every event counter closed. A Python rule that would have
-started something, which the kernel must have refused, reaches `allocate_event_sequence` first and
-is reported. The validator is compared on what it accepts: the Python rule must accept that too.
+copies of what the rule writes, and every event counter closed. A Python rule that starts something
+reaches `allocate_event_sequence` first: then both run, each on its own copy of the world, and the
+results and the whole documents are compared. `assign_none`'s None hands the step to `assign_work`,
+which shadow_handlers_rest.py compares. The validator is compared on what it accepts: the Python
+rule must accept that too.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
 
+from shadow_handlers_rest import _outcome, _worlds, compare_worlds
 from shadow_kit import Recorder, text, values_in
 
 KEY = "staff_operations_v1"
@@ -104,26 +107,78 @@ def prepare(output: str) -> None:
             zone["sanitation"] < 1.0 for zone in state["zones"].values()
         )
 
-    def read_only(label: str, kernel: Any, rule: Any) -> Any:
+    def starting(label: str, kernel: Any, rule: Any) -> Any:
         def shadow(world: Any, minute: Any, *rest: Any) -> Any:
             recorder.seen[f"{label}.calls"] += 1
+            python_rule = rule().__wrapped__
+            try:
+                expected = python_rule(_Twin(world), minute, *rest)
+            except _WouldStart:
+                python_world, kernel_world = _worlds(world)
+                wanted = _outcome(lambda: python_rule(python_world, minute, *rest))
+                actual = _outcome(lambda: kernel(kernel_world, minute, *rest))
+                recorder.seen[f"{label}.starts"] += 1
+                if actual[0] == "Unsupported":
+                    recorder.reasons[f"{label}: {actual[1]}"] += 1
+                    if wanted[0] == "applied":
+                        recorder.differ(f"{label} at {minute}: refused: {actual[1]}")
+                elif text(actual) != text(wanted):
+                    recorder.differ(f"{label} at {minute}: {actual!r:.300} and {wanted!r:.300}")
+                elif actual[0] == "applied":
+                    compare_worlds(recorder, label, python_world, kernel_world)
+                    recorder.seen[f"{label}.started"] += len(actual[1])
+                return kernel(world, minute, *rest)
             try:
                 result = kernel(world, minute, *rest)
             except unsupported as reason:
                 recorder.reasons[f"{label}: {reason}"] += 1
                 raise
             recorder.seen[f"{label}.kernel_ran"] += 1
-            try:
-                expected = rule().__wrapped__(_Twin(world), minute, *rest)
-            except _WouldStart:
-                recorder.differ(f"{label} at {minute}: the Python rule starts something")
-                return result
             if expected != result:
                 recorder.differ(f"{label} at {minute}: {result!r} and {expected!r}")
             recorder.seen[f"{label}.values_compared"] += 1
             return result
 
         return shadow
+
+    travel = native.rules("travel")
+    route_kernel = travel.route
+
+    def route(controller: Any, origin: Any, destination: Any, agent_id: Any) -> Any:
+        if not controller.route_capacities:
+            return route_kernel(controller, origin, destination, agent_id)
+        recorder.seen["route_capacity.calls"] += 1
+        import copy
+        import dataclasses
+
+        from sheltersim.experiments.phases.propose import ProposePhase
+
+        python_world, kernel_world = _worlds(controller.world)
+
+        def on(world: Any) -> Any:
+            copied = copy.copy(controller)
+            copied.world = world
+            return copied
+
+        def plain(found: Any) -> Any:
+            return None if found is None else dataclasses.asdict(found)
+
+        wanted = _outcome(
+            lambda: plain(ProposePhase._route(on(python_world), origin, destination, agent_id))
+        )
+        actual = _outcome(
+            lambda: plain(route_kernel(on(kernel_world), origin, destination, agent_id))
+        )
+        if actual[0] == "Unsupported":
+            recorder.reasons[f"route_capacity: {actual[1]}"] += 1
+        elif text(actual) != text(wanted):
+            recorder.differ(f"route_capacity: {actual!r:.300} and {wanted!r:.300}")
+        else:
+            compare_worlds(recorder, "route_capacity", python_world, kernel_world)
+            recorder.seen["route_capacity.none"] += actual[1] is None
+        return route_kernel(controller, origin, destination, agent_id)
+
+    travel.route = route
 
     def assign_pending(service: Any, minute: Any, *, validate_state: bool = True) -> Any:
         recorder.seen["pending.calls"] += 1
@@ -136,6 +191,9 @@ def prepare(output: str) -> None:
         except unsupported as reason:
             recorder.reasons[f"pending: {reason}"] += 1
             raise
+        if result is None:
+            recorder.seen["pending.to_assign_work"] += 1
+            return result
         recorder.seen["pending.kernel_ran"] += 1
         twin_world = _Twin(
             world,
@@ -207,10 +265,10 @@ def prepare(output: str) -> None:
         return result
 
     rules.update_operations = update_operations
-    rules.assign_operations = read_only(
+    rules.assign_operations = starting(
         "assign", assign_kernel, lambda: operations().assign_staff_operations
     )
-    rules.relief = read_only(
+    rules.relief = starting(
         "relief", relief_kernel, lambda: operations().schedule_staff_operation_relief
     )
     rules.assign_none = assign_pending

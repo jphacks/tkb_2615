@@ -1135,6 +1135,13 @@ fn assign_staff_support<'py>(controller: &Bound<'py, PyAny>, world: &Bound<'py, 
     if assigned.is_empty().unwrap_or(false) {
         return Ok(());
     }
+    record_assigned(world, &assigned)
+}
+
+/// `_record_assigned_support`: the receipts of the requests just assigned. What it writes is not undone,
+/// so what would refuse is an error here (the driver's and `_assign_staff_support`'s callers go on).
+pub(crate) fn record_assigned<'py>(world: &Bound<'py, PyAny>, assigned: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     for request_id in assigned.try_iter()? {
         let request_id = request_id?;

@@ -29,7 +29,7 @@ use crate::rules::overlay;
 use crate::rules::service::{add_one, append_outcome, metrics_of};
 use crate::rules::social_dialogue::context_value;
 use crate::rules::support::{add_rejected, household_of, plan_request, support_kind_of, write_request, PlannedRequest};
-use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_travel, PlannedTrip, Route, Selected, Trip};
+use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_capacity_wait, write_travel, CapacityWait, PlannedTrip, Route, Selected, Trip};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
@@ -109,6 +109,8 @@ enum Effect {
 
 /// What a trip action does, planned.
 struct TripEffect {
+    /// What `_route` records while the facility is chosen.
+    waits: Vec<CapacityWait>,
     trip: Option<PlannedTrip>,
     facility_id: Option<Arc<str>>,
     /// The request's record: `(outcome, reason, detail)`.
@@ -155,8 +157,8 @@ fn plan_toilet<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { trip: None, facility_id: None, outcome: None, rejected: false };
-    let Selected::Found(facility_id, route) = select_toilet(world, &graph, agent_object)? else {
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, outcome: None, rejected: false };
+    let Selected::Found(facility_id, route) = select_toilet(world, &graph, writer, agent_object, &mut effect.waits)? else {
         return Ok(effect);
     };
     if route.destination == *zone_id && has_independent(world, &facility_id)? {
@@ -187,8 +189,8 @@ fn plan_resource<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { trip: None, facility_id: None, outcome: None, rejected: false };
-    match select_resource(world, &graph, agent_object, kind)? {
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, outcome: None, rejected: false };
+    match select_resource(world, &graph, writer, agent_object, kind, &mut effect.waits)? {
         Selected::NoFacility => {
             effect.outcome = Some(("rejected", "no_facility", None));
             effect.rejected = true;
@@ -641,6 +643,10 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
         Some(SleepPlan::NoRoom(None)) => {}
     }
     if let Some((planned, writer, held, metrics, minute)) = trip_effect {
+        // What `_route` recorded while the facility was chosen, before the trip's sequence.
+        for wait in planned.waits {
+            write_capacity_wait(&world, &writer, wait)?;
+        }
         let facility_id = planned.facility_id;
         if let Some(trip) = planned.trip {
             write_travel(&world, &writer, trip)?;
