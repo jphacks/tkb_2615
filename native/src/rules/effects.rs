@@ -2005,8 +2005,11 @@ fn check_state(world: &Bound<'_, PyAny>, history: bool) -> PyResult<()> {
                 return unsupported("a marker's values the Python rule decides");
             }
             if has_guard {
+                if &**phase != "start" {
+                    return Err(errors::marked_value_error(py, "only a start event may store a guard"));
+                }
                 let mut nodes = 0;
-                if &**phase != "start" || parse_guard(&marker["guard"], 1, &mut nodes).is_none() {
+                if parse_guard(&marker["guard"], 1, &mut nodes).is_none() {
                     return unsupported("a marker's guard the Python rule decides");
                 }
             }

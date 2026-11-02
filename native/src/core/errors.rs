@@ -101,6 +101,17 @@ pub(crate) fn error(py: Python<'_>, outcome: Outcome, text: impl Into<String>) -
     made.unwrap_or_else(|error| error)
 }
 
+/// `raise ValueError(text)` in the Python rule's words, marked as made here so that a step which turns
+/// a Python call's exception into Unsupported lets it through (a check of `effect_program_v1`).
+pub(crate) fn marked_value_error(py: Python<'_>, text: &str) -> PyErr {
+    let made = (|| -> PyResult<PyErr> {
+        let instance = py.get_type::<pyo3::exceptions::PyValueError>().call1((text,))?;
+        instance.setattr(intern!(py, MARK), true)?;
+        Ok(PyErr::from_value(instance))
+    })();
+    made.unwrap_or_else(|error| error)
+}
+
 /// Whether this error is an outcome made here, rather than one a Python call raised: a step that
 /// turns any exception of a call into Unsupported lets these through.
 pub(crate) fn made_here(py: Python<'_>, error: &PyErr) -> bool {
