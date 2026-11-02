@@ -355,10 +355,15 @@ impl<'py> Phase<'_, 'py> {
                 Ok(None)
             }
             Err(error) => {
-                // From what the walk leads to, past the rule's own checks.
+                let checks = travel_completion::raised_before_writing(py, &error);
                 let done = self.expected_outcome(error)?;
                 count(&COUNTS.travel_failed);
-                // Not shown to text_check.py: the walk may have changed the world before this.
+                if checks {
+                    // The rule's own checks, which raise before any change.
+                    return Ok(Some(self.checked(handler, object, done)?));
+                }
+                // From what the walk leads to, past the rule's own checks. Not shown to
+                // text_check.py: the walk changed the world before this.
                 Ok(Some(done))
             }
         }

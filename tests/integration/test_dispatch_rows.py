@@ -546,7 +546,9 @@ def test_a_walk_that_does_not_fit_changes_nothing_and_python_says_why(
 
 
 @pytest.mark.parametrize("purpose", ["sleep_bed", "presence_relocation", "another"])
-def test_the_purposes_that_stay_python_s_are_refused_before_any_change(purpose: str) -> None:
+def test_a_walk_home_named_for_another_purpose_fails_with_python_s_text_before_any_change(
+    purpose: str,
+) -> None:
     controller = _new_controller()
     world = controller.world
     event = _return_walk(controller)
@@ -560,10 +562,14 @@ def test_the_purposes_that_stay_python_s_are_refused_before_any_change(purpose: 
     )
     handler = controller.event_dispatcher.handlers["agent_travel_complete"]
     world.minute_index = event.due_minute
+    twin = copy.deepcopy(world)
     before = _document(world)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError) as made:
         native.rules("travel_completion").apply(handler, world, other)
     assert _document(world) == before
+    with pytest.raises(EventApplicationError) as said:
+        AgentTravelCompletionHandler.apply.__wrapped__(handler, twin, other)
+    assert str(made.value) == str(said.value)
 
 
 def test_a_walk_with_a_value_the_writer_refuses_is_recorded_by_python() -> None:
