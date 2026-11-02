@@ -120,7 +120,7 @@
 
 **毎 tick の検証（実装済み）：**
 
-- `TickEngine.step` の終わりの検証は `WorldState.validate_after_tick` です。`validate(validate_event_history=False)` と同じ規則を通しますが、前の分から変わっていないと示せるものを省きます（`core/tick_validation.py`）。何を省くかとその根拠は `docs/architecture.md` にあります。完全な検証（`validate()`）の結果は変わりません。
+- `TickEngine.step` の終わりの検証は `WorldState.validate_after_tick` です。`validate(validate_event_history=False)` と同じ規則を通しますが、前の分から変わっていないと示せるものを省きます（`native/src/rules/after_tick.rs`）。何を省くかとその根拠は `docs/architecture.md` にあります。完全な検証（`validate()`）の結果は変わりません。
 - 大きな辞書の走査は、Rust の確認（`native/src/validation.rs`）を先に通します。Rust の確認は「すべて規則を満たす」と分かったときだけ受け入れ、それ以外は Python の規則が判定します。エラーの文は Python の規則からだけ出ます。
 - 社会関係・体調の関係の記録は、長い Run ではメモリ上に散らばり、Rust で全部を読むだけで 1 tick に数ミリ秒かかります。そこで CPython の dict watcher（Python 3.12 以降）で、書き込まれた記録だけを確かめます（`native/src/watch.rs`）。安定 ABI の外なので、関数は ctypes で探します。
 - Rust の部品がないときは、毎 tick `validate(validate_event_history=False)` を実行します。
@@ -230,7 +230,7 @@ Python に任せる場合（型の違う値、不正な状態、trace が要る�
 
 各テストは、壊した世界について、記憶のない `validate()` と同じ判定（同じエラーの文）になることを確かめます。
 
-- **`core/tick_validation.py` が完全検証に任せているもの：** 属性の代入を通らない書き込み、設定の `1`→`True` は、保存のたびに今までどおり読みます。古い共有の運営の記録と、履歴の中のタプルとリストの差し替えは、上の比較で同じ保存で見つけます。Run の終わりまで待つものはありません。Run の開始・終了（`TickEngine.run`）、読み込みなどの完全検証は、全項目を読みます。
+- **毎 tick の検証（`native/src/rules/after_tick.rs`）が完全検証に任せているもの：** 属性の代入を通らない書き込み、設定の `1`→`True` は、保存のたびに今までどおり読みます。古い共有の運営の記録と、履歴の中のタプルとリストの差し替えは、上の比較で同じ保存で見つけます。Run の終わりまで待つものはありません。Run の開始・終了（`TickEngine.run`）、読み込みなどの完全検証は、全項目を読みます。
 - **覚えたことを捨てる時：** 読み込み・分岐・再開の世界は新しいキャッシュで始まるので、最初の検証は完全です。Checkpoint の作成に失敗すると捨てます。Rust の部品がないときは毎回全部読みます。
 - **限界：** 共有の運営の履歴が上限（20,000件）を超えて `history_truncated` になると、再生の始点が変わるので、その履歴は毎回全部読みます。今の Scenario の7日分は約8,000件で、ここに届きません。
 
@@ -306,7 +306,7 @@ EventLog の比較の保証：`same_saved_records` は保存した bytes を読�
 | `EventQueue` | ID・順序番号・並べた列の索引を持つ | `_events` を書くのはこのクラスのメソッドだけ |
 | `ScheduledEvent` の確認 | 確認と凍結を Rust で行う（`scheduled_event_checked`） | Python の確認が受け入れると分かるときだけ受け入れ、それ以外は Python が判定する |
 | `WorldView` の監査ハッシュ | 文書を作らず Rust で書く（`view_state_hash`） | 出力は `canonical_sha256` と同じ。扱えない値は Python で計算する |
-| 資源台帳の確認（行動の適用と指標） | 毎 tick の検証の記憶（`TickValidationMemo.reservation_ids`）を使う | 予約 ID の列を値で比べ、新しい ID だけを確かめる。失敗した操作の ID は次の比較で外れる |
+| 資源台帳の確認（行動の適用と指標） | 行の kernel（`state/resource_ledger.rs`）が確かめる。Python の規則（kernel が断ったとき）は毎回すべての予約 ID を読む | L7 で毎 tick の記憶が Rust に移り、Python の規則の予約 ID の省略はなくなった |
 | 記録の比較 | 同じオブジェクトなら `to_dict()` で比べない | `dispatch_due`、`record_applied_action_completion` |
 | 共有の運営の記録の重複確認 | その分に実現したイベントは、新しい記録だけを見る | 記録はイベントの実現時刻を持つ（`record_shared_operation` の確認） |
 | 支援の依頼の走査 | 指標の3回の走査を1回にする。苦情の確認は並べ替える前に絞る。同じ種類の依頼はスタッフの読み取りを共有する | 苦情の判断は依頼を pending にしない。スタッフの技能は `assign_pending` の中で変わらない |
@@ -342,7 +342,7 @@ EventLog の比較の保証：`same_saved_records` は保存した bytes を読�
 
 | 処理 | 変えたこと | 根拠・読む入力 |
 |---|---|---|
-| 支援の依頼の走査（`assign_pending`、指標、苦情の確認、スタッフの支援の完了） | `WorldState.unsettled_support_requests()` で、終わっていない依頼だけを読む | 前の毎 tick の検証の記憶（`TickValidationMemo.unsettled_requests`）。解決済み・未解決の依頼は書き込みを知らせる。辞書が同じオブジェクトで始まること（`ValuesSnapshot`）を呼ぶたびに確かめ、新しい依頼を足す。終わった依頼が開き直された、辞書が差し替わった、記憶がない（分岐の直後、`SHELTERSIM_NATIVE=0`）ときは全部を読む。順序は辞書の順で、呼ぶ側が状態を読むので、結果は全部を読むときと同じ。毎 tick の全段階の比較テスト（`test_the_unsettled_requests_equal_a_scan_in_every_tick_phase`）と、開き直し・追加・削除・差し替え・写しのテスト |
+| 支援の依頼の走査（`assign_pending`、指標、苦情の確認、スタッフの支援の完了） | `WorldState.unsettled_support_requests()` で、終わっていない依頼だけを読む | 前の毎 tick の検証の記憶（`TickMemo.unsettled_requests`、`native/src/rules/after_tick.rs`）。解決済み・未解決の依頼は書き込みを知らせる。辞書が同じオブジェクトで始まること（`ValuesSnapshot`）を呼ぶたびに確かめ、新しい依頼を足す。終わった依頼が開き直された、辞書が差し替わった、記憶がない（分岐の直後、`SHELTERSIM_NATIVE=0`）ときは全部を読む。順序は辞書の順で、呼ぶ側が状態を読むので、結果は全部を読むときと同じ。毎 tick の全段階の比較テスト（`test_the_unsettled_requests_equal_a_scan_in_every_tick_phase`）と、開き直し・追加・削除・差し替え・写しのテスト |
 | 段階ごとのスコープ（設備の形状、`selected_models`、部屋の経路、検証の設定） | ジェネレーターの `contextmanager` をやめ、クラス（`core/context.py`）にする | 値を入れて戻すだけで、入れ子のときの動きも同じ |
 | Python の GC | 計算の間の最も若い世代の回収を 50,000 個ごとから 200,000 個ごとにする（`core/collection.py`） | 結果に関わらない。後述の計測 |
 | 依頼の状態・イベントの種類と状態の enum | すでに enum なら呼び直さない（検証で 1 tick 約33回、記録で約29回） | `Enum(x)` は `x` がその enum なら `x` を返す |

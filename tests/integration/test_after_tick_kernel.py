@@ -561,6 +561,12 @@ ACTIVE_BREAKS: dict[str, Callable[[WorldState, str, dict[str, Any]], Any]] = {
     "the task kind": lambda w, key, record: _set_item(
         record, "task_kind", "patrol" if record["task_kind"] != "patrol" else "cleaning"
     ),
+    "the task's duration in the config": lambda w, key, record: _set_item(
+        w.model_state["staff_operations_v1"]["config"]["task_duration_minutes"],
+        record["task_kind"],
+        w.model_state["staff_operations_v1"]["config"]["task_duration_minutes"][record["task_kind"]]
+        + 1,
+    ),
 }
 
 
@@ -802,15 +808,19 @@ def test_a_new_request_is_read_and_held(documents) -> None:
     assert not _takes(world, memo)
 
 
-def _exit(world: WorldState) -> str:
-    """Someone leaves for a while, as a presence command does it: the people change, and the
-    presence ledger points into the lifecycle state."""
+def _leaver(world: WorldState) -> str:
     busy = {item.agent_id for item in world.support_requests.values()}
-    agent_id = next(
+    return next(
         key
         for key, agent in world.agents.items()
         if agent.activity is Activity.IDLE and key not in busy
     )
+
+
+def _exit(world: WorldState, agent_id: str | None = None) -> str:
+    """Someone leaves for a while, as a presence command does it: the people change, and the
+    presence ledger points into the lifecycle state."""
+    agent_id = agent_id or _leaver(world)
     sequence = world.allocate_event_sequence()
     apply_population_presence_command(
         world,
@@ -844,13 +854,40 @@ def test_a_change_of_people_is_the_kernel_s_and_reads_every_request_again(docume
     assert any(paths)
 
 
-def test_a_settled_request_of_someone_who_left_is_found_when_the_people_change(documents) -> None:
+def test_a_settled_request_is_read_again_when_the_people_change(documents) -> None:
+    # A presence command builds the world anew, so the requests are new objects too, and either
+    # sends the kernel back to every request (l7-validate.md says which a test can tell apart).
+    def broken(world: WorldState) -> None:
+        request = next(item for item in world.support_requests.values() if _is_settled(item))
+        # Past the report of the write: a settled request depends only on its fields and the
+        # people, so the memo skips it until they change; the save's full validation reads it.
+        object.__setattr__(request, "requested_minute", world.minute_index + 1)
+        assert _python_error(world) is not None
+
     world, memo = _primed(documents[0])
-    gone = _exit(world)
-    request = next(item for item in world.support_requests.values() if _is_settled(item))
-    # Past the report of the write: only a check that reads every request sees it.
-    object.__setattr__(request, "agent_id", gone)
-    assert request not in memo.facts()["written"]
+    broken(world)
+    assert _takes(world, memo)
+    world, memo = _primed(documents[0])
+    _exit(world)
+    broken(world)
+    assert not _takes(world, memo)
+
+
+def test_the_body_config_s_past_residents_are_read_at_each_tick(documents) -> None:
+    world, memo = _primed(documents[0])
+    leaver = _leaver(world)
+    body_config = world.model_state["body_state_v1"]["config"]
+    body_config["sleep_debt_stress_rate_by_agent"] = {leaver: 0.001}
+    _kernel(world, memo)
+    # Gone, and still in the population's history: the config may name them.
+    _exit(world, leaver)
+    _kernel(world, memo)
+    # Out of the history too, past the tree's report, so only this rule reads it.
+    population = world.model_state["population_dynamics_v1"]
+    initial = population["initial_agent_ids"]
+    list.__delitem__(initial, initial.index(leaver))
+    if leaver in population["profile_traits"]:
+        dict.__delitem__(population["profile_traits"], leaver)
     assert _python_error(world) is not None
     assert not _takes(world, memo)
 
