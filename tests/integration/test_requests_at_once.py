@@ -308,6 +308,15 @@ def test_having_arrived_at_the_end_of_a_trip(generated_scenario: Any) -> None:
     )
 
 
+def test_a_journey_in_a_dict_of_another_kind_is_the_python_rule_s(generated_scenario: Any) -> None:
+    class Other(dict):
+        pass
+
+    world = WorldState.from_scenario(generated_scenario)
+    with pytest.raises(native.Unsupported):
+        native.rules("movement").agent_is_at_queue_trip_destination(world, "A001", Other())
+
+
 def test_having_arrived_with_an_independent_queue(
     generated_scenario_with_split_queues: Any,
 ) -> None:

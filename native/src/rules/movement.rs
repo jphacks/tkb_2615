@@ -796,7 +796,7 @@ fn agent_is_at_facility_service_point(
 #[pyfunction]
 fn agent_is_at_queue_trip_destination(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>, journey: &Bound<'_, PyAny>) -> PyResult<bool> {
     let Some(journey) = crate::core::tracked::as_readable_dict(journey) else {
-        return Ok(false);
+        return if journey.is_instance_of::<PyDict>() { unsupported("another kind of dict") } else { Ok(false) };
     };
     let Some(points) = journey.get_item(intern!(world.py(), "route_points"))? else {
         return Ok(false);

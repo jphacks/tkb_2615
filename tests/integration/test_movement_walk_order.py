@@ -346,6 +346,29 @@ def test_a_replan_to_where_the_person_stands_takes_no_trip(generated_scenario: A
     assert world.metric_state["physical_queue_replan_count"] == 2.0
 
 
+def test_someone_on_their_way_on_a_queue_trip_is_queued_by_the_replan(
+    generated_scenario: Any,
+) -> None:
+    world = _own_queue_with_trips(generated_scenario, ("A001", "A002"))
+    world.agents["A001"].activity = Activity.MOVING
+    world.agents["A001"].target_id = "elsewhere"
+    _move_the_toilet(world)
+    assert _same_after(world, 1) == ()
+    assert world.agents["A001"].activity is Activity.QUEUED
+    assert world.agents["A001"].target_id == TOILET
+
+
+def test_someone_on_their_way_whose_replan_is_blocked_stands_still(
+    generated_scenario: Any,
+) -> None:
+    world = _own_queue_with_trips(generated_scenario, ("A001", "A002"))
+    world.agents["A001"].activity = Activity.MOVING
+    _move_the_toilet(world, {"x": -1000.0, "y": -1000.0})
+    assert _same_after(world, 1) == ()
+    assert world.agents["A001"].activity is Activity.MOVING
+    assert "A001" not in world.model_state[KEY]["journeys"]
+
+
 def test_a_replan_when_the_facility_is_gone_only_ends_the_trip(generated_scenario: Any) -> None:
     world = _own_queue_with_trips(generated_scenario, ("A001",))
     journey = world.model_state[KEY]["journeys"]["A001"]
