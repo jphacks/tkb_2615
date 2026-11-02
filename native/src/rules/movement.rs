@@ -4,10 +4,11 @@
 //!
 //! Every kernel plans first: it reads the rows and the plan of the floor and works out each record,
 //! with nothing changed, and says Unsupported for anything it does not decide. Then it writes.
-//! Planning reads only what the tick started with, so one person's result depends on nobody else's.
-//! That is why `advance_movement` refuses the branches where it would: a queue trip that must
-//! replan, and a person placed in a queue slot, read and change the others' state in the serial
-//! order of the Python rule (docs/rust-port/lanes/i-movement.md), so the whole tick goes to Python.
+//! Planning reads only what the tick started with, so one person's result depends on nobody else's,
+//! except in two branches of `advance_movement`: a queue trip that must replan, and a person placed
+//! in a queue slot. They read the positions the walk has written so far and take event numbers in
+//! its order (docs/rust-port/lanes/i-movement.md). The first walk stops at either branch, and a
+//! second one reads a copy of the positions it keeps up to date, as the Python rule's walk does.
 //!
 //! No Python runs in the plan or the writes but `Geo::of`, before them, and reads of plain data.
 
@@ -25,7 +26,9 @@ use crate::rules::movement_geometry::{
     distance, point_along_polyline, point_in_polygon, point_walkable, polyline_length, usable, Geo, Pt,
 };
 use crate::state::entities::{entities_of, Activity, AgentRow, Entities, EntityStore};
-use crate::state::events::QueueStore;
+use crate::rules::queues::{plan_trip, slot_route, write_plan, Fifo, Plan, Route as QueueRoute, BLOCKED_METRIC};
+use crate::rules::service::{add_one, metrics_of};
+use crate::state::events::{EventRow, EventStatus, EventWriter, QueueStore};
 use crate::state::movement::{Journey, MovementRow, Point, Position};
 use crate::Unsupported;
 
@@ -234,6 +237,11 @@ impl<'py> Scene<'py> {
         Ok(())
     }
 
+    /// Whether `_set_stationary_position` reads the positions of the people ahead for this person.
+    fn stands_in_a_slot(&self, agent: &AgentRow) -> bool {
+        self.geo.layout.is_some() && agent.activity == Activity::Queued && agent.target_id.as_deref().is_some_and(|target| !target.is_empty())
+    }
+
     /// `_set_stationary_position`'s record. A person in a queue slot reads the people ahead, so
     /// `slots` is what they are read from, or None where who walked first would matter.
     fn stationary(&self, agent_id: &str, agent: &AgentRow, slots: Option<(&MovementRow, &Entities)>) -> PyResult<Position> {
@@ -318,7 +326,8 @@ pub(crate) struct Changes {
     positions: Vec<(Arc<str>, Position)>,
     gone_positions: Vec<Arc<str>>,
     gone_journeys: Vec<Arc<str>>,
-    new_journey: Option<(Arc<str>, Journey)>,
+    /// In the order of the walk, which is the order they take in the map.
+    new_journeys: Vec<(Arc<str>, Journey)>,
     staff: Vec<(Arc<str>, Position)>,
     /// The edges one step more, in the order of the walk.
     usage: Vec<Arc<str>>,
@@ -332,6 +341,12 @@ pub(crate) enum TreeWrite<'py> {
 }
 
 impl Changes {
+    /// What another plan changes, after what this one does.
+    pub(crate) fn absorb(&mut self, other: Changes) {
+        self.positions.extend(other.positions);
+        self.new_journeys.extend(other.new_journeys);
+    }
+
     /// Put the plan in the row, and the scalars in the tree. Returns what the tree still needs.
     pub(crate) fn apply<'py>(self, row: &mut MovementRow, tree: &Tree<'py>) -> PyResult<Vec<TreeWrite<'py>>> {
         let py = tree.py();
@@ -349,7 +364,7 @@ impl Changes {
                 writes.push(TreeWrite::Delete("positions", id));
             }
         }
-        if let Some((id, journey)) = self.new_journey {
+        for (id, journey) in self.new_journeys {
             writes.push(TreeWrite::Set("journeys", id.clone(), Field::to_py(&journey, py)?));
             row.journeys.insert(id, journey);
         }
@@ -385,6 +400,22 @@ pub(crate) fn write_tree<'py>(mirror: &Bound<'py, NamespaceMirror>, writes: Vec<
     Ok(())
 }
 
+/// `state["journeys"].pop(agent_id)`.
+pub(crate) fn stop_journey(mirror: &Bound<'_, NamespaceMirror>, agent_id: &Arc<str>) -> PyResult<()> {
+    let mut changes = Changes::default();
+    changes.gone_journeys.push(agent_id.clone());
+    let writes = NamespaceMirror::with_row_tree::<MovementRow, _>(mirror, |row, tree| changes.apply(row, tree))?;
+    write_tree(mirror, writes)
+}
+
+/// `state["positions"][agent_id] = ...` of someone who is at the end of a path in a room.
+pub(crate) fn place_in_room(mirror: &Bound<'_, NamespaceMirror>, agent_id: &Arc<str>, zone_id: &Arc<str>, point: Pt) -> PyResult<()> {
+    let mut changes = Changes::default();
+    changes.positions.push((agent_id.clone(), record(zone_id.clone(), Some(point), KINDS.physical.clone(), None, 0.0)));
+    let writes = NamespaceMirror::with_row_tree::<MovementRow, _>(mirror, |row, tree| changes.apply(row, tree))?;
+    write_tree(mirror, writes)
+}
+
 /// The mirror of a namespace the world really holds: Python stores past the table are not the row's.
 pub(crate) fn mirror_held<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, NamespaceMirror>> {
     let py = world.py();
@@ -395,6 +426,19 @@ pub(crate) fn mirror_held<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py,
         return unsupported("the world holds another movement state");
     }
     Ok(mirror)
+}
+
+/// What a rule reads of a world without the namespace: `world.model_state.get(KEY, {})`.
+pub(crate) fn no_positions() -> MovementRow {
+    MovementRow {
+        schema_version: 2,
+        policy_version: Arc::from(POLICY_VERSION),
+        positions: Default::default(),
+        staff_positions: Default::default(),
+        journeys: Default::default(),
+        edge_usage_minutes: Default::default(),
+        last_updated_minute: 0,
+    }
 }
 
 /// `_state`'s records for the people who have none.
@@ -676,7 +720,6 @@ fn facility_approach_route<'py>(
         _ => None,
     };
     let (agent_id, facility_id) = (exact_str(agent_id)?, exact_str(facility_id)?);
-    let mirror = mirror_held(world)?;
     let store = entities_of(world)?;
     let geo = Geo::of(world)?;
     let configs = attribute(world, intern!(py, "model_configs"))?;
@@ -692,9 +735,13 @@ fn facility_approach_route<'py>(
         let route = route_class.call1((&*agent_zone, &*facility_zone, (&*agent_zone,), PyTuple::empty(py), 0))?;
         return Ok((route, PyTuple::empty(py)).into_pyobject(py)?.into_any());
     }
-    let found = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model, agent_id, facility_id, service_point))
-    })?;
+    let read = |row: &MovementRow| EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model.clone(), agent_id, facility_id, service_point));
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let found = if exact_dict(&table)?.contains(KEY)? {
+        NamespaceMirror::with_row::<MovementRow, _>(&mirror_held(world)?, |row| read(row))?
+    } else {
+        read(&no_positions())?
+    };
     let Some((duration, path)) = found else {
         return Ok(py.None().into_bound(py));
     };
@@ -925,6 +972,8 @@ fn progress_of(part: i64, whole: i64) -> f64 {
 /// The plan of one journey in `advance_movement`.
 enum Step {
     Replan,
+    /// A queue trip's replan, which reads the positions of the walk and writes an event.
+    QueueReplan,
     Stop,
     Finish,
     Walk { position: Position, edge: Option<Arc<str>>, completed: bool },
@@ -952,15 +1001,8 @@ fn plan_journey(
     if (agent.activity != Activity::Moving && !trip_active) || !pending || !task_active {
         return Ok(Step::Stop);
     }
-    // From here the person walks or replans. A queue trip's replan writes the queue and allocates
-    // an event in the walk's order: the Python rule does the whole tick.
-    let replan = || -> PyResult<Step> {
-        if queue_trip {
-            unsupported("a queue trip must replan, in the serial order of the walk")
-        } else {
-            Ok(Step::Replan)
-        }
-    };
+    // From here the person walks or replans.
+    let replan = || if queue_trip { Step::QueueReplan } else { Step::Replan };
     let facility = journey
         .facility_id
         .as_deref()
@@ -968,7 +1010,7 @@ fn plan_journey(
         .and_then(|facility_id| rows.facilities.get(facility_id));
     let destination = facility.map_or(&journey.destination_zone_id, |facility| &facility.zone_id);
     if *destination != journey.destination_zone_id || facility_move_invalidates(scene, journey)? {
-        return replan();
+        return Ok(replan());
     }
     if journey.due_minute <= journey.started_minute
         || journey.due_minute.abs() >= EXACT_INT
@@ -983,7 +1025,7 @@ fn plan_journey(
     if !journey.route_points.is_empty() {
         let points = points_of_journey(journey)?;
         if !room_path_is_clear(&scene.geo, row.positions.get(agent_id), &journey.destination_zone_id, &points, mobility)? {
-            return replan();
+            return Ok(replan());
         }
         let progress = progress_of(boundary - journey.started_minute, duration);
         let Some(point) = point_along_polyline(&points, progress) else {
@@ -1130,6 +1172,242 @@ fn queue_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, QueueStore>> 
         .map_err(|_| Unsupported::new_err("the event queue is not in Rust"))
 }
 
+/// `_replan_physical_queue_trip`, planned with the positions the walk has written so far.
+enum QueueReplanEnd {
+    /// `facility is None`: the trip only ends.
+    NoFacility,
+    Blocked,
+    /// `_schedule_queue_trip` gave up: past the end of the Run. The replan still counts.
+    PastTheEnd,
+    /// A route that takes no time: the person is placed at its end.
+    Placed,
+    Trip(Plan),
+}
+
+struct QueueReplan {
+    event_id: Arc<str>,
+    facility_id: Option<Arc<str>>,
+    end: QueueReplanEnd,
+}
+
+/// What `advance_movement` found to do.
+struct WalkPlan {
+    changes: Changes,
+    replans: Vec<Arc<str>>,
+    queue_replans: Vec<QueueReplan>,
+}
+
+/// `facility_queue_slot_route` or `facility_approach_route`, then what the Python rule makes of it.
+#[allow(clippy::too_many_arguments)]
+fn plan_queue_replan(
+    scene: &Scene<'_>,
+    writer: &EventWriter<'_>,
+    raw_model: Option<Bound<'_, PyAny>>,
+    view: &MovementRow,
+    rows: &Entities,
+    agent_id: &Arc<str>,
+    journey: &Journey,
+    minute: i64,
+    sequence: i64,
+    changes: &mut Changes,
+) -> PyResult<QueueReplan> {
+    let world = &scene.world;
+    let found = |end| QueueReplan {
+        event_id: journey.event_id.clone(),
+        facility_id: journey.facility_id.clone(),
+        end,
+    };
+    changes.gone_journeys.push(agent_id.clone());
+    let Some(facility_id) = &journey.facility_id else {
+        return Ok(found(QueueReplanEnd::NoFacility));
+    };
+    let Some(facility) = rows.facilities.get(facility_id) else {
+        return Ok(found(QueueReplanEnd::NoFacility));
+    };
+    let resource = journey.purpose.starts_with("resource_");
+    let position_trip = journey.purpose.ends_with("_position");
+    let fifo = match &journey.queue_id {
+        Some(queue_id) => match Fifo::read(world, &scene.geo, queue_id)? {
+            Some(fifo) => Some(fifo),
+            None => return unsupported("a queue ID without the queues"),
+        },
+        None => None,
+    };
+    let route = if position_trip {
+        slot_route(&scene.geo, view, rows, raw_model, agent_id, facility, facility_id, fifo.as_ref())?
+    } else if scene.geo.layout.is_none() {
+        Some((0, Arc::from(Vec::new())))
+    } else {
+        let point = fifo.as_ref().and_then(|fifo| fifo.request_of(agent_id)).map(|request| request.service_point_id.clone());
+        approach_point(&scene.geo, view, rows, raw_model, agent_id, facility_id, point.as_deref())?
+    };
+    let Some((minutes, path)) = route.filter(|(_, path)| !path.is_empty()) else {
+        return Ok(found(QueueReplanEnd::Blocked));
+    };
+    if minutes <= 0 || path.len() < 2 {
+        let target = path[path.len() - 1];
+        changes.positions.push((agent_id.clone(), record(facility.zone_id.clone(), Some(target), KINDS.physical.clone(), None, 0.0)));
+        return Ok(found(QueueReplanEnd::Placed));
+    }
+    // `.index(agent_id)` of the provenance, which `_schedule_queue_trip` builds only if it schedules.
+    let index = if fifo.is_some() {
+        0
+    } else {
+        let members = if resource { &facility.resource_queue_agent_ids } else { &facility.queue_agent_ids };
+        match members.iter().position(|member| member == agent_id) {
+            Some(index) => index,
+            None if minute.checked_add(minutes).is_some_and(|due| due >= writer.duration()) => 0,
+            None => return unsupported("a trip of the queue by someone not in it"),
+        }
+    };
+    let phase = if position_trip { "position" } else { "service" };
+    let trip = QueueRoute { agent_id: agent_id.clone(), index, minutes, path };
+    let mut plan = plan_trip(scene, writer, view, rows, facility_id, resource, trip, minute, phase, fifo.as_ref(), sequence)?;
+    changes.absorb(plan.take_changes());
+    Ok(found(if matches!(plan, Plan::Blocked) { QueueReplanEnd::PastTheEnd } else { QueueReplanEnd::Trip(plan) }))
+}
+
+/// The walk of `advance_movement`, changing nothing. `in_order` is the second walk, with what the
+/// branches that read the others need; without it None says that the walk reached one of them.
+fn plan_walk(
+    scene: &Scene<'_>,
+    queue: &QueueStore,
+    row: &MovementRow,
+    rows: &Entities,
+    minute: i64,
+    staff_records: Option<&Bound<'_, PyDict>>,
+    in_order: Option<&(EventWriter<'_>, Option<Bound<'_, PyAny>>)>,
+) -> PyResult<Option<WalkPlan>> {
+    let mut changes = Changes::default();
+    missing_positions(row, rows, &mut changes);
+    let mut plan = WalkPlan { changes: Changes::default(), replans: Vec::new(), queue_replans: Vec::new() };
+    if row.last_updated_minute >= minute {
+        plan.changes = changes;
+        return Ok(Some(plan));
+    }
+    changes.minute = Some(minute);
+    // The positions as the walk has left them, read by the branches that depend on its order.
+    let mut walked = in_order.map(|_| MovementRow {
+        schema_version: row.schema_version,
+        policy_version: row.policy_version.clone(),
+        positions: row.positions.clone(),
+        staff_positions: Default::default(),
+        journeys: Default::default(),
+        edge_usage_minutes: Default::default(),
+        last_updated_minute: minute,
+    });
+    let mut applied = 0;
+    let mut next_sequence = match in_order {
+        Some((writer, _)) => writer.next_sequence()?,
+        None => 0,
+    };
+    let mut completed: Vec<&str> = Vec::new();
+    let mut seen_events: Vec<&str> = Vec::new();
+    let mut journeys: Vec<(&Arc<str>, &Journey)> = row.journeys.iter().collect();
+    journeys.sort_unstable_by(|first, second| first.0.cmp(second.0));
+    for (agent_id, journey) in journeys {
+        if let Some(walked) = &mut walked {
+            for (id, position) in &changes.positions[applied..] {
+                walked.positions.insert(id.clone(), position.clone());
+            }
+            applied = changes.positions.len();
+        }
+        let view: &MovementRow = walked.as_ref().unwrap_or(row);
+        let Some(agent) = rows.agents.get(agent_id) else {
+            changes.gone_journeys.push(agent_id.clone());
+            changes.gone_positions.push(agent_id.clone());
+            if let Some(walked) = &mut walked {
+                walked.positions.shift_remove(&**agent_id);
+            }
+            continue;
+        };
+        match plan_journey(scene, queue, view, rows, agent_id, agent, journey, minute)? {
+            Step::Replan => plan.replans.push(agent_id.clone()),
+            Step::QueueReplan => {
+                let Some((writer, raw_model)) = in_order else {
+                    return Ok(None);
+                };
+                if seen_events.contains(&&*journey.event_id) {
+                    return unsupported("two journeys name one event");
+                }
+                seen_events.push(&journey.event_id);
+                let replan = plan_queue_replan(scene, writer, raw_model.clone(), view, rows, agent_id, journey, minute, next_sequence, &mut changes)?;
+                next_sequence += i64::from(matches!(replan.end, QueueReplanEnd::Trip(_)));
+                plan.queue_replans.push(replan);
+            }
+            Step::Stop => {
+                if in_order.is_none() && scene.stands_in_a_slot(agent) {
+                    return Ok(None);
+                }
+                changes.gone_journeys.push(agent_id.clone());
+                let slots = in_order.map(|_| (view, rows));
+                changes.positions.push((agent_id.clone(), scene.stationary(agent_id, agent, slots)?));
+            }
+            Step::Finish => {
+                changes.gone_journeys.push(agent_id.clone());
+                if let Some(position) = view.positions.get(&**agent_id).and_then(arrived) {
+                    changes.positions.push((agent_id.clone(), position));
+                }
+            }
+            Step::Walk { position, edge, completed: done } => {
+                changes.positions.push((agent_id.clone(), position));
+                changes.usage.extend(edge);
+                if done {
+                    completed.push(agent_id);
+                }
+            }
+        }
+    }
+    for (agent_id, agent) in rows.agents.iter() {
+        let stays_on_journey = (row.journeys.contains_key(&**agent_id) && !changes.gone_journeys.iter().any(|gone| gone == agent_id))
+            || changes.new_journeys.iter().any(|(id, _)| id == agent_id);
+        if !stays_on_journey && agent.activity != Activity::Queued && !completed.contains(&&**agent_id) {
+            changes.positions.push((agent_id.clone(), scene.stationary(agent_id, agent, None)?));
+        }
+    }
+    let mut staff: Vec<_> = rows.staff.iter().collect();
+    staff.sort_unstable_by(|first, second| first.0.cmp(second.0));
+    for (staff_id, member) in staff {
+        changes.staff.push((staff_id.clone(), plan_staff(scene, staff_records, staff_id, &member.zone_id, minute + 1)?));
+    }
+    plan.changes = changes;
+    Ok(Some(plan))
+}
+
+/// The queue replans of a walk, in its order: the events, the people and the counts.
+fn write_queue_replans<'py>(
+    world: &Bound<'py, PyAny>,
+    mirror: &Bound<'py, NamespaceMirror>,
+    store: &Bound<'py, EntityStore>,
+    writer: &EventWriter<'py>,
+    metrics: &Bound<'py, NamespaceMirror>,
+    old_events: Vec<Arc<EventRow>>,
+    replans: Vec<QueueReplan>,
+    minute: i64,
+) -> PyResult<()> {
+    let py = world.py();
+    for (old, replan) in old_events.into_iter().zip(replans) {
+        writer.settle(&old, minute, EventStatus::Suppressed, Some("In-room queue route changed after a wall, obstacle, or equipment update"))?;
+        match replan.end {
+            QueueReplanEnd::NoFacility => continue,
+            QueueReplanEnd::Blocked => {
+                add_one(metrics, "physical_queue_replan_blocked_count")?;
+                add_one(metrics, "movement_replan_blocked_count")?;
+                continue;
+            }
+            QueueReplanEnd::PastTheEnd => add_one(metrics, BLOCKED_METRIC)?,
+            QueueReplanEnd::Placed => {}
+            QueueReplanEnd::Trip(plan) => {
+                let facility = PyString::new(py, replan.facility_id.as_deref().unwrap_or_default());
+                write_plan(world, mirror, store, writer, facility.as_any(), plan)?;
+            }
+        }
+        add_one(metrics, "physical_queue_replan_count")?;
+        add_one(metrics, "movement_replan_count")?;
+    }
+    Ok(())
+}
+
 /// `advance_movement`.
 #[pyfunction]
 pub(crate) fn advance_movement<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
@@ -1155,66 +1433,42 @@ pub(crate) fn advance_movement<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'p
         Some(records) => Some(exact_dict(records)?),
         None => None,
     };
-    let (replans, writes) = NamespaceMirror::with_row_tree::<MovementRow, _>(&mirror, |row, tree| {
-        let queue = queue.try_borrow()?;
-        let (changes, replans) = EntityStore::with_rows(&store, |rows| {
-            let mut changes = Changes::default();
-            missing_positions(row, rows, &mut changes);
-            if row.last_updated_minute >= minute {
-                return Ok((changes, Vec::new()));
-            }
-            changes.minute = Some(minute);
-            let mut replans: Vec<Arc<str>> = Vec::new();
-            let mut completed: Vec<&str> = Vec::new();
-            let mut journeys: Vec<(&Arc<str>, &Journey)> = row.journeys.iter().collect();
-            journeys.sort_unstable_by(|first, second| first.0.cmp(second.0));
-            for (agent_id, journey) in journeys {
-                let Some(agent) = rows.agents.get(agent_id) else {
-                    changes.gone_journeys.push(agent_id.clone());
-                    changes.gone_positions.push(agent_id.clone());
-                    continue;
-                };
-                match plan_journey(&scene, &queue, row, rows, agent_id, agent, journey, minute)? {
-                    Step::Replan => replans.push(agent_id.clone()),
-                    Step::Stop => {
-                        changes.gone_journeys.push(agent_id.clone());
-                        changes.positions.push((agent_id.clone(), scene.stationary(agent_id, agent, None)?));
+    let mut in_order_tools = None;
+    let (replans, writes, queue_replans) = NamespaceMirror::with_row_tree::<MovementRow, _>(&mirror, |row, tree| {
+        let plan = {
+            let held = queue.try_borrow()?;
+            EntityStore::with_rows(&store, |rows| {
+                if let Some(plan) = plan_walk(&scene, &held, row, rows, minute, staff_records, None)? {
+                    return Ok(plan);
+                }
+                let configs = attribute(world, intern!(py, "model_configs"))?;
+                let tools = (EventWriter::of(world)?, exact_dict(&configs)?.get_item(intern!(py, "movement_model"))?);
+                match plan_walk(&scene, &held, row, rows, minute, staff_records, Some(&tools))? {
+                    Some(plan) => {
+                        in_order_tools = Some((tools.0, metrics_of(world)?));
+                        Ok(plan)
                     }
-                    Step::Finish => {
-                        changes.gone_journeys.push(agent_id.clone());
-                        if let Some(position) = row.positions.get(&**agent_id).and_then(arrived) {
-                            changes.positions.push((agent_id.clone(), position));
-                        }
-                    }
-                    Step::Walk { position, edge, completed: done } => {
-                        changes.positions.push((agent_id.clone(), position));
-                        changes.usage.extend(edge);
-                        if done {
-                            completed.push(agent_id);
-                        }
-                    }
+                    None => unsupported("the walk in order asked for itself"),
+                }
+            })?
+        };
+        let WalkPlan { changes, replans, queue_replans } = plan;
+        // The old events, as rows: nothing is refused after this.
+        let mut old_events = Vec::with_capacity(queue_replans.len());
+        if let Some((writer, _)) = &in_order_tools {
+            for replan in &queue_replans {
+                match writer.queue().borrow_mut().row(py, &replan.event_id)? {
+                    Some(row) => old_events.push(row),
+                    None => return unsupported("the trip's event has no row"),
                 }
             }
-            for (agent_id, agent) in rows.agents.iter() {
-                let stays_on_journey = row.journeys.contains_key(&**agent_id)
-                    && !changes.gone_journeys.iter().any(|gone| gone == agent_id);
-                if !stays_on_journey && agent.activity != Activity::Queued && !completed.contains(&&**agent_id) {
-                    changes.positions.push((agent_id.clone(), scene.stationary(agent_id, agent, None)?));
-                }
-            }
-            let mut staff: Vec<_> = rows.staff.iter().collect();
-            staff.sort_unstable_by(|first, second| first.0.cmp(second.0));
-            for (staff_id, member) in staff {
-                changes.staff.push((
-                    staff_id.clone(),
-                    plan_staff(&scene, staff_records, staff_id, &member.zone_id, minute + 1)?,
-                ));
-            }
-            Ok((changes, replans))
-        })?;
-        Ok((replans, changes.apply(row, tree)?))
+        }
+        Ok((replans, changes.apply(row, tree)?, (old_events, queue_replans)))
     })?;
     write_tree(&mirror, writes)?;
+    if let Some((writer, metrics)) = &in_order_tools {
+        write_queue_replans(world, &mirror, &store, writer, metrics, queue_replans.0, queue_replans.1, minute)?;
+    }
     PyTuple::new(py, replans.iter().map(|id| PyString::new(py, id)))
 }
 
@@ -1359,7 +1613,7 @@ pub(crate) fn plan_start(
         KINDS.unavailable.clone()
     };
     changes.positions.push((agent_id.clone(), record(origin.clone(), point, kind, edge_ids.first().cloned(), initial_progress)));
-    changes.new_journey = Some((agent_id.clone(), journey));
+    changes.new_journeys.push((agent_id.clone(), journey));
     Ok(changes)
 }
 

@@ -39,8 +39,19 @@ def _bytes(world: WorldState) -> str:
     return world._canonical_text(world._canonical_data())
 
 
-def _records(world: WorldState) -> list[str]:
-    return [repr(record) for record in world.event_log.records]
+def _records(world: WorldState) -> list[Any]:
+    """Each record, with the event's payload by its sorted keys, as the log's bytes hold it."""
+    return [
+        (
+            record.event.event_id,
+            record.event.sequence,
+            record.realized_minute,
+            record.status,
+            record.detail,
+            sorted(record.event.payload.items(), key=lambda item: item[0]),
+        )
+        for record in world.event_log.records
+    ]
 
 
 def _pending(world: WorldState) -> list[str]:
@@ -55,7 +66,7 @@ def _order_of_maps(world: WorldState) -> list[list[str]]:
 def _same_after(world: WorldState, minute: int) -> tuple[str, ...]:
     """The kernel on the world, the Python rule on a copy. Both must have done the same."""
     twin = copy.deepcopy(world)
-    result = movement.advance_movement(world, minute)
+    result = native.rules("movement").advance_movement(world, minute)
     expected = _python_rule()(twin, minute)
     assert result == expected
     assert _bytes(world) == _bytes(twin)

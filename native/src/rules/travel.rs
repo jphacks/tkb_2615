@@ -17,7 +17,7 @@ use crate::core::value::V;
 use crate::core::world_core::{raw_dict_get, NamespaceMirror};
 use crate::rules::agent_dynamics::agent_knows_facility;
 use crate::rules::movement::{
-    approach, mirror_held, mobility_text, movement_minutes, optional_str, plan_start, route_points_of, str_tuple, write_tree, Changes, Scene,
+    approach, mirror_held, mobility_text, movement_minutes, no_positions, optional_str, plan_start, route_points_of, str_tuple, write_tree, Changes, Scene,
     EXACT_INT, KEY,
 };
 use crate::rules::movement_geometry::{Geo, Pt};
@@ -227,7 +227,7 @@ pub(crate) fn route_class(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 
 /// `_route`.
 #[pyfunction]
-fn route<'py>(
+pub(crate) fn route<'py>(
     controller: &Bound<'py, PyAny>,
     origin_zone_id: &Bound<'py, PyAny>,
     destination_zone_id: &Bound<'py, PyAny>,
@@ -824,31 +824,45 @@ pub(crate) fn select_resource(world: &Bound<'_, PyAny>, graph: &Bound<'_, RouteR
     select(world, graph, agent_id, Some(kind))
 }
 
-/// `_facility_approach`, with a floor plan: its route and path, or None for no route. Unsupported
-/// without one, whose route takes no time.
+/// `_facility_approach`: its route and path, or None for no route. Without a floor plan the route
+/// takes no time and has no path.
 pub(crate) fn approach_route(world: &Bound<'_, PyAny>, agent_id: &str, facility_id: &str) -> PyResult<Option<(Route, Vec<Pt>)>> {
     let py = world.py();
     let store = entities_of(world)?;
     let geo = Geo::of(world)?;
     if geo.layout.is_none() {
-        return unsupported("no floor plan: a request at once");
+        return EntityStore::with_rows(&store, |rows| {
+            let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
+                return unsupported("no such agent or facility");
+            };
+            let route = Route {
+                origin: agent.zone_id.clone(),
+                destination: facility.zone_id.clone(),
+                zone_ids: vec![agent.zone_id.clone()],
+                edge_ids: Vec::new(),
+                minutes: 0,
+            };
+            Ok(Some((route, Vec::new())))
+        });
     }
     let table = attribute(world, intern!(py, "model_state"))?;
-    if !exact_dict(&table)?.contains(KEY)? {
-        return unsupported("a floor plan without the movement state");
-    }
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let raw_model = exact_dict(&configs)?.get_item(intern!(py, "movement_model"))?;
-    let mirror = mirror_held(world)?;
-    let found = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
+    let read = |row: &MovementRow| {
         EntityStore::with_rows(&store, |rows| {
             let Some(facility) = rows.facilities.get(facility_id) else {
                 return unsupported("no such facility");
             };
             let zone = facility.zone_id.clone();
-            Ok(approach(&geo, row, rows, raw_model, agent_id, facility_id)?.map(|found| (found, zone)))
+            Ok(approach(&geo, row, rows, raw_model.clone(), agent_id, facility_id)?.map(|found| (found, zone)))
         })
-    })?;
+    };
+    let found = if exact_dict(&table)?.contains(KEY)? {
+        NamespaceMirror::with_row::<MovementRow, _>(&mirror_held(world)?, |row| read(row))?
+    } else {
+        // `world.model_state.get(MOVEMENT_STATE_KEY, {})`: nobody has a position yet.
+        read(&no_positions())?
+    };
     Ok(found.map(|((minutes, path), zone)| {
         let route = Route { origin: zone.clone(), destination: zone.clone(), zone_ids: vec![zone.clone(), zone], edge_ids: Vec::new(), minutes };
         (route, path.to_vec())

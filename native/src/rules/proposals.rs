@@ -304,7 +304,7 @@ fn plan_sleep<'py>(
 }
 
 /// `position.update(...)` of a person already at their bed: through the tree, which tells the row.
-fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: &overlay::Bed, zone_id: &Arc<str>) -> PyResult<()> {
+pub(crate) fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: &overlay::Bed, zone_id: &Arc<str>) -> PyResult<()> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     let Some(movement) = exact_dict(&table)?.get_item(KEY)? else {

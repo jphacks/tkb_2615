@@ -39,6 +39,7 @@ state_row! {
 /// A trip. The last three fields are absent from the record when they are `None`, which `state_row!`
 /// cannot say: only queue trips have `queue_id`, and only staff support trips the other two. A
 /// null there fits no rule (`validate_movement_runtime_state`), so it is a `Misfit` here.
+#[derive(Clone)]
 pub(crate) struct Journey {
     pub(crate) event_id: Arc<str>,
     pub(crate) task_id: Arc<str>,
