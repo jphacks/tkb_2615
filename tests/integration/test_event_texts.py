@@ -906,3 +906,37 @@ def test_a_typed_social_event_s_first_texts_are_python_s(small_world: WorldState
             typed(payload),
             "typed social interaction references an unknown Agent",
         )
+
+
+def test_an_outage_s_later_texts_are_python_s(operational_world: WorldState) -> None:
+    handler = InfrastructureEventHandler()
+    world = operational_world
+    outages = world.model_state["infrastructure_v1"]["outages"]
+    waiting_id, waiting = next(
+        (key, item) for key, item in sorted(outages.items()) if not item["active"]
+    )
+    kind = waiting["event_type"]
+    target = "component_id" if kind == "power_outage" else "facility_id"
+    base = {"outage_id": waiting_id, target: waiting.get("target_id", "x"), "until_minute": 100}
+    if kind != "power_outage":
+        base["units_out"] = waiting.get("units_out") or 1
+    start = {"event_id": waiting["start_event_id"]}
+    for payload in (
+        {"outage_id": waiting_id},
+        {**base, "until_minute": world.minute_index},
+        {**base, "until_minute": True},
+    ):
+        event = _event(world, kind, payload, **start)
+        _says(handler, world, event, "infrastructure outage payload or duration is invalid")
+    event = _event(world, kind, {**base, target: "nowhere"}, **start)
+    _says(handler, world, event, "infrastructure outage has no valid affected facilities")
+    active_id, active = next((key, item) for key, item in sorted(outages.items()) if item["active"])
+    wrong = "equipment_repaired" if active["event_type"] == "power_outage" else "power_restored"
+    event = _event(
+        world,
+        wrong,
+        {"outage_id": active_id},
+        event_id=active["restore_event_id"],
+        causation_id=active["start_event_id"],
+    )
+    _says(handler, world, event, "infrastructure restoration type does not match its cause")
