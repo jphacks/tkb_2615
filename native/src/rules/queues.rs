@@ -18,6 +18,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBool, PyDict, PyList, PySlice, PyString};
 
+use crate::core::errors;
 use crate::core::mathx::{py_max, py_min};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, unsupported};
 use crate::core::tracked::as_readable_dict;
@@ -183,17 +184,106 @@ fn selected_queue_model<'py>(configs: &Bound<'py, PyAny>) -> PyResult<Option<Bou
     let selected = SELECTED.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py.import("sheltersim.contracts.policies")?.getattr("selected_models")?.unbind())
     })?;
-    // What it refuses, it refuses in the Python rule too.
-    let selection = selected.bind(py).call1((configs,)).map_err(|_| Unsupported::new_err("the model selection refuses"))?;
+    // What it refuses, it refuses in the Python rule too, with the same error.
+    let selection = match selected.bind(py).call1((configs,)) {
+        Ok(selection) => selection,
+        Err(error) => return Err(errors::relayed(py, error)),
+    };
     Ok(selection.downcast_exact::<PyDict>().map_err(|_| Unsupported::new_err("not a selection"))?.get_item(intern!(py, "queue"))?)
+}
+
+/// `raise ValueError(text)` of the queue policy's constructor.
+#[track_caller]
+fn config_error<T>(text: &str) -> PyResult<T> {
+    Err(errors::value_error(text))
+}
+
+/// The checks of `NeedWeightedPhysicalQueuePolicy.__init__` (or of the strict policy), in their
+/// order: the Python rule's ValueError where one fails,
+/// Unsupported where a value's type is one the rows don't judge as Python does.
+fn config_errors(raw: &Bound<'_, PyAny>, need_weighted: bool) -> PyResult<()> {
+    let py = raw.py();
+    if raw.is_none() {
+        return Ok(());
+    }
+    if !raw.is_instance_of::<PyDict>() {
+        return config_error("facility_queues config must be an object");
+    }
+    if !need_weighted {
+        return Ok(());
+    }
+    let config = as_readable_dict(raw).ok_or_else(|| Unsupported::new_err("the queue config is another dict"))?;
+    const FIELDS: [&str; 5] = [
+        "schema_version",
+        "queue_capacity_by_facility",
+        "abandon_after_minutes_by_service",
+        "retry_delay_minutes",
+        "persistence_urgency_threshold",
+    ];
+    for (key, _) in config.iter() {
+        if !key.downcast_exact::<PyString>().is_ok_and(|key| key.to_str().is_ok_and(|key| FIELDS.contains(&key))) {
+            exact_str(&key)?;
+            return config_error("facility_queues config must be an object");
+        }
+    }
+    let plain_int = |value: &Bound<'_, PyAny>| value.is_exact_instance_of::<pyo3::types::PyInt>();
+    if let Some(schema) = config.get_item(intern!(py, "schema_version"))? {
+        if !plain_int(&schema) {
+            return unsupported("another schema version");
+        }
+        if schema.extract::<i64>().map_or(true, |schema| schema != 1) {
+            return config_error("facility_queues requires schema_version 1");
+        }
+    }
+    let mut limits: Vec<Bound<'_, PyAny>> = Vec::new();
+    if let Some(given) = config.get_item(intern!(py, "abandon_after_minutes_by_service"))? {
+        if !given.is_instance_of::<PyDict>() {
+            return config_error("queue abandonment limits contain an unsupported service");
+        }
+        let given = as_readable_dict(&given).ok_or_else(|| Unsupported::new_err("the queue limits are another dict"))?;
+        for (service, limit) in given.iter() {
+            if !service.downcast_exact::<PyString>().is_ok_and(|key| key.to_str().is_ok_and(|key| matches!(key, "toilet" | "water" | "meal"))) {
+                exact_str(&service)?;
+                return config_error("queue abandonment limits contain an unsupported service");
+            }
+            limits.push(limit);
+        }
+    }
+    let within = |value: &Bound<'_, PyAny>, upper: i64| plain_int(value) && value.extract::<i64>().is_ok_and(|value| (1..=upper).contains(&value));
+    if limits.iter().any(|limit| !within(limit, 10080)) {
+        return config_error("queue abandonment limits must be within 1..10080 minutes");
+    }
+    if let Some(retry) = config.get_item(intern!(py, "retry_delay_minutes"))? {
+        if !within(&retry, 1440) {
+            return config_error("queue retry delay must be between 1 and 1440 minutes");
+        }
+    }
+    if let Some(threshold) = config.get_item(intern!(py, "persistence_urgency_threshold"))? {
+        let fails = if let Ok(number) = threshold.downcast_exact::<pyo3::types::PyFloat>() {
+            !(0.0..=1.0).contains(&number.value())
+        } else if plain_int(&threshold) {
+            !threshold.extract::<i64>().is_ok_and(|value| (0..=1).contains(&value))
+        } else if threshold.is_instance_of::<pyo3::types::PyBool>()
+            || !(threshold.is_instance_of::<pyo3::types::PyInt>() || threshold.is_instance_of::<pyo3::types::PyFloat>())
+        {
+            true
+        } else {
+            return unsupported("the threshold is a number of another type");
+        };
+        if fails {
+            return config_error("queue persistence threshold must be normalized to 0..1");
+        }
+    }
+    Ok(())
 }
 
 fn policy_of(world: &Bound<'_, PyAny>) -> PyResult<Policy> {
     let py = world.py();
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let table = exact_dict(&configs)?;
-    let need_weighted = match selected_queue_model(&configs)? {
-        Some(model) => match exact_str(&model)? {
+    let selected = selected_queue_model(&configs)?;
+    let need_weighted = match &selected {
+        Some(model) => match exact_str(model)? {
             "need-weighted-physical-queue-v1" => true,
             "strict-fifo-queue-v1" => false,
             _ => return unsupported("another queue model"),
@@ -201,6 +291,10 @@ fn policy_of(world: &Bound<'_, PyAny>) -> PyResult<Policy> {
         None => table.contains(intern!(py, "facility_geometry"))?,
     };
     let raw = table.get_item(intern!(py, "facility_queues"))?;
+    // The bundled factories build the same two classes from the same config.
+    if let Some(raw) = &raw {
+        config_errors(raw, need_weighted)?;
+    }
     let Some(raw) = raw else {
         return Ok(if need_weighted {
             Policy::NeedWeighted { limits: [LIMIT_TOILET, LIMIT_WATER, LIMIT_MEAL], threshold: PERSISTENCE_THRESHOLD, retry: RETRY_DELAY }

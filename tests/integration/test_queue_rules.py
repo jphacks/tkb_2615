@@ -467,19 +467,29 @@ def test_the_reference_fifo_keeps_the_order_of_starts_and_nobody_gives_up(
         {"persistence_urgency_threshold": 1.5},
         {"persistence_urgency_threshold": True},
         {"persistence_urgency_threshold": float("nan")},
+        {"persistence_urgency_threshold": "high"},
+        {"persistence_urgency_threshold": 2},
+        {"abandon_after_minutes_by_service": []},
+        {"retry_delay_minutes": 3.0},
+        {"schema_version": 1, "abandon_after_minutes_by_service": {"meal": 0}, "retry_delay_minutes": 0},
+        [],
     ],
 )
-def test_a_config_python_turns_down_goes_to_python(
-    generated_scenario: Any, config: dict[str, Any]
+def test_a_config_python_turns_down_raises_the_python_rule_s_error(
+    generated_scenario: Any, config: Any
 ) -> None:
+    """The kernel raises the policy's ValueError, class and text, before changing anything
+    (docs/rust-port/lanes/l8-texts-rest.md)."""
     world = _world(generated_scenario)
     world.model_configs["facility_queues"] = config
     toilet = _facility(world, "toilet")
     _line_up(world, toilet, _people(world, 1))
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(ValueError) as ours:
         _kernel("prepare_facility_queue")(world, toilet, resource=False, minute=3)
-    with pytest.raises(ValueError):
-        queueing.prepare_facility_queue(world, toilet, resource=False, minute=3)
+    assert len(world.facilities[toilet].queue_agent_ids) == 1
+    with pytest.raises(ValueError) as theirs:
+        queueing.prepare_facility_queue.__wrapped__(world, toilet, resource=False, minute=3)
+    assert (type(ours.value), str(ours.value)) == (type(theirs.value), str(theirs.value))
     assert len(world.facilities[toilet].queue_agent_ids) == 1
 
 
