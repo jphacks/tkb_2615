@@ -150,9 +150,12 @@ each OS, because both call the same libm.
 - `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
   `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
   handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
-  modules are Python, called by name. The facility modifier raises its suppressed and failed texts
-  itself (`core/errors.rs`); anything else but a success says `Unsupported` with the world as it
-  was. `state/effect_program.rs` is the row of `effect_program_v1`.
+  modules are Python, called by name. Each handler and the guard raise their suppressed and failed
+  texts themselves (`core/errors.rs`), in the Python rule's order of checks; a value Rust can't
+  judge as Python would says `Unsupported` with the world as it was. `rules/staff_order.rs` is
+  `order_staff_operation` with `validate_staff_operation_order`'s checks, for the `staff_task_order`
+  structure change (the Python validator stays for `validate_effect_program`).
+  `state/effect_program.rs` is the row of `effect_program_v1`.
 
 - `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,
   through `controller.run_tick` (`experiments/phases/driver.py`). Unsupported before anything changes
@@ -168,8 +171,10 @@ each OS, because both call the same libm.
   `install_table`, with the Python dispatcher's steps around it: that runs their kernels
   (`rules/handlers.rs`, `rules/information_events.rs`, `rules/staff_operation_events.rs`,
   `docs/rust-port/lanes/m6-handlers-rest.md`), or their Python rule on a refusal. An EffectProgram's
-  marked event, a patched handler and any other event a Rust function refused calls
-  `controller._dispatch_one_event`. Unsupported only before the first change. `rules/travel_completion.rs`
+  marked event has its guard asked in Rust first (`effects::guard_or_suppress`; a false or failing
+  guard is recorded with the Python rule's text), then goes on as an unmarked one; a marked event of
+  a type with a Rust function, a patched handler and any other event a Rust function refused calls
+  `controller._dispatch_one_event` (docs/rust-port/lanes/l8-texts-saved.md). Unsupported only before the first change. `rules/travel_completion.rs`
   is the walk's handler, with `_after_arrival`'s kernel, and `rules/toilet.rs`, `rules/support.rs` and
   `rules/care_receipts.rs` the toilet's service, the support requests and the care receipts
   (`docs/rust-port/lanes/m6-handlers.md`). No borrow is held
