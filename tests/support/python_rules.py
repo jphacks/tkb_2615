@@ -183,6 +183,9 @@ PORTED_NAMES = frozenset(
         "_restore_person",
         "_schedule_relocation",
         "_set_presence",
+        # policies/psychology.py, inspection/traces.py: rules/trace.rs, rules/decisions.rs
+        "explain_update",
+        "_decision_document",
         # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
         "reserve_sleep_bed",
         "release_sleep_bed",
@@ -198,6 +201,9 @@ PORTED_METHODS = frozenset(
         ("_IndexedMetricSink", "record_decision"),
         ("UtilityBehaviorPolicy", "propose"),
         ("PriorityRuleBehaviorPolicy", "propose"),
+        ("PsychologyUpdateResult", "trace_document"),
+        ("SocialPropagationResult", "trace_document"),
+        ("InformationSpreadResult", "trace_document"),
         ("StressPropagationPolicy", "update"),
         ("ExpressivenessChannelOpennessPolicy", "update"),
         ("DeGrootContactPolicy", "update"),

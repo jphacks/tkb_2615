@@ -169,6 +169,54 @@ def test_the_step_writes_what_the_python_rule_writes(generated_scenario: Any, po
     assert any(delta.stress != 0.5 for delta in final)
 
 
+class _KeepingSink:
+    """What a Run's sink is given, as text."""
+
+    trace_level = TraceLevel.FULL
+
+    def __init__(self) -> None:
+        self.documents: list[str] = []
+
+    def record_social_contact_trace(self, trace: Any) -> None:
+        self.documents.append(json.dumps(trace, ensure_ascii=False))
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("policy", POLICIES)
+def test_the_document_of_a_trace_is_the_python_rule_s(
+    generated_scenario: Any, policy: str, seed: int
+) -> None:
+    """Over several minutes, so contacts last and cooldowns count, on values no scenario has."""
+    draws = random.Random(seed)
+    world, controller, _view, deltas, rng = _small(
+        generated_scenario,
+        policy=policy,
+        stress_spread_per_minute=draws.choice((0.01, 0.2, 2.0)),
+        max_pair_stress_increase=draws.choice((0.001, 0.05, 0.25)),
+        max_agent_stress_increase_per_minute=draws.choice((0.002, 0.05, 0.25)),
+        minimum_contact_minutes=draws.choice((1, 2)),
+        cooldown_minutes=draws.choice((1, 2, 30)),
+        natural_recovery_per_minute=draws.choice((0.0, 0.01)),
+        max_contacts_per_agent=draws.choice((1, 3, 16)),
+    )
+    sink = _KeepingSink()
+    controller.artifacts = sink
+    for minute in range(5):
+        world.minute_index = minute
+        for agent in world.agents.values():
+            agent.stress = draws.choice((0.0, 1.0, draws.random()))
+        view = WorldView.from_world(world, include_state_hash=False)
+        base = tuple(
+            replace(delta, minute_index=minute, stress=draws.choice((0.0, 1.0, draws.random())))
+            for delta in deltas
+        )
+        python = _python_result(world, controller, view, base, rng)
+        _run_kernel(world, controller, view, base, rng)
+        assert sink.documents[-1] == json.dumps(python.trace_document(minute), ensure_ascii=False)
+        assert json.dumps(world.model_state[KEY]) == json.dumps(python.runtime_state)
+    assert len(sink.documents) == 5
+
+
 def test_records_change_keys_and_later_writes_reach_their_new_place(
     generated_scenario: Any,
 ) -> None:

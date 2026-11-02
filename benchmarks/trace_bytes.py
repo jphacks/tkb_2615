@@ -140,7 +140,7 @@ def _keeping(name: str, output: Path, run: Callable[[], dict]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--only", action="append", help="scenarios whose name starts with this")
     parser.add_argument("--models", action="store_true", help="each model with a full trace")
     parser.add_argument("--jobs", type=int, default=6)
@@ -150,6 +150,8 @@ def main() -> int:
         domain, model, level, directory = args.run_model
         _run_model(domain, model, level, Path(directory))
         return 0
+    if args.output is None:
+        parser.error("--output is required")
     args.output.mkdir(parents=True, exist_ok=False)
     names = [
         name
