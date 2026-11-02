@@ -360,7 +360,7 @@ pub(crate) fn capture<'py>(world: &Bound<'py, PyAny>, recorder: &Bound<'py, PyAn
             return unsupported("metric snapshots must have strictly increasing minutes");
         }
     }
-    let resources = crate::rules::resources::metric_values(world, None)?;
+    let resources = crate::rules::resources::metric_values(world)?;
     let kept = attribute(recorder, intern!(py, "resource_snapshots"))?;
     let row = match &resources {
         None if !kept.is_none() => return unsupported("the ledger was removed"),

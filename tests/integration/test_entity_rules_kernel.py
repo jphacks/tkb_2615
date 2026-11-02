@@ -78,7 +78,7 @@ def _resource_config(world: WorldState) -> Any:
 def _python_error(world: WorldState) -> str | None:
     """What the Python rules say about the entities and pending events of this world."""
     try:
-        pending = world._validate_entity_rules(_resource_config(world), None)
+        pending = world._validate_entity_rules(_resource_config(world))
         world._validate_event_rules(pending, False)
     except StateInvariantError as error:
         return str(error)
@@ -476,11 +476,11 @@ def test_kpi_columns_with_no_one_are_left_to_the_python_rule(documents) -> None:
 
 def test_a_changed_environment_config_is_read_again_at_the_next_tick(documents) -> None:
     world = _world(documents[0])
+    taken = native.rules("after_tick").stats()[0]
     world.validate_after_tick()
     world.validate_after_tick()
-    assert world.__dict__["_tick_memo"].environment_config_passed is (
-        "zone_environment" in world.model_configs
-    )
+    # Both checks are the kernel's, which read the config when it had no plan for it.
+    assert native.rules("after_tick").stats()[0] == taken + 2
     if "zone_environment" in world.model_configs:
         world.model_configs["zone_environment"]["unknown"] = 1
         with pytest.raises(StateInvariantError, match="ScenarioZoneEnvironmentConfig"):

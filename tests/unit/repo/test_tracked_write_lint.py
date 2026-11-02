@@ -81,7 +81,7 @@ NOT_INSERTED_INTO_STATE: dict[tuple[str, str, str], str] = {
 # parsed views and of people's fields.
 CHAINS_ON_MEMOS = frozenset(
     {
-        "core/world.py memo = self.__dict__['_tick_memo'] = TickValidationMemo()",
+        "core/world.py memo = self.__dict__['_tick_memo'] = _TickMemo()",
         "domain/staff.py qualified = qualified_by_kind[support_kind] = [staff for sta",
         "policies/world_view.py view = views[zone_id] = zone_environment_view(world, zone_id",
         "policies/world_view.py entry = cache[identity] = (*entry, _fields_of_person(context",

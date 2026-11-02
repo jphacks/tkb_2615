@@ -193,14 +193,9 @@ def initialize_declared_states(world: Any) -> None:
     validate_declared_states(world)
 
 
-def validate_declared_states(world: Any, *, tick_memo: Any = None) -> None:
-    """Check the declared namespaces; see core/tick_validation.py for tick_memo."""
-    if tick_memo is None or not tick_memo.configs_unchanged:
-        descriptors = declared_states(world.model_configs)
-        if tick_memo is not None:
-            tick_memo.declared_states = descriptors
-    else:
-        descriptors = tick_memo.declared_states
+def validate_declared_states(world: Any) -> None:
+    """Check the declared namespaces."""
+    descriptors = declared_states(world.model_configs)
     for namespace, descriptor in descriptors.items():
         state = world.model_state.get(namespace)
         if (
@@ -209,12 +204,6 @@ def validate_declared_states(world: Any, *, tick_memo: Any = None) -> None:
             or state.get("schema_version") != descriptor.schema_version
         ):
             raise ValueError("missing or incompatible required model-state namespace")
-        if (
-            tick_memo is not None
-            and tick_memo.presence_unchanged
-            and namespace == "population_presence_v1"
-        ):
-            continue
         try:
             if not rust_validated(world, namespace):
                 _CONTRACTS[namespace][1](world, state)

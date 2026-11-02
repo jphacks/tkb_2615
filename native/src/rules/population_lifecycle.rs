@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 
 use crate::core::errors;
-use crate::core::row::{attribute, exact_int, exact_str, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
 use crate::core::value::V;
 use crate::rules::movement::{mobility_text, start_movement};
 use crate::rules::movement_geometry::{Geo, Pt};
@@ -1524,10 +1524,24 @@ fn check_lifecycle(world: &Bound<'_, PyAny>, leaving: Option<&str>) -> PyResult<
         if leaving == Some(&**agent_id) {
             continue;
         }
-        let task_fits = EntityStore::with_rows(&entities_of(world)?, |rows| {
-            let matching: Vec<_> = rows.active_tasks.iter().filter(|(_, task)| task.id == *task_id).collect();
-            Ok(matching.len() == 1 && matching[0].1.agent_id.as_deref() == Some(&**agent_id) && &*matching[0].1.kind == "travel_return" && matching[0].1.due_minute == *due)
-        })?;
+        // The objects, as the rule reads them: `task.__dict__[...] = ...` reaches no row
+        // (docs/rust-port/lanes/t-tick-validation.md).
+        let mut matching = Vec::new();
+        for task in exact_dict(&attribute(world, intern!(py, "active_tasks"))?)?.values() {
+            if exact_str(&attribute(&task, intern!(py, "id"))?)? == &**task_id {
+                matching.push(task);
+            }
+        }
+        let task_fits = match matching.as_slice() {
+            [task] => {
+                let task_agent = attribute(task, intern!(py, "agent_id"))?;
+                !task_agent.is_none()
+                    && exact_str(&task_agent)? == &**agent_id
+                    && exact_str(&attribute(task, intern!(py, "kind"))?)? == "travel_return"
+                    && exact_int(&attribute(task, intern!(py, "due_minute"))?)? == *due
+            }
+            _ => false,
+        };
         let Some(queue) = &queue else {
             return unsupported("the queue is not in Rust");
         };
@@ -1588,6 +1602,13 @@ fn validate_population_lifecycle_state(world: &Bound<'_, PyAny>) -> PyResult<()>
     planning(check_lifecycle(world, None))
 }
 
+/// `validate_population_lifecycle_state` as a validator of `state_mirror._RUST_VALIDATORS`: true, or
+/// Unsupported for the Python rule to say.
+#[pyfunction]
+fn validate(world: &Bound<'_, PyAny>) -> PyResult<bool> {
+    planning(check_lifecycle(world, None)).map(|()| true)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(current_household_id, m)?)?;
     m.add_function(wrap_pyfunction!(apply_presence_action, m)?)?;
@@ -1596,5 +1617,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_presence_command, m)?)?;
     m.add_function(wrap_pyfunction!(zone_has_room, m)?)?;
     m.add_function(wrap_pyfunction!(validate_population_lifecycle_state, m)?)?;
+    m.add_function(wrap_pyfunction!(validate, m)?)?;
     Ok(())
 }

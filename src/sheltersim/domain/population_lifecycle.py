@@ -17,6 +17,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from sheltersim import native
 from sheltersim.contracts.extensions import ExtensionModel, Identifier
 from sheltersim.contracts.presence import (
     PRESENCE_NAMESPACE,
@@ -25,6 +26,7 @@ from sheltersim.contracts.presence import (
     PresenceTransition,
 )
 from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.agent_dynamics import AGENT_DYNAMICS_STATE_KEY
 from sheltersim.domain.body_state import BODY_STATE_KEY
@@ -111,6 +113,14 @@ def initialize_population_lifecycle_state(world: WorldState) -> dict[str, Any]:
     )
     validate_population_lifecycle_state(world)
     return state
+
+
+# native/src/rules/population_lifecycle.rs: the rules below, as a validator that says yes or
+# Unsupported.
+register_rust_validator(
+    POPULATION_LIFECYCLE_STATE_KEY,
+    native.rules("population_lifecycle").validate if native.available() else None,
+)
 
 
 @kernel_first("population_lifecycle", "validate_population_lifecycle_state")
