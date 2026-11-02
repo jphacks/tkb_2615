@@ -922,6 +922,12 @@
     state.minute = frame.minute;
     renderFrame();
   }
+  // A Run of an older model is view-only and shows saved points only (D2).
+  function savedPointNote(frame) {
+    return [frame.model_view?.message, frame.saved_point_rounding?.message]
+      .filter(Boolean)
+      .join(" ");
+  }
   function renderFrame() {
     const frame = state.frame;
     if (!frame) return;
@@ -963,6 +969,9 @@
         ? "模式表示：個別の配置は所属を表す記号です。距離・動線は実寸ではありません。"
         : `実座標 ${frame.agents.length - missing}/${frame.agents.length}人記録 · 同じ位置は集合表示 · ドラッグで移動`;
     const issues = [];
+    // Shown first and kept while the frame is shown, unlike a notice.
+    const viewNote = savedPointNote(frame);
+    if (viewNote) issues.push(["閲覧のみのRun", viewNote]);
     if (frame.kpis.toilet_queue_length > 0)
       issues.push([
         "トイレの待機列",

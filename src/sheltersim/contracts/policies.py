@@ -436,6 +436,7 @@ def _model_parameter_config(
 
 def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
     from sheltersim.contracts.runtime import state_signatures
+    from sheltersim.core.model_version import engine_signatures
     from sheltersim.domain.simulator_state import simulator_signatures
 
     catalog = model_catalog()
@@ -607,6 +608,8 @@ def model_signatures(configs: dict[str, dict[str, Any]]) -> dict[str, str]:
         **policies,
         **simulator_signatures(configs),
         **state_signatures(configs),
+        # The whole-model version and the RNG algorithm (core/model_version.py).
+        **engine_signatures(),
     }
     if suite_id is not None:
         implicit = SUITE_RUNTIME_RESOLVED_DOMAINS - set(configs["policy_registry"])

@@ -314,7 +314,9 @@
     view.frame = frame; view.minute = frame.minute;
     el("seek").value = el("minute").value = frame.minute;
     const k = frame.kpis;
-    el("kpis").textContent = `minute ${frame.minute} · 人数 ${k.population} · 入場待ち ${k.pending_arrivals} · ストレス平均 ${Number(k.stress_mean).toFixed(3)} · トイレ待ち ${k.toilet_queue_length} · スタッフ負荷 ${Number(k.staff_load_ratio).toFixed(3)}`;
+    // A Run of an older model is view-only and shows saved points only (D2).
+    const viewNote=[frame.model_view?.message,frame.saved_point_rounding?.message].filter(Boolean).join(" ");
+    el("kpis").textContent = `${viewNote?viewNote+" · ":""}minute ${frame.minute} · 人数 ${k.population} · 入場待ち ${k.pending_arrivals} · ストレス平均 ${Number(k.stress_mean).toFixed(3)} · トイレ待ち ${k.toilet_queue_length} · スタッフ負荷 ${Number(k.staff_load_ratio).toFixed(3)}`;
     el("missing").textContent = `実位置なし ${frame.agents.filter(a => !a.point || a.position_kind !== "physical").length}人。スタッフ位置は現在Zoneで、経路歩行は未実装です。会話文は未記録です。`;
     updateLegend(); renderEntityList(); renderEvents(); updatePeopleChoices();
     if(view.compareIds){el("comparison").replaceChildren();view.comparison=null;try{await loadComparison(view.compareIds,frame.minute,serial);}catch(error){if(error!==STALE)el("compare-status").textContent=error.message;}}

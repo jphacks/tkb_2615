@@ -289,9 +289,9 @@ def test_a_restored_world_that_differs_is_validated_and_compared_in_full_next_ti
         return validate(self, **kwargs)
 
     def changed(self, *args, **kwargs):
-        document = restore(self, *args, **kwargs)
+        document, status = restore(self, *args, **kwargs)
         document["metric_state"] = {**document["metric_state"], "test_only": 1.0}
-        return document
+        return document, status
 
     monkeypatch.setattr(WorldState, "validate", counting_validate)
     with monkeypatch.context() as patch:
@@ -304,9 +304,9 @@ def test_a_restored_world_that_differs_is_validated_and_compared_in_full_next_ti
     assert cache.restored_events_equal() == (len(world.event_log) if native.available() else 0)
 
     def broken(self, *args, **kwargs):
-        document = restore(self, *args, **kwargs)
+        document, status = restore(self, *args, **kwargs)
         document["minute_index"] = -1
-        return document
+        return document, status
 
     with monkeypatch.context() as patch:
         patch.setattr(Checkpoint, "_world_document_for_restore", broken)
