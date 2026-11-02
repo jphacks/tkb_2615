@@ -24,7 +24,7 @@ use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
 use crate::core::census;
 use crate::core::row::{attribute, exact_int, unsupported};
 use crate::core::world_core::raw_dict_get;
-use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
+use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
@@ -347,7 +347,9 @@ impl<'py> Tick<'_, 'py> {
             self.python_step(intern!(py, "_sample_information_contacts"))?.call1((self.minute, self.rng)).map(|_| ())
         })?;
         if !self.controller.getattr(intern!(py, "proximity_contact_config"))?.is_none() {
-            self.controller.call_method1(intern!(py, "_sample_proximity_contacts"), (self.minute,))?;
+            or_rule!(py, proximity::sample_contacts(self.controller, self.minute), {
+                self.python_step(intern!(py, "_sample_proximity_contacts"))?.call1((self.minute,)).map(|_| ())
+            })?;
         }
         Ok(())
     }

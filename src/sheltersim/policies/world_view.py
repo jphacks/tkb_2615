@@ -85,13 +85,6 @@ def _fields_of_person(context: PersonContext | None) -> dict[str, Any]:
 _NO_PERSON_FIELDS = _fields_of_person(None)
 
 
-def _person_entry(identity: str, raw: Any, cache: dict[str, tuple[Any, ...]]) -> tuple[Any, ...]:
-    """Parse a new or changed context; rules/world_view.rs keeps the fields it reads with it."""
-    context = PersonContext.model_validate(raw)
-    cache[identity] = (deepcopy(raw), context, _fields_of_person(context))
-    return cache[identity]
-
-
 def _person_fields(
     contexts: dict[str, PersonContext], cache: dict[str, tuple[Any, ...]] | None
 ) -> dict[str, dict[str, Any]]:
@@ -248,11 +241,6 @@ def _zone_environment(
     if view is None:
         view = views[zone_id] = zone_environment_view(world, zone_id)
     return view
-
-
-def _misinformation_applies(world: WorldState) -> bool:
-    """Whether the selected psychology reads beliefs in false claims, as from_world asks."""
-    return selected_models(world.model_configs)["psychology"] in LIFE_STATE_PSYCHOLOGY_POLICIES
 
 
 def _view_state_hash(

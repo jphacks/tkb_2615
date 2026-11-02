@@ -102,6 +102,10 @@ PORTED_NAMES = frozenset(
         # policies/world_view.py: rules/world_view.rs
         "_view_state_hash",
         "_zone_environment",
+        "zone_environment_view",
+        "_fields_of_person",
+        # policies/proximity.py, experiments/phases/sample.py: rules/proximity.rs
+        "_sample_proximity_contacts",
         "_parsed_person_contexts",
         "_person_fields",
         "active_environmental_stress",

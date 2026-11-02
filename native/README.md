@@ -173,6 +173,9 @@ each OS, because both call the same libm.
   `Unsupported` at any point runs the Python step: a view Python made (or a partial one), another
   class, and anything `ActionCandidate` and `ActionProposal` would turn down.
 
+- `rules/proximity.rs`: `sample_contacts(controller, minute)` replaces the step
+  `_sample_proximity_contacts`, with `DistanceSampledProximityPolicy.sample` on the positions of the
+  `movement_v1` row, or of its tree when the row is tainted. `sample_of` gives the pairs alone.
 - `rules/world_view.rs`: `view_after_movement(controller, world)` and
   `view_for_proposals(controller, world, minute)` replace the two steps of the phases that make a
   `WorldView`. A snapshot of plain Rust values (`ViewData`) is built from the entity rows, the rows of
@@ -180,9 +183,10 @@ each OS, because both call the same libm.
   owns. It is what `WorldView.from_world` and `after_state_update` provide, with the same audit hash
   (`state_hash`, which writes the canonical document from the snapshot). The returned `WorldView`
   makes `agents`, `facilities`, `zone_members` and `group_members` when a Python reader first asks
-  (`RustView.python_fields`, through `WorldView.__getattr__`). A person's context and a zone's
-  conditions are still computed in Python, only when they change, and kept with the object the
-  Python cache holds. A value a typed field can't hold, or anything Python would raise on, says
+  (`RustView.python_fields`, through `WorldView.__getattr__`). A person's context comes from
+  `rules/person_context.rs` (`PersonContext` and `_fields_of_person`) and a zone's conditions from
+  `rules/zone_environment.rs` (`zone_environment_view` and its 8 formulas), each kept while its
+  document stays equal. `selected_models` stays the Python contract. A value a typed field can't hold, or anything Python would raise on, says
   `Unsupported`, and `from_world` runs. `view_of(view)` gives a kernel the snapshot; for a view Python
   made it reads the fields the update kernels read and sets `partial`. Nothing refuses a partial
   view for a rule: a rule that reads other fields must check `partial` and say `Unsupported`.
@@ -303,8 +307,8 @@ each OS, because both call the same libm.
   (`src/state/information.rs`) and reads agents from the entity rows; the household of the view is
   read from `population_presence_v1`, which Python holds. The tree gets single values and the
   refilled contacts, never the whole namespace, and the events are scheduled as rows
-  (`EventWriter` of `src/state/events.rs`); `_schedule_information_contact` stays for what a row
-  refuses, and raises its error. A trace, another RNG, a policy's subclass and whatever the Python
+  (`EventWriter` of `src/state/events.rs`), with the errors of `ScheduledEvent` for what a row
+  refuses. A trace, another RNG, a policy's subclass and whatever the Python
   rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
   same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 
