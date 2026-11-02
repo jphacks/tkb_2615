@@ -26,7 +26,8 @@
 | driver（#344、`rules/tick.rs`） | マージ済み | tick の段階の順序は Rust です。**`rule_shadow` と `--reversed-order` は driver を通りません**（`m6-driver.md`）。L6 で Provider を呼べる router と trace も driver に載りました（[l6-trace.md](lanes/l6-trace.md)）。L0 は driver の `or_rule!` も数えます |
 | overlay（#345、`rules/overlay.rs` ほか） | マージ済み | `an independent FIFO*`、`a temporary room may have a bed`、`a surveyed service point` の断りはなくなりました。`rules/population.rs` の読みを `overlay.rs` に寄せる宿題が残ります（L1） |
 | validate（#346、`rules/after_tick.rs`、`rules/metrics.rs` の `capture`） | マージ済み | **L7 が小さくなりました。** 7日分では Plan のない最初の1 tick を除く全 tick を kernel が受けます。実測の断りは下の L7 |
-| L7（`rust/l7-validate`） | レーン済み | v6 の tick の検証は最初の tick も含めて毎 tick Rust で、記憶も Rust です。断りはゲートの v5 の 2,320 だけ（7日分0）。v5 は L9（[l7-validate.md](lanes/l7-validate.md)） |
+| L7（`rust/l7-validate`） | レーン済み | v6 の tick の検証は最初の tick も含めて毎 tick Rust で、記憶も Rust です。断りはゲートの v5 の 2,320 だけ（7日分0）（[l7-validate.md](lanes/l7-validate.md)） |
+| L7b（`rust/l7b-world-v5`） | レーン済み | **WorldState v5 は古い形ではありません**（資源の運用のない Scenario の今の形）。v5 の tick の検証も v6 と同じ Rust の道に。ゲートの v5 の断り 2,320 → 0。棚卸しの O を2か所 C に直しました（下の「断りの理由」、[l7b-world-v5.md](lanes/l7b-world-v5.md)） |
 | `rust/m6-handlers-rest`（`wt-m6-handlers2`、`df84748`） | **未マージ。** 込みの木で計測済み | 7日分で Python に渡るイベントが 10,495 件から 8 件に。文書 `m6-handlers.md` は同じブランチにあります。マージのときの衝突は `sitecustomize.py` と `docs/architecture.md` だけでした（試しマージ） |
 
 ## 結論
@@ -122,6 +123,8 @@
 | HT | 6 | 6 | 0 | 0 | 0 | 0 | 0 | 0 |
 | H | 32 | 0 | 0 | 0 | 0 | 0 | 23 | 9 |
 | O | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
+
+**訂正（L7b）：** O の4か所のうち `tick_validation.rs` の2か所（`not a WorldState v6`、`a resource facility uses the legacy queues`）は O ではなく C でした（下の「断りの理由」）。この表は L0 の分類のまま数えたもので、数え直していません。直すと C は 1,307、O は 2 です（どちらも一度も届かないか所）。
 | — | — | 10 | 7 | 4 | 12 | 89 | 4 | 92 |
 
 — は棚卸しの後に入った断り（`after_tick.rs` など）か、文のない断りです。**読み方：** C は「壊れた状態だけ」の推測でしたが、Run に 8 行あります（うち2行は判定のみ）。E は「有効な状態で届く」の推測でしたが、Run で届いたのは 6 行で、か所の過半は一度も届きません。
@@ -948,14 +951,14 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 | **M** | 選べるモデルかもしれない ID を知らない | **ほとんど届かない**（下） | 27 |
 | **HT** | trace、Provider | **有効な Run で届く** | 6 |
 | **H** | テストの偽物、patch、shadow、`validate_state=True` | 手順4で印ごと消える | 32 |
-| **O** | 古い保存の形（WorldState v5、情報の schema 1、列の旧方式） | 旧モデルを閲覧のみにすると tick では届かない | 4 |
+| **O** | 古い保存の形（情報の schema 1、列の旧方式） | 旧モデルを閲覧のみにすると tick では届かない | 2（L7b の訂正の後。もとは4） |
 
 | Rust file | C | E | V | T | M | H | HT | O |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
 | `rules/population.rs` | 111 | 22 | 8 | 3 | 0 | 0 | 0 | 0 |
 | `rules/overlay.rs` | 118 | 10 | 7 | 2 | 0 | 0 | 0 | 0 |
 | `rules/effects.rs` | 76 | 55 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `rules/tick_validation.rs` | 109 | 0 | 0 | 0 | 0 | 0 | 0 | 2 |
+| `rules/tick_validation.rs` | 111 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `rules/handlers.rs` | 62 | 35 | 2 | 0 | 0 | 0 | 0 | 0 |
 | `rules/service.rs` | 65 | 18 | 0 | 0 | 0 | 1 | 0 | 0 |
 | `rules/population_lifecycle.rs` | 46 | 26 | 3 | 2 | 0 | 0 | 0 | 0 |
@@ -976,6 +979,8 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 | `rules/staff_dynamics.rs` | 22 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `rules/travel_completion.rs` | 12 | 9 | 3 | 0 | 0 | 2 | 0 | 0 |
 | `rules/body_state.rs` | 20 | 1 | 0 | 0 | 4 | 0 | 0 | 0 |
+
+**O の訂正（L7b、読んで確かめた）：** `tick_validation.rs` の `not a WorldState v6` は O ではありませんでした。WorldState v5 は資源の運用（`resource_service`）のない Scenario が今も書く形で（`WorldState.from_scenario`）、普通の Run で届きます（ゲートの `trace_levels`、`operational`、`branch_commands`、`model__psychology__*` の4つで計 2,320 tick）。`a resource facility uses the legacy queues` も古い保存の形ではなく、v6 の状態の規則（水と食事の設備は普通の列を使わない）で、「legacy」は普通の列のことです。どちらも C に直しました。L7b で v5 の tick の検証を v6 と同じ Rust の道にし、前者の文は `not a WorldState v5 or v6` になりました（[l7b-world-v5.md](lanes/l7b-world-v5.md)）。残る O は情報の schema 1（`information.rs`、`information_events.rs`）の2か所です。列の旧方式の印は `after_tick.rs` の `a legacy queue checkpoint`（—）で断ります。
 
 **M は思ったより閉じています（grep で確かめた）。** 選べるモデルを1つずつ Rust と突き合わせました。`psychology`、`social`、`information`、`behavior`、`affect`、`relationship`、`queue`、`staff_operations`、`staff_fatigue`、`care_outcome`、`body_dynamics` は、クラス名か ID で Rust に道があります。**例外は2つです：`zone_*` の8つの式と `DistanceSampledProximityPolicy` は、Rust に道がありません（次）。** `another movement policy` のような残りの M は、実測では Run で届きません（2節）。Scenario の契約が1つしか許さない値を見ているものが多いと思いますが、確かめていません。
 
@@ -1224,7 +1229,7 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 3. `advance`、`fork`、`submit`、`apply_effect_program`、`web/demo.py:292,1024`、`storage/commands.py` の経路で版を確かめ、**「このRunは旧モデル（版 X）で計算されました。閲覧のみです」のエラーコード**を返す。
 4. `model_signatures` に全体の版を1つ足す（`simulator_signatures` の `simulator:engine` のような1項目）。**Scenario ごとの署名を全部変えずに1か所で上げられる。** RNG の `algorithm_id` は別に記録する。
 5. **旧モデルの Checkpoint を残したテストの fixture。** `test_checkpoint_versions.py` を足す。AGENTS.md の「古い Checkpoint を保持するか、テスト付きの移行」を満たす。
-6. 列の旧方式の移行（`_legacy_queue_migration_required` の後半）、WorldState v5、情報の schema 1 を、**tick の経路から外す**（閲覧では読める）。
+6. 列の旧方式の移行（`_legacy_queue_migration_required` の後半）、情報の schema 1 を、**tick の経路から外す**（閲覧では読める）。**WorldState v5 は外しません**（L9 で分かったこと。資源の運用のない Scenario の今の形で、L7b で v6 と同じ Rust の検証にしました）。
 
 **L11 の中身：**
 - `libm = "=x.y.z"`（`Cargo.lock` もコミット済み）。`mathx.rs` の `extern "C"` と `black_box` をやめる。`None` を返す場合（`math_1`、非正規化数）は Python がエラーを出していた道なので、Rust のエラーの文を決める。

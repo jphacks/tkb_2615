@@ -48,10 +48,13 @@ def tick_plan(world: Any) -> Any:
         for key in simulator_signatures(configs)
         if key.startswith("simulator:")
     )
-    # WorldState.validate: v6 with resource_service, and its config whole.
-    resource_config = ResourceServiceConfig.model_validate(configs["resource_service"])
-    if configs["resource_service"] != resource_config.model_dump(mode="json"):
-        raise ValueError("resource_service config is not canonical")
+    # WorldState.validate: resource_service's config whole. Without it the world is a v5 one and
+    # there is none; the kernel compares this with the world's schema_version at every tick.
+    resource_config = None
+    if "resource_service" in configs:
+        resource_config = ResourceServiceConfig.model_validate(configs["resource_service"])
+        if configs["resource_service"] != resource_config.model_dump(mode="json"):
+            raise ValueError("resource_service config is not canonical")
     information = InformationSpreadConfig.from_mapping(configs.get("information_spread"))
     if "information_spread" in configs and configs["information_spread"] != information.to_dict():
         raise ValueError("information_spread config is not canonical")

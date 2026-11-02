@@ -121,7 +121,7 @@
 
 7日分は `generated` の `project` の経路で、`rule_shadow` の全部の影の7日分は動かしていません（約 2.5 時間かかるため）。**7日分の `kpi_values` は0回です。** Project の経路の `_MetricSink` は `operational_kpi_values` を呼びません。比較はゲートとテストだけです。
 
-**断り：** `snapshot_fields` はどれも「資格のある空いた職員」で、`wait_snapshot` と同じ理由です（ゲート 995回、7日分 2回）。`population_dynamics` のゲート 1,941回はすべて、待っている人か動的な文脈がある状態です。`entity_rules` は0回です。WorldState v5（ゲートの 2,320 tick）は kernel を呼びません。
+**断り：** `snapshot_fields` はどれも「資格のある空いた職員」で、`wait_snapshot` と同じ理由です（ゲート 995回、7日分 2回）。`population_dynamics` のゲート 1,941回はすべて、待っている人か動的な文脈がある状態です。`entity_rules` は0回です。WorldState v5（ゲートの 2,320 tick）は kernel を呼びません（L7b で呼ぶようにしました。[l7b-world-v5.md](l7b-world-v5.md)）。
 
 **ゲートの行の網羅（kernel ありとなしの合計 / kernel ありだけ）：** `experiments/metrics.py` 144行のうち 125行（87%）/ 124行（86%）、`experiments/operational_kpis.py` 33行のうち 31行（94%）/ 8行（24%。kernel が動くので Python の本体は通りません）、`core/tick_validation.py` 157行のうち 139行（89%）/ 同じ、`core/world.py` 894行のうち 684行（77%）/ 676行（76%）、`domain/environment.py` 236行のうち 206行（87%）/ 同じ、`domain/population.py` 486行のうち 412行（85%）/ 411行（85%）。`metrics.py` と `operational_kpis.py` を測るため、`gate_all_paths.py` の `TICK_SIDE` に足しました。 Rust の行の網羅は測っていません。上の延べの件数と、テストの壊した状態で見ています。
 

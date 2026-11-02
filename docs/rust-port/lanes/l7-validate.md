@@ -67,7 +67,7 @@
 
 ## Python に残した規則（手順4で要るもの）
 
-- **WorldState v5 の tick：** すべて Python です（ゲートの 2,320 tick）。**旧モデルを tick の経路から外すのは L9 です。** 列の旧方式の印（`facility_queues_legacy_mode_v1`）も同じで、kernel は断ります。
+- **WorldState v5 の tick：** すべて Python です（ゲートの 2,320 tick）。**旧モデルを tick の経路から外すのは L9 です。**（訂正：v5 は旧モデルではなく、L7b で Rust にしました。[l7b-world-v5.md](l7b-world-v5.md)） 列の旧方式の印（`facility_queues_legacy_mode_v1`）も同じで、kernel は断ります。
 - **設定の契約：** `tick_plan`、`body_config_ids` が呼ぶ pydantic と `canonical_*`。設定が変わったときだけです。D3 と step4-plan の4節（契約の検査は残す）に従いました。
 - **`model_configs` を丸ごと代入した世界：** ミラーがないので毎 tick Python です。`src/` にはありません。
 - **kernel が断ったときの `validate`：** 壊れた状態と patch のときの文を出す道です。手順4で `kernel_first` と同じく Rust のエラーに替わります（L10）。

@@ -30,6 +30,8 @@ def _breaks(world: Any) -> list[tuple[str, Any]]:
         found.append(("need 1% over", agent.needs, "hunger", 1.01))
         found.append(("unknown zone", agent, "zone_id", "nowhere"))
         found.append(("next decision below 0", agent, "next_decision_at", -1))
+        if world.schema_version == 5:
+            found.append(("a v5 hydration need", agent.needs, "hydration_need", 0.5))
     facility = next(iter(world.facilities.values()), None)
     if facility is not None:
         found.append(
@@ -180,9 +182,11 @@ def prepare(output: str) -> None:
 
     def checked(world: Any) -> None:
         validate_after_tick(world)
-        if world.schema_version != 6 or "resource_service" not in world.model_configs:
-            return
-        config = ResourceServiceConfig.model_validate(world.model_configs["resource_service"])
+        # A v5 world (no resource_service) is checked with no config, as validate does.
+        config = None
+        if "resource_service" in world.model_configs:
+            config = ResourceServiceConfig.model_validate(world.model_configs["resource_service"])
+        recorder.seen[f"entity.calls_v{world.schema_version}"] += 1
         try:
             entity_shadow(
                 world, list(world.support_requests.values()), config, InitialNeedProfile, NeedState
