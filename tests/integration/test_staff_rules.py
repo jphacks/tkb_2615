@@ -1,8 +1,8 @@
 """staff_operations_v1 and shared_operations_v1 owned by Rust, with the rules of a tick.
 
-native/src/rules/staff.rs and common_operations.rs move the rules of a tick where no staff member
-starts anything, and a care receipt; the Python rules stay as the comparison base and give every
-error text (docs/rust-port/lanes/m4-staff.md). The rules are compared on the gate by
+native/src/rules/staff.rs and common_operations.rs move the rules of the staff's assignment and a
+care receipt; the Python rules stay as the comparison base and give every error text
+(docs/rust-port/lanes/m4-staff.md, l2-staff.md). The rules are compared on the gate by
 benchmarks/rule_shadow; here, on small worlds and on the values no scenario reaches.
 """
 
@@ -223,7 +223,7 @@ def _set_stress(world: WorldState, zone: str, stress: float) -> None:
     ("skills", "name", "threshold", "above_is_a_task"),
     [(("patrol",), "patrol_stress_at_least", 0.6, True)],
 )
-def test_a_free_worker_with_a_task_goes_to_the_python_rule(
+def test_a_free_worker_with_a_task_reads_the_router_and_without_one_doesnt(
     skills: tuple[str, ...], name: str, threshold: float, above_is_a_task: bool
 ) -> None:
     world = _world(skills=skills)
@@ -293,7 +293,7 @@ def test_the_outreach_threshold_is_the_rules() -> None:
     assert kernel(world, 1, object()) == ()
 
 
-def test_a_repair_goes_to_the_python_rule_and_so_does_another_formula() -> None:
+def test_a_repair_reads_the_router_and_another_formula_goes_to_the_python_rule() -> None:
     world = _world(skills=("maintenance",))
     kernel = native.rules("staff").assign_operations
     assert kernel(world, 1, object()) == ()
@@ -322,7 +322,7 @@ def test_a_tick_with_nothing_to_start_changes_nothing_as_in_the_python_rule(
     assert world.state_digest() == before
 
 
-def test_a_task_under_way_sends_the_relief_to_the_python_rule() -> None:
+def test_a_task_with_no_id_sends_the_relief_to_the_python_rule() -> None:
     world = _world()
     state = world.model_state[KEY]
     state["staff"]["S01"] = {**state["staff"]["S01"], "phase": "working"}
@@ -520,33 +520,28 @@ def test_a_free_worker_goes_past_the_plain_kernel() -> None:
     _request(world, 1, sorted(world.agents)[0])
     service = StaffService(world)
     before = (_waiting_fields(world), _text(dict(world.metric_state)))
-    with pytest.raises(native.Unsupported):
-        native.rules("staff").assign_none(service, 0, validate_state=False)
+    assert native.rules("staff").assign_none(service, 0, validate_state=False) is None
     assert (_waiting_fields(world), _text(dict(world.metric_state))) == before
     # No route is known here, so it is assigned where it stands.
     assert service.assign_pending(0, validate_state=False) == ("support-1",)
 
 
-def test_what_the_assignment_doesnt_decide_goes_to_the_python_rule() -> None:
+def test_what_the_plain_kernel_doesnt_decide_goes_to_assign_work() -> None:
     world = _world()
     for staff_id in world.staff:
         _busy(world, staff_id)
     request = _request(world, 1, sorted(world.agents)[0])
     service = StaffService(world)
     kernel = native.rules("staff").assign_none
-    with pytest.raises(native.Unsupported):
-        kernel(service, 0)  # It validates the state.
-    with pytest.raises(native.Unsupported):
-        kernel(service, 1, validate_state=False)  # Not the world's minute.
+    assert kernel(service, 0) is None  # It validates the state.
+    assert kernel(service, 1, validate_state=False) is None  # Not the world's minute.
     world.model_state["llm"] = {"support_priorities": {request.id: 1}}
-    with pytest.raises(native.Unsupported):
-        kernel(service, 0, validate_state=False)
+    assert kernel(service, 0, validate_state=False) is None
     world.model_state["llm"] = {"support_priorities": {request.id: True}}
     assert kernel(service, 0, validate_state=False) == ()
     world.metric_state["support_assignment_metrics_minute"] = -1.0
     request.report_writes_to([])
-    with pytest.raises(native.Unsupported):
-        kernel(service, 0, validate_state=False)
+    assert kernel(service, 0, validate_state=False) is None
 
 
 # ---- What the metrics read ----
@@ -638,11 +633,11 @@ def test_the_reasons_are_the_python_rules_on_random_staff() -> None:
     } <= reasons_seen
 
 
-def test_a_free_worker_sends_the_snapshot_to_the_python_rule() -> None:
+def test_a_free_worker_s_route_is_read_as_the_python_rule_reads_it() -> None:
     world = _world()
-    request = _request(world, 1, sorted(world.agents)[0])
-    with pytest.raises(native.Unsupported):
-        native.rules("staff").wait_snapshot(world, [request], 0)
+    _request(world, 1, sorted(world.agents)[0])
+    answer = json.loads(_both_snapshots(world, 0))
+    assert answer[0]
 
 
 # ---- record_shared_operation ----

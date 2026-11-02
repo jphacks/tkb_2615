@@ -370,14 +370,15 @@ def test_an_equal_time_goes_to_the_lower_edge_id(generated_scenario: Any) -> Non
     assert repr(route) == repr(ProposePhase._route(controller, zones[0], zones[3], agent_id))
 
 
-def test_an_edge_capacity_and_another_policy_go_to_python(generated_scenario: Any) -> None:
+def test_an_edge_capacity_is_counted_and_another_policy_goes_to_python(
+    generated_scenario: Any,
+) -> None:
     world, controller = _run(generated_scenario, 5)
     kernel = native.rules("travel").route
     agent_id = _idle_people(world, 1)[0]
     zone = world.agents[agent_id].zone_id
     controller.route_capacities = {"any": 1}
-    with pytest.raises(native.Unsupported, match="capacities"):
-        kernel(controller, zone, zone, agent_id)
+    assert kernel(controller, zone, zone, agent_id).edge_ids == ()
     controller.route_capacities = {}
     from sheltersim.policies.space import SpaceRouter
 

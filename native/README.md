@@ -250,12 +250,17 @@ each OS, because both call the same libm.
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
   `validate(world)` accepts a world where no staff member has a task; an active record reads the
   pending events, which is the Python rule's.
-- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
-  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
-  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
-  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
-  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
-  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `rules.staff`: the staff's assignment of `domain/staff.py` and `domain/staff_operations.py`
+  (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`, which is `assign_none`
+  (None hands the step to `assign_work`), `update_operations(world, minute)`,
+  `assign_operations(world, minute, router)`, `relief(world, minute)`, and
+  `wait_snapshot(world, active_support, minute)` for `experiments/metrics.py`. A worker's start plans
+  first and then writes one record at a time. They say Unsupported, before any change, for a value
+  the rows can't hold and for another staff formula. `format_g` is there for the tests.
+  See `docs/rust-port/lanes/m4-staff.md`, `l2-staff.md`.
+- `rules.travel.route`: `_route`, with edge capacities too: it counts the trips under way and records
+  `zone_edge_capacity_wait` as the Python rule does. A rule that plans (`proposals.apply_effect`) holds
+  that record and reserves its sequence on the `EventWriter` until it writes.
 - `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
   `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
   `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
