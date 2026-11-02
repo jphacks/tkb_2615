@@ -132,16 +132,27 @@ def _scheduled(guard: dict[str, Any]) -> Callable[[WorldState], str]:
     return arrange
 
 
-def _both_ways(
-    scenario: Any,
-    event: ScheduledEvent | Callable[[WorldState], str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Any, dict[str, int], dict[str, int]]:
-    """The event's record from the Rust loop; the Python step and guard save the same.
+def _python_guard(world: WorldState, event: ScheduledEvent) -> tuple[EventStatus, str] | None:
+    """What `effect_event_guard_or_suppress` makes of the event with the guard's Python rule."""
+    from sheltersim.events.models import EventApplicationError
 
-    A crafted marker of no program makes a world `validate()` turns down, which neither the guard
-    nor the dispatch loop reads; an event whose guard holds goes to its handler, so it comes from
-    a program scheduled as an operator's would be.
+    try:
+        holds = effects.should_apply_effect_guard.__wrapped__(world, event)
+    except EventApplicationError as error:
+        return EventStatus.FAILED, str(error)
+    return None if holds else (EventStatus.SUPPRESSED, "EffectProgram guard evaluated false")
+
+
+def _both_ways(
+    scenario: Any, event: ScheduledEvent | Callable[[WorldState], str]
+) -> tuple[Any, dict[str, int], dict[str, int]]:
+    """The event's record from the Rust loop; the Python step saves the same.
+
+    The Python step asks the guard through its kernel too, so the guard's Python rule is asked
+    here on its own, before either step: where the dispatcher asks the guard, the record is its
+    outcome. A crafted marker of no program makes a world `validate()` turns down, which neither
+    the guard nor the dispatch loop reads; an event whose guard holds goes to its handler, so it
+    comes from a program scheduled as an operator's would be.
     """
     by_kernel = OfflineSimulationController(WorldState.from_scenario(scenario), Sink())
     by_python = OfflineSimulationController(WorldState.from_scenario(scenario), Sink())
@@ -151,16 +162,19 @@ def _both_ways(
             event_id = event.event_id
         else:
             event_id = event(controller.world)
+    pending = next(
+        item for item in by_python.world.event_queue.pending() if item.event_id == event_id
+    )
+    python_guard = _python_guard(by_python.world, pending)
     before = _counts()
     by_kernel._run_dispatch_phase(by_kernel.world, 0)
     after = _counts()
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            effects, "should_apply_effect_guard", effects.should_apply_effect_guard.__wrapped__
-        )
-        DispatchPhase._run_dispatch_phase(by_python, by_python.world, 0)
+    DispatchPhase._run_dispatch_phase(by_python, by_python.world, 0)
     assert _saved(by_kernel) == _saved(by_python)
-    return by_kernel.world.event_log.find(event_id), before, after
+    record = by_kernel.world.event_log.find(event_id)
+    if python_guard is not None and not (record.detail or "").startswith("no handler registered"):
+        assert (record.status, record.detail) == python_guard
+    return record, before, after
 
 
 def _grew(before: dict[str, int], after: dict[str, int], *names: str) -> None:
@@ -171,13 +185,9 @@ def _grew(before: dict[str, int], after: dict[str, int], *names: str) -> None:
 FACILITY = {"facility_id": "toilet_01", "working_units": 0}
 
 
-def test_a_false_guard_suppresses_the_event_in_rust(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_false_guard_suppresses_the_event_in_rust(scenario: Any) -> None:
     guard = {"operator": "lt", "field": "simulation.minute", "value": 0}
-    record, before, after = _both_ways(
-        scenario, _marked("effect_program_apply", FACILITY, guard), monkeypatch
-    )
+    record, before, after = _both_ways(scenario, _marked("effect_program_apply", FACILITY, guard))
     assert (record.status, record.detail) == (
         EventStatus.SUPPRESSED,
         "EffectProgram guard evaluated false",
@@ -200,11 +210,9 @@ def test_a_false_guard_suppresses_the_event_in_rust(
     ],
 )
 def test_a_guard_the_contract_turns_down_fails_with_its_text(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch, guard: dict[str, Any]
+    scenario: Any, guard: dict[str, Any]
 ) -> None:
-    record, before, after = _both_ways(
-        scenario, _marked("effect_program_apply", FACILITY, guard), monkeypatch
-    )
+    record, before, after = _both_ways(scenario, _marked("effect_program_apply", FACILITY, guard))
     assert record.status is EventStatus.FAILED
     assert record.detail.startswith("EffectProgram guard is invalid: ")
     _grew(before, after, "guard_failed", "events_rust")
@@ -251,21 +259,17 @@ def test_a_guard_the_contract_turns_down_fails_with_its_text(
     ],
 )
 def test_a_guard_without_its_target_fails_with_python_s_text(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch, field: str, payload: dict[str, Any], text: str
+    scenario: Any, field: str, payload: dict[str, Any], text: str
 ) -> None:
     guard = {"operator": "gte", "field": field, "value": 0}
     if field == "staff.available":
         guard["operator"], guard["value"] = "eq", True
-    record, before, after = _both_ways(
-        scenario, _marked("effect_program_apply", payload, guard), monkeypatch
-    )
+    record, before, after = _both_ways(scenario, _marked("effect_program_apply", payload, guard))
     assert (record.status, record.detail) == (EventStatus.FAILED, text)
     _grew(before, after, "guard_failed", "events_rust")
 
 
-def test_a_later_operand_is_read_only_after_those_before_it(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_later_operand_is_read_only_after_those_before_it(scenario: Any) -> None:
     """`and` stops at a false operand, so the missing target after it is never read."""
     first_false = {
         "operator": "and",
@@ -274,36 +278,28 @@ def test_a_later_operand_is_read_only_after_those_before_it(
             {"operator": "gte", "field": "target.capacity", "value": 0},
         ],
     }
-    record, _, _ = _both_ways(
-        scenario, _marked("effect_program_apply", {}, first_false), monkeypatch
-    )
+    record, _, _ = _both_ways(scenario, _marked("effect_program_apply", {}, first_false))
     assert record.detail == "EffectProgram guard evaluated false"
     first_true = {**first_false, "operator": "or"}
     first_true["operands"] = [
         {"operator": "gte", "field": "target.capacity", "value": 0},
         {"operator": "gte", "field": "simulation.minute", "value": 0},
     ]
-    record, _, _ = _both_ways(
-        scenario, _marked("effect_program_apply", {}, first_true), monkeypatch
-    )
+    record, _, _ = _both_ways(scenario, _marked("effect_program_apply", {}, first_true))
     assert record.detail == "guard field 'target.capacity' has no facility target"
 
 
-def test_a_guard_that_holds_goes_on_to_the_handler(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_guard_that_holds_goes_on_to_the_handler(scenario: Any) -> None:
     guard = {"operator": "gte", "field": "target.working_units", "value": 1}
-    record, before, after = _both_ways(scenario, _scheduled(guard), monkeypatch)
+    record, before, after = _both_ways(scenario, _scheduled(guard))
     assert (record.status, record.detail) == (EventStatus.APPLIED, None)
     _grew(before, after, "guard_passed", "others_applied", "events_rust")
     assert after["events_python"] == before["events_python"]
 
 
-def test_a_false_guard_of_a_scheduled_program_suppresses_its_start(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_false_guard_of_a_scheduled_program_suppresses_its_start(scenario: Any) -> None:
     guard = {"operator": "gt", "field": "target.working_units", "value": 1}
-    record, before, after = _both_ways(scenario, _scheduled(guard), monkeypatch)
+    record, before, after = _both_ways(scenario, _scheduled(guard))
     assert (record.status, record.detail) == (
         EventStatus.SUPPRESSED,
         "EffectProgram guard evaluated false",
@@ -311,11 +307,9 @@ def test_a_false_guard_of_a_scheduled_program_suppresses_its_start(
     _grew(before, after, "guard_suppressed", "events_rust")
 
 
-def test_an_event_without_a_handler_is_python_s_to_record(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_event_without_a_handler_is_python_s_to_record(scenario: Any) -> None:
     guard = {"operator": "lt", "field": "simulation.minute", "value": 0}
-    record, before, after = _both_ways(scenario, _marked("no_such_event", {}, guard), monkeypatch)
+    record, before, after = _both_ways(scenario, _marked("no_such_event", {}, guard))
     assert (record.status, record.detail) == (
         EventStatus.FAILED,
         "no handler registered for event type 'no_such_event'",
@@ -324,13 +318,9 @@ def test_an_event_without_a_handler_is_python_s_to_record(
     assert after["guard_suppressed"] == before["guard_suppressed"]
 
 
-def test_a_marked_event_of_the_table_is_python_s(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_marked_event_of_the_table_is_python_s(scenario: Any) -> None:
     guard = {"operator": "lt", "field": "simulation.minute", "value": 0}
-    record, before, after = _both_ways(
-        scenario, _marked("support_request_timeout", {}, guard), monkeypatch
-    )
+    record, before, after = _both_ways(scenario, _marked("support_request_timeout", {}, guard))
     assert (record.status, record.detail) == (
         EventStatus.SUPPRESSED,
         "EffectProgram guard evaluated false",
@@ -339,11 +329,9 @@ def test_a_marked_event_of_the_table_is_python_s(
     assert after["guard_suppressed"] == before["guard_suppressed"]
 
 
-def test_a_guard_rust_cannot_read_is_left_to_python(
-    scenario: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_guard_rust_cannot_read_is_left_to_python(scenario: Any) -> None:
     """An int past 64 bits is the contract's to take, and Python's to compare."""
     guard = {"operator": "lt", "field": "simulation.minute", "value": 2**70}
-    record, before, after = _both_ways(scenario, _scheduled(guard), monkeypatch)
+    record, before, after = _both_ways(scenario, _scheduled(guard))
     assert (record.status, record.detail) == (EventStatus.APPLIED, None)
     _grew(before, after, "guard_refused", "events_python")
