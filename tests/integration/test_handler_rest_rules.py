@@ -29,12 +29,15 @@ from sheltersim.events.handlers import (
     InformationContactHandler,
     ProximityContactHandler,
     ResourceLedgerHandler,
+    SocialInteractionHandler,
+    StaffOperationCompletionHandler,
     StaffSupportCompletionHandler,
     WaterRestorationHandler,
 )
 from sheltersim.events.models import (
     EventApplicationError,
     EventKind,
+    EventLogRecord,
     EventStatus,
     EventSuppressed,
     ScheduledEvent,
@@ -684,3 +687,219 @@ def test_the_kernels_are_what_ran(generated_scenario: Any) -> None:
     handler.apply(world, event)
     after, _ = native.rules("handlers").stats()
     assert after["facility_outage"] > before.get("facility_outage", 0)
+
+
+# ---- The other social events: their fixed amounts, which few runs reach ------------------------
+
+
+SOCIAL_SOURCE = "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1"
+
+
+def _social_event(world: WorldState, payload: dict[str, Any], **fields: Any) -> ScheduledEvent:
+    return _event(
+        world,
+        "social_interaction",
+        payload,
+        kind=EventKind.ENDOGENOUS,
+        source_id="social-policy-test",
+        provenance={
+            "source_type": "assumption",
+            "source_id": SOCIAL_SOURCE,
+            "policy_version": "social-policy-test",
+        },
+        **fields,
+    )
+
+
+def _social_is_python_s(world: WorldState, event: ScheduledEvent) -> WorldState:
+    twin = copy.deepcopy(world)
+    handler = SocialInteractionHandler()
+    assert native.rules("social_interaction").apply(handler, world, event) is None
+    type(handler).apply.__wrapped__(handler, twin, event)
+    assert _bytes(world) == _bytes(twin)
+    return twin
+
+
+@pytest.mark.parametrize(
+    ("action", "stress", "trust"),
+    [
+        ("acknowledge_complaint", 0.5 - 0.02, 0.5 + 0.01),
+        ("explain_staff_process", 0.5 - 0.01, 0.5 + 0.01),
+        ("share_practical_information", 0.5, 0.5 + 0.005),
+    ],
+)
+def test_a_complaint_response_is_python_s(
+    generated_scenario: Any, action: str, stress: float, trust: float
+) -> None:
+    world, _ = _small_world(generated_scenario)
+    request_id = _open_request(world, age=4)
+    agent = next(iter(sorted(world.agents.items())))[1]
+    agent.stress = 0.5
+    agent.trust = 0.5
+    event = _social_event(
+        world,
+        {
+            "interaction_type": "complaint_response",
+            "agent_id": agent.id,
+            "request_id": request_id,
+            "zone_id": agent.zone_id,
+            "stress_threshold": 0.1,
+            "complaint_wait_minutes": 3,
+            "action": action,
+            "reason_short": "long_wait",
+        },
+        causation_id=request_id,
+    )
+    _social_is_python_s(world, event)
+    assert (agent.stress, agent.trust) == (stress, trust)
+
+
+@pytest.mark.parametrize(
+    ("action", "stress", "trust"),
+    [
+        ("offer_reassurance", 0.5 - 0.03, 0.5 + 0.01),
+        ("share_practical_information", 0.5, 0.5 + 0.005),
+    ],
+)
+def test_an_untyped_social_event_is_python_s(
+    generated_scenario: Any, action: str, stress: float, trust: float
+) -> None:
+    world, _ = _small_world(generated_scenario)
+    request_id = _open_request(world)
+    agent = world.agents[world.support_requests[request_id].agent_id]
+    agent.stress = 0.5
+    agent.trust = 0.5
+    event = _social_event(world, {"agent_id": agent.id, "request_id": request_id, "action": action})
+    _social_is_python_s(world, event)
+    assert (agent.stress, agent.trust) == (stress, trust)
+
+
+def test_cooperation_is_python_s(generated_scenario: Any) -> None:
+    world, _ = _small_world(generated_scenario)
+    first, second = (world.agents[key] for key in sorted(world.agents)[:2])
+    second.zone_id = first.zone_id
+    presence = world.model_state.get("population_presence_v1")
+    if presence is not None:
+        presence["people"][first.id]["household_id"] = "home-1"
+        presence["people"][second.id]["household_id"] = "home-1"
+    first.stress, second.stress, first.trust, second.trust = 0.5, 0.6, 0.5, 0.6
+    contact = ScheduledEvent(
+        event_id="contact-test",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=world.minute_index - 1,
+        priority=0,
+        sequence=900_010,
+        event_type="information_contact_update",
+        payload={"sender_agent_id": first.id, "recipient_agent_id": second.id},
+        source_id="SRC-TEST",
+        provenance={"source_type": "assumption", "source_id": "SRC-TEST"},
+    )
+    world.event_log.append(
+        EventLogRecord(
+            event=contact, realized_minute=world.minute_index - 1, status=EventStatus.APPLIED
+        )
+    )
+    event = _social_event(
+        world,
+        {
+            "interaction_type": "cooperation",
+            "agent_id": first.id,
+            "participant_agent_id": second.id,
+            "zone_id": first.zone_id,
+            "stress_threshold": 0.1,
+            "relationship": "same_group",
+            "trigger_event_id": "contact-test",
+            "action": "offer_mutual_support",
+            "reason_short": "shared_group_contact",
+        },
+        causation_id="contact-test",
+    )
+    if presence is None:
+        pytest.skip("this Scenario has no presence state to put two people in one household")
+    _social_is_python_s(world, event)
+    assert (first.stress, second.stress) == (0.5 - 0.02, 0.6 - 0.02)
+    assert (first.trust, second.trust) == (0.5 + 0.01, 0.6 + 0.01)
+
+
+def _operation_world(kind: str, zone_id: str) -> tuple[WorldState, ScheduledEvent, str]:
+    """A staff member at work on an operation in this zone, due now."""
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["duration_minutes"] = 200
+    document["scheduled_events"] = []
+    document["model_configs"]["staff_operations"] = {}
+    document["model_configs"]["shared_operations"] = {
+        "schema_version": 1,
+        "policy_version": "shared-operations-v1",
+    }
+    world = WorldState.from_scenario(ScenarioSpec.model_validate(document))
+    initialize_simulator_extensions(world)
+    world.minute_index = 10
+    staff_id = sorted(world.staff)[0]
+    staff = world.staff[staff_id]
+    task_id = "staff-operation-test"
+    world.active_tasks[task_id] = ActiveTask(
+        id=task_id,
+        kind="staff_operation",
+        agent_id=None,
+        resource_id=None,
+        start_minute=5,
+        due_minute=10,
+        staff_id=staff_id,
+    )
+    staff.active_task_id = task_id
+    staff.work_queue[:] = [task_id]
+    staff.busy_until = 10
+    world.model_state["staff_operations_v1"]["staff"][staff_id].update(
+        {
+            "phase": "working",
+            "task_id": task_id,
+            "task_kind": kind,
+            "target_id": None,
+            "target_zone_id": zone_id,
+            "reason": "test",
+            "started_minute": 5,
+            "arrival_minute": 5,
+            "due_minute": 10,
+            "causation_event_ids": ["cause-1"],
+        }
+    )
+    event = ScheduledEvent(
+        event_id="staff-operation-complete-test",
+        kind=EventKind.COMPLETION,
+        due_minute=10,
+        priority=5,
+        sequence=900_011,
+        event_type="staff_operation_complete",
+        payload={
+            "staff_id": staff_id,
+            "task_id": task_id,
+            "task_kind": kind,
+            "target_id": None,
+            "target_zone_id": zone_id,
+        },
+        source_id="SRC-TEST",
+        provenance={"source_type": "assumption", "source_id": "SRC-TEST"},
+    )
+    return world, event, staff_id
+
+
+@pytest.mark.parametrize("kind", ["cleaning", "information_outreach", "patrol"])
+def test_a_finished_operation_is_python_s(kind: str) -> None:
+    probe = WorldState.from_scenario(ScenarioSpec.model_validate(_small_replay_document()))
+    zone_id = next(iter(sorted(agent.zone_id for agent in probe.agents.values())))
+    world, event, _ = _operation_world(kind, zone_id)
+    twin = copy.deepcopy(world)
+    handler = StaffOperationCompletionHandler()
+    actual = native.rules("staff_operation_events").complete(handler, world, event)
+    expected = StaffOperationCompletionHandler.apply.__wrapped__(handler, twin, event)
+    assert [item.to_dict() for item in actual or ()] == [item.to_dict() for item in expected or ()]
+    assert _bytes(world) == _bytes(twin)
+    assert world._core.mirror("staff_operations_v1").verify()
+
+
+def _small_replay_document() -> dict[str, Any]:
+    document = json.loads(SMALL_REPLAY.read_text(encoding="utf-8"))
+    document["schema_version"] = 3
+    document["scheduled_events"] = []
+    return document
