@@ -32,6 +32,8 @@
 
 **合計：Python の raise 93 か所のうち 88 か所を Rust の文にしました。** 型が Python の受けるものかもしれない値（`schema_version: 1.0`、dict の派生型など）は今までどおり `Unsupported` です。そこで Python の規則が先の検査で別の文を出す場合も、Python が決めます。
 
+**Rust の側で数えると：** 文を出すか所は 91（overlay 68、staff_dynamics 14、queues 9。中継を含む）。全テストで届いたのは 66 か所で、**66 か所すべてが Python の規則と比べるテストの中で届きます**（掃引、設定と override、列の設定、`test_each_change_…`、`test_a_wall_s_clearance_…`。`speed/lane-l8-texts-rest/after/census.json` の `moved` とテストの名前で突き合わせ）。届かない 25 か所は、overlay の足跡・障害物・壁・予約されたベッド・凹んだ区域の文と、窓や区間の型の組み合わせです。
+
 **比較の道（`tests-compare.log`、全テスト）：** 比べた 74 回のうち同じ 74、違い 0、Python が例外を出さなかった 0。27 か所（overlay 16、staff_dynamics 11）。**ゲート**の比較の数は下の「確認」にあります。
 
 **感度：** 写しの木で3つの文を1文字ずつ変えると（`overlay.rs`、`queues.rs`、`staff_dynamics.rs` の各1つ）、比べるテスト 5 件が失敗し、比較の道も `differs` を3回数えて終了コード1でした（`speed/lane-l8-texts-rest/sens-tests.log`、`sens-cmp.txt`）。
@@ -57,7 +59,19 @@
 
 ## 確認
 
-- **ハッシュ：** ゲート `--expect`、`--reversed-order`、比較の道ありのゲート、7日分 `--expect`、`first_difference.py --both`（55 シナリオ、driver の経路）。結果は下の表（`speed/lane-l8-texts-rest/checks.out`）。
+`speed/lane-l8-texts-rest/checks.out`（コード `e492adf`）。負荷の高い機械で、ほかのレーンと同時に動かしました。
+
+| 確認 | 結果 |
+|---|---|
+| ゲート `--expect` | 55 シナリオ、問題 0 |
+| ゲート `--reversed-order --expect` | 55 シナリオ、問題 0 |
+| 比較の道ありのゲート `--expect` | 55 シナリオ、問題 0。比較 5 回すべて同じ（overlay 2 か所） |
+| 7日分 `--expect` | world `69aba6590f6b`、KPI `94c8cbb26041`、events も一致 |
+| `first_difference.py --both`（driver の経路） | 55 シナリオすべて違いなし。220,892 段階で digest が同じ |
+| 棚卸し（後） | 7日分の断り 0、ゲートの driver の断り 0。自分の範囲で Run に残る断りは `service.rs` の `no active task`（`EventSuppressed`、L8a）だけ |
+| ruff、ruff format、clippy（`disallowed_methods`） | 問題なし |
+
+- **ハッシュ：** 上の表のとおり変わりません。
 - **全テスト：** Rust あり 4,654 件成功、1 件失敗（`test_refusal_census.py::test_a_run_of_the_driver_shows_its_fallbacks`。基準の木でも失敗します。生成の Run に driver の断りがもうないためで、#353 で直されます）、8 件 skip。`SHELTERSIM_NATIVE=0` 2,079 件成功、2,584 件 skip。
 - `tracked_mirror_gate.py` は動かしていません（依頼のとおり）。
 - **Linux（WSL2）だけで確かめました。** C API は増やしていません（`PyTypeInfo` を `Unsupported` と同じ形で `StateInvariantError` などに実装）。
