@@ -436,8 +436,11 @@ impl<'py> Phase<'_, 'py> {
                 Err(error) => self.expected_outcome(error).map(Some),
             };
         }
-        if exact_int(&attribute(self.world, intern!(py, "schema_version"))?).ok() != Some(6) {
-            return Ok(None);
+        // `ResourceServiceCompletionHandler.apply`'s check, before its manager's `complete`.
+        if attribute(self.world, intern!(py, "schema_version"))?.ne(6)? {
+            let error = errors::error(py, errors::Outcome::Failed, "resource service completion requires WorldState v6");
+            let done = self.expected_outcome(error)?;
+            return Ok(Some(self.checked(handler, object, done)?));
         }
         match service::complete_event(&attribute(handler, intern!(py, "service"))?, event) {
             Ok(()) => {

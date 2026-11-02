@@ -33,6 +33,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 CHECK: Any = None
@@ -160,11 +161,16 @@ class _Check:
         apply = type(handler).apply
         python_rule = getattr(apply, "__wrapped__", apply)
         if type(handler).__name__ == "ResourceServiceCompletionHandler":
-            # Its apply has no kernel of its own: the kernel is its manager's `complete`.
+            # Its apply has no kernel of its own: the kernel is its manager's `complete`. Its own
+            # check runs, with the manager's Python rule behind it.
             complete = type(handler.service).complete.__wrapped__
+            service = handler.service
 
             def python_rule(handler: Any, world: Any, event: Any) -> None:
-                complete(handler.service, event)
+                shim = SimpleNamespace(
+                    service=SimpleNamespace(complete=lambda e: complete(service, e))
+                )
+                apply(shim, world, event)
 
         label = f"direct {type(handler).__name__}"
         self.compare(label, name, text, lambda: python_rule(handler, world, event))

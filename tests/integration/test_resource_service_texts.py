@@ -242,6 +242,40 @@ def test_a_completion_whose_service_state_differs_is_python_s_to_fail(
     )
 
 
+def test_a_completion_in_a_world_not_v6_fails_with_the_handler_s_text(
+    resource_service_scenario: Any,
+) -> None:
+    """`ResourceServiceCompletionHandler`'s own check: the dispatch loop saves the Python step's.
+
+    A world with the water service is v6 (`validate()` says so); one whose version was set back
+    reaches the handler's check before its manager's. The Rust loop and the Python step save the
+    same failed record.
+    """
+    from sheltersim.events.models import EventStatus
+    from sheltersim.experiments.phases.dispatch import DispatchPhase
+
+    saved = []
+    for by_kernel in (True, False):
+        world, completion = _started(resource_service_scenario)
+        controller = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))
+        world.event_queue.remove(completion.event_id)
+        world.schedule_event(_completion(completion, due_minute=0))
+        world.schema_version = 5
+        if by_kernel:
+            controller._run_dispatch_phase(world, 0)
+        else:
+            DispatchPhase._run_dispatch_phase(controller, world, 0)
+        record = world.event_log.find(completion.event_id)
+        assert (record.status, record.detail) == (
+            EventStatus.FAILED,
+            "resource service completion requires WorldState v6",
+        )
+        saved.append(
+            [item.decode() for item in world.event_log.items_bytes(0, len(world.event_log))]
+        )
+    assert saved[0] == saved[1]
+
+
 # ---- cancel -------------------------------------------------------------------------------------
 
 
