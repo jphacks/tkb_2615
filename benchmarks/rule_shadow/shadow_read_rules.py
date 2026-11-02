@@ -7,6 +7,8 @@
 - At each proximity step: the Python rule on a stand-in world that records what it schedules, then
   the kernel on the world; the events as JSON text, in order, and the event counter.
 
+Run alone with SHELTERSIM_RULE_SHADOW_ONLY=read_rules, this keeps every tick on the Python path.
+
 `seen` also says which formula each zone was read under and which side of each branch it took,
 since most of these are selected by the Scenario, and a formula no Run selects is not compared here
 (tests/integration/test_read_rules.py makes those inputs).
@@ -178,6 +180,9 @@ def prepare(output: str) -> None:
 
     if not native.available():
         return
+    # The driver calls its kernels directly, past these stand-ins: alone, this shadow would see no
+    # tick and report nothing while every hash passes.
+    native.rules("tick").python_path_only(True)
     recorder = Recorder(output, "read_rules")
     unsupported = native.Unsupported
     views = native.rules("world_view")

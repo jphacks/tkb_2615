@@ -45,6 +45,7 @@ DRIVEN_STEPS = (
     "_assign_staff_support",
     "_run_sample_phase",
     "_sample_information_contacts",
+    "_sample_proximity_contacts",
     "_run_metrics_phase",
     "_admit_pending_returns",
 )

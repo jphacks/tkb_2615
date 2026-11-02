@@ -334,6 +334,106 @@ def test_a_config_the_contract_refuses_is_left_to_it(seed: int) -> None:
     assert outcomes[True] > 10
 
 
+def _bare_world(config: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        model_configs={"zone_environment": config},
+        model_state={ZONE_ENVIRONMENT_STATE_KEY: {"modifiers": {}}},
+    )
+
+
+def _just_below(bound: float) -> float:
+    return bound - (abs(bound) * 0.005 or 1e-9)
+
+
+def _just_above(bound: float) -> float:
+    return bound + (abs(bound) * 0.005 or 1e-9)
+
+
+def test_each_bound_of_the_contract_is_where_the_contract_puts_it() -> None:
+    # Each with the fields it is ordered against at their widest.
+    room = {
+        "min_probability_multiplier": {"max_probability_multiplier": 2.0},
+        "max_probability_multiplier": {"min_probability_multiplier": 0.1},
+        "comfortable_min_temperature_c": {"comfortable_max_temperature_c": 50.0},
+        "comfortable_max_temperature_c": {"comfortable_min_temperature_c": -10.0},
+    }
+    accepted = refused = 0
+    for name, (low, high) in _BOUNDS.items():
+        for value in (low, high, _just_below(low), _just_above(high)):
+            config = {name: value, "policy_version": "zone-environment-v2", **room.get(name, {})}
+            if _assert_zone_same(_bare_world(config), "hall"):
+                accepted += 1
+            else:
+                refused += 1
+    for name, (low, high) in _INT_BOUNDS.items():
+        for value in (low, high, low - 1, high + 1):
+            config = {
+                name: value,
+                "policy_version": "zone-environment-v2",
+                **(
+                    {"max_rest_decision_minutes": 240}
+                    if name == "min_rest_decision_minutes"
+                    else {"min_rest_decision_minutes": 1}
+                    if name == "max_rest_decision_minutes"
+                    else {}
+                ),
+            }
+            if _assert_zone_same(_bare_world(config), "hall"):
+                accepted += 1
+            else:
+                refused += 1
+    for name, (low, high) in _BASELINE_BOUNDS.items():
+        for value in (low, high, _just_below(low), _just_above(high)):
+            config = {"baseline_by_zone": {"hall": {name: value}}}
+            if _assert_zone_same(_bare_world(config), "hall"):
+                accepted += 1
+            else:
+                refused += 1
+    assert accepted >= 30
+    assert refused >= 30
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"policy_version": "zone-environment-v1", "lighting_sleep_efficiency_loss": 0.1},
+        {"policy_version": "zone-environment-v1", "privacy_discontent_per_minute": 0.001},
+        {"policy_version": "zone-environment-v1", "baseline_by_zone": {"hall": {}}},
+        {
+            "policy_version": "zone-environment-v2",
+            "min_probability_multiplier": 1.0,
+            "max_probability_multiplier": 1.0,
+        },
+        {"comfortable_min_temperature_c": 20.0, "comfortable_max_temperature_c": 20.0},
+        {"min_rest_decision_minutes": 9, "max_rest_decision_minutes": 8},
+        {"policy_version": "zone-environment-v3"},
+        {"source_type": "measured"},
+        {"source_id": " spaced"},
+        {"baseline_by_zone": {"hall": {"other": 1.0}}},
+        {"baseline_by_zone": []},
+        # Which documents are legacy, by what they leave out.
+        {"noise_rest_efficiency_loss": 0.25},
+        {"lighting_sleep_efficiency_loss": 0.25},
+        {"baseline_by_zone": {}},
+        {"policy_version": "zone-environment-v1"},
+        {"policy_version": "zone-environment-v2"},
+    ],
+)
+def test_the_orderings_and_versions_of_the_contract(config: dict[str, Any]) -> None:
+    try:
+        zone_environment_view(_bare_world(config), "hall")
+    except ValidationError:
+        with pytest.raises(native.Unsupported):
+            _rules("zone_environment").view_of(_bare_world(config), "hall")
+        return
+    if config.get("source_id") == " spaced":
+        # The contract strips it. No canonical document holds it, so the kernel leaves it.
+        with pytest.raises(native.Unsupported):
+            _rules("zone_environment").view_of(_bare_world(config), "hall")
+        return
+    assert _assert_zone_same(_bare_world(config), "hall")
+
+
 def test_a_world_without_the_policy_has_the_neutral_view() -> None:
     for world in (
         SimpleNamespace(model_configs={}, model_state={}),
@@ -586,6 +686,34 @@ def test_a_person_context_is_taken_and_read_as_the_contract_takes_and_reads_it(s
     assert refused > 500
 
 
+@pytest.mark.parametrize(
+    ("field", "limit"),
+    [
+        ("parent_ids", 4),
+        ("caregiver_ids", 16),
+        ("care_for_ids", 16),
+        ("partner_ids", 16),
+        ("relative_ids", 32),
+        ("review_reasons", 32),
+        ("care_support_needs", 8),
+    ],
+)
+def test_the_length_of_each_list_is_where_the_contract_puts_it(field: str, limit: int) -> None:
+    fields_of = _rules("person_context").fields_of
+    kinds = list(get_args(SupportKind))
+    make = (
+        (lambda size: kinds[:size])
+        if field == "care_support_needs"
+        else (lambda size: ["A"] * size)
+    )
+    PersonContext.model_validate({field: make(limit)})
+    fields_of({field: make(limit)})
+    with pytest.raises(ValidationError):
+        PersonContext.model_validate({field: make(limit + 1)})
+    with pytest.raises(native.Unsupported):
+        fields_of({field: make(limit + 1)})
+
+
 def test_each_literal_of_the_contract_is_taken() -> None:
     fields_of = _rules("person_context").fields_of
     for kind in get_args(SupportKind):
@@ -810,6 +938,15 @@ def test_a_minute_off_the_interval_or_at_the_end_schedules_nothing(
     world = _proximity_world(generated_scenario_with)
     assert _run_step_both_ways(world, 7) == []
     assert _run_step_both_ways(world, world.duration_minutes - 1) == []
+    every_minute = {
+        "schema_version": 1,
+        "enabled": True,
+        "policy_version": PROXIMITY,
+        "sample_interval_minutes": 1,
+        "max_distance_m": 10.0,
+        "max_pairs_per_sample": 2,
+    }
+    assert _run_step_both_ways(world, world.duration_minutes - 1, every_minute) == []
     config = {
         "schema_version": 1,
         "enabled": True,
@@ -860,25 +997,28 @@ def test_a_contact_that_is_not_an_event_raises_as_the_python_step_does(
     information_spread_scenario: Any,
 ) -> None:
     """A negative counter is the one input left that the row's parse does not close."""
-    world = WorldState.from_scenario(information_spread_scenario(duration=60, correction=False))
+    world = WorldState.from_scenario(information_spread_scenario(duration=120, correction=False))
     controller = _controller(world)
     engine = TickEngine(world, phase_handler=controller)
-    for _ in range(10):
+    for _ in range(119):
         engine.step()
-    if not world.model_state["information_spread_v1"]["messages"]:
-        pytest.skip("no claim was made")
-    copied = WorldState.from_dict(world.to_dict())
-    copied_controller = _controller(copied)
-    world.id_counters["event"] = copied.id_counters["event"] = -5
-    minute = world.minute_index
-    outcomes = []
-    for side, step in (
-        (copied, lambda: copied_controller._sample_information_contacts(minute, CounterRNG(11))),
-        (world, lambda: _rules("information").sample_contacts(controller, minute, CounterRNG(11))),
-    ):
+        copied = WorldState.from_dict(world.to_dict())
+        counter = copied.id_counters["event"]
+        minute = world.minute_index
         try:
-            step()
-            outcomes.append(("no contact", side.id_counters["event"]))
+            copied.id_counters["event"] = -5
+            _controller(copied)._sample_information_contacts(minute, CounterRNG(11))
+            continue
         except ValueError as error:
-            outcomes.append((str(error), side.id_counters["event"]))
-    assert outcomes[0] == outcomes[1]
+            expected = str(error)
+        taken = copied.id_counters["event"]
+        assert expected == "event sequence must be a non-negative integer"
+        assert taken == -4
+        world.id_counters["event"] = -5
+        with pytest.raises(ValueError) as raised:
+            _rules("information").sample_contacts(controller, minute, CounterRNG(11))
+        assert str(raised.value) == expected
+        assert world.id_counters["event"] == taken
+        assert counter >= 0
+        return
+    raise AssertionError("no minute had a contact to schedule")
