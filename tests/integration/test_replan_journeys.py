@@ -156,9 +156,12 @@ def test_a_walk_takes_the_other_route(generated_scenario: Any) -> None:
     assert journey["route_edge_ids"] == [ALTERNATE]
     assert journey["event_id"] != old["event_id"]
     assert world.metric_state["movement_replan_count"] == 1.0
-    assert next(
-        record for record in world.event_log.records if record.event.event_id == old["event_id"]
-    ).status is EventStatus.SUPPRESSED
+    assert (
+        next(
+            record for record in world.event_log.records if record.event.event_id == old["event_id"]
+        ).status
+        is EventStatus.SUPPRESSED
+    )
 
 
 def test_a_walk_with_no_route_stops_and_is_counted(generated_scenario: Any) -> None:
@@ -545,7 +548,7 @@ def test_support_with_a_moved_completion_is_python_s_error(generated_scenario: A
 
 
 def test_edge_capacities_are_asked_of_the_python_route(generated_scenario: Any) -> None:
-    """`_route` with capacities is in Python until it has a kernel: the rest here is the kernel's."""
+    """`_route` with capacities may be Python's: the rest here is the kernel's."""
     world = _world(generated_scenario)
     _with_alternate_route(world)
     _walk_to_the_toilet(world)
@@ -556,27 +559,25 @@ def test_edge_capacities_are_asked_of_the_python_route(generated_scenario: Any) 
 
 
 def test_a_tick_with_a_closed_edge_replans_through_the_driver(generated_scenario: Any) -> None:
+    """The driver's path against the phases' Python, over ticks that really replan."""
     from sheltersim.core.engine import TickEngine
 
-    def run(with_native: bool) -> str:
-        world = WorldState.from_scenario(generated_scenario)
+    def run(driver: bool) -> tuple[str, float]:
+        world = _world(generated_scenario)
+        world.minute_index = 0
         _with_alternate_route(world)
         controller = _controller(world)
-        if not with_native:
+        if not driver:
             controller.run_tick = lambda *_arguments: False  # type: ignore[method-assign]
         engine = TickEngine(world, phase_handler=controller)
-        for _ in range(40):
-            engine.step()
-        routes = [
-            journey["route_edge_ids"]
-            for journey in world.model_state[KEY]["journeys"].values()
-        ]
+        engine.step()
+        _walk_to_the_toilet(world, sorted(world.agents)[-1])
         world.zone_edges[FIRST_LEG].closed = True
         controller._refresh_space()
-        for _ in range(40):
+        for _ in range(10):
             engine.step()
-        assert world.metric_state.get("movement_replan_count", 0.0) >= 0.0
-        assert routes is not None
-        return _bytes(world)
+        return _bytes(world), world.metric_state.get("movement_replan_count", 0.0)
 
-    assert run(True) == run(False)
+    with_driver, without = run(True), run(False)
+    assert with_driver[1] >= 1.0
+    assert with_driver == without

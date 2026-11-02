@@ -1,8 +1,8 @@
-"""The branches of `advance_movement` that depend on the order of the walk, against the Python rule.
+"""The branches of `advance_movement` that depend on the walk's order, against the Python rule.
 
-The gate and the 7-day run never reach them (docs/rust-port/lanes/l3-movement.md), so these tests are
-all that compares them: a queue trip that replans, and a person placed in a slot during the walk.
-Each one runs the kernel on the world and the Python rule on a copy, and the whole worlds must be the
+The gate and the 7-day run never reach them (docs/rust-port/lanes/l3-movement.md), so these tests
+are all that compares them: a queue trip that replans, and a person placed in a slot in the walk.
+Each runs the kernel on the world and the Python rule on a copy, and the whole worlds must be the
 same, floats by their bits, with the event numbers, the suppressed records and the metrics.
 
 A case the Python rule raises on is refused by the kernel with nothing changed.
@@ -272,7 +272,7 @@ def _queue_trip(
     due: int = 300,
     points: list[dict[str, float]] | None = None,
 ) -> dict[str, Any]:
-    """A walk of this person in the queue, by hand, with its event pending and their queue's task."""
+    """A walk of this person, by hand, with its event pending and their queue's task."""
     state = world.model_state[KEY]
     task_id = next(
         key
@@ -420,7 +420,7 @@ def test_a_replan_seen_by_the_slot_of_someone_later_in_the_walk(
     assert state["positions"]["A002"]["position_kind"] == "physical"
 
 
-# ---- A person placed in a slot during the walk -----------------------------------------------------
+# ---- A person placed in a slot during the walk ----------------------------------------------
 
 
 @pytest.mark.parametrize("queue_order", [("A001", "A002", "A003"), ("A003", "A002", "A001")])
@@ -585,11 +585,10 @@ def _random_trips(world: WorldState, rng: random.Random, people: tuple[str, ...]
         }
 
 
-@pytest.mark.parametrize("seed", range(40))
-def test_random_walks_are_python_s_bit_for_bit(generated_scenario: Any, seed: int) -> None:
+def _random_walk(scenario: Any, seed: int) -> WorldState:
     rng = random.Random(seed)
     people = tuple(rng.sample(("A001", "A002", "A003", "A004", "A005", "A006"), 6))
-    world = _trips_of_the_facility_s_own_queue(generated_scenario, people)
+    world = _trips_of_the_facility_s_own_queue(scenario, people)
     _random_trips(world, rng, people)
     point = world.model_configs["facility_geometry"]["facility_points"][TOILET]
     _move_the_toilet(world, {"x": point["x"] - rng.uniform(0.0, 0.4), "y": point["y"]})
@@ -615,3 +614,24 @@ def test_random_walks_are_python_s_bit_for_bit(generated_scenario: Any, seed: in
     for minute in (1, 2, 3):
         world.minute_index = minute
         _same_after(world, minute)
+    return world
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_walks_are_python_s_bit_for_bit(generated_scenario: Any, seed: int) -> None:
+    _random_walk(generated_scenario, seed)
+
+
+def test_the_random_walks_reach_the_branches(generated_scenario: Any) -> None:
+    """Or the test above compares little: replans of each ending, and people placed in slots."""
+    counts: dict[str, float] = {}
+    for seed in range(12):
+        world = _random_walk(generated_scenario, seed)
+        for name in (
+            "physical_queue_replan_count",
+            "physical_queue_replan_blocked_count",
+            "movement_replan_count",
+        ):
+            counts[name] = counts.get(name, 0.0) + world.metric_state.get(name, 0.0)
+    assert counts["physical_queue_replan_count"] > 0
+    assert counts["physical_queue_replan_blocked_count"] > 0

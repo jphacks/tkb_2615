@@ -429,26 +429,18 @@ def _move_the_toilet(world: WorldState) -> None:
     }
 
 
-def test_two_queue_replans_go_to_the_python_rule_and_keep_their_order(
-    generated_scenario_with_split_queues: Any,
-) -> None:
-    """The kernel doesn't decide this tick: the event numbers depend on who replans first."""
+def test_two_queue_replans_keep_their_order(generated_scenario_with_split_queues: Any) -> None:
+    """The event numbers depend on who replans first. test_movement_walk_order.py has the rest."""
     world = _two_people_in_queue_trips(generated_scenario_with_split_queues)
     _move_the_toilet(world)
-    twin = copy.deepcopy(world)
-    assert "serial order" in _refuses(world, "advance_movement", 1)
-    # What runs instead, through the name every caller has.
-    assert movement.advance_movement(world, 1) == _rule("advance_movement")(twin, 1) == ()
-    assert _bytes(world) == _bytes(twin)
-    assert world.id_counters == twin.id_counters
-    assert _mirror(world).verify()
+    assert _same_after(world, "advance_movement", 1) == ()
     first, second = (
         world.model_state[KEY]["journeys"][key]["event_id"] for key in ("A001", "A002")
     )
     assert int(first.rsplit("-", 1)[1]) + 1 == int(second.rsplit("-", 1)[1])
 
 
-def test_a_person_in_a_slot_in_the_walk_goes_to_the_python_rule(generated_scenario: Any) -> None:
+def test_a_person_in_a_slot_in_the_walk_is_python_s(generated_scenario: Any) -> None:
     """Their slot reads the people ahead, who the walk may already have moved."""
     world = _run(generated_scenario, 5)
     facility = world.facilities[sorted(world.facilities)[0]]
@@ -460,11 +452,7 @@ def test_a_person_in_a_slot_in_the_walk_goes_to_the_python_rule(generated_scenar
     agent.target_id = facility.id
     facility.queue_agent_ids.append(agent_id)
     state["last_updated_minute"] = world.minute_index - 1
-    twin = copy.deepcopy(world)
-    assert "queue slot" in _refuses(world, "advance_movement", world.minute_index)
-    movement.advance_movement(world, world.minute_index)
-    _rule("advance_movement")(twin, world.minute_index)
-    assert _bytes(world) == _bytes(twin)
+    _same_after(world, "advance_movement", world.minute_index)
 
 
 def test_finishing_one_trip_may_read_the_slots(generated_scenario: Any) -> None:

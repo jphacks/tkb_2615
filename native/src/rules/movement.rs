@@ -672,7 +672,6 @@ fn queue_slot_position<'py>(
     let py = world.py();
     let _ = geometry; // What _geometry(world) gives, as every caller passes.
     let (agent_id, facility_id) = (exact_str(agent_id)?, exact_str(facility_id)?);
-    let mirror = mirror_held(world)?;
     let store = entities_of(world)?;
     let geo = Geo::of(world)?;
     let fifo = match queue_id {
@@ -680,13 +679,135 @@ fn queue_slot_position<'py>(
         _ => None,
     };
     let independent = fifo.as_ref().map(crate::rules::queues::Fifo::slot_view);
-    let slot = NamespaceMirror::with_row::<MovementRow, _>(&mirror, |row| {
+    let slot = with_positions(world, |row| {
         EntityStore::with_rows(&store, |rows| queue_slot_in(&geo, row, rows, agent_id, facility_id, independent))
     })?;
     match slot {
         Some(point) => point_object(py, point),
         None => Ok(py.None().into_bound(py)),
     }
+}
+
+/// How near counts as being there, in `agent_is_at_queue_slot` and its siblings, in metres.
+const ARRIVED_WITHIN: f64 = 0.05;
+
+/// The rule on the row of the world's positions, or on none in a world without the namespace.
+fn with_positions<R>(world: &Bound<'_, PyAny>, read: impl FnOnce(&MovementRow) -> PyResult<R>) -> PyResult<R> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    if exact_dict(&table)?.contains(KEY)? {
+        NamespaceMirror::with_row::<MovementRow, _>(&mirror_held(world)?, |row| read(row))
+    } else {
+        read(&no_positions())
+    }
+}
+
+/// Whether the person's record is this near a point. A record's point is not usable: the rule's.
+fn is_near(row: &MovementRow, agent_id: &str, point: Pt) -> PyResult<bool> {
+    let Some(current) = position_point(row.positions.get(agent_id)) else {
+        return Ok(false);
+    };
+    if !usable(current.x, current.y) {
+        return unsupported("a position is not a usable point");
+    }
+    Ok(distance(point, current) <= ARRIVED_WITHIN)
+}
+
+/// `agent_is_at_queue_slot`.
+pub(crate) fn at_queue_slot(world: &Bound<'_, PyAny>, agent_id: &str, facility_id: &str, queue_id: Option<&str>) -> PyResult<bool> {
+    let store = entities_of(world)?;
+    let geo = Geo::of(world)?;
+    if geo.layout.is_none() {
+        return Ok(false);
+    }
+    let fifo = match queue_id {
+        Some(queue) => crate::rules::queues::Fifo::read(world, &geo, queue)?,
+        None => None,
+    };
+    let independent = fifo.as_ref().map(crate::rules::queues::Fifo::slot_view);
+    with_positions(world, |row| {
+        EntityStore::with_rows(&store, |rows| {
+            if rows.facilities.get(facility_id).is_none() {
+                return Ok(false);
+            }
+            match queue_slot_in(&geo, row, rows, agent_id, facility_id, independent)? {
+                Some(target) => is_near(row, agent_id, target),
+                None => Ok(false),
+            }
+        })
+    })
+}
+
+/// `agent_is_at_facility_service_point`.
+pub(crate) fn at_service_point(world: &Bound<'_, PyAny>, agent_id: &str, facility_id: &str, service_point: Option<&str>) -> PyResult<bool> {
+    let py = world.py();
+    let store = entities_of(world)?;
+    let geo = Geo::of(world)?;
+    if geo.layout.is_none() {
+        // The route of no floor plan: none of its minutes.
+        return EntityStore::with_rows(&store, |rows| {
+            if rows.agents.get(agent_id).is_none() || rows.facilities.get(facility_id).is_none() {
+                return unsupported("no such agent or facility");
+            }
+            Ok(true)
+        });
+    }
+    let configs = attribute(world, intern!(py, "model_configs"))?;
+    let raw_model = exact_dict(&configs)?.get_item(intern!(py, "movement_model"))?;
+    let found = with_positions(world, |row| {
+        EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model, agent_id, facility_id, service_point))
+    })?;
+    Ok(found.is_some_and(|(minutes, path)| minutes <= 0 || path.len() < 2))
+}
+
+/// `agent_is_at_queue_trip_destination`, of the person's own journey in the row.
+pub(crate) fn at_trip_destination(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<bool> {
+    with_positions(world, |row| {
+        let Some(point) = row.journeys.get(agent_id).and_then(|journey| journey.route_points.last()) else {
+            return Ok(false);
+        };
+        if !usable(point.x, point.y) {
+            return unsupported("a route point is not a usable point");
+        }
+        is_near(row, agent_id, Pt { x: point.x, y: point.y })
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (world, agent_id, facility_id, queue_id=None))]
+fn agent_is_at_queue_slot(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>, facility_id: &Bound<'_, PyAny>, queue_id: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
+    let queue = queue_id.filter(|queue| !queue.is_none()).map(exact_str).transpose()?;
+    at_queue_slot(world, exact_str(agent_id)?, exact_str(facility_id)?, queue)
+}
+
+#[pyfunction]
+#[pyo3(signature = (world, agent_id, facility_id, service_point_id=None))]
+fn agent_is_at_facility_service_point(
+    world: &Bound<'_, PyAny>,
+    agent_id: &Bound<'_, PyAny>,
+    facility_id: &Bound<'_, PyAny>,
+    service_point_id: Option<&Bound<'_, PyAny>>,
+) -> PyResult<bool> {
+    let point = service_point_id.filter(|point| !point.is_none()).map(exact_str).transpose()?;
+    at_service_point(world, exact_str(agent_id)?, exact_str(facility_id)?, point)
+}
+
+/// `agent_is_at_queue_trip_destination`, of the journey it is given.
+#[pyfunction]
+fn agent_is_at_queue_trip_destination(world: &Bound<'_, PyAny>, agent_id: &Bound<'_, PyAny>, journey: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let Some(journey) = crate::core::tracked::as_readable_dict(journey) else {
+        return Ok(false);
+    };
+    let Some(points) = journey.get_item(intern!(world.py(), "route_points"))? else {
+        return Ok(false);
+    };
+    let points = exact_list(&points)?;
+    if points.is_empty() {
+        return Ok(false);
+    }
+    let destination = plain_point(&points.get_item(points.len() - 1)?)?;
+    let agent_id = exact_str(agent_id)?;
+    with_positions(world, |row| is_near(row, agent_id, destination))
 }
 
 /// `min(options, key=(distance, points))`: the tuple order on finite floats.
@@ -735,13 +856,9 @@ fn facility_approach_route<'py>(
         let route = route_class.call1((&*agent_zone, &*facility_zone, (&*agent_zone,), PyTuple::empty(py), 0))?;
         return Ok((route, PyTuple::empty(py)).into_pyobject(py)?.into_any());
     }
-    let read = |row: &MovementRow| EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model.clone(), agent_id, facility_id, service_point));
-    let table = attribute(world, intern!(py, "model_state"))?;
-    let found = if exact_dict(&table)?.contains(KEY)? {
-        NamespaceMirror::with_row::<MovementRow, _>(&mirror_held(world)?, |row| read(row))?
-    } else {
-        read(&no_positions())?
-    };
+    let found = with_positions(world, |row| {
+        EntityStore::with_rows(&store, |rows| approach_point(&geo, row, rows, raw_model, agent_id, facility_id, service_point))
+    })?;
     let Some((duration, path)) = found else {
         return Ok(py.None().into_bound(py));
     };
@@ -1159,6 +1276,58 @@ fn plan_staff(scene: &Scene<'_>, operations: Option<&Bound<'_, PyDict>>, staff_i
     };
     let kind = on_route_kind(&point);
     Ok(record(current_zone, point, kind, edge_id, progress))
+}
+
+/// `staff_position_snapshots`, from outside `advance_movement`.
+#[pyfunction]
+#[pyo3(signature = (world, *, boundary_minute=None))]
+fn staff_position_snapshots<'py>(world: &Bound<'py, PyAny>, boundary_minute: Option<&Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyDict>> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let table = exact_dict(&table)?;
+    let result = PyDict::new(py);
+    if !table.contains(KEY)? {
+        return Ok(result);
+    }
+    let boundary = match boundary_minute.filter(|boundary| !boundary.is_none()) {
+        Some(boundary) => exact_int(boundary)?,
+        None => exact_int(&attribute(world, intern!(py, "minute_index"))?)?,
+    };
+    let mirror = mirror_held(world)?;
+    let store = entities_of(world)?;
+    let scene = Scene::of(world)?;
+    let operations = table.get_item("staff_operations_v1")?;
+    let staff_records = match &operations {
+        Some(operations) => match crate::core::tracked::as_readable_dict(operations) {
+            Some(operations) => operations.get_item(intern!(py, "staff"))?,
+            None => None,
+        },
+        None => None,
+    };
+    let staff_records = match &staff_records {
+        Some(records) => Some(exact_dict(records)?),
+        None => None,
+    };
+    let (records, writes) = NamespaceMirror::with_row_tree::<MovementRow, _>(&mirror, |row, tree| {
+        let mut changes = Changes::default();
+        EntityStore::with_rows(&store, |rows| {
+            let mut staff: Vec<_> = rows.staff.iter().collect();
+            staff.sort_unstable_by(|first, second| first.0.cmp(second.0));
+            for (staff_id, member) in staff {
+                changes.staff.push((staff_id.clone(), plan_staff(&scene, staff_records, staff_id, &member.zone_id, boundary)?));
+            }
+            Ok(())
+        })?;
+        let writes = changes.apply(row, tree)?;
+        let mut records: Vec<(Arc<str>, Position)> = row.staff_positions.iter().map(|(id, position)| (id.clone(), position.clone())).collect();
+        records.sort_unstable_by(|first, second| first.0.cmp(&second.0));
+        Ok((records, writes))
+    })?;
+    write_tree(&mirror, writes)?;
+    for (id, position) in &records {
+        result.set_item(&**id, Field::to_py(position, py)?)?;
+    }
+    Ok(result)
 }
 
 /// The rows of the world's event queue.
@@ -2007,6 +2176,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(zone_center, m)?)?;
     m.add_function(wrap_pyfunction!(queue_slot_position, m)?)?;
     m.add_function(wrap_pyfunction!(facility_approach_route, m)?)?;
+    m.add_function(wrap_pyfunction!(staff_position_snapshots, m)?)?;
+    m.add_function(wrap_pyfunction!(agent_is_at_queue_slot, m)?)?;
+    m.add_function(wrap_pyfunction!(agent_is_at_queue_trip_destination, m)?)?;
+    m.add_function(wrap_pyfunction!(agent_is_at_facility_service_point, m)?)?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     Ok(())
 }
