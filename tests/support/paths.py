@@ -23,4 +23,6 @@ AGENTS_INITIAL = FIXTURES / "agents_initial.json"
 PROFILES_SMALL = FIXTURES / "profiles_small.json"
 GYM_LAYOUT = FIXTURES / "layouts" / "gym_synthetic.json"
 DEMO_REPLAY = FIXTURES / "demo_replay"
+# A Run saved before Checkpoints recorded the whole-model version (engine version 1).
+SAVED_RUN_ENGINE_V1 = FIXTURES / "saved_runs" / "engine-v1-small"
 BENCHMARKS = FIXTURES.parent / "benchmarks"

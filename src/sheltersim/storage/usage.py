@@ -418,8 +418,12 @@ class UsageLedger:
             # One-time conservative import for runs created before this service existed.
             known: dict[str, dict[str, Any]] = {}
             for branch in store.branches(project_id, run_id):
-                _, checkpoint = store.load_branch(project_id, run_id, branch["branch_id"])
-                for record in checkpoint.runtime_state.get("llm", {}).get("records", []):
+                # Only the saved tape is read, also of a view-only Run of another model.
+                reference = store.branch_reference(project_id, run_id, branch["branch_id"])
+                runtime_state = store.checkpoint_fields(
+                    project_id, run_id, reference.checkpoint_hash, ("runtime_state",)
+                )["runtime_state"]
+                for record in runtime_state.get("llm", {}).get("records", []):
                     if record["api_request_count"]:
                         known[digest(record)] = record
             analysis = store._path(project_id, "runs", run_id, "analysis.json")

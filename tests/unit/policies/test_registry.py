@@ -26,7 +26,8 @@ from sheltersim.contracts.policies import (
     model_signatures,
     selected_models,
 )
-from sheltersim.core.checkpoint import Checkpoint, CheckpointError, _digest
+from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.model_version import ViewOnlyRunError
 from sheltersim.core.world import WorldState
 from sheltersim.domain.information import INFORMATION_SPREAD_STATE_KEY
 from sheltersim.domain.models import AgentInformationState, TypedMessage
@@ -320,15 +321,22 @@ def test_a_suite_runs_the_models_it_leaves_implicit():
 
 
 def test_a_checkpoint_from_before_implicit_suite_selectors_ran_is_refused():
-    """Resuming it would switch models mid-Run under an unchanged signature (#169)."""
+    """Resuming it would switch models mid-Run under an unchanged signature (#169).
+
+    It is a Run of another model version: view-only (core/model_version.py).
+    """
     world = WorldState.from_scenario(_implicit_suite_scenario())
     document = Checkpoint.capture(world).to_dict()
     document["model_versions"]["model_suite"] = f"{CORE_MODEL_SUITE_V2}@1"
-    document.pop("checkpoint_hash")
-    document["checkpoint_hash"] = _digest(document)
+    document["checkpoint_hash"] = Checkpoint.document_hashes(document)[1]
 
-    with pytest.raises(CheckpointError, match="explicit migration required"):
+    with pytest.raises(ViewOnlyRunError, match="run_model_view_only") as refused:
         Checkpoint.from_dict(document).restore_world()
+    assert refused.value.status.differences == ("model_suite",)
+    # A changed document is reported as changed, not as another model version.
+    document["model_versions"]["model_suite"] = f"{CORE_MODEL_SUITE_V2}@2"
+    with pytest.raises(CheckpointError, match="integrity hash mismatch"):
+        Checkpoint.from_dict(document)
 
 
 def test_selected_models_scope_shares_the_selection_of_one_configs_object() -> None:

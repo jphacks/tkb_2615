@@ -539,6 +539,7 @@ class ProjectServices:
             and not query
         ):
             from sheltersim.contracts.policies import model_signatures
+            from sheltersim.core.model_version import recorded_engine
 
             reference = self.store.branch_reference(project_id, parts[2], parts[4])
             saved = self.store.checkpoint_fields(
@@ -546,11 +547,17 @@ class ProjectServices:
             )
             run = self.store.run(project_id, parts[2])
             installed = {}
+            # A Run of another model version is view-only (core/model_version.py).
+            status = self.store.checkpoint_model_status(
+                project_id, parts[2], reference.checkpoint_hash
+            )
             try:
                 scenario = self.store.scenario(
                     project_id, run["scenario_id"], run["scenario_version"]
                 )
                 installed = model_signatures(scenario.model_configs)
+                if not status.current:
+                    raise ValueError(status.message())
                 # Checkpoint includes the controller/interpreter versions as well.
                 checkpoint = self.store.load_checkpoint(
                     project_id, parts[2], reference.checkpoint_hash
@@ -560,28 +567,32 @@ class ProjectServices:
                 compatible = True
                 limitation = None
             except (ValueError, TypeError, KeyError):
+                recorded = recorded_engine(saved["model_versions"]) | saved["model_versions"]
                 differences = [
                     {
                         "component": key,
-                        "recorded": saved["model_versions"].get(key),
+                        "recorded": recorded.get(key),
                         "installed": installed.get(key),
                     }
-                    for key in sorted(set(saved["model_versions"]) | set(installed))
+                    for key in sorted(set(recorded) | set(installed))
                     if (
-                        key.startswith(("policy:", "state:", "simulator:", "operator:"))
+                        key.startswith(("policy:", "state:", "simulator:", "operator:", "engine:"))
                         or key == "model_suite"
                     )
-                    if saved["model_versions"].get(key) != installed.get(key)
+                    if recorded.get(key) != installed.get(key)
                 ]
                 compatible = False
                 limitation = (
-                    "Installed schema/model validation requires an explicit migration/new Run; "
-                    "original checkpoint is retained."
+                    status.message()
+                    if not status.current
+                    else "Installed schema/model validation requires an explicit migration/new "
+                    "Run; original checkpoint is retained."
                 )
             settings = saved["runtime_state"].get("llm_settings", {})
             return {
                 "schema_version": 1,
                 "continuation_model_state_compatible": compatible,
+                "model_view": status.to_dict(),
                 "checkpoint_hash": reference.checkpoint_hash,
                 "recorded_versions": saved["model_versions"],
                 "installed_policy_state_versions": installed,

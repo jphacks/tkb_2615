@@ -17,7 +17,7 @@ from sheltersim.experiments.timeline import TimelineError, TimelineStore
 from sheltersim.experiments.validation import evidence_context
 from sheltersim.llm.accounting import accounted_router, usage_limits
 from sheltersim.llm.config import LLMMode, LLMSettings
-from sheltersim.storage.projects import ProjectStore, StorageError, digest
+from sheltersim.storage.projects import ProjectStore, StorageError, digest, view_only_error
 from sheltersim.storage.telemetry import RunTelemetryStore
 from sheltersim.storage.usage import UsageLedger
 
@@ -150,6 +150,23 @@ class ProjectAPI:
             watcher.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
             if watcher.is_alive():
                 raise TimeoutError("the background job is still running")
+
+    def _require_current_model(self, project_id: str, run_id: str, branch_id: str) -> None:
+        """Refuse a Run of another model version before a job starts.
+
+        Only the head's recorded versions and configs are read. A head that can't be
+        read is left to the job, which loads and validates it and fails the Run.
+        """
+        try:
+            status = TimelineStore(self.store, project_id, run_id).model_status(branch_id)
+        except StorageError:
+            if not self.store._path(
+                project_id, "runs", run_id, "branches", branch_id, "branch.json"
+            ).exists():
+                raise
+            return
+        if not status.current:
+            raise view_only_error(status)
 
     def _admit(self, project_id: str, run_id: str, branch_id: str) -> None:
         """Refuse a job for a branch that has one, or beyond max_jobs; holds self._lock."""
@@ -315,9 +332,13 @@ class ProjectAPI:
                         raise StorageError("run_id_conflict")
                     if run["branches"]:
                         if document.get("execution_mode") == "offline":
-                            _, initial = self.store.load_branch(project_id, run["run_id"], "main")
+                            # Only the saved purpose is read, also of a view-only Run.
+                            head = self.store.branch_reference(project_id, run["run_id"], "main")
+                            initial = self.store.checkpoint_fields(
+                                project_id, run["run_id"], head.checkpoint_hash, ("runtime_state",)
+                            )
                             if (
-                                initial.runtime_state.get("execution_purpose")
+                                initial["runtime_state"].get("execution_purpose")
                                 != "offline_experiment"
                             ):
                                 raise StorageError("run_execution_mode_conflict")
@@ -436,6 +457,8 @@ class ProjectAPI:
             # Another branch of the Run may compute meanwhile (#48).
             if (project_id, run_id, branch_id) in self._jobs:
                 raise StorageError("pause background calculation before forking")
+            # A Run of another model version is view-only: no fork, no EffectProgram.
+            self._require_current_model(project_id, run_id, branch_id)
             program = (
                 EffectProgram.model_validate(document["program"])
                 if document.get("program") is not None
@@ -480,6 +503,8 @@ class ProjectAPI:
             # The pointer and the immutable Scenario bound the range without decoding
             # the history; the worker loads and validates the checkpoint once.
             reference = self.store.branch_reference(project_id, run_id, branch_id)
+            # A Run of another model version is view-only; say so before any job starts.
+            self._require_current_model(project_id, run_id, branch_id)
             run = self.store.run(project_id, run_id)
             scenario = self.store.scenario(project_id, run["scenario_id"], run["scenario_version"])
             if (
