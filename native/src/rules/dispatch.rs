@@ -448,6 +448,12 @@ impl<'py> Phase<'_, 'py> {
                 refused(py, RESOURCE_COMPLETE, &COUNTS.resource_refused, &error);
                 Ok(None)
             }
+            // Its checks raise before any change.
+            Err(error) if errors::made_here(py, &error) => {
+                count(&COUNTS.resource_ran);
+                let done = self.expected_outcome(error)?;
+                Ok(Some(self.checked(handler, object, done)?))
+            }
             Err(error) => Err(error),
         }
     }

@@ -481,7 +481,22 @@ fn resource_ledger(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: 
     let result = (|| {
         let operation = attribute(handler, intern!(py, "operation"))?;
         let ledger_event = refused_by_python(py, ledger_event_of(world, event, exact_str(&operation)?))?;
-        crate::rules::resources::apply_operation(world, &ledger_event, &operation)
+        match crate::rules::resources::apply_operation(world, &ledger_event, &operation) {
+            // What the kernel leaves, the ledger's rule decides (`apply_resource_operation`, which
+            // changes nothing when it turns the operation down) and says why. The handler's
+            // `except ResourceLedgerError as exc: raise EventApplicationError(str(exc))` is here.
+            Err(error) if error.is_instance_of::<Unsupported>(py) => {
+                let resources = py.import(intern!(py, "sheltersim.domain.resources"))?;
+                match resources.getattr(intern!(py, "apply_resource_operation"))?.call1((world, &ledger_event, &operation)) {
+                    Ok(_) => Ok(()),
+                    Err(error) if error.is_instance(py, &resources.getattr(intern!(py, "ResourceLedgerError"))?) => {
+                        errors::failed(py, error.value(py).str()?.to_str()?.to_owned())
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            done => done,
+        }
     })();
     counted(py, "resource_ledger", result)
 }

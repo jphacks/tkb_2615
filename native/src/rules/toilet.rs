@@ -616,17 +616,38 @@ pub(crate) fn complete_event<'py>(world: &Bound<'py, PyAny>, event: EventRef<'_,
     if !due_task {
         return errors::failed(py, "toilet completion does not match an active due task");
     }
-    let (staff_id, task_start) = EntityStore::with_rows(&store, |rows| {
-        let Some(task) = rows.active_tasks.get(&*task_id) else {
-            return unsupported("no active task");
+    // `complete_toilet_service`'s checks, in its order: the handler raises its `ValueError`'s text.
+    enum Turned {
+        NotAToilet,
+        NoAgent,
+        NotActive,
+        Mismatch,
+        NotUsing,
+        NotOneSlot,
+    }
+    let checked = EntityStore::with_rows(&store, |rows| {
+        let Some(facility) = rows.facilities.get(&*facility_id) else {
+            return Ok(Err(Turned::NotAToilet));
         };
-        if &*task.kind != "toilet_service"
-            || task.agent_id.as_deref() != Some(&*agent_id)
-            || task.resource_id.as_deref() != Some(&*facility_id)
-        {
-            return unsupported("the task does not match");
+        if !is_toilet(&facility.kind)? {
+            return Ok(Err(Turned::NotAToilet));
         }
-        // `complete_toilet_service`'s check of a reserved person.
+        let Some(agent) = rows.agents.get(&*agent_id) else {
+            return Ok(Err(Turned::NoAgent));
+        };
+        let Some(task) = rows.active_tasks.get(&*task_id).filter(|task| &*task.kind == "toilet_service") else {
+            return Ok(Err(Turned::NotActive));
+        };
+        if task.agent_id.as_deref() != Some(&*agent_id) || task.resource_id.as_deref() != Some(&*facility_id) {
+            return Ok(Err(Turned::Mismatch));
+        }
+        if agent.activity != Activity::InService || agent.target_id.as_deref() != Some(&*facility_id) {
+            return Ok(Err(Turned::NotUsing));
+        }
+        if facility.active_agent_ids.iter().filter(|id| ***id == *agent_id).count() != 1 {
+            return Ok(Err(Turned::NotOneSlot));
+        }
+        // The check of a reserved person, which the Python rule makes after it has written.
         if let Some(staff_id) = &task.staff_id {
             let Some(staff) = rows.staff.get(&**staff_id) else {
                 return unsupported("the staff reservation is inconsistent");
@@ -639,18 +660,25 @@ pub(crate) fn complete_event<'py>(world: &Bound<'py, PyAny>, event: EventRef<'_,
                 return unsupported("the staff reservation is inconsistent");
             }
         }
-        let (Some(facility), Some(agent)) = (rows.facilities.get(&*facility_id), rows.agents.get(&*agent_id)) else {
-            return unsupported("no such facility or agent");
-        };
-        if !is_toilet(&facility.kind)?
-            || agent.activity != Activity::InService
-            || agent.target_id.as_deref() != Some(&*facility_id)
-            || facility.active_agent_ids.iter().filter(|id| ***id == *agent_id).count() != 1
-        {
-            return unsupported("the service's state does not match");
-        }
-        Ok((task.staff_id.clone(), task.start_minute))
+        Ok(Ok((task.staff_id.clone(), task.start_minute)))
     })?;
+    let (staff_id, task_start) = match checked {
+        Ok(found) => found,
+        Err(turned) => {
+            let (agent, facility) = (errors::repr_str(py, &agent_id)?, errors::repr_str(py, &facility_id)?);
+            return errors::failed(
+                py,
+                match turned {
+                    Turned::NotAToilet => format!("{facility} is not a toilet Facility"),
+                    Turned::NoAgent => format!("Agent {agent} does not exist"),
+                    Turned::NotActive => format!("toilet service task {} is not active", errors::repr_str(py, &task_id)?),
+                    Turned::Mismatch => "toilet completion payload does not match its active task".to_owned(),
+                    Turned::NotUsing => format!("Agent {agent} is not using Facility {facility}"),
+                    Turned::NotOneSlot => format!("Agent {agent} must occupy exactly one toilet service slot"),
+                },
+            );
+        }
+    };
     let metrics = metrics_of(world)?;
     // `finish_service` and `record_queue_transition`.
     let finishing = with_queues(world, |row| {

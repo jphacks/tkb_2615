@@ -159,6 +159,13 @@ class _Check:
             return
         apply = type(handler).apply
         python_rule = getattr(apply, "__wrapped__", apply)
+        if type(handler).__name__ == "ResourceServiceCompletionHandler":
+            # Its apply has no kernel of its own: the kernel is its manager's `complete`.
+            complete = type(handler.service).complete.__wrapped__
+
+            def python_rule(handler: Any, world: Any, event: Any) -> None:
+                complete(handler.service, event)
+
         label = f"direct {type(handler).__name__}"
         self.compare(label, name, text, lambda: python_rule(handler, world, event))
 
