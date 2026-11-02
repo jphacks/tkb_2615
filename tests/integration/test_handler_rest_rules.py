@@ -20,10 +20,18 @@ from support.paths import SMALL_REPLAY
 
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
+from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
-from sheltersim.domain.models import ActiveTask, Activity, SupportRequestState, SupportRequestStatus
+from sheltersim.domain.models import (
+    ActiveTask,
+    Activity,
+    InformationSpreadConfig,
+    SupportRequestState,
+    SupportRequestStatus,
+)
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.domain.staff import StaffService
+from sheltersim.events import handlers as module
 from sheltersim.events.handlers import (
     FacilityOutageHandler,
     InformationContactHandler,
@@ -903,3 +911,56 @@ def _small_replay_document() -> dict[str, Any]:
     document["schema_version"] = 3
     document["scheduled_events"] = []
     return document
+
+
+# ---- What a draw hides ---------------------------------------------------------------------------
+
+
+def test_many_draws_of_a_claim_and_a_correction_are_python_s(generated_scenario: Any) -> None:
+    """1% in a coefficient flips few draws, so these settings put the probability near the middle."""
+    world, _ = _small_world(generated_scenario)
+    agent_id = sorted(world.agents)[0]
+    world.agents[agent_id].trust = 1.0
+    rules = native.rules("information_events")
+    believing = InformationSpreadConfig(
+        rumor_belief_probability=0.0, rumor_trust_sensitivity=0.5, rumor_source_sensitivity=0.0
+    )
+    accepting = InformationSpreadConfig(
+        correction_acceptance_probability=1.0,
+        correction_trust_sensitivity=0.0,
+        correction_source_sensitivity=0.0,
+    )
+    rng = CounterRNG(world.seed)
+    for number in range(4000):
+        event_id = f"event-{number}"
+        python_strength = module._sample_claim_belief_strength(
+            world,
+            believing,
+            agent_id=agent_id,
+            source_id="SRC-TEST",
+            event_id=event_id,
+            minute=7,
+            message_id="claim-1",
+        )
+        assert python_strength == rules.claim_strength_of(
+            world, believing, agent_id, "SRC-TEST", event_id, 7, "claim-1"
+        )
+        label = "correction-acceptance-v1"
+        drawn = rng.random(label, 7, event_id, agent_id, "claim-1")
+        assert (drawn < 0.95) == rules.acceptance_of(
+            world, accepting, label, 1.0, "SRC-TEST", event_id, 7, agent_id, "claim-1"
+        )
+
+
+@pytest.mark.parametrize("kind", TYPED_KINDS)
+def test_care_without_configured_amounts_uses_the_formula_s_defaults(
+    generated_scenario: Any, kind: str
+) -> None:
+    registry = generated_scenario.model_configs["policy_registry"]
+    registry.pop("suite_id", None)
+    registry["care_outcome"] = "typed-care-support-response-v1"
+    world, _ = _small_world(generated_scenario)
+    configs = world.model_configs["body_dynamics"]
+    for name in [key for key in configs if key.startswith(kind) or "assistance" in key]:
+        configs.pop(name)
+    _care_is_python_s(world, kind)

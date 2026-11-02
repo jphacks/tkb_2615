@@ -643,7 +643,24 @@ fn contact<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: 
     add_counter(&state, "contact_deliveries")
 }
 
+/// `_sample_claim_belief_strength`, for the tests: a draw hides a small change in its probability.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn claim_strength_of(world: &Bound<'_, PyAny>, config: &Bound<'_, PyAny>, agent_id: &str, source_id: &str, event_id: &str, minute: i64, message_id: &str) -> PyResult<f64> {
+    sample_strength(world, config, agent_id, source_id, event_id, minute, message_id)
+}
+
+/// A correction's acceptance as the rules draw it, for the tests.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn acceptance_of(world: &Bound<'_, PyAny>, config: &Bound<'_, PyAny>, label: &str, trust: f64, source_id: &str, event_id: &str, minute: i64, agent_id: &str, message_id: &str) -> PyResult<bool> {
+    let chance = acceptance_probability(config, trust, reliability_of(config, source_id)?)?;
+    Ok(draw(&seed_of(world)?, label, minute, event_id, agent_id, message_id) < chance)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(claim_strength_of, m)?)?;
+    m.add_function(wrap_pyfunction!(acceptance_of, m)?)?;
     m.add_function(wrap_pyfunction!(rumor, m)?)?;
     m.add_function(wrap_pyfunction!(correction, m)?)?;
     m.add_function(wrap_pyfunction!(contact, m)?)?;
