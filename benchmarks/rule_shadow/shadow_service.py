@@ -132,6 +132,20 @@ class _NoService:
         raise RuntimeError("a Python rule reached a service of the world")
 
 
+class _ToiletOnCopy:
+    """The toilet's manager on the copy: the Python rule, and no kernel on the world's rows."""
+
+    def __init__(self, manager: Any, twin: Any) -> None:
+        stand_in = type(manager).__new__(type(manager))
+        stand_in.__dict__.update(manager.__dict__)
+        stand_in.world = twin
+        self.stand_in = stand_in
+
+    def request(self, *arguments: Any, **options: Any) -> Any:
+        rule = type(self.stand_in).request
+        return getattr(rule, "__wrapped__", rule)(self.stand_in, *arguments, **options)
+
+
 def manager_stand_in(manager: Any, twin: Any) -> Any:
     """The manager on the copy: the rule's own methods, with the copy as its world."""
     stand_in = type(manager).__new__(type(manager))
@@ -152,8 +166,8 @@ def controller_stand_in(controller: Any, twin: Any) -> Any:
     stand_in.world = twin
     if controller.resource_service is not None:
         stand_in.resource_service = manager_stand_in(controller.resource_service, twin)
-    # These hold the world: a rule that reaches them must not write it from here.
-    stand_in.toilet_service = _NoService()
+    stand_in.toilet_service = _ToiletOnCopy(controller.toilet_service, twin)
+    # This one holds the world: a rule that reaches it must not write it from here.
     stand_in.staff_service = _NoService()
     return stand_in
 

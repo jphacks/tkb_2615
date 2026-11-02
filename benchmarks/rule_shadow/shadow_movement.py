@@ -1,11 +1,14 @@
 """Compare every kernel of native/src/rules/movement.rs with its Python rule at each call.
 
 A writer's kernel runs on the world first, on a plain copy taken before it, and the Python rule then
-runs on that copy with the world's other parts: it must give the same document and result. The
-order is this way round because a queue trip's replan, which the kernel refuses, writes the queue:
-the Python rule only runs on the copy after the kernel has taken the call, and its queue here can
-only be read. Key order inside a record isn't compared, since a kernel leaves a record alone when
-its bits are the same and a restored one has the JSON's order; the order of the maps is.
+runs on that copy with the world's other parts: it must give the same document and result. Key order
+inside a record isn't compared, since a kernel leaves a record alone when its bits are the same and
+a restored one has the JSON's order; the order of the maps is.
+
+A queue trip's replan writes the event queue, the log, the people and the metrics, so the copy here
+can't run it. Such a walk is counted (`advance.in_order_replans`), not compared here, and
+tests/integration/test_movement_walk_order.py compares it whole. Neither the gate nor the 7-day run
+has reached one.
 
 The validator is compared on what it accepts: the Python rule must accept that too. What it refuses
 goes to the Python rule anyway.
@@ -94,6 +97,8 @@ def prepare(output: str) -> None:
             recorder.seen[f"{name}.calls"] += 1
             state = world.model_state.get(KEY)
             plain = None if state is None else json.loads(json.dumps(state))
+            sequence = world.id_counters.get("event", 0)
+            pending = len(world.event_queue.pending()) if name == "advance_movement" else 0
             try:
                 result = kernel(world, *arguments, **options)
             except unsupported as reason:
@@ -101,6 +106,12 @@ def prepare(output: str) -> None:
                 raise
             recorder.seen[f"{name}.kernel_ran"] += 1
             if plain is None:
+                return result
+            if name == "advance_movement" and (
+                len(world.event_queue.pending()) != pending
+                or world.id_counters.get("event", 0) != sequence
+            ):
+                recorder.seen["advance.in_order_replans"] += 1
                 return result
             where = f"{name} {arguments!r:.100} at {world.minute_index}"
             before = _document(plain)

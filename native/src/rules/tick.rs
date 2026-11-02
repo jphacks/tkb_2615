@@ -24,7 +24,7 @@ use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
 use crate::core::census;
 use crate::core::row::{attribute, exact_int, unsupported};
 use crate::core::world_core::raw_dict_get;
-use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, service, social_propagation, staff, staff_dynamics, support, toilet, trace, world_view};
+use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, replan, service, social_propagation, staff, staff_dynamics, support, toilet, trace, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
@@ -137,7 +137,9 @@ impl<'py> Tick<'_, 'py> {
                 rule_of(self.table.update.bind(py).as_any(), intern!(py, "advance_movement"))?.call1((world, minute))
             })?;
             if moved.is_truthy()? {
-                controller.call_method1(intern!(py, "_replan_journeys"), (state, moved, minute))?;
+                or_rule!(py, replan::replan_journeys(controller, &state, &moved, minute), {
+                    self.python_step(intern!(py, "_replan_journeys"))?.call1((&state, &moved, minute)).map(|_| ())
+                })?;
             }
         }
         let view = or_rule!(py, world_view::view_after_movement(controller, world), {

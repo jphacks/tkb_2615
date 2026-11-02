@@ -26,6 +26,7 @@ DRIVEN_STEPS = (
     "_run_dispatch_phase",
     "_run_update_phase",
     "_update_movement",
+    "_replan_journeys",
     "_view_after_movement",
     "_psychology_update",
     "_social_propagation",

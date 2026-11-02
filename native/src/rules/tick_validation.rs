@@ -23,7 +23,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyInt, PyList, PyString, PyTuple};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, str_value, unsupported};
 use crate::core::tracked::as_readable_list;
 use crate::core::value::V;
 use crate::core::world_core::{raw_dict_get, NamespaceMirror};
@@ -732,7 +732,7 @@ pub(crate) fn entity_rules_watching<'py>(
             let Some(worker) = work.staff.and_then(|id| workers.get(id)) else {
                 return unsupported("a resource service task's staff is unknown");
             };
-            let has_skill = worker.skills.iter().any(|item| exact_str(&item).is_ok_and(|text| text == skill));
+            let has_skill = worker.skills.iter().any(|item| str_value(&item) == Some(skill));
             if worker.active_task != Some(work.id)
                 || worker.work_queue.as_slice() != [work.id]
                 || worker.busy_until != work.due
@@ -1025,7 +1025,7 @@ fn route_capacities_pass(config: &Bound<'_, PyAny>, edges: &Bound<'_, PyDict>) -
     let py = config.py();
     let config = exact_dict(config)?;
     let text_is = |name: &Bound<'_, PyString>, expected: &str| -> PyResult<bool> {
-        Ok(config.get_item(name)?.is_some_and(|value| exact_str(&value).is_ok_and(|text| text == expected)))
+        Ok(config.get_item(name)?.is_some_and(|value| str_value(&value) == Some(expected)))
     };
     let version_is_one = config
         .get_item(intern!(py, "schema_version"))?
@@ -1072,7 +1072,7 @@ fn population_dynamics(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     }
     let state = exact_dict(&state)?;
     let text_is = |name: &Bound<'_, PyString>, expected: &str| -> PyResult<bool> {
-        Ok(state.get_item(name)?.is_some_and(|value| exact_str(&value).is_ok_and(|text| text == expected)))
+        Ok(state.get_item(name)?.is_some_and(|value| str_value(&value) == Some(expected)))
     };
     let version_is_one = state
         .get_item(intern!(py, "schema_version"))?

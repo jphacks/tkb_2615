@@ -503,6 +503,11 @@ pub(crate) fn exact_str<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a str> {
     text.to_str().map_err(|_| Unsupported::new_err("a str is not UTF-8"))
 }
 
+/// A str and nothing else, with UTF-8, for a rule that only asks: nothing is refused.
+pub(crate) fn str_value<'a>(value: &'a Bound<'_, PyAny>) -> Option<&'a str> {
+    value.downcast_exact::<PyString>().ok()?.to_str().ok()
+}
+
 /// A dict whose reads are the inherited C code, so reading it runs no Python.
 pub(crate) fn exact_dict<'a, 'py>(value: &'a Bound<'py, PyAny>) -> PyResult<&'a Bound<'py, PyDict>> {
     as_readable_dict(value).ok_or_else(|| Unsupported::new_err("a value is not a plain dict"))

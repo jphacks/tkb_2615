@@ -3,11 +3,12 @@
 //!
 //! One call plans with nothing changed and then writes. What it doesn't take goes to the Python step
 //! before any write, which is also how a bad value gets its error text
-//! (docs/rust-port/lanes/m4-service.md):
-//! - a request of a Run's last minute, which `StaffService.request` closes at once;
-//! - a trip that takes no time, which asks the toilet or the water queue at once;
-//! - a person at a facility with an independent FIFO, who queues at once;
-//! - anything that isn't plainly what the Python step accepts.
+//! (docs/rust-port/lanes/m4-service.md): anything that isn't plainly what the Python step accepts.
+//!
+//! A person who asks a queue at once (no trip to make, or an independent FIFO at their facility) goes
+//! through the queue's own kernel, which plans and writes in one and refuses before its first write:
+//! it runs last in the plan, so its refusal still leaves everything unchanged. A person the queue
+//! turns down is such a refusal, and the Python step writes the text it gives.
 
 use std::sync::{Arc, LazyLock};
 
@@ -26,10 +27,11 @@ use crate::rules::facility_queues::has_independent;
 use crate::rules::movement::KEY;
 use crate::rules::movement_geometry::Pt;
 use crate::rules::overlay;
-use crate::rules::service::{add_one, append_outcome, metrics_of};
+use crate::rules::service::{self, add_one, append_outcome, metrics_of};
+use crate::rules::toilet;
 use crate::rules::social_dialogue::context_value;
-use crate::rules::support::{add_rejected, household_of, plan_request, support_kind_of, write_request, PlannedRequest};
-use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_capacity_wait, write_travel, CapacityWait, PlannedTrip, Route, Selected, Trip};
+use crate::rules::support::{PlannedRequest, add_rejected, append_or_python, household_of, plan_request, support_kind_of, write_closed_request, write_request};
+use crate::rules::travel::{CapacityWait, PlannedTrip, Route, Selected, Trip, approach_route, plan_travel, rows_of, select_resource, select_toilet, write_capacity_wait, write_travel};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
@@ -113,6 +115,8 @@ struct TripEffect {
     waits: Vec<CapacityWait>,
     trip: Option<PlannedTrip>,
     facility_id: Option<Arc<str>>,
+    /// The person is at the facility and asks its queue, with no trip.
+    at_once: bool,
     /// The request's record: `(outcome, reason, detail)`.
     outcome: Option<(&'static str, &'static str, Option<&'static str>)>,
     rejected: bool,
@@ -157,17 +161,20 @@ fn plan_toilet<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, outcome: None, rejected: false };
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
     let Selected::Found(facility_id, route) = select_toilet(world, &graph, writer, agent_object, &mut effect.waits)? else {
         return Ok(effect);
     };
-    if route.destination == *zone_id && has_independent(world, &facility_id)? {
-        return unsupported("the toilet's independent queue at once");
-    }
-    effect.trip = if route.destination == *zone_id {
+    effect.trip = if route.destination == *zone_id && has_independent(world, &facility_id)? {
+        effect.at_once = true;
+        None
+    } else if route.destination == *zone_id {
         match approach_route(world, agent_id, &facility_id)? {
             None => None,
-            Some((local, _)) if local.minutes <= 0 => return unsupported("the toilet's queue at once"),
+            Some((local, _)) if local.minutes <= 0 => {
+                effect.at_once = true;
+                None
+            }
             Some((local, points)) => plan_facility_trip(world, writer, agent_id, local, points, "toilet_request", &facility_id, minute)?,
         }
     } else {
@@ -189,7 +196,7 @@ fn plan_resource<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, outcome: None, rejected: false };
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
     match select_resource(world, &graph, writer, agent_object, kind, &mut effect.waits)? {
         Selected::NoFacility => {
             effect.outcome = Some(("rejected", "no_facility", None));
@@ -202,12 +209,11 @@ fn plan_resource<'py>(
         }
         Selected::Found(facility_id, route) => {
             if route.destination == *zone_id && has_independent(world, &facility_id)? {
-                return unsupported("the service's independent queue at once");
-            }
-            if route.destination == *zone_id {
+                effect.at_once = true;
+            } else if route.destination == *zone_id {
                 match approach_route(world, agent_id, &facility_id)? {
                     None => effect.outcome = Some(("rejected", "room_route_blocked", None)),
-                    Some((local, _)) if local.minutes <= 0 => return unsupported("the service's queue at once"),
+                    Some((local, _)) if local.minutes <= 0 => effect.at_once = true,
                     Some((local, points)) => {
                         effect.trip = plan_facility_trip(world, writer, agent_id, local, points, "resource_request", &facility_id, minute)?;
                         if effect.trip.is_some() {
@@ -228,6 +234,15 @@ fn plan_resource<'py>(
         }
     }
     Ok(effect)
+}
+
+/// A method set on the manager (a test's patch) is the Python step's to call.
+fn own_request(manager: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = manager.py();
+    if raw_dict_get(&manager.getattr(intern!(py, "__dict__"))?, intern!(py, "request").as_any())?.is_some() {
+        return unsupported("the manager's request is another function");
+    }
+    Ok(())
 }
 
 /// `release_sleep_bed`, not done yet: the reservations to delete from, if the person has one.
@@ -306,7 +321,7 @@ fn plan_sleep<'py>(
 }
 
 /// `position.update(...)` of a person already at their bed: through the tree, which tells the row.
-fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: &overlay::Bed, zone_id: &Arc<str>) -> PyResult<()> {
+pub(crate) fn place_in_bed(world: &Bound<'_, PyAny>, agent_object: &Bound<'_, PyAny>, bed: &overlay::Bed, zone_id: &Arc<str>) -> PyResult<()> {
     let py = world.py();
     let table = attribute(world, intern!(py, "model_state"))?;
     let Some(movement) = exact_dict(&table)?.get_item(KEY)? else {
@@ -356,21 +371,32 @@ fn apply_seek<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>,
     let bed = held_bed(table, &agent_object)?;
     let planned = plan_request(&service_object, &world, &writer, agent_id, minute)?;
     let mut care = None;
+    let mut interrupted = None;
     let mut pressure_due = false;
-    if let PlannedRequest::Opens { request_id, event, .. } = &planned {
+    let opened = match &planned {
+        PlannedRequest::Opens { request_id, event, .. } => Some((request_id, event.sequence + 1)),
+        PlannedRequest::Closes { request_id, .. } => Some((request_id, writer.next_sequence()?)),
+        PlannedRequest::Rejected => None,
+    };
+    if let Some((request_id, sequence)) = opened {
         if seek_help && !namespace_is_absent(&world, intern!(py, SHARED_OPERATIONS))? {
-            let transition = Transition {
-                request_id: request_id.clone(),
-                agent_id: Arc::from(agent_id),
-                household_id: household_of(&world, agent_id)?,
-                support_kind: support_kind_of(&world, &writer, agent_id)?,
-                status: "requested",
-                staff_id: None,
-                causation_id: None,
-                source_ids: source_ids_of(&world, agent_id)?,
-                outcome: None,
+            let transition = |status| -> PyResult<Transition> {
+                Ok(Transition {
+                    request_id: request_id.clone(),
+                    agent_id: Arc::from(agent_id),
+                    household_id: household_of(&world, agent_id)?,
+                    support_kind: support_kind_of(&world, &writer, agent_id)?,
+                    status,
+                    staff_id: None,
+                    causation_id: None,
+                    source_ids: source_ids_of(&world, agent_id)?,
+                    outcome: None,
+                })
             };
-            care = Some(plan_transition(&world, &writer, transition, event.sequence + 1)?);
+            care = Some(plan_transition(&world, &writer, transition("requested")?, sequence)?);
+            if matches!(planned, PlannedRequest::Closes { .. }) {
+                interrupted = Some(transition("interrupted")?);
+            }
         } else if seek_help && table.contains(intern!(py, SHARED_OPERATIONS))? {
             return unsupported("the namespace is None");
         }
@@ -392,16 +418,28 @@ fn apply_seek<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>,
         Ok(())
     })?;
     raw_setattr(&agent, intern!(py, "next_decision_at"), next.into_pyobject(py)?.as_ptr())?;
-    let PlannedRequest::Opens { request_id, timeout_minute, event } = planned else {
-        add_rejected(&metrics)?;
-        return PyTuple::new(py, [py.None().into_bound(py), next.into_pyobject(py)?.into_any(), PyBool::new(py, false).to_owned().into_any()]);
+    let (request_id, is_open) = match planned {
+        PlannedRequest::Rejected => {
+            add_rejected(&metrics)?;
+            return PyTuple::new(py, [py.None().into_bound(py), next.into_pyobject(py)?.into_any(), PyBool::new(py, false).to_owned().into_any()]);
+        }
+        PlannedRequest::Opens { request_id, timeout_minute, event } => {
+            write_request(&world, &writer, agent_id, minute, &request_id, timeout_minute, event)?;
+            (request_id, true)
+        }
+        PlannedRequest::Closes { request_id, until } => {
+            write_closed_request(&world, &metrics, agent_id, minute, &request_id, until)?;
+            (request_id, false)
+        }
     };
-    write_request(&world, &writer, agent_id, minute, &request_id, timeout_minute, event)?;
     if let Some(care) = care {
         write_transition(&world, &writer, care)?;
     }
     let request_text = PyString::new(py, &request_id);
     let after = (|| -> PyResult<()> {
+        if let Some(interrupted) = interrupted {
+            append_or_python(&world, interrupted)?;
+        }
         if pressure_due {
             let kwargs = PyDict::new(py);
             kwargs.set_item(intern!(py, "agent_id"), &agent_object)?;
@@ -409,6 +447,9 @@ fn apply_seek<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>,
             kwargs.set_item(intern!(py, "minute"), minute)?;
             let state = table.get_item(intern!(py, INFORMATION))?.ok_or_else(|| PyRuntimeError::new_err("no information state"))?;
             attribute(controller, intern!(py, "information_policy"))?.call_method(intern!(py, "record_support_request"), (state,), Some(&kwargs))?;
+        }
+        if !is_open {
+            return Ok(());
         }
         if !attribute(controller, intern!(py, "llm_router"))?.is_none() {
             controller.call_method1(intern!(py, "_prioritize_support_request"), (&request_text, proposal))?;
@@ -432,7 +473,8 @@ fn apply_seek<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound<'py, PyAny>,
     // service does not let them.
     let next_now = EntityStore::with_rows(&entities_of(&world)?, |rows| Ok(rows.agents.get(agent_id).map(|row| row.next_decision_at)))?;
     let next_now = next_now.ok_or_else(|| PyRuntimeError::new_err("the person has gone"))?;
-    PyTuple::new(py, [request_text.into_any(), next_now.into_pyobject(py)?.into_any(), PyBool::new(py, true).to_owned().into_any()])
+    // A request closed at once did not commit the decision.
+    PyTuple::new(py, [request_text.into_any(), next_now.into_pyobject(py)?.into_any(), PyBool::new(py, is_open).to_owned().into_any()])
 }
 
 /// `model_state[INFORMATION]["query_pressure"][agent] >= policy.config.query_threshold`.
@@ -575,15 +617,39 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
             Effect::Toilet => plan_toilet(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, minute)?,
             Effect::Resource(kind, _) => {
                 if attribute(controller, intern!(py, "resource_service"))?.is_none() {
-                    return unsupported("no resource service");
+                    TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: true }
+                } else {
+                    plan_resource(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, kind, minute)?
                 }
-                plan_resource(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, kind, minute)?
             }
             _ => return unsupported("not a trip"),
         };
         let held = if planned.outcome.is_some() { Some(service_mirror(&world)?) } else { None };
         let metrics = if planned.rejected { Some(metrics_of(&world)?) } else { None };
         trip_effect = Some((planned, writer, held, metrics, minute));
+    }
+    // A capacity wait comes before the queue's own events, and its sequence is only reserved here:
+    // the queue's kernel below would take the next one first.
+    if let Some((TripEffect { at_once: true, waits, .. }, ..)) = &trip_effect {
+        if !waits.is_empty() {
+            return unsupported("a capacity wait comes before a request at once");
+        }
+    }
+    // The queue's kernel, which writes all it does or refuses having written nothing. It reads
+    // nothing that the writes below change.
+    if let Some((TripEffect { at_once: true, facility_id: Some(facility_id), .. }, ..)) = &trip_effect {
+        let facility = PyString::new(py, facility_id);
+        match &effect {
+            Effect::Toilet => {
+                own_request(&attribute(controller, intern!(py, "toilet_service"))?)?;
+                toilet::queue_up(&world, &agent_object, facility.as_any(), None)?;
+            }
+            _ => {
+                let manager = attribute(controller, intern!(py, "resource_service"))?;
+                own_request(&manager)?;
+                service::queue_up(&manager, &agent_object, facility.as_any())?;
+            }
+        }
     }
 
     // Write. Nothing below refuses.
@@ -648,6 +714,11 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
             write_capacity_wait(&world, &writer, wait)?;
         }
         let facility_id = planned.facility_id;
+        if planned.at_once {
+            if let Some(facility_id) = &facility_id {
+                target = PyString::new(py, facility_id).into_any();
+            }
+        }
         if let Some(trip) = planned.trip {
             write_travel(&world, &writer, trip)?;
             if let Some(facility_id) = &facility_id {
