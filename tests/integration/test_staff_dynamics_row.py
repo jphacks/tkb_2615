@@ -558,14 +558,16 @@ def _outcome(rule: Any, *arguments: Any, **options: Any) -> tuple[str, str]:
 @needs_kernels
 @pytest.mark.parametrize("raw", CONFIGS, ids=[f"config{i}" for i in range(len(CONFIGS))])
 def test_the_config_kernel_gives_the_python_result_or_leaves_it_to_python(raw: Any) -> None:
+    """The kernel's value, or the Python rule's ValueError, class and text, or Unsupported for a
+    value of another type (docs/rust-port/lanes/l8-texts-rest.md)."""
     python = canonical_staff_dynamics_config.__wrapped__
     expected = _outcome(python, copy.deepcopy(raw))
     try:
-        actual = _text(_kernels().canonical_config(copy.deepcopy(raw)))
+        actual: tuple[str, str] | None = _outcome(_kernels().canonical_config, copy.deepcopy(raw))
     except native.Unsupported:
         actual = None
     if actual is not None:
-        assert ("value", actual) == expected
+        assert actual == expected
     # What every caller sees is the same whichever of the two ran.
     assert _outcome(canonical_staff_dynamics_config, copy.deepcopy(raw)) == expected
 
@@ -632,11 +634,18 @@ def test_the_override_kernel_gives_the_python_result_or_leaves_it_to_python(
     except (ValueError, TypeError) as error:
         expected = "error", str(error)
     try:
-        actual = _text(_kernels().validate_override(value, known_staff_ids=known))
+        actual: tuple[str, str] | None = (
+            "value",
+            _text(_kernels().validate_override(value, known_staff_ids=known)),
+        )
     except native.Unsupported:
         actual = None
+    except ValueError as error:
+        # The Python rule's class and text (docs/rust-port/lanes/l8-texts-rest.md).
+        assert type(error) is ValueError
+        actual = "error", str(error)
     if actual is not None:
-        assert ("value", actual) == expected
+        assert actual == expected
 
 
 def _override_of_size(size: int) -> dict[str, Any]:
@@ -666,10 +675,11 @@ def test_the_override_kernel_counts_the_json_limit_to_the_byte(size: int, accept
     if accepted:
         assert _text(_kernels().validate_override(value)) == _text(python(value))
         return
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(ValueError) as ours:
         _kernels().validate_override(value)
-    with pytest.raises(ValueError, match="16 KiB"):
-        validate_staff_shift_windows_override(value)
+    with pytest.raises(ValueError, match="16 KiB") as theirs:
+        python(value)
+    assert str(ours.value) == str(theirs.value)
 
 
 def _valid_for_python(world: WorldState) -> bool:

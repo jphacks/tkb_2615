@@ -12,15 +12,16 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet, PyString};
 
+use crate::core::errors;
 use crate::core::mathx::{exp, py_max, py_min};
 use crate::core::row::{
-    attribute, exact_dict, exact_float, exact_int, exact_list, exact_str, namespace_is_absent,
+    attribute, exact_dict, exact_int, exact_list, exact_str, namespace_is_absent,
     unsupported, Field,
 };
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::staff_dynamics::{
-    shifts_are_valid, ConfigRow, LastActivity, Shift, StaffDynamicsRow, StaffRecord, MAX_REST_MINUTES,
+    shifts_are_valid, ConfigRow, LastActivity, Shift, StaffDynamicsRow, StaffRecord, MAX_REST_MINUTES, MAX_SHIFTS,
     MINUTES_PER_DAY, MINUTES_PER_WEEK, NAME, POLICY_V1, POLICY_V2,
 };
 
@@ -426,74 +427,128 @@ fn shifts_of(rows: &Bound<'_, PyList>) -> PyResult<Vec<Shift>> {
     Ok(shifts)
 }
 
-/// `canonical_staff_dynamics_config`: the new dict, or Unsupported for the Python rule to raise
-/// or to take a value of another type that it accepts, such as `schema_version: 1.0`.
+/// What a check of the Python rule says of a value: it fails, it passes, or the rows can't tell
+/// (a type the Python rule may take, such as `schema_version: 1.0`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Fails,
+    Passes,
+    Unknown,
+}
+
+/// `type(value) is int and lower <= value <= upper`.
+fn int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> Verdict {
+    if !value.is_exact_instance_of::<pyo3::types::PyInt>() {
+        return Verdict::Fails;
+    }
+    match value.extract::<i64>() {
+        Ok(value) if (lower..=upper).contains(&value) => Verdict::Passes,
+        _ => Verdict::Fails,
+    }
+}
+
+/// The Python rule's check `isinstance(value, int) and not isinstance(value, bool) and lower <=
+/// value <= upper`: an int's subclass other than bool is for the Python rule.
+fn plain_int_within(value: &Bound<'_, PyAny>, lower: i64, upper: i64) -> Verdict {
+    if value.is_instance_of::<pyo3::types::PyBool>() || !value.is_instance_of::<pyo3::types::PyInt>() {
+        return Verdict::Fails;
+    }
+    if !value.is_exact_instance_of::<pyo3::types::PyInt>() {
+        return Verdict::Unknown;
+    }
+    int_within(value, lower, upper)
+}
+
+/// `raise ValueError(text)` of `canonical_staff_dynamics_config`.
+#[track_caller]
+fn config_error<T>(text: &str) -> PyResult<T> {
+    Err(errors::value_error(text))
+}
+
+/// `canonical_staff_dynamics_config`: the new dict, or the Python rule's ValueError in its order,
+/// or Unsupported for the Python rule to take a value of another type that it accepts, such as
+/// `schema_version: 1.0`.
 fn canonical_config<'py>(raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     let py = raw.py();
     let empty;
     let raw = if raw.is_none() {
         empty = PyDict::new(py);
         &empty
+    } else if !raw.is_instance_of::<PyDict>() {
+        return config_error("staff_dynamics config has unsupported fields");
     } else {
         exact_dict(raw)?
     };
     for (key, _) in raw.iter() {
-        if !CONFIG_FIELDS.contains(&exact_str(&key)?) {
-            return unsupported("the config has other fields");
+        if !key.downcast::<PyString>().is_ok_and(|key| key.to_str().is_ok_and(|key| CONFIG_FIELDS.contains(&key))) {
+            exact_str(&key)?;
+            return config_error("staff_dynamics config has unsupported fields");
         }
     }
     let windows = raw.get_item(intern!(py, "shift_windows_by_staff"))?;
     let recovery = raw.get_item(intern!(py, "off_shift_fatigue_recovery_per_minute"))?;
-    let legacy = match raw.get_item(intern!(py, "policy_version"))? {
-        Some(version) => match exact_str(&version)? {
-            POLICY_V1 => true,
-            POLICY_V2 => false,
-            _ => return unsupported("another policy"),
+    let policy = raw.get_item(intern!(py, "policy_version"))?;
+    // `raw.get("policy_version") == V1 or (no policy and neither later key)`.
+    let legacy = match &policy {
+        Some(version) => match version.downcast_exact::<PyString>() {
+            Ok(version) => version.to_str()? == POLICY_V1,
+            Err(_) => return unsupported("another policy"),
         },
         None => windows.is_none() && recovery.is_none(),
     };
-    if let Some(schema) = raw.get_item(intern!(py, "schema_version"))? {
-        if exact_int(&schema)? != 1 {
-            return unsupported("another schema");
-        }
-    }
-    let source = raw.get_item(intern!(py, "source_id"))?;
-    if let Some(source) = &source {
-        if exact_str(source)?.is_empty() {
-            return unsupported("an empty source");
-        }
-    }
-
-    let integer_in = |name: &Bound<'py, PyString>, default: i64, upper: i64| -> PyResult<()> {
-        let value = match raw.get_item(name)? {
-            Some(value) => exact_int(&value)?,
-            None => default,
-        };
-        if !(1..=upper).contains(&value) {
-            return unsupported("a limit is outside its range");
-        }
-        Ok(())
-    };
-    integer_in(intern!(py, "max_continuous_work_minutes"), 240, MINUTES_PER_DAY)?;
-    integer_in(intern!(py, "rest_minutes"), 30, MAX_REST_MINUTES)?;
-    if let Some(limits) = raw.get_item(intern!(py, "max_continuous_work_minutes_by_staff"))? {
-        for (id, limit) in exact_dict(&limits)?.iter() {
-            staff_key(&id)?;
-            if !(1..=MINUTES_PER_DAY).contains(&exact_int(&limit)?) {
-                return unsupported("a limit is outside its range");
+    // One text for the schema, the policy and the source: any that fails raises it.
+    let schema = match raw.get_item(intern!(py, "schema_version"))? {
+        None => Verdict::Passes,
+        Some(schema) if schema.is_exact_instance_of::<pyo3::types::PyInt>() => {
+            if schema.extract::<i64>().is_ok_and(|schema| schema == 1) {
+                Verdict::Passes
+            } else {
+                Verdict::Fails
             }
         }
-    }
-    let mut any_windows = false;
-    if let Some(windows) = &windows {
-        for (id, rows) in exact_dict(windows)?.iter() {
-            staff_key(&id)?;
-            shifts_of(exact_list(&rows)?)?;
-            any_windows = true;
+        Some(_) => Verdict::Unknown,
+    };
+    let policy_verdict = match &policy {
+        None => Verdict::Passes,
+        Some(version) => {
+            let version = exact_str(version)?;
+            if version == POLICY_V1 || version == POLICY_V2 {
+                Verdict::Passes
+            } else {
+                Verdict::Fails
+            }
         }
+    };
+    let source = raw.get_item(intern!(py, "source_id"))?;
+    let source_verdict = match &source {
+        None => Verdict::Passes,
+        Some(source) if !source.is_instance_of::<PyString>() => Verdict::Fails,
+        Some(source) => match source.downcast_exact::<PyString>() {
+            Ok(text) if text.to_str()?.is_empty() => Verdict::Fails,
+            Ok(_) => Verdict::Passes,
+            Err(_) => Verdict::Unknown,
+        },
+    };
+    let checks = [schema, policy_verdict, source_verdict];
+    if checks.contains(&Verdict::Fails) {
+        return config_error("unsupported staff_dynamics policy or source");
     }
+    if checks.contains(&Verdict::Unknown) {
+        return unsupported("another schema or source");
+    }
+    // Policy v1 with shifts or a recovery.
+    let any_windows = match &windows {
+        None => false,
+        Some(windows) => match crate::core::tracked::as_readable_dict(windows) {
+            Some(windows) => !windows.is_empty(),
+            None => return unsupported("the shift windows are another value"),
+        },
+    };
     let recovery_value = match &recovery {
-        Some(recovery) => exact_float(recovery)?,
+        Some(recovery) => match recovery.downcast_exact::<pyo3::types::PyFloat>() {
+            Ok(recovery) => recovery.value(),
+            Err(_) => return unsupported("the recovery is another value"),
+        },
         None => {
             if legacy {
                 0.0
@@ -502,13 +557,85 @@ fn canonical_config<'py>(raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>
             }
         }
     };
+    if legacy && (any_windows || recovery_value != 0.0) {
+        return config_error("staff shift and off-shift recovery assumptions require policy v2");
+    }
+    for (name, default, upper) in [
+        (intern!(py, "max_continuous_work_minutes"), 240, MINUTES_PER_DAY),
+        (intern!(py, "rest_minutes"), 30, MAX_REST_MINUTES),
+    ] {
+        let verdict = match raw.get_item(name)? {
+            Some(value) => plain_int_within(&value, 1, upper),
+            None => {
+                if (1..=upper).contains(&default) {
+                    Verdict::Passes
+                } else {
+                    Verdict::Fails
+                }
+            }
+        };
+        match verdict {
+            Verdict::Passes => {}
+            Verdict::Fails => return config_error(&format!("staff_dynamics {name} is outside its supported range")),
+            Verdict::Unknown => return unsupported("a limit is an int of another type"),
+        }
+    }
+    if let Some(limits) = raw.get_item(intern!(py, "max_continuous_work_minutes_by_staff"))? {
+        if !limits.is_instance_of::<PyDict>() {
+            return config_error("staff_dynamics per-staff work limits must be an object");
+        }
+        for (id, limit) in exact_dict(&limits)?.iter() {
+            let id_passes = id.is_instance_of::<PyString>() && !id.is_empty()?;
+            if !id_passes || int_within(&limit, 1, MINUTES_PER_DAY) == Verdict::Fails {
+                return config_error("staff_dynamics per-staff work limits must be integer minutes in 1..1440");
+            }
+            staff_key(&id)?;
+        }
+    }
+    if let Some(windows) = &windows {
+        let windows = exact_dict(windows)?;
+        for (id, rows) in windows.iter() {
+            let id_passes = id.is_instance_of::<PyString>() && !id.is_empty()?;
+            let rows_pass = rows.is_instance_of::<PyList>() && rows.len()? <= MAX_SHIFTS;
+            if !id_passes || !rows_pass {
+                return config_error("staff_dynamics shift windows require a staff ID and at most 21 intervals");
+            }
+            staff_key(&id)?;
+            let mut shifts = Vec::new();
+            for row in exact_list(&rows)?.iter() {
+                let fits = match row.downcast::<PyDict>() {
+                    Err(_) => false,
+                    Ok(row) => {
+                        let start = row.get_item(intern!(py, "start_minute"))?;
+                        let end = row.get_item(intern!(py, "end_minute"))?;
+                        match (start, end, row.len()) {
+                            (Some(start), Some(end), 2) => match (int_within(&start, 0, MINUTES_PER_WEEK), int_within(&end, 0, MINUTES_PER_WEEK)) {
+                                (Verdict::Passes, Verdict::Passes) => {
+                                    let shift = Shift { start_minute: start.extract()?, end_minute: end.extract()? };
+                                    let fits = shift.start_minute < shift.end_minute;
+                                    shifts.push(shift);
+                                    fits
+                                }
+                                _ => false,
+                            },
+                            _ => false,
+                        }
+                    }
+                };
+                if !fits {
+                    return config_error("staff shift intervals must be non-empty [start,end) weekly minutes");
+                }
+                exact_dict(&row)?;
+            }
+            if !shifts_are_valid(&shifts) {
+                return config_error("staff shift intervals for one person cannot overlap");
+            }
+        }
+    }
     if !(0.0..=1.0).contains(&recovery_value) {
-        return unsupported("the recovery is outside 0..1");
+        return config_error("staff_dynamics off-shift recovery must be within 0..1 per minute");
     }
     let policy = if legacy { POLICY_V1 } else { POLICY_V2 };
-    if policy == POLICY_V1 && (any_windows || recovery_value != 0.0) {
-        return unsupported("policy v1 has no shifts or recovery");
-    }
 
     // {defaults, **raw}: every key of raw is one of the defaults, so this is their order.
     let config = PyDict::new(py);
@@ -611,9 +738,12 @@ fn validate_override<'py>(
     known_staff_ids: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = value.py();
+    if !value.is_instance_of::<PyDict>() {
+        return config_error("shift-window overrides require 1..100 staff IDs");
+    }
     let value = exact_dict(value)?;
     if !(1..=100).contains(&value.len()) {
-        return unsupported("the number of staff IDs is out of range");
+        return config_error("shift-window overrides require 1..100 staff IDs");
     }
     let known = match known_staff_ids {
         Some(known) if !known.is_none() => match known.downcast_exact::<PySet>() {
@@ -636,8 +766,9 @@ fn validate_override<'py>(
         }
         parsed.push((text, shifts_of(exact_list(rows)?)?, rows));
     }
+    // The rule's second check; what Unsupported above leaves to it may fail an earlier one.
     if override_json_length(&parsed) > 16_384 {
-        return unsupported("the override exceeds the limit");
+        return config_error("shift-window overrides exceed the 16 KiB limit");
     }
     parsed.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     let normalized = PyDict::new(py);
