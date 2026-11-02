@@ -92,6 +92,14 @@ PORTED_NAMES = frozenset(
         "_support_assignment_order",
         "_route_candidates",
         "_support_route_wait_reasons",
+        # domain/staff.py, domain/staff_operations.py, experiments/phases/*: rules/staff.rs,
+        # travel.rs, support.rs. A test reaches a `kernel_first` rule through `__wrapped__`.
+        "_preempt_background_staff",
+        "_maintenance_blocked",
+        "shared_passage_edge_loads",
+        "_active_route_edge_loads",
+        "_record_route_capacity_wait",
+        "_current_journey_edge",
         # domain/common_operations.py: rules/common_operations.rs, likewise.
         "_event_payload_matches",
         "_validate_observed_state_changes",
@@ -207,6 +215,9 @@ PORTED_NAMES = frozenset(
         "_restore_person",
         "_schedule_relocation",
         "_set_presence",
+        # policies/psychology.py, inspection/traces.py: rules/trace.rs, rules/decisions.rs
+        "explain_update",
+        "_decision_document",
         # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
         "reserve_sleep_bed",
         "release_sleep_bed",
@@ -222,6 +233,9 @@ PORTED_METHODS = frozenset(
         ("_IndexedMetricSink", "record_decision"),
         ("UtilityBehaviorPolicy", "propose"),
         ("PriorityRuleBehaviorPolicy", "propose"),
+        ("PsychologyUpdateResult", "trace_document"),
+        ("SocialPropagationResult", "trace_document"),
+        ("InformationSpreadResult", "trace_document"),
         ("StressPropagationPolicy", "update"),
         ("ExpressivenessChannelOpennessPolicy", "update"),
         ("DeGrootContactPolicy", "update"),
@@ -256,6 +270,11 @@ def segment_steps() -> frozenset[str]:
 def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     if request.node.get_closest_marker("python_rules") is None:
         return
+    without_kernels(monkeypatch)
+
+
+def without_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mark's change, for a test that compares both within one test."""
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.core import world as world_module

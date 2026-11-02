@@ -255,7 +255,7 @@ fn arrive<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
 // ---- Relief ------------------------------------------------------------------------------------------
 
 /// `{"cleaning": {...}, ...}[kind]`.
-fn relief_skills(kind: &str) -> Option<[&'static str; 2]> {
+pub(crate) fn relief_skills(kind: &str) -> Option<[&'static str; 2]> {
     match kind {
         "cleaning" => Some(["cleaning", "sanitation"]),
         "maintenance" => Some(["maintenance", "repair"]),

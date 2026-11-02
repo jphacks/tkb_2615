@@ -12,6 +12,7 @@
 //! `Unsupported` while any part of the world is not Rust's, so a rule asks for it in its planning
 //! stage, before it changes anything.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -1136,6 +1137,8 @@ pub(crate) struct EventWriter<'py> {
     log: Bound<'py, EventStore>,
     counters: Bound<'py, PyDict>,
     duration: i64,
+    /// Sequences a plan has promised to `allocate_reserved` before what it plans next.
+    reserved: Cell<i64>,
 }
 
 impl<'py> EventWriter<'py> {
@@ -1169,16 +1172,27 @@ impl<'py> EventWriter<'py> {
             .getattr(intern!(py, "duration_minutes"))?
             .extract::<i64>()
             .map_err(|_| Unsupported::new_err("the duration is not an int"))?;
-        Ok(Self { queue, log, counters, duration })
+        Ok(Self { queue, log, counters, duration, reserved: Cell::new(0) })
     }
 
     pub(crate) fn duration(&self) -> i64 {
         self.duration
     }
 
-    /// What `allocate_sequence` would return, changing nothing.
+    /// What `allocate_sequence` would return, changing nothing, past the sequences reserved.
     pub(crate) fn next_sequence(&self) -> PyResult<i64> {
-        self.counter()
+        Ok(self.counter()? + self.reserved.get())
+    }
+
+    /// Sets how many sequences `allocate_reserved` will take before what is planned from now on.
+    pub(crate) fn reserve(&self, count: usize) {
+        self.reserved.set(count as i64);
+    }
+
+    /// `allocate_sequence`, of one the plan reserved.
+    pub(crate) fn allocate_reserved(&self) -> PyResult<i64> {
+        self.reserved.set((self.reserved.get() - 1).max(0));
+        self.allocate_sequence()
     }
 
     fn counter(&self) -> PyResult<i64> {

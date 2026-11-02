@@ -102,7 +102,7 @@ def record(args: argparse.Namespace) -> int:
         observers.append(recorder)
     observers.append(stream)
     # The Rust side is what a Run does: the driver of rules/tick.rs, watched between its phases.
-    tick_probe.install(observers, on_driver=not args.reverse)
+    tick_probe.install(observers)
     # A run that stops with an error still leaves what it wrote until then.
     try:
         gate_all_paths.run_one(args.record, output, _scenario(args.record))

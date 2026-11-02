@@ -30,10 +30,8 @@ use crate::rules::overlay;
 use crate::rules::service::{self, add_one, append_outcome, metrics_of};
 use crate::rules::toilet;
 use crate::rules::social_dialogue::context_value;
-use crate::rules::support::{
-    add_rejected, append_or_python, household_of, plan_request, support_kind_of, write_closed_request, write_request, PlannedRequest,
-};
-use crate::rules::travel::{approach_route, plan_travel, rows_of, select_resource, select_toilet, write_travel, PlannedTrip, Route, Selected, Trip};
+use crate::rules::support::{PlannedRequest, add_rejected, append_or_python, household_of, plan_request, support_kind_of, write_closed_request, write_request};
+use crate::rules::travel::{CapacityWait, PlannedTrip, Route, Selected, Trip, approach_route, plan_travel, rows_of, select_resource, select_toilet, write_capacity_wait, write_travel};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventWriter};
 use crate::state::resource_service::{held_mirror as service_mirror, RequestRecord};
@@ -113,6 +111,8 @@ enum Effect {
 
 /// What a trip action does, planned.
 struct TripEffect {
+    /// What `_route` records while the facility is chosen.
+    waits: Vec<CapacityWait>,
     trip: Option<PlannedTrip>,
     facility_id: Option<Arc<str>>,
     /// The person is at the facility and asks its queue, with no trip.
@@ -161,8 +161,8 @@ fn plan_toilet<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
-    let Selected::Found(facility_id, route) = select_toilet(world, &graph, agent_object)? else {
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
+    let Selected::Found(facility_id, route) = select_toilet(world, &graph, writer, agent_object, &mut effect.waits)? else {
         return Ok(effect);
     };
     effect.trip = if route.destination == *zone_id && has_independent(world, &facility_id)? {
@@ -196,8 +196,8 @@ fn plan_resource<'py>(
     minute: i64,
 ) -> PyResult<TripEffect> {
     let graph = rows_of(controller)?;
-    let mut effect = TripEffect { trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
-    match select_resource(world, &graph, agent_object, kind)? {
+    let mut effect = TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: false };
+    match select_resource(world, &graph, writer, agent_object, kind, &mut effect.waits)? {
         Selected::NoFacility => {
             effect.outcome = Some(("rejected", "no_facility", None));
             effect.rejected = true;
@@ -617,7 +617,7 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
             Effect::Toilet => plan_toilet(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, minute)?,
             Effect::Resource(kind, _) => {
                 if attribute(controller, intern!(py, "resource_service"))?.is_none() {
-                    TripEffect { trip: None, facility_id: None, at_once: false, outcome: None, rejected: true }
+                    TripEffect { waits: Vec::new(), trip: None, facility_id: None, at_once: false, outcome: None, rejected: true }
                 } else {
                     plan_resource(controller, &world, &writer, &agent_object, &agent_arc, &zone_id, kind, minute)?
                 }
@@ -627,6 +627,13 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
         let held = if planned.outcome.is_some() { Some(service_mirror(&world)?) } else { None };
         let metrics = if planned.rejected { Some(metrics_of(&world)?) } else { None };
         trip_effect = Some((planned, writer, held, metrics, minute));
+    }
+    // A capacity wait comes before the queue's own events, and its sequence is only reserved here:
+    // the queue's kernel below would take the next one first.
+    if let Some((TripEffect { at_once: true, waits, .. }, ..)) = &trip_effect {
+        if !waits.is_empty() {
+            return unsupported("a capacity wait comes before a request at once");
+        }
     }
     // The queue's kernel, which writes all it does or refuses having written nothing. It reads
     // nothing that the writes below change.
@@ -702,6 +709,10 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
         Some(SleepPlan::NoRoom(None)) => {}
     }
     if let Some((planned, writer, held, metrics, minute)) = trip_effect {
+        // What `_route` recorded while the facility was chosen, before the trip's sequence.
+        for wait in planned.waits {
+            write_capacity_wait(&world, &writer, wait)?;
+        }
         let facility_id = planned.facility_id;
         if planned.at_once {
             if let Some(facility_id) = &facility_id {

@@ -121,8 +121,14 @@ each OS, because both call the same libm.
   `core/checkpoint_cache.py` uses `canonical_json` for what a Checkpoint save encodes;
   elsewhere replacing `json` alone saved about 1% (see below).
 
+- `rules/trace.rs`: the trace documents with their shape unchanged (decision D1 of
+  `docs/rust-port/step4-plan.md`): `TraceRows`, `AgentPsychologyTrace.to_dict`, `trace_document` and
+  `record_psychology_trace` (`_record_psychology_trace`), the social contacts' document, and
+  `TraceSink`, which hands each finished Python dict to the sink's own `record_*` method. The writer
+  and its `_sanitize` stay in Python. `benchmarks/trace_bytes.py` compares what a Run writes.
+
 - `rules/psychology.rs`: each person's minute (`update_psychology`, all the built-in psychology
-  models, for a tick with no trace), the distress monitor and long-term distress
+  models, with `TraceRows` if the Run keeps a trace), the distress monitor and long-term distress
   (`update_long_term`) and writing the new values (`apply_deltas`). They replace steps of the
   update phase (`experiments/phases/segments.py`), read the entity rows, and read the zone's
   conditions, the body record, the group and what a person heard from `rules/world_view.rs`. Every float operation keeps the Python order; `max`/`min`
@@ -143,8 +149,9 @@ each OS, because both call the same libm.
 
 - `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,
   through `controller.run_tick` (`experiments/phases/driver.py`). Unsupported before anything changes
-  for a tick that a hook watches or changes (a trace, a Provider that can be called, a shadow, a patched
-  step or rule in the table of `install`). After that a kernel's Unsupported runs that step's Python rule.
+  for a tick that a hook changes (a shadow, a patched step or rule in the table of `install`). A trace
+  and a Provider stay on the driver: the Provider's hooks are the same Python, called from the kernels
+  at the same places. After that a kernel's Unsupported runs that step's Python rule.
   `python_path_only(True)` sends every tick to `phase_handler`; `stats()` says what ran.
 
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
@@ -168,7 +175,8 @@ each OS, because both call the same libm.
   for anything else. `record_outcome` appends the `_IndexedMetricSink` record as JSON bytes
   (`decision_sink` in a sink's own class says what it may do), then calls `commit_action` and
   `remember_decision`. Unsupported comes before anything is appended; after that, a rule that
-  refuses runs in Python on its own. A trace or a sink of another class is Unsupported.
+  refuses runs in Python on its own. With a trace `RunArtifactWriter` gets the document of
+  `_decision_document` (`record_decision_document`). A sink of another class is Unsupported.
 - `rules/behavior.rs`: `propose_due(controller, view, rng)` and `observed_state(controller, view,
   agent_id)` compute the proposals and the snapshot `rules/decisions.rs` keeps as rows, here as the
   Python `ActionProposal`s and the snapshot dict. They read the snapshot of `rules/world_view.rs`, so
@@ -201,7 +209,8 @@ each OS, because both call the same libm.
   (`src/state/social_propagation.rs`) and reads agents from the entity rows. Each tick refills the
   contacts in the order of Python's new dict, reusing the nodes of the records
   (`NamespaceMirror::refill_record_map`). `CounterRNG` draws, `math.fsum`, `sum`, `max`/`min` ties
-  and float order are those of Python. A trace, another RNG, a policy's subclass, and what the
+  and float order are those of Python. A trace's document comes from `rules/trace.rs`. Another RNG, a
+  policy's subclass, and what the
   Python rule turns down give `Unsupported`, and the Python step runs. `core::rng` can keep each
   draw of a thread for the comparison of `benchmarks/rule_shadow` (`start_draw_log`, `take_draw_log`).
 
@@ -247,12 +256,17 @@ each OS, because both call the same libm.
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
   `validate(world)` accepts a world where no staff member has a task; an active record reads the
   pending events, which is the Python rule's.
-- `rules.staff`: a tick of `domain/staff.py` and `domain/staff_operations.py` where no staff member
-  starts anything (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`,
-  `update_operations(world, minute)`, `assign_operations(world, minute, router)`,
-  `relief(world, minute)`, and `wait_snapshot(world, active_support, minute)` for
-  `experiments/metrics.py`. They say Unsupported as soon as a worker would take something, and the
-  Python rule runs the step. See `docs/rust-port/lanes/m4-staff.md`.
+- `rules.staff`: the staff's assignment of `domain/staff.py` and `domain/staff_operations.py`
+  (`src/rules/staff.rs`): `assign_pending(service, minute, validate_state=)`, which is `assign_none`
+  (None hands the step to `assign_work`), `update_operations(world, minute)`,
+  `assign_operations(world, minute, router)`, `relief(world, minute)`, and
+  `wait_snapshot(world, active_support, minute)` for `experiments/metrics.py`. A worker's start plans
+  first and then writes one record at a time. They say Unsupported, before any change, for a value
+  the rows can't hold and for another staff formula. `format_g` is there for the tests.
+  See `docs/rust-port/lanes/m4-staff.md`, `l2-staff.md`.
+- `rules.travel.route`: `_route`, with edge capacities too: it counts the trips under way and records
+  `zone_edge_capacity_wait` as the Python rule does. A rule that plans (`proposals.apply_effect`) holds
+  that record and reserves its sequence on the `EventWriter` until it writes.
 - `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
   `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
   `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
@@ -318,7 +332,7 @@ each OS, because both call the same libm.
   read from `population_presence_v1`, which Python holds. The tree gets single values and the
   refilled contacts, never the whole namespace, and the events are scheduled as rows
   (`EventWriter` of `src/state/events.rs`), with the errors of `ScheduledEvent` for what a row
-  refuses. A trace, another RNG, a policy's subclass and whatever the Python
+  refuses. A trace's document is written here. Another RNG, a policy's subclass and whatever the Python
   rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
   same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 

@@ -2,9 +2,11 @@
 
 sitecustomize.py installs this. Each `_psychology_update` runs the Python rules on the same view
 first (`explain_update`, and `deltas_without_traces` where the model has it), then the kernel, and
-compares every field as the text of JSON. Each `_apply_state_deltas` runs `apply_state_deltas` on a
-plain stand-in of the people and their body records first, then the kernel on the world, and
-compares every value and the rows.
+compares every field as the text of JSON. With a trace the rows of `TraceRows`, as the objects they
+make, are compared with `explain_update`'s, and each `_record_psychology_trace` compares the
+document and the contributions with what the Python step gives the sink for that result. Each
+`_apply_state_deltas` runs `apply_state_deltas` on a plain stand-in of the people and their body
+records first, then the kernel on the world, and compares every value and the rows.
 """
 
 from __future__ import annotations
@@ -23,7 +25,13 @@ def _delta_text(delta: Any) -> str:
     return json.dumps([getattr(delta, item.name) for item in fields(delta)], ensure_ascii=False)
 
 
+# Used by a whole Run's traced steps, between `_psychology_update` and `_record_psychology_trace`.
+_EXPLAINED = "_shadow_explained"
+
+
 def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -> None:
+    from shadow_kit import captured, values_in
+
     from sheltersim import native
     from sheltersim.core.engine import TraceLevel
     from sheltersim.domain.models import Activity
@@ -32,7 +40,9 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
     from sheltersim.policies.psychology import apply_state_deltas
 
     rules = native.rules("psychology")
+    trace_rules = native.rules("trace")
     python_update = UpdatePhase._psychology_update
+    python_record = UpdatePhase._record_psychology_trace
     python_apply = UpdatePhase._apply_state_deltas
 
     def reach(view: Any, policy: Any) -> None:
@@ -67,15 +77,17 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
         policy = self.psychology
         expected = None
         error = None
-        untraced = self.artifacts.trace_level is TraceLevel.OFF
-        if untraced:
-            try:
-                expected = [policy.explain_update(view, minute).deltas]
-                without_traces = getattr(policy, "deltas_without_traces", None)
-                if without_traces is not None:
-                    expected.append(without_traces(view, minute))
-            except Exception as caught:  # noqa: BLE001 - only compared with what the kernel does
-                error = caught
+        traced = self.artifacts.trace_level is not TraceLevel.OFF
+        explained = None
+        setattr(self, _EXPLAINED, None)
+        try:
+            explained = policy.explain_update(view, minute)
+            expected = [explained.deltas]
+            without_traces = getattr(policy, "deltas_without_traces", None)
+            if without_traces is not None:
+                expected.append(without_traces(view, minute))
+        except Exception as caught:  # noqa: BLE001 - only compared with what the kernel does
+            error = caught
         try:
             result = rules.update_psychology(self, view, minute)
         except native.Unsupported as reason:
@@ -92,7 +104,57 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
             if theirs != mine:
                 differences.append(f"minute {minute}: deltas {number} of {policy.policy_version}")
             seen["update_values_compared"] += 15 * len(theirs)
+        if traced:
+            seen["trace_rows_steps"] += 1
+            setattr(self, _EXPLAINED, explained)
+            mine = [_delta_text(trace) for trace in result.traces]
+            theirs = [_delta_text(trace) for trace in explained.traces]
+            if theirs != mine:
+                first = next((a, b) for a, b in zip(mine, theirs, strict=False) if a != b)
+                differences.append(f"minute {minute}: traces of {policy.policy_version}: {first}")
+            if result.policy_version != explained.policy_version:
+                differences.append(f"minute {minute}: the version of the result")
+            seen["trace_rows_compared"] += len(theirs)
+            seen["trace_row_values_compared"] += len(theirs) * len(fields(explained.traces[0]))
         return result
+
+    def record(self: Any, result: Any, final_deltas: Any, minute: int) -> None:
+        sink = self.artifacts
+        if sink.trace_level is TraceLevel.OFF:
+            trace_rules.record_psychology_trace(self, result, final_deltas, minute)
+            return
+        explained = getattr(self, _EXPLAINED, None)
+        name = "record_psychology_trace"
+        seen["trace_document_steps"] += 1
+        if explained is None or type(result.traces) is tuple:
+            seen["trace_document_left_to_python"] += 1
+            python_record(self, result, final_deltas, minute)
+            return
+        with captured(sink, name, forward=False) as python_calls:
+            python_record(self, explained, final_deltas, minute)
+        with captured(sink, name) as kernel_calls:
+            trace_rules.record_psychology_trace(self, result, final_deltas, minute)
+        seen["trace_document_kernel_ran"] += 1
+        if python_calls != kernel_calls:
+            pair = (
+                (kernel_calls[0][:1500], python_calls[0][:1500]) if kernel_calls else python_calls
+            )
+            differences.append(f"minute {minute}: the document: {pair}")
+        else:
+            document = json.loads(kernel_calls[0])
+            seen["trace_document_values_compared"] += values_in(document)
+            seen["trace_document_bytes_compared"] += len(kernel_calls[0])
+            # Which parts of a document the comparison reached.
+            seen[f"trace_model:{explained.policy_version}"] += 1
+            for person in document[0][0]["agents"]:
+                seen["trace_people"] += 1
+                for cause in person["direct_causes"]:
+                    seen[f"trace_cause:{cause['kind']}"] += 1
+                for part in ("zone_environment", "environment_conditions", "life_state"):
+                    seen[f"trace_part:{part}"] += part in person
+                seen["trace_part:information_belief_effect"] += (
+                    "information_belief_effect" in person
+                )
 
     def apply(self: Any, world: Any, final_deltas: Any) -> None:
         seen["apply_steps"] += 1
@@ -146,4 +208,5 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
             differences.append(f"minute {world.minute_index}: rows: {problem or store.tainted}")
 
     OfflineSimulationController._psychology_update = update  # type: ignore[method-assign]
+    OfflineSimulationController._record_psychology_trace = record  # type: ignore[method-assign]
     OfflineSimulationController._apply_state_deltas = apply  # type: ignore[method-assign]

@@ -1,9 +1,9 @@
 """The tick's phases in Rust: native/src/rules/tick.rs.
 
-`TickEngine.step` asks a handler's `run_tick` first. The driver refuses a tick that a hook watches
-or changes, before anything has happened, and `step` then runs the phases through `phase_handler`,
-so a test's patch, a trace, a Provider or a tick_probe all see what they saw before. Without the
-Rust kernels the controller has no `run_tick`. See docs/rust-port/lanes/m6-driver.md.
+`TickEngine.step` asks a handler's `run_tick` first. The driver refuses a tick that a hook changes,
+before anything has happened, and `step` then runs the phases through `phase_handler`, so a test's
+patch sees what it saw before. A trace, a Provider and an observer of the phases go with the driver.
+Without the Rust kernels the controller has no `run_tick`. See docs/rust-port/lanes/m6-driver.md.
 """
 
 from __future__ import annotations
@@ -44,6 +44,8 @@ DRIVEN_STEPS = (
     "_run_arbitrate_phase",
     "_arbitrate_services",
     "_assign_staff_support",
+    "_record_assigned_support",
+    "_consider_due_complaints",
     "_run_sample_phase",
     "_sample_information_contacts",
     "_sample_proximity_contacts",
