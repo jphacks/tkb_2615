@@ -355,7 +355,7 @@ const COLUMNS: [[&str; 6]; 2] = [
 /// `resource_metric_values`.
 #[pyfunction]
 #[pyo3(signature = (world, *, tick_memo=None))]
-fn metric_values<'py>(
+pub(crate) fn metric_values<'py>(
     world: &Bound<'py, PyAny>,
     tick_memo: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Option<Bound<'py, PyDict>>> {

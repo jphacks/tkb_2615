@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -29,10 +29,11 @@ use crate::core::value::V;
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::rules::world_view::{group_of, presence_people_of};
 use crate::state::entities::{entities_of, EntityStore};
-use crate::state::events::{EventKind, EventRow, EventWriter};
+use crate::state::events::{is_stable_id, EventKind, EventRow, EventWriter};
 use crate::state::information::{belief_rank, ContactRow, InformationRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }
@@ -649,12 +650,11 @@ fn with_plan<'py>(
 
 /// `_sample_information_contacts` of the sample phase (experiments/phases/segments.py).
 #[pyfunction]
-fn sample_contacts<'py>(
+pub(crate) fn sample_contacts<'py>(
     controller: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
     rng: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
-    let py = controller.py();
     let Some(inputs) = inputs(controller, minute, rng)? else {
         return Ok(());
     };
@@ -663,10 +663,8 @@ fn sample_contacts<'py>(
     let draws = KeyedDraws::new(&inputs.seed);
     let plan = with_plan(&inputs, &mirror, &draws, false)?;
     write(&mirror, &plan)?;
-    let schedule = intern!(py, "_schedule_information_contact");
     for proposal in &plan.proposals {
-        // `_schedule_information_contact`, which stays for what a row refuses: it raises its own
-        // error. The state is written, so nothing may take that for the kernel's refusal.
+        // `_schedule_information_contact`.
         let due_minute = inputs.minute + 1;
         if due_minute >= writer.duration() {
             continue;
@@ -678,33 +676,29 @@ fn sample_contacts<'py>(
                 writer.schedule(row)?;
             }
             None => {
-                controller
-                    .call_method1(
-                        schedule,
-                        (
-                            inputs.minute,
-                            &*proposal.message,
-                            &*plan.ids[proposal.sender],
-                            &*plan.ids[proposal.recipient],
-                            &*proposal.belief,
-                            proposal.basis,
-                            proposal.minutes,
-                            proposal.probability,
-                            &*proposal.source,
-                            &*proposal.causation,
-                        ),
-                    )
-                    .map_err(|error| {
-                        if error.is_instance_of::<Unsupported>(py) {
-                            PyRuntimeError::new_err(error.to_string())
-                        } else {
-                            error
-                        }
-                    })?;
+                // It raises after taking the sequence. The state is written, so nothing may take
+                // this for the kernel's refusal.
+                writer.allocate_sequence()?;
+                return Err(refused_contact_event(proposal, due_minute, sequence));
             }
         }
     }
     Ok(())
+}
+
+/// What `ScheduledEvent._check` raises for a contact whose row `contact_event` refuses, in its order.
+fn refused_contact_event(proposal: &Proposal, due_minute: i64, sequence: i64) -> PyErr {
+    PyValueError::new_err(if !is_stable_id(&proposal.source) {
+        "source_id must be a stable ID"
+    } else if !is_stable_id(&proposal.causation) {
+        "causation_id must be a stable ID"
+    } else if due_minute < 0 {
+        "event due_minute must be a non-negative integer"
+    } else if sequence < 0 {
+        "event sequence must be a non-negative integer"
+    } else {
+        "event payload and provenance must contain finite JSON values"
+    })
 }
 
 /// The event of `_schedule_information_contact`, with the keys in its order.

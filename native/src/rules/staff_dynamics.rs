@@ -239,7 +239,7 @@ fn plan(
 
 /// `update_staff_dynamics`.
 #[pyfunction]
-fn update(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn update(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());

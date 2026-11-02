@@ -239,6 +239,19 @@ fn entity_rules<'py>(
     initial_needs_type: &Bound<'py, PyAny>,
     needs_type: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyList>> {
+    entity_rules_watching(world, requests, resource_config, initial_needs_type, needs_type, &mut |_| {})
+}
+
+/// `entity_rules`, telling `watch` the type of each pending event it reads, for a caller with
+/// rules of its own about them (`rules/after_tick.rs`), which then needs no second walk of the queue.
+pub(crate) fn entity_rules_watching<'py>(
+    world: &Bound<'py, PyAny>,
+    requests: &Bound<'py, PyList>,
+    resource_config: &Bound<'py, PyAny>,
+    initial_needs_type: &Bound<'py, PyAny>,
+    needs_type: &Bound<'py, PyAny>,
+    watch: &mut dyn FnMut(&str),
+) -> PyResult<Bound<'py, PyList>> {
     let py = world.py();
     let held = Held::new();
     if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 {
@@ -479,6 +492,7 @@ fn entity_rules<'py>(
     let mut timeouts: FxHashMap<&str, Named> = FxHashMap::default();
     for (index, event) in events.iter().enumerate() {
         let kind = event_type(event, &held)?;
+        watch(kind);
         let target = match kind {
             "toilet_service_complete" => &mut toilet_events,
             "resource_service_complete" => &mut resource_events,

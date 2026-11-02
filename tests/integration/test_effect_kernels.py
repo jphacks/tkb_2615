@@ -18,8 +18,6 @@ import pytest
 from sheltersim import native
 from sheltersim.core.state_mirror import rust_validated
 from sheltersim.core.world import WorldState
-from sheltersim.domain import geometry_overlay
-from sheltersim.events import effects
 from sheltersim.events.effects import (
     DEFAULT_PRIMITIVE_REGISTRY,
     EFFECT_EVENT_TYPES,
@@ -356,8 +354,7 @@ def test_the_bound_of_an_addition_is_the_python_rule_s(
         world, _program(_action(op, "zone", _a_zone(world), {"count": 1}, end=None))
     )
     # The floor plan has no place for so many toilets; this is about the bound.
-    for module in (effects, geometry_overlay):
-        monkeypatch.setattr(module, "installed_facility_placement_enabled", lambda _: False)
+    world.model_configs["geometry_overlay"]["schema_version"] = 3
     document = _structure_event(world, op).to_dict()
     room = bound - len(getattr(world, field))
     handler = EffectProgramStructureHandler()

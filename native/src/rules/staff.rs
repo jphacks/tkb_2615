@@ -253,7 +253,7 @@ fn kind_exposure(workers: &[Worker], kind: &str) -> PyResult<(bool, bool, bool)>
 /// `StaffService.assign_pending`: the plain case without a call to Python, and the rest.
 #[pyfunction]
 #[pyo3(signature = (service, minute, *, validate_state=true))]
-fn assign_pending<'py>(
+pub(crate) fn assign_pending<'py>(
     service: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
     validate_state: bool,
@@ -1032,7 +1032,7 @@ fn world_zones(world: &Bound<'_, PyAny>) -> PyResult<Vec<Arc<str>>> {
 
 /// `update_staff_operations`: each zone's sanitation falls with who is in it.
 #[pyfunction]
-fn update_operations(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn update_operations(world: &Bound<'_, PyAny>, minute: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     if namespace_is_absent(world, intern!(py, NAME))? {
         return Ok(());
@@ -1110,7 +1110,7 @@ struct ZonePeople {
 /// `assign_staff_operations` when no free worker has a task to take: it changes nothing. Unsupported
 /// as soon as one has, since a task needs a route and events.
 #[pyfunction]
-fn assign_operations<'py>(
+pub(crate) fn assign_operations<'py>(
     world: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
     _router: &Bound<'py, PyAny>,
@@ -1244,7 +1244,7 @@ fn assign_operations<'py>(
 
 /// `schedule_staff_operation_relief` when no staff member has a task: there is nothing to relieve.
 #[pyfunction]
-fn relief<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn relief<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let py = world.py();
     let done = PyTuple::empty(py);
     if namespace_is_absent(world, intern!(py, NAME))? {

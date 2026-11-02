@@ -1168,7 +1168,7 @@ fn returns_inner<'py>(world: &Bound<'py, PyAny>, minute: i64) -> PyResult<Bound<
 }
 
 #[pyfunction]
-fn admit_pending_returns<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn admit_pending_returns<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     returns_inner(world, exact_int(minute)?)
 }
 
@@ -1238,6 +1238,7 @@ fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAn
     match returns_inner(world, row.due_minute) {
         Ok(_) => Ok(()),
         Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            crate::core::census::caught(py, "__wrapped__ admit_pending_returns (after writes)", &error);
             py.import("sheltersim.domain.population_lifecycle")?.getattr("admit_pending_returns")?.getattr("__wrapped__")?.call1((world, row.due_minute))?;
             Ok(())
         }

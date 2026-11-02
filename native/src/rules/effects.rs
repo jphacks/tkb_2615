@@ -13,8 +13,8 @@
 //!
 //! The pydantic contracts of the parameters stay Python's: a rule calls `model_validate` where its
 //! Python rule does, through `_PARAMETER_MODELS` of `events/effects.py`. So do the rules of modules
-//! other lanes hold (`apply_geometry_change`, the two of temporary spaces, `order_staff_operation`,
-//! the receipts): they're called by name, with no borrow held. Nothing here reads LLM output: what
+//! other lanes hold (`order_staff_operation`, the receipts): they're called by name, with no borrow
+//! held. `rules/overlay.rs` is called directly. Nothing here reads LLM output: what
 //! a program may do was validated before it was scheduled, by `validate_effect_program`, which is
 //! not touched (docs/rust-port/lanes/m6-effects.md).
 
@@ -34,6 +34,7 @@ use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::care_receipts::{facility_recovery_record, handoff_record};
 use crate::rules::staff_dynamics::{is_available, staff_status};
 use crate::state::effect_program::{EffectProgramRow, Program, NAME};
+use crate::rules::overlay;
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::events::{is_stable_id, EventRow, EventWriter};
 use crate::state::resource_ledger::{held_mirror, resource_index, LedgerRow};
@@ -974,7 +975,6 @@ fn environment(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bou
 // ---- EffectProgramTemporarySpaceHandler ----------------------------------------------------------
 
 const TEMPORARY_SPACES: &str = "temporary_spaces_v1";
-const TEMPORARY_MODULE: &str = "sheltersim.domain.temporary_spaces";
 
 fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: bool) -> PyResult<()> {
     let py = world.py();
@@ -1033,11 +1033,7 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
             return unsupported("the space does not match its expiry");
         }
         let candidate = copy_of(world)?;
-        let keywords = PyDict::new(py);
-        keywords.set_item("event_id", &*row.event_id)?;
-        keywords.set_item("causation_id", row.causation_id.as_deref())?;
-        let expired = call_rule(py, TEMPORARY_MODULE, "expire_temporary_space", (&candidate, &**modifier), Some(&keywords))?;
-        if !expired.is_truthy()? {
+        if !overlay::expire_space(&candidate, modifier, &row.event_id, row.causation_id.as_deref())? {
             return unsupported("the space is already expired");
         }
         return commit(world, &candidate);
@@ -1076,9 +1072,7 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
     record.set_item("source_ids", PyList::new(py, sources)?)?;
     record.set_item("geometry_status", "zone_only_capacity")?;
     let candidate = copy_of(world)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("event_id", &*row.event_id)?;
-    call_rule(py, TEMPORARY_MODULE, "register_temporary_space", (&candidate, record), Some(&keywords))?;
+    overlay::register_space(&candidate, record.as_any(), &row.event_id)?;
     commit(world, &candidate)
 }
 
@@ -1097,7 +1091,6 @@ const GEOMETRY_OPERATORS: [&str; 5] =
     ["move_facility", "transfer_equipment", "set_partition", "set_route_access", "temporary_room_geometry"];
 
 fn geometry_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: bool) -> PyResult<()> {
-    let py = world.py();
     let row = event_row(event)?;
     let payload = map_of(&row.payload)?;
     if !has_exactly(payload, &GEOMETRY_FIELDS) {
@@ -1173,9 +1166,7 @@ fn geometry_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
         }
     }
     let candidate = copy_of(world)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("expire", expire)?;
-    call_rule(py, "sheltersim.domain.geometry_overlay", "apply_geometry_change", (&candidate, event), Some(&keywords))?;
+    overlay::apply_change(&candidate, event, expire)?;
     commit(world, &candidate)
 }
 
@@ -1609,7 +1600,6 @@ fn add_one_staff(py: Python<'_>, candidate: &Bound<'_, PyAny>, staff_id: &str, z
 }
 
 fn add_one_toilet(py: Python<'_>, candidate: &Bound<'_, PyAny>, facility_id: &str, zone_id: &str, row: &EventRow) -> PyResult<()> {
-    const OVERLAY: &str = "sheltersim.domain.geometry_overlay";
     let keywords = PyDict::new(py);
     keywords.set_item("id", facility_id)?;
     keywords.set_item("kind", "toilet")?;
@@ -1618,15 +1608,10 @@ fn add_one_toilet(py: Python<'_>, candidate: &Bound<'_, PyAny>, facility_id: &st
     keywords.set_item("working_units", 1)?;
     let toilet = py.import(intern!(py, "sheltersim.domain.models"))?.getattr(intern!(py, "FacilityState"))?.call((), Some(&keywords))?;
     attribute(candidate, intern!(py, "facilities"))?.set_item(facility_id, toilet)?;
-    if call_rule(py, OVERLAY, "installed_facility_placement_enabled", (candidate,), None)?.is_truthy()? {
-        let keywords = PyDict::new(py);
-        keywords.set_item("event_id", &*row.event_id)?;
-        let sources = match row.source_id.as_deref() {
-            Some(source) if !source.is_empty() => PyTuple::new(py, [source])?,
-            _ => PyTuple::empty(py),
-        };
-        keywords.set_item("source_ids", sources)?;
-        call_rule(py, OVERLAY, "place_installed_facility", (candidate, facility_id), Some(&keywords))?;
+    if overlay::placement_enabled(candidate)? {
+        let source = row.source_id.as_deref().filter(|source| !source.is_empty());
+        let sources: Vec<&str> = source.into_iter().collect();
+        overlay::place_facility(candidate, facility_id, &row.event_id, &sources)?;
     }
     call_rule(py, "sheltersim.domain.agent_dynamics", "announce_installed_facility", (candidate, facility_id), None)?;
     Ok(())

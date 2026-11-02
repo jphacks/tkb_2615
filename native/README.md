@@ -35,6 +35,9 @@ Checkpoint document) and times them.
   exports `pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()>`, and Python reaches it with
   `native.rules("movement")` or `native.state("movement")`, which are `None` without the
   extension. Catch `native.Unsupported` around a call; the Python code then decides.
+  `Unsupported` is a type of its own in `lib.rs`: building one notes its line for
+  `benchmarks/rule_shadow/refusal_census.py` (`src/core/census.rs`), off unless that tool turns it
+  on. New refusals are counted without doing anything.
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
   and `rules/information.rs` hold the contact kernels; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
@@ -49,6 +52,8 @@ Checkpoint document) and times them.
 - `src/state/population.rs`: the `V` row of `population_presence_v1`, `population_lifecycle_v1`,
   `population_dynamics_v1`, `temporary_spaces_v1`, `geometry_overlay_v1` and `model_configs`
   (`docs/rust-port/lanes/m6-population.md`).
+- `src/state/facility_queues.rs`: the typed row of `facility_queues_v1`. The rules read it and write
+  through the tree (`docs/rust-port/lanes/m6-overlay.md`).
 - `src/rules/population.rs`, `src/rules/population_lifecycle.rs`: the rules of `domain/population.py`
   and `domain/population_lifecycle.py`, each behind `kernel_first`. A kernel plans, refuses before
   its first write what the Python rule raises on, then writes with the rule's operations on the
@@ -125,11 +130,22 @@ each OS, because both call the same libm.
   are the same floats. A value `AgentStateDelta`'s checks might refuse raises `Unsupported` before
   anything changes, so the Python step runs and raises its own text.
 
+- `rules/overlay.rs`: `domain/temporary_spaces.py` and the rules of `domain/geometry_overlay.py`:
+  capacity, beds and room intake, placing an installed facility, checking and applying a floor-plan
+  change, and the checks of both states. `rules/effects.rs` and `rules/proposals.rs` call it directly.
+- `rules/facility_queues.rs`: `domain/facility_queues.py`. `rules/queues.rs` and `rules/service.rs`
+  serve an independent FIFO through it.
 - `rules/effects.rs`: the rules of an EffectProgram's events: the guard, the five handlers of
   `events/effects.py`, the two reads of modifier stacks and `validate_effect_program_state`. A
   handler keeps the Python rule's copy, check and swap. `model_validate` and the rules of other
   modules are Python, called by name. Anything but a success says `Unsupported` with the world as it
   was. `state/effect_program.rs` is the row of `effect_program_v1`.
+
+- `rules/tick.rs`: `run_tick(controller, world, minute, rng, observer)`, one tick's phases in order,
+  through `controller.run_tick` (`experiments/phases/driver.py`). Unsupported before anything changes
+  for a tick that a hook watches or changes (a trace, a Provider that can be called, a shadow, a patched
+  step or rule in the table of `install`). After that a kernel's Unsupported runs that step's Python rule.
+  `python_path_only(True)` sends every tick to `phase_handler`; `stats()` says what ran.
 
 - `rules/dispatch.rs`: `run_phase(controller, world, minute)`, the dispatch phase. An event type with
   a Rust function (`social_interaction`, `agent_travel_complete`, `toilet_service_complete`,
@@ -161,6 +177,9 @@ each OS, because both call the same libm.
   `Unsupported` at any point runs the Python step: a view Python made (or a partial one), another
   class, and anything `ActionCandidate` and `ActionProposal` would turn down.
 
+- `rules/proximity.rs`: `sample_contacts(controller, minute)` replaces the step
+  `_sample_proximity_contacts`, with `DistanceSampledProximityPolicy.sample` on the positions of the
+  `movement_v1` row, or of its tree when the row is tainted. `sample_of` gives the pairs alone.
 - `rules/world_view.rs`: `view_after_movement(controller, world)` and
   `view_for_proposals(controller, world, minute)` replace the two steps of the phases that make a
   `WorldView`. A snapshot of plain Rust values (`ViewData`) is built from the entity rows, the rows of
@@ -168,9 +187,10 @@ each OS, because both call the same libm.
   owns. It is what `WorldView.from_world` and `after_state_update` provide, with the same audit hash
   (`state_hash`, which writes the canonical document from the snapshot). The returned `WorldView`
   makes `agents`, `facilities`, `zone_members` and `group_members` when a Python reader first asks
-  (`RustView.python_fields`, through `WorldView.__getattr__`). A person's context and a zone's
-  conditions are still computed in Python, only when they change, and kept with the object the
-  Python cache holds. A value a typed field can't hold, or anything Python would raise on, says
+  (`RustView.python_fields`, through `WorldView.__getattr__`). A person's context comes from
+  `rules/person_context.rs` (`PersonContext` and `_fields_of_person`) and a zone's conditions from
+  `rules/zone_environment.rs` (`zone_environment_view` and its 8 formulas), each kept while its
+  document stays equal. `selected_models` stays the Python contract. A value a typed field can't hold, or anything Python would raise on, says
   `Unsupported`, and `from_world` runs. `view_of(view)` gives a kernel the snapshot; for a view Python
   made it reads the fields the update kernels read and sets `partial`. Nothing refuses a partial
   view for a rule: a rule that reads other fields must check `partial` and say `Unsupported`.
@@ -215,7 +235,7 @@ each OS, because both call the same libm.
   `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
   arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
   `kernel_first`. Each plans and then writes, in one call.
-  An independent FIFO and a person who gives up on the queue give `Unsupported` before any write.
+  A person who gives up on the queue gives `Unsupported` before any write.
   See `docs/rust-port/lanes/m4-queues.md`.
 
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
@@ -230,12 +250,22 @@ each OS, because both call the same libm.
 - `rules.metrics`: the KPI columns of a minute (`src/rules/metrics.rs`):
   `snapshot_fields(world, unsettled, minute)` for `MetricSnapshot.from_world` and
   `kpi_values(world, snapshot)` for `operational_kpi_values`. They read the rows and change nothing.
+  `capture(world, recorder, minute)` is `MetricsRecorder.capture`, which `rules/tick.rs` calls for a
+  `_MetricSink`; it says Unsupported with nothing changed for what the Python rule raises on.
 - `rules.tick_validation`: the per-tick check (`src/rules/tick_validation.rs`):
   `entity_rules(world, requests, resource_config, initial_needs_type, needs_type)` answers for the
   entity and event rules of `WorldState.validate` at the end of a tick, reading the objects and not
   the entity rows. It has no text: it returns the zones whose capacity is still the Python rule's,
   or says Unsupported and the Python rules run. `population_dynamics(world)` is the validator of
   that namespace with no one pending. See `docs/rust-port/lanes/m5-metrics.md`.
+- `rules.after_tick`: all of `WorldState.validate_after_tick` on a tick where nothing
+  `TickValidationMemo.begin` compares has moved (`src/rules/after_tick.rs`):
+  `after_tick(world, memo, shadow=False)` returns the zones whose capacity is still the Python
+  rule's, with the memo moved on, or says Unsupported with the memo as it was and the Python check
+  runs. `Plan` is what it reads of `model_configs`, made by `core/tick_validation.py` after a check
+  passed. Validators come from `_RUST_VALIDATORS`; a rule with none is called in Python from there.
+  `install` lists what a patch of sends the tick to the Python check. `stats()` says what ran. See
+  `docs/rust-port/lanes/m6-validate.md`.
 - `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
   (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
   `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel, or the
@@ -257,7 +287,7 @@ each OS, because both call the same libm.
   facility_id, *, minute=None, validate_state=None, queue_id=None)` and
   `record_request_outcome(manager, *, ...)`, each `kernel_first` on `ResourceServiceManager`.
   `serve_head` is one pass of `arbitrate`'s loop after the positions; it returns the started event's
-  ID, or None to stop. An independent FIFO gives `Unsupported` before any write.
+  ID, or None to stop. `serve_independent_head` is the same pass of one independent queue.
 - `rules.proposals.apply_effect(controller, proposal)`: `_apply_effect` (`src/rules/proposals.rs`),
   which returns `(target_id, next_decision_at, committed)`. `seek_help`, `seek_information`, a bed in
   a temporary room and a trip of no minutes give `Unsupported` before any write.
@@ -281,8 +311,8 @@ each OS, because both call the same libm.
   (`src/state/information.rs`) and reads agents from the entity rows; the household of the view is
   read from `population_presence_v1`, which Python holds. The tree gets single values and the
   refilled contacts, never the whole namespace, and the events are scheduled as rows
-  (`EventWriter` of `src/state/events.rs`); `_schedule_information_contact` stays for what a row
-  refuses, and raises its error. A trace, another RNG, a policy's subclass and whatever the Python
+  (`EventWriter` of `src/state/events.rs`), with the errors of `ScheduledEvent` for what a row
+  refuses. A trace, another RNG, a policy's subclass and whatever the Python
   rule might raise on give `Unsupported`, and the Python step runs. `planned_contacts` returns the
   same tick's draws and contacts without changing anything, for `benchmarks/rule_shadow`.
 

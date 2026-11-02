@@ -31,6 +31,7 @@ use crate::rules::world_view::{DemandModifier, RustView, ViewAgent, ViewData};
 use crate::state::entities::{raw_setattr, Activity, RequestStatus};
 use crate::Unsupported;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }

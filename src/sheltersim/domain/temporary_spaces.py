@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sheltersim import native
+from sheltersim.core.kernels import kernel_first
+from sheltersim.core.state_mirror import register_rust_validator
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import Activity
 
@@ -103,6 +106,7 @@ def validate_temporary_spaces_state(world: WorldState) -> None:
             raise ValueError("temporary_spaces_v1 history record is invalid")
 
 
+@kernel_first("overlay", "capacity_metrics")
 def capacity_metrics(
     world: WorldState, zone_id: str, *, occupancy: int | None = None
 ) -> dict[str, int | None]:
@@ -187,12 +191,14 @@ def capacity_metrics(
     }
 
 
+@kernel_first("overlay", "effective_zone_capacity")
 def effective_zone_capacity(
     world: WorldState, zone_id: str, *, occupancy: int | None = None
 ) -> int | None:
     return capacity_metrics(world, zone_id, occupancy=occupancy)["effective_capacity"]
 
 
+@kernel_first("overlay", "effective_total_zone_capacity")
 def effective_total_zone_capacity(
     world: WorldState, zone_id: str, *, occupancy: int | None = None
 ) -> int | None:
@@ -200,6 +206,7 @@ def effective_total_zone_capacity(
     return capacity_metrics(world, zone_id, occupancy=occupancy)["effective_total_capacity"]
 
 
+@kernel_first("overlay", "incoming_travelers")
 def incoming_travelers(world: WorldState, zone_id: str, *, excluding: str | None = None) -> int:
     """People walking to zone_id, directly or to one of its facilities.
 
@@ -217,6 +224,7 @@ def incoming_travelers(world: WorldState, zone_id: str, *, excluding: str | None
     return count
 
 
+@kernel_first("overlay", "register_temporary_space")
 def register_temporary_space(world: WorldState, record: dict[str, Any], *, event_id: str) -> None:
     state = world.model_state.get(TEMPORARY_SPACES_STATE_KEY)
     if not isinstance(state, dict):
@@ -236,6 +244,7 @@ def register_temporary_space(world: WorldState, record: dict[str, Any], *, event
     )
 
 
+@kernel_first("overlay", "expire_temporary_space")
 def expire_temporary_space(
     world: WorldState, space_id: str, *, event_id: str, causation_id: str | None
 ) -> bool:
@@ -279,3 +288,7 @@ def _append_history(
     )
     if len(state["history"]) > MAX_TEMPORARY_SPACE_HISTORY:
         del state["history"][: len(state["history"]) - MAX_TEMPORARY_SPACE_HISTORY]
+
+
+if native.available():
+    register_rust_validator(TEMPORARY_SPACES_STATE_KEY, native.rules("overlay").validate_spaces)

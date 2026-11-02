@@ -139,7 +139,7 @@ impl Known<'_> {
 impl ServiceRow {
     /// The rules of a tick's check in `WorldState.validate`, given a row of the right types. True
     /// says the Python rules accept; false decides nothing.
-    fn passes_rules(&self, rows: &Entities, known: &Known<'_>, minute_index: i64) -> PyResult<bool> {
+    fn passes_rules(&self, rows: &Entities, known: &Known<'_>, minute_index: i64, heads: &std::collections::HashMap<Arc<str>, Vec<Arc<str>>>) -> PyResult<bool> {
         if self.schema_version != SCHEMA_VERSION
             || !listed_once(&self.cancelled_task_ids)
             || !listed_once(&self.active_reservation_ids)
@@ -187,7 +187,10 @@ impl ServiceRow {
             if !matches!(&*facility.kind, "water_station" | "meal_distribution")
                 || rows.agents.get(&record.agent_id).is_none()
                 || !stall_reason_is_known(&record.reason)
-                || facility.resource_queue_agent_ids.first() != Some(&record.agent_id)
+                || !(match heads.get(facility_id) {
+                    Some(heads) => heads.contains(&record.agent_id),
+                    None => facility.resource_queue_agent_ids.first() == Some(&record.agent_id),
+                })
             {
                 return Ok(false);
             }
@@ -205,8 +208,15 @@ fn validate(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     }
     let table = attribute(world, intern!(py, "model_state"))?;
     let table = as_readable_dict(&table).ok_or_else(|| Unsupported::new_err("model_state is another kind of mapping"))?;
+    // Where a facility has independent queues, each queue's head is a head of the facility.
+    let mut heads: std::collections::HashMap<Arc<str>, Vec<Arc<str>>> = std::collections::HashMap::new();
     if table.contains(QUEUES_KEY)? {
-        return Ok(false);
+        let stalls = NamespaceMirror::with_row::<ServiceRow, _>(&held_mirror(world)?, |row| Ok(row.stall_state.keys().cloned().collect::<Vec<_>>()))?;
+        for facility_id in stalls {
+            if let Some(found) = crate::rules::facility_queues::independent_heads(world, &facility_id)? {
+                heads.insert(facility_id, found);
+            }
+        }
     }
     let archived = match table.get_item(LIFECYCLE_KEY)? {
         Some(lifecycle) => match as_readable_dict(&lifecycle) {
@@ -226,7 +236,7 @@ fn validate(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     let mirror = held_mirror(world)?;
     let store = entities_of(world)?;
     NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| {
-        EntityStore::with_rows(&store, |rows| row.passes_rules(rows, &known, minute_index))
+        EntityStore::with_rows(&store, |rows| row.passes_rules(rows, &known, minute_index, &heads))
     })
 }
 

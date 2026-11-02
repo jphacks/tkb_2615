@@ -28,7 +28,7 @@
 | `from_world` の `group_id` | `group_of` | `household_id` が `profile.group_id` を上書きする規則 |
 | `infrastructure_event_context_ids`、断水の判定 | `read_facility_contexts` | 設備に効く停止のイベント ID（数値はありません） |
 
-`zone_environment_view` の式（気温、騒音、換気など）は Python のままです。
+`zone_environment_view` の式（気温、騒音、換気など）は L5 が移しました。
 
 ## レーン H が使うもの
 
@@ -37,7 +37,7 @@
 
 ## Python に残したもの
 
-人の文脈の解析（`PersonContext`）と区域の環境（`zone_environment_view` と式）は Python のままで、入力が変わったときだけ呼びます。`applied_facility_event_ids` は設備が欠けているときに呼びます。`selected_models` は view ごとに1回呼びます。
+人の文脈の解析（`PersonContext`）と区域の環境（`zone_environment_view` と式）は、その後レーン L5 が移しました（[l5-read-rules.md](l5-read-rules.md)）。`applied_facility_event_ids` は設備が欠けているときに呼びます。`selected_models` は view ごとに1回呼びます。
 
 ## 遅延の判断
 

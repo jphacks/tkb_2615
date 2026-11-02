@@ -319,151 +319,163 @@ class ToiletServiceManager:
         world = self.world
         queue_state = world.model_state[FACILITY_QUEUES_STATE_KEY]
         started: list[ScheduledEvent] = []
-        facility_limit = min(facility.capacity, facility.working_units)
         for queue_id in queue_ids_for_facility(world, facility.id):
             prepare_independent_facility_queue(world, queue_id, minute=minute, resource=False)
             queue = queue_state["queues"][queue_id]
-            point = point_for_queue(world, queue_id)
-            if point is None:
+            if point_for_queue(world, queue_id) is None:
                 raise StateInvariantError(f"service queue {queue_id!r} lost its signed point")
             while queue["queued_request_ids"]:
                 if progress_physical_queue_positions(
                     world, facility.id, resource=False, minute=minute, queue_id=queue_id
                 ):
                     break
-                if (
-                    len(queue["active_request_ids"])
-                    >= physical_service_capacity(
-                        world, facility.id, point.service_capacity, queue_id
-                    )
-                    or len(facility.active_agent_ids) >= facility_limit
-                ):
-                    request_id = queue["queued_request_ids"][0]
-                    mark_stall(world, queue_id, request_id, "capacity")
+                event_id = self._serve_independent_head(facility.id, queue_id, minute, rng)
+                if event_id is None:
                     break
-                if progress_physical_queue_head_to_service(
-                    world, facility.id, resource=False, minute=minute, queue_id=queue_id
-                ):
-                    break
-                request_id = queue["queued_request_ids"][0]
-                request = queue_state["requests"][request_id]
-                agent_id = request["agent_id"]
-                queue_task = world.active_tasks.get(request["queue_task_id"])
-                if queue_task is None or queue_task.kind != "toilet_queue":
-                    raise StateInvariantError("independent toilet queue lost its active task")
-                queue_wait = minute - queue_task.start_minute
-                if queue_wait < 0:
-                    raise StateInvariantError("toilet queue time cannot be in the future")
-                rng_key = (
-                    "toilet-service",
-                    facility.id,
-                    agent_id,
-                    "minute",
-                    minute,
-                    self.policy_version,
-                    "duration",
-                    queue_id,
-                )
-                draw = rng.random(*rng_key)
-                if not 0.0 <= draw < 1.0:
-                    raise ValueError("keyed RNG draw must be between zero and one")
-                duration_span = self.max_service_minutes - self.min_service_minutes + 1
-                service_minutes = min(
-                    self.max_service_minutes,
-                    self.min_service_minutes + int(draw * duration_span),
-                )
-                due_minute = minute + service_minutes
-                if due_minute >= world.duration_minutes:
-                    mark_stall(world, queue_id, request_id, "run_end")
-                    break
-                required_staff_skills = set(point.access.required_staff_skills)
-                staff_member = (
-                    next(
-                        (
-                            person
-                            for person in sorted(world.staff.values(), key=lambda item: item.id)
-                            if required_staff_skills <= set(person.skills)
-                            and person.zone_id == facility.zone_id
-                            and person.active_task_id is None
-                            and staff_is_available(world, person.id)
-                            and staff_dynamics_is_available(world, person.id, minute)
-                        ),
-                        None,
-                    )
-                    if required_staff_skills
-                    else None
-                )
-                if required_staff_skills and staff_member is None:
-                    mark_stall(world, queue_id, request_id, "staff")
-                    break
-                sequence, event_id, task_id = self._allocate_service_ids()
-                task = ActiveTask(
-                    id=task_id,
-                    kind="toilet_service",
-                    agent_id=agent_id,
-                    resource_id=facility.id,
-                    start_minute=minute,
-                    due_minute=due_minute,
-                    staff_id=staff_member.id if staff_member is not None else None,
-                )
-                event = ScheduledEvent(
-                    event_id=event_id,
-                    kind=EventKind.COMPLETION,
-                    due_minute=due_minute,
-                    priority=0,
-                    sequence=sequence,
-                    event_type="toilet_service_complete",
-                    payload={
-                        "facility_id": facility.id,
-                        "agent_id": agent_id,
-                        "task_id": task_id,
-                        "staff_id": staff_member.id if staff_member is not None else None,
-                    },
-                    source_id=task_id,
-                    causation_id=queue_task.id,
-                    provenance={
-                        "source_type": "assumption",
-                        "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
-                        "policy_version": self.policy_version,
-                        "duration_distribution": "discrete_uniform_inclusive",
-                        "minimum_minutes": self.min_service_minutes,
-                        "maximum_minutes": self.max_service_minutes,
-                        "service_minutes": service_minutes,
-                        "queue_wait_minutes": queue_wait,
-                        "requested_at": queue_task.start_minute,
-                        "service_started_at": minute,
-                        "rng_key": list(rng_key),
-                        "rng_draw": draw,
-                        "queue_id": queue_id,
-                    },
-                )
-                if agent_id not in facility.queue_agent_ids:
-                    raise StateInvariantError(
-                        "independent toilet request is missing from facility projection"
-                    )
-                facility.queue_agent_ids.remove(agent_id)
-                facility.active_agent_ids.append(agent_id)
-                del world.active_tasks[queue_task.id]
-                world.active_tasks[task.id] = task
-                if staff_member is not None:
-                    staff_member.active_task_id = task.id
-                    staff_member.work_queue[:] = [task.id]
-                    staff_member.busy_until = task.due_minute
-                world.agents[agent_id].activity = Activity.IN_SERVICE
-                world.agents[agent_id].target_id = facility.id
-                world.schedule_event(event)
-                active_request = start_facility_queue_service(world, request_id, task.id)
-                record_queue_transition(
-                    world,
-                    active_request,
-                    transition="service_started",
-                    task_id=task.id,
-                    wait_minutes=queue_wait,
-                    causation_id=event.event_id,
-                )
-                self._record_queue_wait(queue_wait)
-                started.append(event)
+                started.append(world.event_queue.find(event_id))
         return started
+
+    @kernel_first("toilet", "serve_independent_head")
+    def _serve_independent_head(
+        self, facility_id: str, queue_id: str, minute: int, rng: KeyedRandom
+    ) -> str | None:
+        """The head of one independent queue starts its service: the event's ID, or None to stop."""
+        world = self.world
+        facility = world.facilities[facility_id]
+        queue_state = world.model_state[FACILITY_QUEUES_STATE_KEY]
+        queue = queue_state["queues"][queue_id]
+        point = point_for_queue(world, queue_id)
+        facility_limit = min(facility.capacity, facility.working_units)
+        if (
+            len(queue["active_request_ids"])
+            >= physical_service_capacity(world, facility.id, point.service_capacity, queue_id)
+            or len(facility.active_agent_ids) >= facility_limit
+        ):
+            request_id = queue["queued_request_ids"][0]
+            mark_stall(world, queue_id, request_id, "capacity")
+            return None
+        if progress_physical_queue_head_to_service(
+            world, facility.id, resource=False, minute=minute, queue_id=queue_id
+        ):
+            return None
+        request_id = queue["queued_request_ids"][0]
+        request = queue_state["requests"][request_id]
+        agent_id = request["agent_id"]
+        queue_task = world.active_tasks.get(request["queue_task_id"])
+        if queue_task is None or queue_task.kind != "toilet_queue":
+            raise StateInvariantError("independent toilet queue lost its active task")
+        queue_wait = minute - queue_task.start_minute
+        if queue_wait < 0:
+            raise StateInvariantError("toilet queue time cannot be in the future")
+        rng_key = (
+            "toilet-service",
+            facility.id,
+            agent_id,
+            "minute",
+            minute,
+            self.policy_version,
+            "duration",
+            queue_id,
+        )
+        draw = rng.random(*rng_key)
+        if not 0.0 <= draw < 1.0:
+            raise ValueError("keyed RNG draw must be between zero and one")
+        duration_span = self.max_service_minutes - self.min_service_minutes + 1
+        service_minutes = min(
+            self.max_service_minutes,
+            self.min_service_minutes + int(draw * duration_span),
+        )
+        due_minute = minute + service_minutes
+        if due_minute >= world.duration_minutes:
+            mark_stall(world, queue_id, request_id, "run_end")
+            return None
+        required_staff_skills = set(point.access.required_staff_skills)
+        staff_member = (
+            next(
+                (
+                    person
+                    for person in sorted(world.staff.values(), key=lambda item: item.id)
+                    if required_staff_skills <= set(person.skills)
+                    and person.zone_id == facility.zone_id
+                    and person.active_task_id is None
+                    and staff_is_available(world, person.id)
+                    and staff_dynamics_is_available(world, person.id, minute)
+                ),
+                None,
+            )
+            if required_staff_skills
+            else None
+        )
+        if required_staff_skills and staff_member is None:
+            mark_stall(world, queue_id, request_id, "staff")
+            return None
+        sequence, event_id, task_id = self._allocate_service_ids()
+        task = ActiveTask(
+            id=task_id,
+            kind="toilet_service",
+            agent_id=agent_id,
+            resource_id=facility.id,
+            start_minute=minute,
+            due_minute=due_minute,
+            staff_id=staff_member.id if staff_member is not None else None,
+        )
+        event = ScheduledEvent(
+            event_id=event_id,
+            kind=EventKind.COMPLETION,
+            due_minute=due_minute,
+            priority=0,
+            sequence=sequence,
+            event_type="toilet_service_complete",
+            payload={
+                "facility_id": facility.id,
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "staff_id": staff_member.id if staff_member is not None else None,
+            },
+            source_id=task_id,
+            causation_id=queue_task.id,
+            provenance={
+                "source_type": "assumption",
+                "source_id": "ASM-TOILET-SERVICE-DURATION-V1",
+                "policy_version": self.policy_version,
+                "duration_distribution": "discrete_uniform_inclusive",
+                "minimum_minutes": self.min_service_minutes,
+                "maximum_minutes": self.max_service_minutes,
+                "service_minutes": service_minutes,
+                "queue_wait_minutes": queue_wait,
+                "requested_at": queue_task.start_minute,
+                "service_started_at": minute,
+                "rng_key": list(rng_key),
+                "rng_draw": draw,
+                "queue_id": queue_id,
+            },
+        )
+        if agent_id not in facility.queue_agent_ids:
+            raise StateInvariantError(
+                "independent toilet request is missing from facility projection"
+            )
+        facility.queue_agent_ids.remove(agent_id)
+        facility.active_agent_ids.append(agent_id)
+        del world.active_tasks[queue_task.id]
+        world.active_tasks[task.id] = task
+        if staff_member is not None:
+            staff_member.active_task_id = task.id
+            staff_member.work_queue[:] = [task.id]
+            staff_member.busy_until = task.due_minute
+        world.agents[agent_id].activity = Activity.IN_SERVICE
+        world.agents[agent_id].target_id = facility.id
+        world.schedule_event(event)
+        active_request = start_facility_queue_service(world, request_id, task.id)
+        record_queue_transition(
+            world,
+            active_request,
+            transition="service_started",
+            task_id=task.id,
+            wait_minutes=queue_wait,
+            causation_id=event.event_id,
+        )
+        self._record_queue_wait(queue_wait)
+        return event.event_id
 
     def _queue_task(self, facility_id: str, agent_id: str) -> ActiveTask:
         matches = [

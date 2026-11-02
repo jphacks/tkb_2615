@@ -38,6 +38,10 @@ class _MetricSink:
     def capture_metric(self, world: Any, *, minute: int | None = None) -> None:
         self.metrics.capture(world, minute=minute)
 
+    # rules/tick.rs calls rules/metrics.rs's capture on `self.metrics` while the method is this one,
+    # so a subclass or a patch that changes it is called.
+    capture_metric_as_defined = capture_metric
+
     def record_decision(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 

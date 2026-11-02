@@ -1283,7 +1283,7 @@ fn admit_inner<'py>(world: &Bound<'py, PyAny>, minute: i64) -> PyResult<Bound<'p
 }
 
 #[pyfunction]
-fn admit_pending_arrivals<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn admit_pending_arrivals<'py>(world: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let minute = exact_int(minute)?;
     admit_inner(world, minute)
 }
@@ -2490,6 +2490,7 @@ fn queue_departures<'py>(
     match admit_inner(world, minute) {
         Ok(_) => {}
         Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            crate::core::census::caught(py, "__wrapped__ admit_pending_arrivals (after writes)", &error);
             py.import("sheltersim.domain.population")?.getattr("admit_pending_arrivals")?.getattr("__wrapped__")?.call1((world, minute))?;
         }
         Err(error) => return Err(error),

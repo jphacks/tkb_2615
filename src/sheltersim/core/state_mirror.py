@@ -715,6 +715,7 @@ OWNED_NAMESPACES: dict[str, tuple[str, str]] = {
     "geometry_overlay_v1": ("population", "ROW"),
     "resource_service_v1": ("resource_service", "ROW"),
     "effect_program_v1": ("effect_program", "ROW"),
+    "facility_queues_v1": ("facility_queues", "ROW"),
 }
 
 # The same for a field of WorldState that is not in model_state. A whole assignment to such a field

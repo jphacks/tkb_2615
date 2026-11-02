@@ -39,6 +39,7 @@ use crate::state::entities::{entities_of, EntityStore};
 use crate::state::social_propagation::{ContactRecord, SocialRow, NAME, SCHEMA_VERSION};
 use crate::Unsupported;
 
+#[track_caller]
 fn unsupported<T>(reason: &'static str) -> PyResult<T> {
     Err(Unsupported::new_err(reason))
 }
@@ -429,7 +430,7 @@ fn id_bytes<'a>(input: &'a Input<'_>) -> &'a [u8] {
 
 /// `_social_propagation` of the update phase (experiments/phases/segments.py).
 #[pyfunction]
-fn update_social_propagation<'py>(
+pub(crate) fn update_social_propagation<'py>(
     controller: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     view: &Bound<'py, PyAny>,

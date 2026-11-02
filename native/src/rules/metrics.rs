@@ -10,10 +10,11 @@
 
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 
 use crate::core::mathx::py_sum;
-use crate::core::row::{attribute, exact_dict, exact_int, exact_str, namespace_is_absent, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, namespace_is_absent, unsupported};
 use crate::core::world_core::{field_mirror_of, NamespaceMirror};
 use crate::rules::staff::{open_waits, OpenWaits};
 use crate::state::entities::{entities_of, EntityStore};
@@ -319,7 +320,82 @@ fn kpi_values<'py>(world: &Bound<'py, PyAny>, snapshot: &Bound<'py, PyAny>) -> P
     Ok(values)
 }
 
+/// What `capture` makes a snapshot of: the class and its fields, in the order of the dataclass.
+struct SnapshotClass {
+    class: Py<PyAny>,
+    new: Py<PyAny>,
+    fields: Vec<Py<PyString>>,
+}
+
+static SNAPSHOT: GILOnceCell<SnapshotClass> = GILOnceCell::new();
+
+/// `MetricsRecorder.capture` of the minute that is the world's, for the driver's `_MetricSink`: all
+/// of it, or Unsupported with nothing changed and the Python rule then raises or does what's left.
+#[pyfunction]
+pub(crate) fn capture<'py>(world: &Bound<'py, PyAny>, recorder: &Bound<'py, PyAny>, minute: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let class = SNAPSHOT.get_or_try_init(py, || -> PyResult<SnapshotClass> {
+        let class = py.import("sheltersim.experiments.metrics")?.getattr("MetricSnapshot")?;
+        let fields = class.getattr("__dataclass_fields__")?.downcast_into::<PyDict>()?;
+        let fields = fields.keys().iter().map(|name| Ok(name.downcast_into::<PyString>()?.unbind())).collect::<PyResult<Vec<_>>>()?;
+        Ok(SnapshotClass { class: class.unbind(), new: py.import("builtins")?.getattr("object")?.getattr("__new__")?.unbind(), fields })
+    })?;
+    let sample = exact_int(minute)?;
+    if exact_int(&attribute(world, intern!(py, "minute_index"))?)? != sample {
+        return unsupported("the metric minute is not the world's");
+    }
+    let unsettled = world.call_method0(intern!(py, "unsettled_support_requests"))?;
+    let unsettled = match unsettled.downcast_exact::<PyList>() {
+        Ok(list) => list.clone(),
+        Err(_) => PyList::new(py, unsettled.try_iter()?.collect::<PyResult<Vec<_>>>()?)?,
+    };
+    let values = snapshot_fields(world, &unsettled, minute)?;
+    if values.len() != class.fields.len() {
+        return unsupported("the snapshot has other fields");
+    }
+    let snapshots = attribute(recorder, intern!(py, "snapshots"))?;
+    let snapshots = exact_list(&snapshots)?;
+    if let Some(last) = snapshots.len().checked_sub(1) {
+        if exact_int(&attribute(&snapshots.get_item(last)?, intern!(py, "minute_index"))?)? >= sample {
+            return unsupported("metric snapshots must have strictly increasing minutes");
+        }
+    }
+    let resources = crate::rules::resources::metric_values(world, None)?;
+    let kept = attribute(recorder, intern!(py, "resource_snapshots"))?;
+    let row = match &resources {
+        None if !kept.is_none() => return unsupported("the ledger was removed"),
+        None => None,
+        Some(_) if kept.is_none() && !snapshots.is_empty() => return unsupported("the ledger came late"),
+        Some(resources) => {
+            let row = PyDict::new(py);
+            row.set_item(intern!(py, "minute_index"), minute)?;
+            row.update(resources.as_mapping())?;
+            Some(row)
+        }
+    };
+    if !kept.is_none() {
+        exact_list(&kept)?;
+    }
+    let snapshot = class.new.bind(py).call1((class.class.bind(py),))?;
+    for (name, value) in class.fields.iter().zip(values.iter()) {
+        // SAFETY: all three are live objects; the function is in the stable ABI and sets an error
+        // on failure. The dataclass is frozen: this is what its `__init__` does through `object`.
+        if unsafe { pyo3::ffi::PyObject_GenericSetAttr(snapshot.as_ptr(), name.as_ptr(), value.as_ptr()) } != 0 {
+            return Err(PyErr::fetch(py));
+        }
+    }
+    if let Some(row) = row {
+        if kept.is_none() {
+            recorder.setattr(intern!(py, "resource_snapshots"), PyList::new(py, [row])?)?;
+        } else {
+            exact_list(&kept)?.append(row)?;
+        }
+    }
+    snapshots.append(snapshot)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(capture, m)?)?;
     m.add_function(wrap_pyfunction!(snapshot_fields, m)?)?;
     m.add_function(wrap_pyfunction!(kpi_values, m)?)?;
     Ok(())

@@ -177,9 +177,9 @@ python benchmarks/first_difference.py A B
 ~~~
 
 - 段階ごとに、`model_state`の名前空間、人、作業、イベントの列、イベント記録などの部分ごとのdigestを書きます。比べると、最初に違った分、段階、部分を示し、そこまでもう一度実行して、違う値をJSONのパスと浮動小数点の16進で示します。
-- `--both`は`SHELTERSIM_NATIVE=1`と`=0`で動かして比べます。
+- `--both`は`SHELTERSIM_NATIVE=1`と`=0`で動かして比べます。Rustの側はRunと同じ経路（`native/src/rules/tick.rs`のdriver）を、段階の間で見ます（`tick_probe.install(..., on_driver=True)`）。`tick_probe.install`の既定と`benchmarks/rule_shadow`は`phase_handler`の経路を動かすので、driverの比較にはなりません。
 - `--draws`は、乱数の抽選ごとに鍵と値、比べた相手の値を記録して比べます。確率がわずかに違っても比較の結果が変わらなければ世界もハッシュも変わらないので、確率の式を移すときはこれを使います。Rustの中の抽選は記録されないので、Rustの確率の式は、レーンの文書の手順で`tests/integration/test_native_kernels.py`にビット単位の比較を足して確かめます。
-- ハッシュは、kernelが動いたことを示しません。`Unsupported`ならPythonが動いて同じハッシュになるからです。kernelを足したら、`benchmarks/rule_shadow`（kernelとPythonの規則を毎回比べ、`Unsupported`を理由ごとに数える）を同じ手順で通し、kernelが動いた回数を確かめます。手順は[lanes/p5-template-namespace.md](rust-port/lanes/p5-template-namespace.md)に書きます。
+- ハッシュは、kernelが動いたことを示しません。`Unsupported`ならPythonが動いて同じハッシュになるからです。kernelを足したら、`benchmarks/rule_shadow`（kernelとPythonの規則を毎回比べ、`Unsupported`を理由ごとに数える）を同じ手順で通し、kernelが動いた回数を確かめます。手順は[lanes/p5-template-namespace.md](rust-port/lanes/p5-template-namespace.md)に書きます。driverの経路も含めて、すべての`Unsupported`を作られた行と理由ごとに数えるには`benchmarks/rule_shadow/refusal_census.py`（`SHELTERSIM_REFUSAL_CENSUS`）を使います。
 - これらのフックはベンチマークの側にあり、`src/`には何も足しません。`--draws`や`--reverse`は、`--expect`と同じ最終のハッシュになるはずです。ならなければ不具合として調べます。
 - digestは、辞書の順序を区別しません（キーでそろえた正規のJSONです）。順序に頼る処理は`--reversed-order`で確かめます。追記だけの履歴の古い項目の書き換えは、一定の間隔（`--full-every-minutes`）でしか見えません。
 

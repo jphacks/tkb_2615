@@ -4,7 +4,6 @@
 //! (docs/rust-port/lanes/m4-service.md).
 //!
 //! What goes to Python, before anything is written:
-//! - an independent FIFO (`facility_queues_v1`), which no 7-day Run has;
 //! - `cancel` and `interrupt_for_staff`, which no 7-day Run reaches;
 //! - anything not plainly what the Python rule accepts, such as a reservation ID in use.
 
@@ -20,6 +19,10 @@ use crate::core::mathx::py_max;
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, map_set, unsupported, Field};
 use crate::core::value::V;
 use crate::core::world_core::{field_mirror_of, raw_dict_get, NamespaceMirror};
+use crate::rules::facility_queues::{
+    choose_queue_id, has_independent, point_of, position_in, request_of_task, transition_row, with_queues, write_enqueue, write_finish, write_stall,
+    write_start, write_transition,
+};
 use crate::rules::movement::KEY as MOVEMENT_KEY;
 use crate::rules::movement_geometry::Geo;
 use crate::rules::queues::head_to_service;
@@ -28,12 +31,12 @@ use crate::rules::social_network::mapping_get;
 use crate::rules::staff_dynamics::{is_available, is_available_now, staff_status};
 use crate::state::entities::{entities_of, raw_setattr, Activity, EntityStore};
 use crate::state::events::{is_stable_id, EventKind, EventRef, EventRow, EventStatus, EventWriter};
+use crate::state::facility_queues::QueueRequest;
 use crate::state::metric_state::MetricRow;
 use crate::state::resource_ledger::{held_mirror as ledger_mirror, resource_index, LedgerRow};
 use crate::state::resource_service::{held_mirror, RequestRecord, ServiceRow, Stall, StallRecord};
 use crate::Unsupported;
 
-const QUEUES_KEY: &str = "facility_queues_v1";
 const OPERATIONAL_KEY: &str = "operational_events_v1";
 const WATER: &str = "water_ml";
 const FOOD: &str = "food_meal_units";
@@ -106,16 +109,14 @@ struct Manager<'py> {
 }
 
 impl<'py> Manager<'py> {
-    /// The manager's world and config, or Unsupported where an independent FIFO may be.
+    /// The manager's world and config.
     fn of(manager: &Bound<'py, PyAny>) -> PyResult<Self> {
         let py = manager.py();
         let world = attribute(manager, intern!(py, "world"))?;
         let config = attribute(manager, intern!(py, "config"))?;
         exact_dict(&config)?;
         let table = attribute(&world, intern!(py, "model_state"))?;
-        if exact_dict(&table)?.contains(QUEUES_KEY)? {
-            return unsupported("an independent FIFO may be here");
-        }
+        exact_dict(&table)?;
         Ok(Self { world, config, table })
     }
 
@@ -408,14 +409,19 @@ pub(crate) fn set_agent<'py>(
 /// The facilities `arbitrate` has anything to do at, in ID order, as `(facility, resource_id)`. An
 /// empty queue does nothing in the Python rule.
 #[pyfunction]
-fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
+pub(crate) fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
+    // An independent queue of a facility whose list says nothing has its say in the Python rule.
+    let waiting = with_queues(&manager.world, |row| {
+        Ok(row.queues.values().filter(|queue| !queue.queued_request_ids.is_empty()).map(|queue| queue.facility_id.clone()).collect::<Vec<_>>())
+    })?
+    .unwrap_or_default();
     let mut due: Vec<(Arc<str>, &'static str)> = EntityStore::with_rows(&entities_of(&manager.world)?, |rows| {
         Ok(rows
             .facilities
             .iter()
-            .filter(|(_, facility)| !facility.resource_queue_agent_ids.is_empty())
+            .filter(|(id, facility)| !facility.resource_queue_agent_ids.is_empty() || waiting.contains(id))
             .filter_map(|(id, facility)| resource_of(&facility.kind).map(|resource| (id.clone(), resource)))
             .collect())
     })?;
@@ -435,12 +441,103 @@ fn facilities_to_serve<'py>(manager: &Bound<'py, PyAny>) -> PyResult<Bound<'py, 
 
 /// One pass of `arbitrate`'s loop after the positions: the started event's ID, or None to stop.
 #[pyfunction]
-fn serve_head<'py>(
+pub(crate) fn serve_head<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource_id: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyString>>> {
+    let world = attribute(manager, intern!(manager.py(), "world"))?;
+    if has_independent(&world, exact_str(facility_id)?)? {
+        return unsupported("a facility with independent queues");
+    }
+    Ok(serve_one(manager, facility_id, resource_id, minute, None)?.0)
+}
+
+/// One pass of `_arbitrate_independent_facility`'s loop after the positions: the started event's
+/// ID or None to stop, and the head's wait as `(agent, reason)`.
+#[pyfunction]
+fn serve_independent_head<'py>(
+    manager: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    resource_id: &Bound<'py, PyAny>,
+    queue_id: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let py = manager.py();
+    let (started, stall) = serve_one(manager, facility_id, resource_id, minute, Some(exact_str(queue_id)?))?;
+    let stall = match stall {
+        Some((agent, reason)) => PyTuple::new(py, [PyString::new(py, &agent), PyString::new(py, reason)])?.into_any(),
+        None => py.None().into_bound(py),
+    };
+    let started = match started {
+        Some(started) => started.into_any(),
+        None => py.None().into_bound(py),
+    };
+    PyTuple::new(py, [started, stall])
+}
+
+/// `_record_independent_queue_stall`.
+#[pyfunction]
+fn record_independent_stall<'py>(
+    manager: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    stalls: &Bound<'py, PyAny>,
+    previous: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = manager.py();
+    let manager = Manager::of(manager)?;
+    let world = &manager.world;
+    let facility_name = exact_str(facility_id)?;
+    let waits = stalls.downcast_exact::<PyList>().map_err(|_| Unsupported::new_err("the stalls are not a list"))?;
+    if waits.is_empty() {
+        return Ok(());
+    }
+    let mut pairs: Vec<(Arc<str>, Arc<str>)> = Vec::with_capacity(waits.len());
+    for wait in waits.iter() {
+        let wait = wait.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("a stall is not a tuple"))?;
+        pairs.push((Arc::from(exact_str(&wait.get_item(0)?)?), Arc::from(exact_str(&wait.get_item(1)?)?)));
+    }
+    if !previous.is_none() {
+        let held = exact_dict(previous)?;
+        let (Some(agent), Some(reason)) = (held.get_item(intern!(py, "agent_id"))?, held.get_item(intern!(py, "reason"))?) else {
+            return unsupported("a stall record has another shape");
+        };
+        let (agent, reason) = (exact_str(&agent)?, exact_str(&reason)?);
+        if pairs.iter().any(|(known_agent, known_reason)| &**known_agent == agent && &**known_reason == reason) {
+            let table = exact_dict(&manager.table)?;
+            let Some(service) = table.get_item(intern!(py, "resource_service_v1"))? else {
+                return unsupported("no service state");
+            };
+            exact_dict(&service)?
+                .get_item(intern!(py, "stall_state"))?
+                .ok_or_else(|| Unsupported::new_err("no stall state"))?
+                .set_item(facility_id, previous)?;
+            return Ok(());
+        }
+    }
+    let mirror = held_mirror(world)?;
+    let metrics = metrics_of(world)?;
+    record_stall(world, &mirror, &metrics, manager.minute()?, facility_name, &pairs[0].0, &pairs[0].1)
+}
+
+/// The head of an independent queue, read when a pass starts.
+struct IndependentHead {
+    request: QueueRequest,
+    active_count: i64,
+    point_capacity: i64,
+    required_skills: Vec<Arc<str>>,
+}
+
+/// The two passes: a facility's own queue, or one independent queue of the facility.
+#[allow(clippy::type_complexity)]
+fn serve_one<'py>(
+    manager: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    resource_id: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+    queue_id: Option<&str>,
+) -> PyResult<(Option<Bound<'py, PyString>>, Option<(Arc<str>, &'static str)>)> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
     let world = &manager.world;
@@ -460,27 +557,75 @@ fn serve_head<'py>(
     let metrics = metrics_of(world)?;
     let writer = EventWriter::of(world)?;
     NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |_| Ok(()))?;
+    let geo = Geo::of(world)?;
+    let head = match queue_id {
+        Some(queue_name) => {
+            let Some(point) = point_of(&geo, queue_name) else {
+                return unsupported("a queue with no signed point");
+            };
+            let read = with_queues(world, |row| {
+                let Some(queue) = row.queues.get(queue_name) else {
+                    return unsupported("no such queue");
+                };
+                let Some(first) = queue.queued_request_ids.first() else {
+                    return unsupported("the queue is empty");
+                };
+                let Some(request) = row.requests.get(&**first) else {
+                    return unsupported("a queue lists an unknown request");
+                };
+                Ok(IndependentHead {
+                    request: request.clone(),
+                    active_count: queue.active_request_ids.len() as i64,
+                    point_capacity: if &*point.facility_id == facility_name { point.service_capacity } else { -1 },
+                    required_skills: point.required_staff_skills.clone(),
+                })
+            })?;
+            let Some(read) = read else {
+                return unsupported("no queue state");
+            };
+            if read.point_capacity < 0 {
+                return unsupported("a queue's point is another facility's");
+            }
+            Some(read)
+        }
+        None => None,
+    };
 
     // `_queue_task` and what is read of the facility.
     let (agent_id, task_id, task_start, zone_id, configured, active_count) = EntityStore::with_rows(&store, |rows| {
         let Some(facility) = rows.facilities.get(facility_name) else {
             return unsupported("no such facility");
         };
-        let Some(agent_id) = facility.resource_queue_agent_ids.first() else {
-            return unsupported("the queue is empty");
-        };
-        let mut found = None;
-        for (_, task) in rows.active_tasks.iter() {
-            if &*task.kind == "resource_service_queue"
-                && task.agent_id.as_deref() == Some(&**agent_id)
-                && task.resource_id.as_deref() == Some(facility_name)
-            {
-                if found.is_some() {
-                    return unsupported("a person with two queue tasks");
+        let (agent_id, found) = match &head {
+            Some(head) => {
+                // `world.active_tasks.get(request["queue_task_id"])`, of the queue's kind.
+                let Some(task) = rows.active_tasks.get(&*head.request.queue_task_id).filter(|task| &*task.kind == "resource_service_queue") else {
+                    return unsupported("a queue's request lost its task");
+                };
+                if !facility.resource_queue_agent_ids.contains(&head.request.agent_id) {
+                    return unsupported("a request is missing from the facility's list");
                 }
-                found = Some((task.id.clone(), task.start_minute));
+                (&head.request.agent_id, Some((task.id.clone(), task.start_minute)))
             }
-        }
+            None => {
+                let Some(agent_id) = facility.resource_queue_agent_ids.first() else {
+                    return unsupported("the queue is empty");
+                };
+                let mut found = None;
+                for (_, task) in rows.active_tasks.iter() {
+                    if &*task.kind == "resource_service_queue"
+                        && task.agent_id.as_deref() == Some(&**agent_id)
+                        && task.resource_id.as_deref() == Some(facility_name)
+                    {
+                        if found.is_some() {
+                            return unsupported("a person with two queue tasks");
+                        }
+                        found = Some((task.id.clone(), task.start_minute));
+                    }
+                }
+                (agent_id, found)
+            }
+        };
         let Some((task_id, start)) = found else {
             return unsupported("a person with no queue task");
         };
@@ -508,14 +653,26 @@ fn serve_head<'py>(
         return unsupported("the task's ID is a reservation's");
     }
 
-    let stop = |reason: &str| -> PyResult<Option<Bound<'py, PyString>>> {
-        record_stall(world, &mirror, &metrics, minute_value, facility_name, &agent_id, reason)?;
-        Ok(None)
+    let stop = |reason: &'static str| -> PyResult<(Option<Bound<'py, PyString>>, Option<(Arc<str>, &'static str)>)> {
+        match (&head, queue_id) {
+            (Some(head), Some(queue_name)) => {
+                write_stall(world, queue_name, &head.request.request_id, if reason == "water_outage" { "outage" } else { reason })?;
+                Ok((None, Some((agent_id.clone(), reason))))
+            }
+            _ => {
+                record_stall(world, &mirror, &metrics, minute_value, facility_name, &agent_id, reason)?;
+                Ok((None, None))
+            }
+        }
     };
     if is_water && water_is_blocked(&manager.table, facility_name, &zone_id)? {
         return stop("water_outage");
     }
-    if active_count >= service_capacity(world, &manager.table, facility_name, configured)? {
+    let at_capacity = match &head {
+        Some(head) => head.active_count >= head.point_capacity || active_count >= configured,
+        None => active_count >= service_capacity(world, &manager.table, facility_name, configured)?,
+    };
+    if at_capacity {
         return stop("capacity");
     }
 
@@ -526,7 +683,10 @@ fn serve_head<'py>(
             .staff
             .iter()
             .filter(|(_, person)| {
-                person.zone_id == zone_id && person.skills.0.iter().any(|known| *known == skill) && person.active_task_id.is_none()
+                person.zone_id == zone_id
+                    && person.skills.0.iter().any(|known| *known == skill)
+                    && head.as_ref().is_none_or(|head| head.required_skills.iter().all(|wanted| person.skills.0.contains(wanted)))
+                    && person.active_task_id.is_none()
             })
             .map(|(_, person)| person.id.clone())
             .collect())
@@ -562,8 +722,8 @@ fn serve_head<'py>(
         return stop("run_end");
     }
     // Writes only what ends this pass.
-    if head_to_service(world, facility_id, true, minute_value)? {
-        return Ok(None);
+    if head_to_service(world, facility_id, true, minute_value, queue_id)? {
+        return Ok((None, None));
     }
 
     // The start of the service: everything here is checked before the first write.
@@ -589,6 +749,9 @@ fn serve_head<'py>(
     payload.insert(names.staff_id.clone(), V::Str(staff_id.clone()));
     let mut provenance = source.provenance(V::Str(names.service_scheduled.clone()));
     provenance.insert(names.service_minutes.clone(), V::Int(service_minutes));
+    if let Some(queue_name) = queue_id {
+        provenance.insert(Arc::from("queue_id"), V::Str(Arc::from(queue_name)));
+    }
     let Some(completion) = EventRow::new(
         completion_id.clone(),
         EventKind::Completion,
@@ -626,6 +789,23 @@ fn serve_head<'py>(
     if wait.abs() >= 1 << 53 {
         return unsupported("a wait too long for a float");
     }
+    // `record_queue_transition` after the start: the record takes the next sequence.
+    let transition = match &head {
+        Some(head) => Some(transition_row(
+            py,
+            &writer,
+            &head.request,
+            "service_started",
+            &task_id,
+            Some(wait),
+            Some(&completion_id),
+            None,
+            Some(head.point_capacity),
+            completion_sequence + 2,
+            minute_value,
+        )?),
+        None => None,
+    };
 
     // The ledger says last whether it takes it. It changes nothing when it doesn't.
     apply_planned(
@@ -653,7 +833,12 @@ fn serve_head<'py>(
     reservation_ids.call_method0(intern!(py, "sort"))?;
     clear_stall(&mirror, facility_name)?;
     let agent_text = PyString::new(py, &agent_id);
-    attribute(&facility_object, intern!(py, "resource_queue_agent_ids"))?.call_method1(intern!(py, "pop"), (0,))?;
+    let waiting_list = attribute(&facility_object, intern!(py, "resource_queue_agent_ids"))?;
+    if head.is_some() {
+        waiting_list.call_method1(intern!(py, "remove"), (&agent_text,))?;
+    } else {
+        waiting_list.call_method1(intern!(py, "pop"), (0,))?;
+    }
     attribute(&facility_object, intern!(py, "resource_active_agent_ids"))?.call_method1(intern!(py, "append"), (&agent_text,))?;
     let kind = if is_water { "resource_service_water" } else { "resource_service_food" };
     let task = active_task_class(py)?.call1((&task_text, kind, &agent_text, facility_id, minute_value, due, &staff_key))?;
@@ -671,6 +856,10 @@ fn serve_head<'py>(
     attribute(&staff_object, intern!(py, "work_queue"))?.set_item(PySlice::full(py), PyList::new(py, [&task_text])?)?;
     set_agent(world, &store, agent_text.as_any(), Activity::InService, Some(facility_id))?;
     writer.schedule(completion)?;
+    if let (Some(head), Some(queue_name), Some(transition)) = (&head, queue_id, &transition) {
+        write_start(world, &head.request.request_id, queue_name, &task_id)?;
+        write_transition(&writer, transition, minute_value)?;
+    }
     // `_record_queue_wait`.
     let key = if is_water { "water_service_wait" } else { "meal_service_wait" };
     NamespaceMirror::with_row_tree::<MetricRow, _>(&metrics, |row, tree| {
@@ -682,7 +871,7 @@ fn serve_head<'py>(
         let value = py_max(row.get(&*maximum).copied().unwrap_or(0.0), wait as f64);
         map_set(row, tree, &maximum, value)
     })?;
-    Ok(Some(PyString::new(py, &completion_id)))
+    Ok((Some(PyString::new(py, &completion_id)), None))
 }
 
 // ---- complete -----------------------------------------------------------------------------------
@@ -788,15 +977,42 @@ pub(crate) fn complete_event<'py>(manager: &Bound<'py, PyAny>, event: EventRef<'
 
     let source = Source::of(&manager)?;
     let resource_arc = if is_water { NAMES.water.clone() } else { NAMES.food.clone() };
+    let consume_sequence = writer.next_sequence()?;
     let audit = audit_row(
         &writer,
         &source,
         "consume",
-        writer.next_sequence()?,
+        consume_sequence,
         minute,
         operation_payload(&warehouse, &resource_arc, &task_arc, &agent_arc, quantity),
-        event_id,
+        event_id.clone(),
     )?;
+    // `finish_service` and `record_queue_transition`, with the record's next sequence.
+    let finishing = with_queues(world, |row| {
+        let Some(request) = request_of_task(row, task_id).cloned() else {
+            return Ok(None);
+        };
+        let Some(queue) = row.queues.get(&*request.queue_id) else {
+            return unsupported("no such queue");
+        };
+        // In the list it isn't removed from, the record gives its place.
+        let position = if &*request.status == "queued" { None } else { position_in(queue, &request.request_id) };
+        Ok(Some((request, position)))
+    })?
+    .flatten();
+    let finished = match finishing {
+        Some((request, position)) => {
+            let task_start = EntityStore::with_rows(&store, |rows| match rows.active_tasks.get(task_id) {
+                Some(task) => Ok(task.start_minute),
+                None => unsupported("no active task"),
+            })?;
+            let wait = task_start.checked_sub(request.requested_minute).ok_or_else(|| Unsupported::new_err("a wait out of range"))?;
+            let capacity = point_of(&*Geo::of(world)?, &request.queue_id).map(|point| point.service_capacity);
+            let row = transition_row(py, &writer, &request, "completed", task_id, Some(wait), Some(&event_id), position, capacity, consume_sequence + 1, minute)?;
+            Some((request, row))
+        }
+        None => None,
+    };
     let reservation_ids = service_list(&manager.table, intern!(py, "active_reservation_ids"))?;
     let facilities = attribute(world, intern!(py, "facilities"))?;
     let Some(facility) = raw_dict_get(&facilities, PyString::new(py, facility_id).as_any())? else {
@@ -850,6 +1066,10 @@ pub(crate) fn complete_event<'py>(manager: &Bound<'py, PyAny>, event: EventRef<'
     let need_name = if is_water { intern!(py, "hydration_need") } else { intern!(py, "hunger") };
     raw_setattr(&needs, need_name, relieved.into_pyobject(py)?.as_ptr())?;
     add_one(&metrics, if is_water { "water_service_completed_count" } else { "meal_service_completed_count" })?;
+    if let Some((request, row)) = &finished {
+        write_finish(world, request)?;
+        write_transition(&writer, row, minute)?;
+    }
     attribute(&facility, intern!(py, "resource_active_agent_ids"))?.call_method1(intern!(py, "remove"), (&agent_object,))?;
     // `_release_staff`.
     attribute(&staff, intern!(py, "work_queue"))?.call_method0(intern!(py, "clear"))?;
@@ -945,9 +1165,6 @@ fn request<'py>(
     if !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true())) {
         return unsupported("the world's whole validation is Python's");
     }
-    if queue_id.is_some_and(|queue| !queue.is_none()) {
-        return unsupported("an independent FIFO");
-    }
     let manager = Manager::of(manager)?;
     let world = &manager.world;
     let world_minute = manager.minute()?;
@@ -968,6 +1185,34 @@ fn request<'py>(
         Some(counter) => exact_int(&counter)?,
         None => 0,
     };
+    let given_queue = queue_id.filter(|queue| !queue.is_none()).map(exact_str).transpose()?;
+    let independent = has_independent(world, facility_name)?;
+    if given_queue.is_some() && !independent {
+        return unsupported("a queue ID of a facility without independent queues");
+    }
+    let chosen_queue = match (independent, given_queue) {
+        (false, _) => None,
+        (true, Some(queue)) if !queue.is_empty() => Some(queue.to_owned()),
+        (true, _) => choose_queue_id(world, facility_id, agent_id)?,
+    };
+    if independent && chosen_queue.is_none() {
+        return unsupported("no accessible independent queue");
+    }
+    let geo = Geo::of(world)?;
+    let point = match &chosen_queue {
+        Some(queue) => match point_of(&geo, queue) {
+            Some(point) if &*point.facility_id == facility_name => Some(point),
+            _ => return unsupported("no accessible independent queue"),
+        },
+        None => None,
+    };
+    let queue_tail = match &chosen_queue {
+        Some(queue) => with_queues(world, |row| match row.queues.get(&**queue) {
+            Some(queue) => Ok(queue.queued_request_ids.len() as i64 + 1),
+            None => unsupported("no such queue"),
+        })?,
+        None => None,
+    };
     let (zone, resource, queue_position) = EntityStore::with_rows(&store, |rows| {
         let (Some(agent), Some(facility)) = (rows.agents.get(agent_name), rows.facilities.get(facility_name)) else {
             return unsupported("no such agent or facility");
@@ -987,7 +1232,7 @@ fn request<'py>(
                 return unsupported("the person is at a facility");
             }
         }
-        Ok((agent.zone_id.clone(), resource, facility.resource_queue_agent_ids.len() as i64 + 1))
+        Ok((agent.zone_id.clone(), resource, queue_tail.unwrap_or(facility.resource_queue_agent_ids.len() as i64 + 1)))
     })?;
     // `_next_queue_task_id`.
     let task_id: Arc<str> = loop {
@@ -1006,14 +1251,44 @@ fn request<'py>(
     let queue = attribute(&facility, intern!(py, "resource_queue_agent_ids"))?;
     let active_tasks = attribute(world, intern!(py, "active_tasks"))?;
     let action = if resource == WATER { "fetch_water" } else { "collect_meal" };
+    let service_kind = if resource == WATER { "water" } else { "meal" };
+    let transition = match point {
+        Some(point) => {
+            let known = with_queues(world, |row| Ok(row.requests.contains_key(&*task_id)))?;
+            if known != Some(false) {
+                return unsupported("the request's ID is in use");
+            }
+            let request = QueueRequest {
+                request_id: task_id.clone(),
+                queue_id: point.queue_id.clone(),
+                service_point_id: point.id.clone(),
+                facility_id: point.facility_id.clone(),
+                agent_id: Arc::from(agent_name),
+                service_kind: Arc::from(service_kind),
+                requested_minute: world_minute,
+                status: Arc::from("queued"),
+                queue_task_id: task_id.clone(),
+                active_task_id: task_id.clone(),
+            };
+            let sequence = writer.next_sequence()?;
+            Some(transition_row(py, &writer, &request, "queued", &task_id, None, None, Some(queue_position), Some(point.service_capacity), sequence, world_minute)?)
+        }
+        None => None,
+    };
 
     // Write.
     counters.set_item(intern!(py, "resource_task"), counter)?;
     queue.call_method1(intern!(py, "append"), (agent_id,))?;
+    if let Some(point) = point {
+        write_enqueue(world, point, &task_id, &task_id, agent_name, service_kind, world_minute)?;
+    }
     let task_text = PyString::new(py, &task_id);
     let task = active_task_class(py)?.call1((&task_text, "resource_service_queue", agent_id, facility_id, world_minute, world_minute))?;
     active_tasks.set_item(&task_text, task)?;
     set_agent(world, &store, agent_id, Activity::Queued, Some(facility_id))?;
+    if let Some(transition) = &transition {
+        write_transition(&writer, transition, world_minute)?;
+    }
     append_outcome(
         py,
         &mirror,
@@ -1034,6 +1309,8 @@ fn request<'py>(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(facilities_to_serve, m)?)?;
     m.add_function(wrap_pyfunction!(serve_head, m)?)?;
+    m.add_function(wrap_pyfunction!(serve_independent_head, m)?)?;
+    m.add_function(wrap_pyfunction!(record_independent_stall, m)?)?;
     m.add_function(wrap_pyfunction!(complete, m)?)?;
     m.add_function(wrap_pyfunction!(record_request_outcome, m)?)?;
     m.add_function(wrap_pyfunction!(request, m)?)?;

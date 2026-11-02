@@ -27,6 +27,8 @@ use crate::rules::agent_dynamics::learn_facility_of;
 use crate::rules::body_state::record_social_event;
 use crate::rules::care_receipts::{record_transition, PlannedTransition};
 use crate::rules::movement::finish_movement;
+use crate::rules::population::admit_pending_arrivals;
+use crate::rules::population_lifecycle::admit_pending_returns;
 use crate::rules::social_interaction::apply_event;
 use crate::rules::social_network::observe_event;
 use crate::rules::travel::schedule_return;
@@ -187,6 +189,9 @@ struct Phase<'a, 'py> {
     table: &'static Table,
     module: Bound<'py, PyModule>,
     direct: bool,
+    /// The driver has checked that nothing the phase calls is patched, so it calls the kernels of
+    /// what follows the events without their Python entries.
+    driver: bool,
 }
 
 /// What a Rust function made of an event; None when it left it for Python, with nothing changed.
@@ -959,6 +964,32 @@ impl<'py> Phase<'_, 'py> {
         Ok(())
     }
 
+    fn admit_returns(&self) -> PyResult<()> {
+        let py = self.py();
+        if self.driver {
+            match admit_pending_returns(self.world, self.minute) {
+                Ok(_) => return Ok(()),
+                Err(error) if error.is_instance_of::<Unsupported>(py) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.controller.call_method1(intern!(py, "_admit_pending_returns"), (self.world, self.minute))?;
+        Ok(())
+    }
+
+    fn admit_arrivals(&self) -> PyResult<()> {
+        let py = self.py();
+        if self.driver {
+            match admit_pending_arrivals(self.world, self.minute) {
+                Ok(_) => return Ok(()),
+                Err(error) if error.is_instance_of::<Unsupported>(py) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.module.getattr(intern!(py, "admit_pending_arrivals"))?.call1((self.world, self.minute))?;
+        Ok(())
+    }
+
     fn run(&self) -> PyResult<()> {
         let py = self.py();
         let world = self.world;
@@ -986,9 +1017,9 @@ impl<'py> Phase<'_, 'py> {
                 controller.call_method1(intern!(py, "_interrupt_trips_of_event"), (world, outcome.event(py)?))?;
             }
         }
-        controller.call_method1(intern!(py, "_admit_pending_returns"), (world, self.minute))?;
+        self.admit_returns()?;
         self.sync_movement()?;
-        self.module.getattr(intern!(py, "admit_pending_arrivals"))?.call1((world, self.minute))?;
+        self.admit_arrivals()?;
         for outcome in outcomes.iter_mut().filter(applied) {
             if &*outcome.event_type == "information_contact_update" {
                 controller.call_method1(intern!(py, "_consider_social_contact_event"), (outcome.event(py)?,))?;
@@ -1004,6 +1035,29 @@ fn run_phase<'py>(
     controller: &Bound<'py, PyAny>,
     world: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    run_inner(controller, world, minute, false)
+}
+
+/// The phase for `rules/tick.rs`.
+pub(crate) fn run_for_driver<'py>(
+    controller: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    run_inner(controller, world, minute, true)
+}
+
+/// Whether a benchmark's shadow has asked for the rules' Python entries.
+pub(crate) fn python_entries() -> bool {
+    PYTHON_ENTRIES.load(Ordering::Relaxed)
+}
+
+fn run_inner<'py>(
+    controller: &Bound<'py, PyAny>,
+    world: &Bound<'py, PyAny>,
+    minute: &Bound<'py, PyAny>,
+    driver: bool,
 ) -> PyResult<()> {
     let py = world.py();
     let refuse = |error: PyErr| -> PyErr {
@@ -1037,6 +1091,7 @@ fn run_phase<'py>(
         table,
         module,
         direct: !PYTHON_ENTRIES.load(Ordering::Relaxed),
+        driver,
     };
     count(&COUNTS.phases_ran);
     phase.run().map_err(|error| {
