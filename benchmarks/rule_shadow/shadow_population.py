@@ -1,18 +1,17 @@
 """Whether the mirror's generation is right to stand in for reading the state, at every tick.
 
-The end-of-tick check of a Rust-owned namespace (core/tick_validation.py) trusts "no write reached
-it" where it used to encode the state and compare. Results don't depend on this unless a write gets
-past the generation, and then only a bad state would go unseen until the next save, so no hash
-would show it. At each TickValidationMemo.begin this keeps the canonical JSON of each namespace and
-of model_configs as it was at the last check, and:
+The end-of-tick check (native/src/rules/after_tick.rs) skips the rules of a namespace no write
+reached since its last passed check, by the generation of its mirror. Results don't depend on this
+unless a write gets past the generation, and then only a bad state would go unseen until the next
+save, so no hash would show it. At each check the kernel passes, this keeps the canonical JSON of
+each namespace and of model_configs, and at the next:
 
 - a state the memo calls unchanged must have the same bytes as at the last check;
 - a row must have the bytes of its tree;
-- the Python rule of each skipped check that doesn't read the clock must pass, for dynamics, whose
-  skip this lane added. The other skips only changed how they learn the state is the same.
+- the Python rule of the dynamics, whose skip doesn't read the clock, must pass when skipped.
 
 The bytes are the values compared. Writes the generation saw are counted, so a run with no write at
-all says so.
+all says so. It runs the kernel as shadow_after_tick.py does, past the shadows' Python path.
 """
 
 from __future__ import annotations
@@ -38,16 +37,17 @@ def prepare(output: str) -> None:
     from sheltersim.core import state_mirror, tick_validation
 
     recorder = Recorder(output, "population")
-    begin = tick_validation.TickValidationMemo.begin
+    rules = native.rules("after_tick")
+    kernel = rules.after_tick
     last: dict[int, dict[str, bytes | None]] = {}
 
-    def checked_begin(self: Any, world: Any) -> None:
-        seen = last.pop(id(self), None)
+    def checked(world: Any, memo: Any, _from_shadow: bool = False) -> None:
         now = {name: tick_validation.saved_json(world.model_state.get(name)) for name in NAMES}
         now["model_configs"] = tick_validation.saved_json(world.model_configs)
-        begin(self, world)
+        kernel(world, memo, True)
+        seen = last.get(id(memo))
         # One entry per live memo; a new one starts with nothing to compare.
-        last[id(self)] = now
+        last[id(memo)] = now
         recorder.seen["checks"] += 1
         table = world.model_state
         mirrors = getattr(table, "_mirrors", {})
@@ -74,23 +74,24 @@ def prepare(output: str) -> None:
                 recorder.differ(f"model_configs: the row differs at {world.minute_index}")
         if seen is None:
             return
+        unchanged = memo.facts()["unchanged"]
         for flag, name in (
-            ("presence_unchanged", "population_presence_v1"),
-            ("lifecycle_unchanged", "population_lifecycle_v1"),
-            ("dynamics_unchanged", "population_dynamics_v1"),
-            ("overlay_unchanged", "geometry_overlay_v1"),
-            ("configs_unchanged", "model_configs"),
+            ("presence", "population_presence_v1"),
+            ("lifecycle", "population_lifecycle_v1"),
+            ("dynamics", "population_dynamics_v1"),
+            ("overlay", "geometry_overlay_v1"),
+            ("configs", "model_configs"),
         ):
-            if not getattr(self, flag):
-                recorder.seen[f"{flag}.no"] += 1
+            if not unchanged[flag]:
+                recorder.seen[f"{flag}_unchanged.no"] += 1
                 if seen[name] != now[name]:
-                    recorder.seen[f"{flag}.written"] += 1
+                    recorder.seen[f"{flag}_unchanged.written"] += 1
                 continue
-            recorder.seen[f"{flag}.yes"] += 1
+            recorder.seen[f"{flag}_unchanged.yes"] += 1
             recorder.seen["bytes_compared"] += len(now[name] or b"")
             if seen[name] != now[name]:
-                recorder.differ(f"{flag} at {world.minute_index}, but its bytes changed")
-        if self.dynamics_unchanged:
+                recorder.differ(f"{flag} unchanged at {world.minute_index}, but its bytes changed")
+        if unchanged["dynamics"]:
             # Here: shadow_population_rules.py replaces this rule's kernel before it is imported.
             from sheltersim.domain.population import validate_population_dynamics_state
 
@@ -99,4 +100,4 @@ def prepare(output: str) -> None:
             except Exception as error:  # noqa: BLE001 - only compared with the skip
                 recorder.differ(f"dynamics check skipped, and the rule says: {error}")
 
-    tick_validation.TickValidationMemo.begin = checked_begin  # type: ignore[method-assign]
+    rules.after_tick = checked

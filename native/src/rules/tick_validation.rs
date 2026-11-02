@@ -20,7 +20,7 @@ use std::cell::RefCell;
 
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyDict, PyDictMethods, PyInt, PyList, PyString, PyTuple};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, str_value, unsupported};
@@ -33,6 +33,7 @@ use crate::state::resource_ledger::{held_mirror, LedgerRow};
 use crate::validation::{is_count, is_unit};
 
 const WATER_KIND: &str = "water_station";
+const PRESENCE: &str = "population_presence_v1";
 const MEAL_KIND: &str = "meal_distribution";
 
 /// Keeps the str objects read, so the `&str` of each stays valid for the whole call.
@@ -1120,8 +1121,110 @@ fn population_dynamics(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     Ok(true)
 }
 
+/// `validate_presence_state` (`contracts/presence.py`), the validator of the declared namespace
+/// `population_presence_v1`: true, or Unsupported for the contract and the rule to say. The parse
+/// of the contract is `rules/population.rs`' `presence_is_plain`, which refuses what it isn't sure of.
+#[pyfunction]
+fn validate_presence(world: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = world.py();
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let table = exact_dict(&table)?;
+    let Some(raw) = raw_dict_get(table, intern!(py, PRESENCE).as_any())? else {
+        // The declared check said what a missing namespace is; here there is nothing to read.
+        return unsupported("no presence state");
+    };
+    crate::rules::population::presence_is_plain(&raw)?;
+    let V::Map(state) = V::from_py(&raw)? else {
+        return unsupported("the presence state is not a mapping");
+    };
+    let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let agents = exact_dict(&agents)?;
+    let zones = attribute(world, intern!(py, "zones"))?;
+    let zones = exact_dict(&zones)?;
+    let known_zone = |zone: Option<&V>| -> PyResult<bool> {
+        Ok(match zone {
+            None | Some(V::Null) => true,
+            Some(V::Str(zone)) => zones.contains(&**zone)?,
+            Some(_) => false,
+        })
+    };
+    let empty = indexmap::IndexMap::new();
+    let people = match state.get("people") {
+        Some(V::Map(people)) => people,
+        _ => &empty,
+    };
+    for (key, person) in people {
+        let V::Map(person) = person else {
+            return unsupported("a presence record is not a mapping");
+        };
+        let agent_id = match person.get("agent_id") {
+            Some(V::Str(agent_id)) => agent_id,
+            _ => return unsupported("a presence record lacks its ID"),
+        };
+        let since = match person.get("since_minute") {
+            Some(V::Int(since)) => *since,
+            _ => return unsupported("a presence record lacks its minute"),
+        };
+        let admitted = matches!(person.get("status"), Some(V::Str(status)) if &**status == "admitted");
+        if key != agent_id
+            || since > minute
+            || admitted != agents.contains(&**key)?
+            || !known_zone(person.get("transition_zone_id"))?
+            || !known_zone(person.get("return_zone_id"))?
+        {
+            return unsupported("a presence record disagrees with the world");
+        }
+        if let Some(V::List(path)) = person.get("archive_path") {
+            // `value = world.model_state; value = value[part]`, through what is there now.
+            let mut value = table.clone().into_any();
+            for part in path {
+                let V::Str(part) = part else {
+                    return unsupported("an archive path holds another value");
+                };
+                let next = match value.downcast::<PyDict>() {
+                    Ok(dict) => dict.get_item(&**part)?,
+                    Err(_) => None,
+                };
+                let Some(next) = next else {
+                    return unsupported("a presence archive path is missing");
+                };
+                value = next;
+            }
+        }
+    }
+    for (key, _) in agents.iter() {
+        if !people.contains_key(exact_str(&key)?) {
+            return unsupported("the presence omits an admitted person");
+        }
+    }
+    if let Some(V::List(history)) = state.get("history") {
+        let mut ids: FxHashSet<&str> = FxHashSet::default();
+        let mut previous = -1;
+        for receipt in history {
+            let V::Map(receipt) = receipt else {
+                return unsupported("a presence receipt is not a mapping");
+            };
+            let (Some(V::Str(id)), Some(V::Str(agent_id)), Some(V::Int(at))) =
+                (receipt.get("transition_id"), receipt.get("agent_id"), receipt.get("minute"))
+            else {
+                return unsupported("a presence receipt lacks a field");
+            };
+            if !ids.insert(id) || !people.contains_key(&**agent_id) || *at < previous || *at > minute {
+                return unsupported("a presence receipt's identity, order or time disagrees");
+            }
+            if !known_zone(receipt.get("from_zone_id"))? || !known_zone(receipt.get("to_zone_id"))? {
+                return unsupported("a presence receipt names an unknown zone");
+            }
+            previous = *at;
+        }
+    }
+    Ok(true)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(entity_rules, m)?)?;
     m.add_function(wrap_pyfunction!(population_dynamics, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_presence, m)?)?;
     Ok(())
 }

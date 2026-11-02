@@ -184,7 +184,7 @@ class MetricsRecorder:
         snapshot = MetricSnapshot.from_world(world, minute=minute)
         if self.snapshots and snapshot.minute_index <= self.snapshots[-1].minute_index:
             raise ValueError("metric snapshots must have strictly increasing minutes")
-        resource_values = resource_metric_values(world, tick_memo=world.__dict__.get("_tick_memo"))
+        resource_values = resource_metric_values(world)
         if resource_values is None:
             if self.resource_snapshots is not None:
                 raise ValueError("resource ledger cannot be removed during metric capture")

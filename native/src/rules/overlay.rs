@@ -622,6 +622,17 @@ fn effective_total_zone_capacity(world: &Bound<'_, PyAny>, zone_id: &Bound<'_, P
     counted(world.py(), "effective_total_zone_capacity", result)
 }
 
+/// `effective_total_zone_capacity(world, zone_id, occupancy=occupancy)` for a caller in Rust
+/// (`rules/after_tick.rs`), without the Python entry's count.
+pub(crate) fn total_zone_capacity(world: &Bound<'_, PyAny>, zone_id: &Bound<'_, PyAny>, occupancy: i64) -> PyResult<Option<i64>> {
+    let Some(nominal) = nominal_of(world, zone_id)? else {
+        return Ok(None);
+    };
+    let found = capacity_of(world, exact_str(zone_id)?, nominal, Some(occupancy))?;
+    let total = found.effective.checked_add(found.room_capacity).and_then(|sum| sum.checked_add(found.retained_rooms));
+    total.map(Some).ok_or_else(|| Unsupported::new_err("a capacity out of range"))
+}
+
 /// `incoming_travelers`.
 #[pyfunction]
 #[pyo3(signature = (world, zone_id, *, excluding=None))]

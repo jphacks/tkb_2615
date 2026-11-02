@@ -298,27 +298,20 @@ def validate_simulator_extensions(
     world: WorldState,
     *,
     validate_event_history: bool = True,
-    tick_memo: Any = None,
     history_memo: Any = None,
 ) -> None:
     """Validate each extension independently for checkpoint and restore hooks.
 
     Per-tick validation passes ``validate_event_history=False``: append-only histories
-    are then checked only for records from the tick that just ended. With a tick_memo
-    it also skips what is proven unchanged (core/tick_validation.py). A save's complete
+    are then checked only for records from the tick that just ended. A save's complete
     validation passes a history_memo to skip unchanged old entries
     (core/save_validation.py).
     """
-    if tick_memo is not None and tick_memo.configs_unchanged:
-        required = tick_memo.required_states
-    else:
-        required = {
-            key.removeprefix("simulator:")
-            for key in simulator_signatures(world.model_configs)
-            if key.startswith("simulator:")
-        }
-        if tick_memo is not None:
-            tick_memo.required_states = required
+    required = {
+        key.removeprefix("simulator:")
+        for key in simulator_signatures(world.model_configs)
+        if key.startswith("simulator:")
+    }
     if (
         TEMPORARY_SPACES_STATE_KEY in world.model_state
         and TEMPORARY_SPACES_STATE_KEY not in required
@@ -341,16 +334,11 @@ def validate_simulator_extensions(
         validate_body_state(
             world,
             validate_event_history=validate_event_history,
-            tick_memo=tick_memo,
             history_memo=history_memo,
         )
-    if (tick_memo is None or not tick_memo.dynamics_unchanged) and not rust_validated(
-        world, "population_dynamics_v1"
-    ):
+    if not rust_validated(world, "population_dynamics_v1"):
         validate_population_dynamics_state(world)
-    if (tick_memo is None or not tick_memo.lifecycle_unchanged) and not rust_validated(
-        world, "population_lifecycle_v1"
-    ):
+    if not rust_validated(world, "population_lifecycle_v1"):
         validate_population_lifecycle_state(world)
     if not rust_validated(world, "social_network_v1"):
         validate_social_network_state(world)
@@ -362,9 +350,7 @@ def validate_simulator_extensions(
         validate_temporary_spaces_state(world)
     if not rust_validated(world, "movement_v1"):
         validate_movement_runtime_state(world)
-    if (tick_memo is None or not tick_memo.overlay_unchanged) and not rust_validated(
-        world, "geometry_overlay_v1"
-    ):
+    if not rust_validated(world, "geometry_overlay_v1"):
         validate_geometry_overlay_state(world)
     if not rust_validated(world, "facility_queues_v1"):
         validate_facility_queue_state(world)
@@ -377,7 +363,6 @@ def validate_simulator_extensions(
         validate_shared_operations_state(
             world,
             validate_event_history=validate_event_history,
-            tick_memo=tick_memo,
             history_memo=history_memo,
         )
 
@@ -620,10 +605,10 @@ def _install_after_tick_kernel() -> None:
         (state_mirror, "_RUST_VALIDATORS"),
         (runtime, "validate_declared_states"),
         (effects, "validate_effect_program_state"),
-        (tick_validation.TickValidationMemo, "begin"),
-        (tick_validation.TickValidationMemo, "commit"),
-        (tick_validation.TickValidationMemo, "requests_to_check"),
+        (tick_validation, "tick_plan"),
+        (tick_validation, "body_config_ids"),
         (body_state, "_ROWS_VALID"),
+        (body_state, "validate_body_config"),
         (common_operations, "_TICK_VALID"),
     ]
     native.rules("after_tick").install(
@@ -632,12 +617,7 @@ def _install_after_tick_kernel() -> None:
         body_state._ROWS_VALID,
         common_operations._TICK_VALID,
         native.rules("effects").validate_state,
-        (
-            validate_population_lifecycle_state,
-            validate_geometry_overlay_state,
-            validate_facility_queue_state,
-            validate_temporary_spaces_state,
-        ),
+        (tick_validation.tick_plan, tick_validation.body_config_ids),
         (world_module.InitialNeedProfile, world_module.NeedState),
     )
 

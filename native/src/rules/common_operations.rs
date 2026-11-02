@@ -406,7 +406,12 @@ fn record_other<'py>(world: &Bound<'py, PyAny>, record: &Bound<'py, PyAny>) -> P
         state.set_item("history_truncated", true)?;
         history.del_item(PySlice::new(py, 0, (history.len()? - MAX_HISTORY) as isize, 1))?;
     }
-    Ok(())
+    // Checked above as a tick's check would check it, so that check needs nothing more of it but
+    // the staff completions, which it reads again (`state/shared_operations.rs`).
+    NamespaceMirror::with_row::<SharedOperationsRow, _>(&mirror, |row| {
+        row.history.appended_passed(event_id);
+        Ok(())
+    })
 }
 
 fn text_of(value: &Bound<'_, PyAny>) -> Option<String> {

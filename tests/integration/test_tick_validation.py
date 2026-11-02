@@ -453,18 +453,6 @@ def test_a_memo_does_not_carry_over_when_the_clock_goes_back(finished_world) -> 
     assert before is None or world.__dict__["_tick_memo"] is not before
 
 
-def test_changing_the_agents_checks_settled_requests_again(finished_world) -> None:
-    """A settled request's rules read the Agent IDs, so a change of IDs rereads them all."""
-    if not native.available():
-        pytest.skip("the plain validation reads every request")
-    world = _checked_world(finished_world)
-    memo = world.__dict__["_tick_memo"]
-    memo.begin(world)
-    assert len(memo.requests_to_check(world.support_requests)) < len(world.support_requests)
-    memo.agents_unchanged = False
-    assert len(memo.requests_to_check(world.support_requests)) == len(world.support_requests)
-
-
 def test_the_validation_leaves_the_saved_state_unchanged(finished_world) -> None:
     """The memo and the write reports are not state: the world's JSON is the same."""
     world = _restored(finished_world)
@@ -523,18 +511,11 @@ def test_a_reopened_request_is_seen_in_the_order_of_the_dict(finished_world) -> 
     request.status = SupportRequestStatus.PENDING
     _assert_scans_agree(world)
     assert request in _unsettled_scan(world)
-    # The check rejects the state (no timeout event); a kept memo must not hide it either way.
-    memo = world.__dict__.get("_tick_memo")
-    if memo is not None:
-        memo.begin(world)
-        memo.requests_to_check(world.support_requests)
-        memo.commit(world)
-        _assert_scans_agree(world)
-        assert memo._open_requests == [
-            item
-            for item in world.support_requests.values()
-            if item.status not in (SupportRequestStatus.RESOLVED, SupportRequestStatus.UNRESOLVED)
-        ]
+    # The check rejects the state (no timeout event), and the memo goes with it.
+    with pytest.raises(StateInvariantError):
+        world.validate_after_tick()
+    assert "_tick_memo" not in world.__dict__
+    _assert_scans_agree(world)
 
 
 def test_an_added_request_is_seen_before_the_next_check(finished_world) -> None:
