@@ -118,7 +118,7 @@ struct TripEffect {
     /// The person is at the facility and asks its queue, with no trip.
     at_once: bool,
     /// The request's record: `(outcome, reason, detail)`.
-    outcome: Option<(&'static str, &'static str, Option<&'static str>)>,
+    outcome: Option<(&'static str, &'static str, Option<Arc<str>>)>,
     rejected: bool,
 }
 
@@ -226,7 +226,7 @@ fn plan_resource<'py>(
                 if effect.trip.is_some() {
                     effect.outcome = Some(("travel_scheduled", "route_available", None));
                 } else {
-                    effect.outcome = Some(("rejected", "travel_rejected", Some(TRAVEL_REJECTED_DETAIL)));
+                    effect.outcome = Some(("rejected", "travel_rejected", Some(Arc::from(TRAVEL_REJECTED_DETAIL))));
                     effect.rejected = true;
                 }
             }
@@ -637,17 +637,30 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
     }
     // The queue's kernel, which writes all it does or refuses having written nothing. It reads
     // nothing that the writes below change.
-    if let Some((TripEffect { at_once: true, facility_id: Some(facility_id), .. }, ..)) = &trip_effect {
-        let facility = PyString::new(py, facility_id);
-        match &effect {
-            Effect::Toilet => {
-                own_request(&attribute(controller, intern!(py, "toilet_service"))?)?;
-                toilet::queue_up(&world, &agent_object, facility.as_any(), None)?;
-            }
-            _ => {
-                let manager = attribute(controller, intern!(py, "resource_service"))?;
-                own_request(&manager)?;
-                service::queue_up(&manager, &agent_object, facility.as_any())?;
+    if let Some((planned, _, held, metrics, _)) = trip_effect.as_mut() {
+        if let (true, Some(facility_id)) = (planned.at_once, planned.facility_id.clone()) {
+            let facility = PyString::new(py, &facility_id);
+            match &effect {
+                Effect::Toilet => {
+                    own_request(&attribute(controller, intern!(py, "toilet_service"))?)?;
+                    toilet::queue_up(&world, &agent_object, facility.as_any(), None)?;
+                }
+                _ => {
+                    let manager = attribute(controller, intern!(py, "resource_service"))?;
+                    own_request(&manager)?;
+                    // Read before the request, which may write the task counter and then turn the
+                    // person down.
+                    let rows = (service_mirror(&world)?, metrics_of(&world)?);
+                    if let Err(text) = service::queue_up_or_refusal(&manager, &agent_object, facility.as_any())? {
+                        // `except ValueError as exc`: the record says why, with `str(exc)`, and the
+                        // person is not at the facility's queue.
+                        planned.at_once = false;
+                        planned.outcome = Some(("rejected", "request_rejected", Some(Arc::from(text))));
+                        planned.rejected = true;
+                        *held = Some(rows.0);
+                        *metrics = Some(rows.1);
+                    }
+                }
             }
         }
     }
@@ -737,7 +750,7 @@ pub(crate) fn apply_effect<'py>(controller: &Bound<'py, PyAny>, proposal: &Bound
                     reason: Arc::from(reason),
                     facility_id,
                     origin_zone_id: zone_id.clone(),
-                    detail: detail.map(Arc::from),
+                    detail,
                 },
             )?;
         }

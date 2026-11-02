@@ -169,27 +169,19 @@ def test_without_a_floor_plan_someone_in_the_zone_asks_at_once(
     assert committed is True
 
 
-def test_a_person_the_service_turns_down_is_recorded_by_the_python_step(
+def test_a_person_the_service_turns_down_is_recorded_with_python_s_text(
     generated_scenario_with_split_queues: Any,
 ) -> None:
     world = WorldState.from_scenario(generated_scenario_with_split_queues)
     facility_id = _facility_of(world, "water")
     _place_at(world, "A001", facility_id)
     world.agents["A001"].activity = Activity.MOVING
-    before = _bytes(world)
-    controller = _controller(world)
-    with pytest.raises(native.Unsupported):
-        native.rules("proposals").apply_effect(
-            controller, _proposal(ActionKind.FETCH_WATER, "A001", world)
-        )
-    assert _bytes(world) == before
-    target, _, committed = controller._apply_effect(
-        _proposal(ActionKind.FETCH_WATER, "A001", world)
-    )
+    target, _, committed = _effect(world, ActionKind.FETCH_WATER, "A001")
     assert target is None
     assert committed is False
     records = world.model_state["resource_service_v1"]["request_history"]
     assert records[-1]["reason"] == "request_rejected"
+    assert records[-1]["detail"] == "Agent 'A001' cannot request resource service while active"
 
 
 def test_a_toilet_request_a_test_patched_is_the_python_step_s(

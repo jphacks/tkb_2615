@@ -28,7 +28,13 @@ from sheltersim.events.handlers import (
     SupportRequestTimeoutHandler,
     ToiletServiceCompletionHandler,
 )
-from sheltersim.events.models import EventKind, EventStatus, EventSuppressed, ScheduledEvent
+from sheltersim.events.models import (
+    EventApplicationError,
+    EventKind,
+    EventStatus,
+    EventSuppressed,
+    ScheduledEvent,
+)
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.phases.dispatch import DispatchPhase
 from sheltersim.experiments.phases.propose import ProposePhase
@@ -283,9 +289,11 @@ def test_a_toilet_completion_is_python_s(generated_scenario: Any, hygiene: float
 def test_a_toilet_completion_that_does_not_fit_is_python_s(generated_scenario: Any) -> None:
     world, _ = _run(generated_scenario, 5)
     event = _in_service(world, world.minute_index)
-    world.agents[event.payload["agent_id"]].activity = Activity.IDLE
+    agent_id = event.payload["agent_id"]
+    world.agents[agent_id].activity = Activity.IDLE
     before = _bytes(world)
-    with pytest.raises(native.Unsupported, match="does not match"):
+    # `complete_toilet_service`'s ValueError, as the handler wraps it.
+    with pytest.raises(EventApplicationError, match=f"Agent '{agent_id}' is not using Facility"):
         native.rules("toilet").complete(ToiletServiceCompletionHandler(), world, event)
     assert _bytes(world) == before
 
