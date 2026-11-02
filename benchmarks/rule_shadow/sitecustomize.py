@@ -160,6 +160,11 @@ def _install(output: str) -> None:
 if CENSUS_OUTPUT:
     importlib.import_module("refusal_census").install(CENSUS_OUTPUT)
 
+# Not a shadow either: it compares the kernels' moved errors with the Python rules'
+# (error_compare.py).
+if os.environ.get("SHELTERSIM_ERROR_COMPARE"):
+    importlib.import_module("error_compare").install(os.environ["SHELTERSIM_ERROR_COMPARE"])
+
 if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
     # A plain run that only says what the dispatch loop's direct calls did (shadow_dispatch.py).
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)

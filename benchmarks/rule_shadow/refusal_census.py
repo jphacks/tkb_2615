@@ -13,7 +13,10 @@ every process:
 Rust (native/src/core/census.rs) counts each `Unsupported` where it is built, and each fallback of
 `or_rule!` and each `__wrapped__` call-back, so the driver's path shows as well as `kernel_first`'s.
 A wrapper on every function of `rules` and `state` counts what reaches a Python entry. Nothing here
-changes a result: it reads, and the gate and 7-day hashes are checked with it on.
+changes a result: it reads, and the gate and 7-day hashes are checked with it on. It also counts
+what the Python rule raised after each refusal (`python_raised`: the error texts to move to Rust,
+docs/rust-port/lanes/l8-texts-rest.md) and each error a kernel raises through core/errors.rs
+(`moved`).
 
 Each count has a bucket, from the state it came from:
   tick_ok        in a tick that finished, and so passed validate_after_tick
@@ -65,13 +68,19 @@ class _Census:
 
     def collect(self, bucket: str, scope: str | None = None) -> None:
         raised, caught = self.native.census_take()
-        if not raised and not caught:
+        moved, fell_back = self.native.census_take_errors()
+        if not raised and not caught and not moved and not fell_back:
             return
         where = self.scope() if scope is None else scope
         for file, line, reason, n in raised:
             self.rows["raised", where, bucket, file, line, reason, ""] += n
         for by, file, line, reason, n in caught:
             self.rows["caught", where, bucket, file, line, reason, by] += n
+        for file, line, text, n in moved:
+            self.rows["moved", where, bucket, file, line, text, ""] += n
+        # The Python class and text go where `by` is for the others, after the one who fell back.
+        for by, file, line, reason, outcome, n in fell_back:
+            self.rows["fell_back", where, bucket, file, line, reason, f"{by}\t{outcome}"] += n
 
     def write(self) -> None:
         self.collect("outside")
@@ -163,6 +172,10 @@ def install(output: str) -> None:
                 _wrap_module(module, f"{group_name}.{module_name}")
     native.census_switch(True)
     atexit.register(census.write)
+
+    from sheltersim.core import kernels
+
+    kernels._fell_back = native.census_fell_back
 
     from sheltersim.core.engine import TickEngine
     from sheltersim.core.world import WorldState
@@ -302,11 +315,19 @@ def report(arguments: argparse.Namespace) -> int:
             }
         return data[key]
 
+    moved: dict[Any, Counter[str]] = defaultdict(Counter)
+    outcomes: dict[Any, Counter[str]] = defaultdict(Counter)
     for run, directory in runs.items():
         rows, ticks[run] = _read(directory)
         for kind, scope, bucket, file, line, reason, by, n in rows:
             # A file is as rustc was given it, absolute for a module found by build.rs.
             file = file[file.rfind("native/") + len("native/") :] if "native/" in file else file
+            if kind == "moved":
+                moved[file, line, reason][run] += n
+                continue
+            if kind == "fell_back":
+                outcomes[file, line, reason][by.split("\t", 1)[1]] += n
+                continue
             if kind == "caught":
                 if by.startswith(("or_rule", "__wrapped__")):
                     fallbacks[run, f"{by.split('(')[0].strip()}"] += n
@@ -366,6 +387,8 @@ def report(arguments: argparse.Namespace) -> int:
                 "entries": entries[file, line, reason].most_common(3),
                 # None caught: a check that discards the error, or a class's method's refusal.
                 "caught": sum(entries[file, line, reason].values()),
+                # What the Python rule raised after this refusal; the rest of `caught` returned.
+                "python_raised": outcomes[file, line, reason].most_common(5),
             }
         )
     table.sort(key=lambda row: (-row["week"], -row["gate"], -row["tests"], row["reason"]))
@@ -384,6 +407,9 @@ def report(arguments: argparse.Namespace) -> int:
         "reached_sites": len(reached_lines),
         "never": never,
         "table": table,
+        "moved": sorted(
+            [file, line, text, dict(counts)] for (file, line, text), counts in moved.items()
+        ),
         "fallbacks": sorted(
             ([run, by, n] for (run, by), n in fallbacks.items()), key=lambda r: (-r[2], r[0], r[1])
         ),

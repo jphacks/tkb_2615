@@ -22,6 +22,7 @@ use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBool, PyDict, PyList, PyString, PyTuple, PyType};
 
 use crate::core::census;
+use crate::core::errors;
 use crate::core::row::{attribute, exact_int, exact_str, unsupported};
 use crate::core::world_core::raw_dict_get;
 use crate::rules::movement_geometry::Geo;
@@ -84,7 +85,21 @@ fn refused(py: Python<'_>, error: &PyErr, kernel: &str) -> bool {
 macro_rules! or_rule {
     ($py:expr, $kernel:expr, $rule:expr) => {
         match $kernel {
-            Err(error) if refused($py, &error, concat!("or_rule ", stringify!($kernel))) => $rule,
+            Err(error) if refused($py, &error, concat!("or_rule ", stringify!($kernel))) => {
+                let result = $rule;
+                if let Err(raised) = &result {
+                    census::fell_back($py, concat!("or_rule ", stringify!($kernel)), &error, raised);
+                }
+                result
+            }
+            Err(error) => {
+                // A moved error while comparing (core/errors.rs): the Python rule on the same state.
+                if let Some(site) = errors::moved_site($py, &error) {
+                    let result = $rule;
+                    errors::compared($py, site, &error, result.as_ref().err());
+                }
+                Err(error)
+            }
             other => other,
         }
     };
