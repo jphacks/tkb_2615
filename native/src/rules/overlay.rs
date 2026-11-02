@@ -17,6 +17,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors;
 use crate::core::mathx::{hypot, pow, py_max, py_min, py_round, py_sum};
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, unsupported};
 use crate::core::value::V;
@@ -1497,11 +1498,15 @@ fn inside_zone(zone: &[Pt], polygon: &[Pt]) -> bool {
 }
 
 // ---- validate_geometry_change -------------------------------------------------------------------
+//
+// Each check raises the Python rule's ValueError with its text, in its order
+// (docs/rust-port/lanes/l8-texts-rest.md). What the rows cannot judge as Python does (a value that is
+// not a plain point, a flag that is not a bool) still says Unsupported.
 
-const REFUSED: &str = "the Python rule refuses the change";
-
-fn refuse<T>() -> PyResult<T> {
-    unsupported(REFUSED)
+/// `raise ValueError(text)` of `validate_geometry_change` and its helpers.
+#[track_caller]
+fn invalid<T>(text: &str) -> PyResult<T> {
+    Err(errors::value_error(text))
 }
 
 fn model_of<'py>(py: Python<'py>, module: &str, name: &str, raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -1509,6 +1514,16 @@ fn model_of<'py>(py: Python<'py>, module: &str, name: &str, raw: &Bound<'py, PyA
         .getattr(name)?
         .call_method1(intern!(py, "model_validate"), (raw,))
         .map_err(|_| Unsupported::new_err("the contract refuses the parameters"))
+}
+
+/// `Model.model_validate(parameters)` of the check: the contract's own error, as the rule raises it.
+#[track_caller]
+fn checked_model<'py>(py: Python<'py>, module: &str, name: &str, raw: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let class = py.import(module)?.getattr(name)?;
+    match class.call_method1(intern!(py, "model_validate"), (raw,)) {
+        Ok(model) => Ok(model),
+        Err(error) => Err(errors::relayed(py, error)),
+    }
 }
 
 const OVERLAY_MODULE: &str = "sheltersim.domain.geometry_overlay";
@@ -1589,7 +1604,7 @@ fn clear_of_rooms(geo: &Geo, rooms: &Doc, facility_id: &str, zone_id: &str, poin
     let layout = layout_of_plan(geo)?;
     let constraints = constraints_of_plan(geo)?;
     let Some(&old) = layout.facility_points.get(facility_id) else {
-        return refuse();
+        return unsupported("the facility has no point");
     };
     let (dx, dy) = (point.x - old.x, point.y - old.y);
     for room in rooms.values() {
@@ -1599,46 +1614,49 @@ fn clear_of_rooms(geo: &Geo, rooms: &Doc, facility_id: &str, zone_id: &str, poin
         }
         let polygon = polygon_of(room.get("polygon_m"))?;
         if point_in_polygon(point, &polygon) {
-            return refuse();
+            return invalid("facility_in_use: facility move would enter an active temporary room");
         }
         for service in &layout.service_points {
             if &*service.facility_id == facility_id && point_in_polygon(Pt { x: service.point.x + dx, y: service.point.y + dy }, &polygon) {
-                return refuse();
+                return invalid("facility_in_use: moved service point would enter an active temporary room");
             }
         }
         if let Some((_, footprint)) = constraints.footprints.iter().find(|(id, _)| &**id == facility_id) {
             let shifted: Vec<Pt> = footprint.iter().map(|item| Pt { x: item.x + dx, y: item.y + dy }).collect();
             if polygons_overlap(&shifted, &polygon) {
-                return refuse();
+                return invalid("facility_in_use: moved equipment footprint would enter an active temporary room");
             }
         }
     }
     Ok(())
 }
 
-/// A facility with people or a staff task: `facility_in_use`.
-fn facility_is_free(world: &Bound<'_, PyAny>, target: &str) -> PyResult<(Arc<str>, Arc<str>)> {
+/// A facility with people or a staff task: `facility_in_use`, with the texts of the operation.
+fn facility_is_free(world: &Bound<'_, PyAny>, target: &str, busy: &str, tasked: &str) -> PyResult<(Arc<str>, Arc<str>)> {
     let store = entities_of(world)?;
     let found = EntityStore::with_rows(&store, |rows| {
         let Some(facility) = rows.facilities.get(target) else {
-            return refuse();
+            return unsupported("the facility is gone");
         };
         if !facility.queue_agent_ids.is_empty()
             || !facility.active_agent_ids.is_empty()
             || !facility.resource_queue_agent_ids.is_empty()
             || !facility.resource_active_agent_ids.is_empty()
         {
-            return refuse();
+            return Ok(Err(()));
         }
-        Ok((facility.zone_id.clone(), facility.kind.clone()))
+        Ok(Ok((facility.zone_id.clone(), facility.kind.clone())))
     })?;
+    let Ok(found) = found else {
+        return invalid(busy);
+    };
     if let Some(operations) = state_of(world, "staff_operations_v1")? {
         if let Some(staff) = child(&operations, "staff")? {
             for (_, row) in exact_dict(&staff)?.iter() {
                 if let Some(row) = crate::core::tracked::as_readable_dict(&row) {
                     if let Some(other) = row.get_item(intern!(world.py(), "target_id"))? {
                         if other.downcast_exact::<PyString>().is_ok_and(|other| other.to_str().is_ok_and(|other| other == target)) {
-                            return refuse();
+                            return invalid(tasked);
                         }
                         if !other.is_none() && other.downcast_exact::<PyString>().is_err() {
                             return unsupported("a task's target is another value");
@@ -1712,47 +1730,87 @@ fn service_staff_in_zone(world: &Bound<'_, PyAny>, geo: &Geo, facility_id: &str,
         Ok(rows.staff.iter().any(|(_, staff)| &*staff.zone_id == zone_id && wanted.iter().all(|name| staff.skills.0.contains(name))))
     })?;
     if staffed {
-        Ok(())
-    } else {
-        refuse()
+        return Ok(());
     }
+    // `', '.join(sorted(required))` of a set; str sorts by code point, as UTF-8 bytes do.
+    wanted.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    wanted.dedup();
+    let skills: Vec<&str> = wanted.iter().map(|name| &**name).collect();
+    invalid(&format!(
+        "staff_unavailable: no staff with {} works in {}, so the moved station would not be served",
+        skills.join(", "),
+        errors::repr_str(py, zone_id)?
+    ))
 }
 
-/// The footprint a move would give: inside the zone, past no wall, overlapping nothing.
-fn footprint_fits(constraints: &Constraints, facility_id: &str, zone: &[Pt], dx_from: Pt, to: Pt, transfer: bool) -> PyResult<()> {
+/// The corners of a footprint moved by `to - from`, as the operation adds them.
+fn shifted_footprint(footprint: &[Pt], from: Pt, to: Pt, transfer: bool) -> PyResult<Vec<Pt>> {
+    footprint
+        .iter()
+        .map(|point| {
+            let shifted = if transfer {
+                Pt { x: point.x + (to.x - from.x), y: point.y + (to.y - from.y) }
+            } else {
+                Pt { x: point.x + to.x - from.x, y: point.y + to.y - from.y }
+            };
+            if usable(shifted.x, shifted.y) {
+                Ok(shifted)
+            } else {
+                unsupported("a moved corner is not a usable point")
+            }
+        })
+        .collect()
+}
+
+/// The footprint a transfer gives: inside the zone, past no wall, overlapping nothing.
+fn transferred_footprint_fits(constraints: &Constraints, facility_id: &str, zone: &[Pt], from: Pt, to: Pt) -> PyResult<()> {
     let Some((_, footprint)) = constraints.footprints.iter().find(|(id, _)| &**id == facility_id) else {
         return Ok(());
     };
-    // `item.facility_id` of an obstacle raises AttributeError in the transfer's Python rule.
-    if transfer && constraints.obstacle_count > 0 {
-        return unsupported("the Python rule raises on an obstacle");
-    }
-    let shifted: Vec<Pt> = footprint
-        .iter()
-        .map(|point| {
-            if transfer {
-                Pt { x: point.x + (to.x - dx_from.x), y: point.y + (to.y - dx_from.y) }
-            } else {
-                Pt { x: point.x + to.x - dx_from.x, y: point.y + to.y - dx_from.y }
-            }
-        })
-        .collect();
-    if shifted.iter().any(|point| !usable(point.x, point.y) || !point_in_polygon(*point, zone)) {
-        return refuse();
+    let shifted = shifted_footprint(footprint, from, to, true)?;
+    if shifted.iter().any(|point| !point_in_polygon(*point, zone)) {
+        return invalid("area_invalid: transferred equipment footprint leaves its destination zone");
     }
     if sides(&shifted).any(|(a, b)| constraints.walls.iter().any(|wall| segments_meet(a, b, wall.start, wall.end))) {
-        return refuse();
+        return invalid("clear_width_insufficient: transferred equipment footprint crosses a wall");
     }
-    let others = constraints.blocked[..constraints.obstacle_count].iter().chain(
-        constraints.footprints.iter().filter(|(id, _)| &**id != facility_id).map(|(_, polygon)| polygon),
-    );
+    // `item.facility_id` of an obstacle raises AttributeError in the transfer's Python rule.
+    if constraints.obstacle_count > 0 {
+        return unsupported("the Python rule raises on an obstacle");
+    }
+    let others = constraints.footprints.iter().filter(|(id, _)| &**id != facility_id).map(|(_, polygon)| polygon);
     for shape in others {
-        if shifted.iter().any(|point| point_in_polygon(*point, shape)) || point_in_polygon(shape[0], &shifted) {
-            return refuse();
+        if shifted.iter().any(|point| point_in_polygon(*point, shape))
+            || point_in_polygon(shape[0], &shifted)
+            || sides(&shifted).any(|(a, b)| segment_to_polygon(a, b, shape) < 1e-8)
+        {
+            return invalid("area_invalid: transferred equipment overlaps another obstacle");
         }
-        if sides(&shifted).any(|(a, b)| segment_to_polygon(a, b, shape) < 1e-8) {
-            return refuse();
-        }
+    }
+    Ok(())
+}
+
+/// The footprint a same-zone move gives, in the checks' order of the Python rule.
+fn moved_footprint_fits(constraints: &Constraints, facility_id: &str, zone: &[Pt], from: Pt, to: Pt) -> PyResult<()> {
+    let Some((_, footprint)) = constraints.footprints.iter().find(|(id, _)| &**id == facility_id) else {
+        return Ok(());
+    };
+    let shifted = shifted_footprint(footprint, from, to, false)?;
+    if shifted.iter().any(|point| !point_in_polygon(*point, zone)) {
+        return invalid("area_invalid: moved footprint leaves its zone");
+    }
+    if sides(&shifted).any(|(a, b)| constraints.walls.iter().any(|wall| segments_meet(a, b, wall.start, wall.end))) {
+        return invalid("clear_width_insufficient: moved equipment crosses a wall");
+    }
+    let others: Vec<&Vec<Pt>> = constraints.blocked[..constraints.obstacle_count]
+        .iter()
+        .chain(constraints.footprints.iter().filter(|(id, _)| &**id != facility_id).map(|(_, polygon)| polygon))
+        .collect();
+    if others.iter().any(|shape| shifted.iter().any(|point| point_in_polygon(*point, shape)) || point_in_polygon(shape[0], &shifted)) {
+        return invalid("area_invalid: moved footprint overlaps existing obstacles or equipment");
+    }
+    if sides(&shifted).any(|(a, b)| others.iter().any(|shape| segment_to_polygon(a, b, shape) < 1e-8)) {
+        return invalid("clear_width_insufficient: moved equipment intersects an obstacle");
     }
     Ok(())
 }
@@ -1760,22 +1818,27 @@ fn footprint_fits(constraints: &Constraints, facility_id: &str, zone: &[Pt], dx_
 fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &Bound<'_, PyAny>, end_minute: Option<i64>) -> PyResult<()> {
     let py = world.py();
     let Some(state) = state_of(world, OVERLAY_KEY)? else {
-        return refuse();
+        return invalid("geometry_overlay_required: declare the versioned geometry overlay before approving effects");
     };
     exact_dict(&state)?;
     let geo = Geo::of(world)?;
-    let layout = layout_of_plan(&geo)?;
+    let Some(layout) = geo.layout.as_ref() else {
+        return invalid("geometry_unavailable");
+    };
     let constraints = constraints_of_plan(&geo)?;
     match op {
         "set_route_access" => {
-            let data = model_of(py, OVERLAY_MODULE, "RouteAccessParameters", parameters)?;
+            let data = checked_model(py, OVERLAY_MODULE, "RouteAccessParameters", parameters)?;
             let accessible = attribute(&data, intern!(py, "accessible"))?.is_truthy()?;
             let edges = edges_of(world)?;
             let Some(edge) = edges.get(target) else {
-                return refuse();
+                return invalid("target_missing: route does not exist");
             };
-            if end_minute.is_none() || (accessible && edge.closed) {
-                return refuse();
+            if end_minute.is_none() {
+                return invalid("expiry_required: route-access changes require a bounded end");
+            }
+            if accessible && edge.closed {
+                return invalid("unsupported_reopening: this operation cannot override a prior graph closure");
             }
             if !accessible {
                 let rooms = part(&state, "temporary_rooms")?;
@@ -1811,14 +1874,14 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                         outgoing |= edge.from == *room_zone;
                     }
                     if !incoming || !outgoing {
-                        return refuse();
+                        return invalid("route_in_use: closure would disconnect an active temporary room");
                     }
                 }
             }
             Ok(())
         }
         "transfer_equipment" => {
-            let data = model_of(py, OPERATIONS_MODULE, "EquipmentTransferParameters", parameters)?;
+            let data = checked_model(py, OPERATIONS_MODULE, "EquipmentTransferParameters", parameters)?;
             let (equipment, from_zone, to_zone) = (
                 text_attr(&data, intern!(py, "equipment_id"))?,
                 text_attr(&data, intern!(py, "from_zone_id"))?,
@@ -1828,27 +1891,41 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
             let store = entities_of(world)?;
             let known = EntityStore::with_rows(&store, |rows| Ok(rows.facilities.get(target).map(|facility| facility.zone_id.clone())))?;
             let (Some(zone_now), Some(&old)) = (known, layout.facility_points.get(target)) else {
-                return refuse();
+                return invalid("target_missing: equipment must identify a positioned facility");
             };
-            let zones = attribute(world, intern!(py, "zones"))?;
-            if &*equipment != target || from_zone != zone_now || !exact_dict(&zones)?.contains(&*to_zone)? || end_minute.is_some() {
-                return refuse();
+            if &*equipment != target {
+                return invalid("target_mismatch: equipment_id must match the selected facility");
             }
-            let (_, kind) = facility_is_free(world, target)?;
+            let zones = attribute(world, intern!(py, "zones"))?;
+            if from_zone != zone_now || !exact_dict(&zones)?.contains(&*to_zone)? {
+                return invalid("precondition_failed: equipment source/destination zone does not match");
+            }
+            if end_minute.is_some() {
+                return invalid("unsupported_transfer_expiry: equipment transfers are permanent");
+            }
+            let (_, kind) = facility_is_free(
+                world,
+                target,
+                "facility_in_use: equipment queues and services must be empty",
+                "facility_in_use: an active staff task targets this equipment",
+            )?;
             let (Some(_), Some(destination)) = (layout.zones.get(&*from_zone), layout.zones.get(&*to_zone)) else {
-                return refuse();
+                return invalid("target_missing: equipment zone has no surveyed polygon");
             };
             if !point_in_polygon(point, &destination.polygon) {
-                return refuse();
+                return invalid("area_invalid: transfer point must lie inside the destination zone");
             }
             let rooms = part(&state, "temporary_rooms")?;
             clear_of_rooms(&geo, map_of(&rooms)?, target, &to_zone, point)?;
             if !zones_connected(&edges_of(world)?, &from_zone, &to_zone) {
-                return refuse();
+                return invalid("route_unavailable: equipment zones have no open directed route");
             }
             service_staff_in_zone(world, &geo, target, &kind, &to_zone)?;
-            if walls_are_near(constraints, point) || !walkable_at(&geo, &to_zone, point)? {
-                return refuse();
+            if walls_are_near(constraints, point) {
+                return invalid("clear_width_insufficient: transferred equipment must remain half a metre from walls");
+            }
+            if !walkable_at(&geo, &to_zone, point)? {
+                return invalid("clear_width_insufficient: transfer point is not walkable");
             }
             let (dx, dy) = (point.x - old.x, point.y - old.y);
             for service in &layout.service_points {
@@ -1856,75 +1933,94 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                     continue;
                 }
                 let shifted = Pt { x: service.point.x + dx, y: service.point.y + dy };
-                if !usable(shifted.x, shifted.y)
-                    || !point_in_polygon(shifted, &destination.polygon)
-                    || walls_are_near(constraints, shifted)
-                    || !walkable_at(&geo, &to_zone, shifted)?
-                {
-                    return refuse();
+                if !usable(shifted.x, shifted.y) {
+                    return unsupported("a moved service point is not a usable point");
+                }
+                if !point_in_polygon(shifted, &destination.polygon) {
+                    return invalid("area_invalid: transferred service point leaves its destination zone");
+                }
+                if walls_are_near(constraints, shifted) || !walkable_at(&geo, &to_zone, shifted)? {
+                    return invalid("clear_width_insufficient: transferred service point is not walkable");
                 }
             }
-            footprint_fits(constraints, target, &destination.polygon, old, point, true)
+            transferred_footprint_fits(constraints, target, &destination.polygon, old, point)
         }
         "move_facility" => {
-            let data = model_of(py, OVERLAY_MODULE, "MoveFacilityParameters", parameters)?;
+            let data = checked_model(py, OVERLAY_MODULE, "MoveFacilityParameters", parameters)?;
             let point = point_attr(&data, intern!(py, "point_m"))?;
             let store = entities_of(world)?;
             let known = EntityStore::with_rows(&store, |rows| Ok(rows.facilities.get(target).is_some()))?;
             let (true, Some(&old)) = (known, layout.facility_points.get(target)) else {
-                return refuse();
+                return invalid("target_missing: facility has no surveyed position");
             };
             if end_minute.is_some() {
-                return refuse();
+                return invalid("unsupported_move_expiry: same-zone moves are permanent; approve an explicit later move");
             }
-            let (zone_id, _) = facility_is_free(world, target)?;
+            let (zone_id, _) = facility_is_free(
+                world,
+                target,
+                "facility_in_use: queues and services must be empty",
+                "facility_in_use: an active staff task targets this facility",
+            )?;
             let Some(zone) = layout.zones.get(&*zone_id) else {
                 return unsupported("a facility in a zone with no polygon");
             };
             if !point_in_polygon(point, &zone.polygon) {
-                return refuse();
+                return invalid("area_invalid: cross-zone facility moves are unsupported");
             }
             let rooms = part(&state, "temporary_rooms")?;
             clear_of_rooms(&geo, map_of(&rooms)?, target, &zone_id, point)?;
             if walls_are_near(constraints, point) {
-                return refuse();
+                return invalid("clear_width_insufficient: moved service point requires half a metre from walls");
             }
             for service in &layout.service_points {
                 if &*service.facility_id != target {
                     continue;
                 }
                 let shifted = Pt { x: service.point.x + point.x - old.x, y: service.point.y + point.y - old.y };
-                if !usable(shifted.x, shifted.y)
-                    || !point_in_polygon(shifted, &zone.polygon)
-                    || walls_are_near(constraints, shifted)
-                    || !walkable_at(&geo, &zone_id, shifted)?
-                {
-                    return refuse();
+                if !usable(shifted.x, shifted.y) {
+                    return unsupported("a moved service point is not a usable point");
+                }
+                if !point_in_polygon(shifted, &zone.polygon) {
+                    return invalid("area_invalid: moved facility would move a service point outside its zone");
+                }
+                if walls_are_near(constraints, shifted) {
+                    return invalid("clear_width_insufficient: moved service point is too close to a wall");
+                }
+                if !walkable_at(&geo, &zone_id, shifted)? {
+                    return invalid("clear_width_insufficient: moved service point is not walkable");
                 }
             }
             if !walkable_at(&geo, &zone_id, point)? {
-                return refuse();
+                return invalid("clear_width_insufficient: moved service point is not walkable");
             }
-            footprint_fits(constraints, target, &zone.polygon, old, point, false)
+            moved_footprint_fits(constraints, target, &zone.polygon, old, point)
         }
         "set_partition" => {
-            let data = model_of(py, OVERLAY_MODULE, "PartitionParameters", parameters)?;
+            let data = checked_model(py, OVERLAY_MODULE, "PartitionParameters", parameters)?;
             let polygon = points_attr(&data, intern!(py, "polygon_m"))?;
             let Some(zone) = layout.zones.get(target) else {
-                return refuse();
+                return invalid("target_missing: zone does not exist");
             };
-            if end_minute.is_none() || !inside_zone(&zone.polygon, &polygon) {
-                return refuse();
+            if end_minute.is_none() {
+                return invalid("expiry_required: partitions require an explicit bounded end");
+            }
+            // `_validate_partition_polygon`.
+            if !valid_simple(&polygon) || polygon.iter().any(|point| !point_in_polygon(*point, &zone.polygon)) {
+                return invalid("area_invalid: partition requires a simple positive-area polygon inside its zone");
+            }
+            if sides(&polygon).any(|(a, b)| !segment_inside_polygon(a, b, &zone.polygon)) {
+                return invalid("area_invalid: partition leaves a concave zone");
             }
             if layout.facility_points.values().any(|point| point_in_polygon(*point, &polygon)) {
-                return refuse();
+                return invalid("area_invalid: partition covers a facility");
             }
             for shape in &constraints.blocked {
                 if polygon.iter().any(|point| point_in_polygon(*point, shape))
                     || point_in_polygon(shape[0], &polygon)
                     || sides(&polygon).any(|(a, b)| segment_to_polygon(a, b, shape) < 1e-8)
                 {
-                    return refuse();
+                    return invalid("area_invalid: partition overlaps equipment or another obstacle");
                 }
             }
             let movement = movement_mirror(world)?;
@@ -1937,7 +2033,7 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                                 return unsupported("a position is not a usable point");
                             }
                             if point_in_polygon(Pt { x: point.x, y: point.y }, &polygon) {
-                                return refuse();
+                                return invalid("route_in_use: partition covers a current person");
                             }
                         }
                     }
@@ -1949,14 +2045,14 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                 if layout.zones.get(&*zone_id).is_some() {
                     if let Some(centre) = geo.zone_center(&zone_id)? {
                         if point_in_polygon(centre, &polygon) {
-                            return refuse();
+                            return invalid("route_in_use: partition covers a staff standing point");
                         }
                     }
                 }
             }
             for route in layout.routes.values() {
                 if route.points.windows(2).any(|pair| !segment_clear_of_polygon(pair[0], pair[1], &polygon, route.width / 2.0)) {
-                    return refuse();
+                    return invalid("clear_width_insufficient: partition obstructs a declared passage");
                 }
             }
             if let Some(mirror) = &movement {
@@ -1969,7 +2065,7 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                         if points.windows(2).any(|pair| !segment_clear_of_polygon(pair[0], pair[1], &polygon, WALL_CLEARANCE))
                             && !crate::rules::movement::is_queue_trip(&journey.purpose)
                         {
-                            return refuse();
+                            return invalid("route_in_use: partition intersects current room travel");
                         }
                     }
                     Ok(())
@@ -1978,7 +2074,7 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
             Ok(())
         }
         "temporary_room_geometry" => {
-            let data = model_of(py, OPERATIONS_MODULE, "TemporaryRoomGeometry", parameters)?;
+            let data = checked_model(py, OPERATIONS_MODULE, "TemporaryRoomGeometry", parameters)?;
             let polygon = points_attr(&data, intern!(py, "polygon_m"))?;
             let beds = points_attr(&data, intern!(py, "bed_points_m"))?;
             let room_id = text_attr(&data, intern!(py, "room_id"))?;
@@ -1987,33 +2083,46 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
             let route_ids = route_ids.downcast_exact::<PyTuple>().map_err(|_| Unsupported::new_err("not a tuple"))?;
             let route_ids: Vec<Arc<str>> = route_ids.iter().map(|id| Ok(Arc::from(exact_str(&id)?))).collect::<PyResult<_>>()?;
             let duration = exact_int(&attribute(world, intern!(py, "duration_minutes"))?)?;
-            if &*zone_id != target || end_minute.is_none_or(|end| end >= duration) {
-                return refuse();
+            if &*zone_id != target {
+                return invalid("target_mismatch: temporary room zone must match its selected zone");
+            }
+            if end_minute.is_none_or(|end| end >= duration) {
+                return invalid("expiry_required: temporary rooms need an in-run expiry");
             }
             let Some(zone) = layout.zones.get(target) else {
-                return refuse();
+                return invalid("target_missing: temporary room zone has no surveyed polygon");
             };
-            if !inside_zone(&zone.polygon, &polygon) {
-                return refuse();
+            // `_validate_room_polygon`.
+            if !valid_simple(&polygon) {
+                return invalid("area_invalid: temporary room polygon must be simple and nondegenerate");
+            }
+            if polygon.iter().any(|point| !point_in_polygon(*point, &zone.polygon)) {
+                return invalid("area_invalid: temporary room polygon must lie inside its zone");
+            }
+            if sides(&polygon).any(|(a, b)| !segment_inside_polygon(a, b, &zone.polygon)) {
+                return invalid("area_invalid: temporary room polygon crosses the zone boundary");
             }
             let edges = edges_of(world)?;
             for id in &route_ids {
                 let (Some(edge), Some(route)) = (edges.get(id), layout.routes.get(&**id)) else {
-                    return refuse();
+                    return invalid("route_unavailable: temporary room access route must connect to its zone");
                 };
-                if (&*edge.from != target && &*edge.to != target) || edge.closed || !route.accessible {
-                    return refuse();
+                if &*edge.from != target && &*edge.to != target {
+                    return invalid("route_unavailable: temporary room access route must connect to its zone");
+                }
+                if edge.closed || !route.accessible {
+                    return invalid("route_unavailable: temporary room access route is closed or inaccessible");
                 }
             }
             let incoming = route_ids.iter().any(|id| &*edges[id].to == target);
             let outgoing = route_ids.iter().any(|id| &*edges[id].from == target);
             if !incoming || !outgoing {
-                return refuse();
+                return invalid("route_unavailable: temporary room requires directed ingress and egress routes");
             }
             let rooms = part(&state, "temporary_rooms")?;
             let rooms = map_of(&rooms)?;
             if rooms.contains_key(&*room_id) {
-                return refuse();
+                return invalid("room_exists: temporary room ID already exists");
             }
             for row in rooms.values() {
                 let row = map_of(row)?;
@@ -2021,11 +2130,11 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                     && matches!(row.get("zone_id"), Some(V::Str(zone)) if &**zone == target)
                     && polygons_overlap(&polygon, &polygon_of(row.get("polygon_m"))?)
                 {
-                    return refuse();
+                    return invalid("area_invalid: temporary room overlaps another active room");
                 }
             }
             if layout.facility_points.values().any(|point| point_in_polygon(*point, &polygon)) {
-                return refuse();
+                return invalid("area_invalid: temporary room covers a facility");
             }
             let reservations = part(&state, "bed_reservations")?;
             for reservation in map_of(&reservations)?.values() {
@@ -2042,25 +2151,30 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                 };
                 if let Some(V::Int(index)) = reservation.get("bed_index") {
                     if *index >= 0 && (*index as usize) < held.len() && point_in_polygon(point_in_value(&held[*index as usize])?, &polygon) {
-                        return refuse();
+                        return invalid("room_in_use: temporary room would cover a reserved sleep bed");
                     }
                 }
             }
             if constraints.blocked.iter().any(|shape| polygons_overlap(&polygon, shape)) {
-                return refuse();
+                return invalid("area_invalid: temporary room overlaps an obstacle or equipment footprint");
             }
             if sides(&polygon).any(|(a, b)| constraints.walls.iter().any(|wall| segments_meet(a, b, wall.start, wall.end))) {
-                return refuse();
+                return invalid("area_invalid: temporary room boundary crosses a declared wall");
             }
             if let Some(mirror) = &movement_mirror(world)? {
                 NamespaceMirror::with_row::<MovementRow, _>(mirror, |row| {
-                    for position in row.positions.values().chain(row.staff_positions.values()) {
-                        if let Some(point) = position.point {
-                            if !usable(point.x, point.y) {
-                                return unsupported("a position is not a usable point");
-                            }
-                            if point_in_polygon(Pt { x: point.x, y: point.y }, &polygon) {
-                                return refuse();
+                    for (positions, text) in [
+                        (&row.positions, "room_in_use: temporary room would cover a current person"),
+                        (&row.staff_positions, "room_in_use: temporary room would cover a current staff member"),
+                    ] {
+                        for position in positions.values() {
+                            if let Some(point) = position.point {
+                                if !usable(point.x, point.y) {
+                                    return unsupported("a position is not a usable point");
+                                }
+                                if point_in_polygon(Pt { x: point.x, y: point.y }, &polygon) {
+                                    return invalid(text);
+                                }
                             }
                         }
                     }
@@ -2085,12 +2199,12 @@ fn check_change(world: &Bound<'_, PyAny>, op: &str, target: &str, parameters: &B
                     }
                 }
                 if !reachable {
-                    return refuse();
+                    return invalid("route_unavailable: every bed must be reachable from a room access point");
                 }
             }
             Ok(())
         }
-        _ => refuse(),
+        _ => invalid("unsupported_geometry_operator"),
     }
 }
 

@@ -44,6 +44,15 @@ Checkpoint document) and times them.
   such as `errors::int_not_bool`, say Unsupported only where Rust can't tell). The text is saved, as
   the event record's `detail`. `benchmarks/rule_shadow/text_check.py` compares each one with the
   Python rule's while that exists (docs/rust-port/lanes/l8-texts-events.md).
+  The same file has the exits for the rules' other errors: where the Python rule raises a
+  `ValueError`, a `StateInvariantError` or a class of a contract, a kernel raises that class with
+  that text, in the rule's order of checks and before any
+  change, instead of `Unsupported`. A Python call the rule makes too (a contract's
+  `model_validate`) has its error relayed as it is. With `errors_switch(True)`
+  (`benchmarks/rule_shadow/error_compare.py`) the entries that fall back to a Python rule also run
+  it after such an error and count whether it raised the same class and text
+  (`docs/rust-port/lanes/l8-texts-rest.md`). `corrupt(namespace, check)` is the one exit for a
+  state the Python rules' checks never let through; its text is not Python's.
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
   and `rules/information.rs` hold the contact kernels; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
