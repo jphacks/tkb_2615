@@ -3,7 +3,9 @@
 native/src/rules/effects.rs (docs/rust-port/lanes/m6-effects.md). An effect's events are rare, and
 7 simulated days have none, so this file and the gate are all that compares them. Each handler runs
 on two copies of one world, and the whole documents must be the same text of JSON. Anything but a
-success must leave the world as it was and say Unsupported, so the Python rule words the error.
+success must leave the world as it was: an expected outcome is the Python rule's class and text,
+raised by the kernel (more cases in test_effect_program_texts.py), and a value the kernel is unsure
+of says Unsupported, so the Python rule decides.
 """
 
 from __future__ import annotations
@@ -283,22 +285,23 @@ def test_a_zone_condition_starts_and_expires(world: WorldState, rules: Any, op: 
     expiry = _event(world, "effect_program_environment_expire")
     apply = EffectProgramEnvironmentHandler()
     expire = EffectProgramEnvironmentHandler(expire=True)
-    _refused(rules.environment, expire, world, expiry)
+    _python_s_outcome(rules.environment, expire, world, expiry)
     state = _same_in_both(rules.environment, apply, world, start)
     assert state.model_state["zone_environment_v1"]["modifiers"]
-    _refused(rules.environment, apply, state, start)
+    _python_s_outcome(rules.environment, apply, state, start)
     state = _same_in_both(rules.environment, expire, state, expiry)
     assert not state.model_state["zone_environment_v1"]["modifiers"]
 
 
-def test_zone_parameters_stay_python_s_to_refuse(world: WorldState, rules: Any) -> None:
+def test_invalid_zone_parameters_are_the_contract_s_text(world: WorldState, rules: Any) -> None:
     schedule_effect_program(
         world, _program(_action("set_lighting", "zone", _a_zone(world), {"level": 1.0}))
     )
     document = _event(world, "effect_program_environment").to_dict()
     document["payload"]["parameters"] = {"level": 9.0}
     event = ScheduledEvent(**document)
-    _refused(rules.environment, EffectProgramEnvironmentHandler(), world, event)
+    text = _python_s_outcome(rules.environment, EffectProgramEnvironmentHandler(), world, event)
+    assert text.startswith("zone environment parameters are invalid: 1 validation error")
 
 
 def test_a_temporary_space_starts_and_expires(world: WorldState, rules: Any) -> None:
@@ -317,7 +320,7 @@ def test_a_temporary_space_starts_and_expires(world: WorldState, rules: Any) -> 
     expiry = _event(world, "effect_program_temporary_space_expire")
     apply = EffectProgramTemporarySpaceHandler()
     expire = EffectProgramTemporarySpaceHandler(expire=True)
-    _refused(rules.temporary_space, expire, world, expiry)
+    _python_s_outcome(rules.temporary_space, expire, world, expiry)
     state = _same_in_both(rules.temporary_space, apply, world, start)
     document = expiry.to_dict()
     document["causation_id"] = start.event_id
@@ -358,14 +361,17 @@ def test_a_new_member_or_toilet_is_the_same(
         assert len(state.facilities) == len(world.facilities) + 2
 
 
-def test_past_the_bound_of_members_goes_to_python(world: WorldState, rules: Any) -> None:
+def test_past_the_bound_of_members_is_the_rule_s_text(world: WorldState, rules: Any) -> None:
     schedule_effect_program(
         world, _program(_action("add_staff", "zone", _a_zone(world), {"count": 2}, end=None))
     )
     document = _structure_event(world, "add_staff").to_dict()
     document["payload"]["count"] = 1000
     event = ScheduledEvent(**document)
-    _refused(rules.structure, EffectProgramStructureHandler(), world, event)
+    assert (
+        _python_s_outcome(rules.structure, EffectProgramStructureHandler(), world, event)
+        == "adding staff would exceed the 100-staff runtime bound"
+    )
 
 
 @pytest.mark.parametrize(
@@ -390,9 +396,9 @@ def test_the_bound_of_an_addition_is_the_python_rule_s(
     document["payload"]["count"] = room
     _same_in_both(rules.structure, handler, world, ScheduledEvent(**document))
     document["payload"]["count"] = room + 1
-    _refused(rules.structure, handler, world, ScheduledEvent(**document))
-    with pytest.raises(EventApplicationError):
-        type(handler).apply.__wrapped__(handler, _copy(world), ScheduledEvent(**document))
+    assert _python_s_outcome(
+        rules.structure, handler, world, ScheduledEvent(**document)
+    ).startswith("adding ")
 
 
 def test_a_role_change_is_the_same_and_its_contract_stays_python_s(
@@ -411,7 +417,8 @@ def test_a_role_change_is_the_same_and_its_contract_stays_python_s(
     assert state.staff[staff_id].skills == ("alpha", "zeta")
     document = event.to_dict()
     document["payload"]["skills"] = ["same", "same"]
-    _refused(rules.structure, handler, world, ScheduledEvent(**document))
+    text = _python_s_outcome(rules.structure, handler, world, ScheduledEvent(**document))
+    assert text.startswith("staff-role event skills are invalid: ")
 
 
 def test_a_repair_is_the_same_and_checks_what_it_expects(world: WorldState, rules: Any) -> None:
@@ -442,7 +449,10 @@ def test_a_repair_is_the_same_and_checks_what_it_expects(world: WorldState, rule
     state = _same_in_both(rules.structure, handler, world, event)
     assert state.facilities[facility].working_units == capacity
     world.facilities[facility].working_units = capacity
-    _refused(rules.structure, handler, world, event)
+    assert (
+        _python_s_outcome(rules.structure, handler, world, event)
+        == "facility repair preconditions no longer match the live facility state"
+    )
 
 
 def test_an_order_is_the_same_and_only_for_its_minute(world: WorldState, rules: Any) -> None:
@@ -472,7 +482,7 @@ def test_an_order_is_the_same_and_only_for_its_minute(world: WorldState, rules: 
         type(handler).apply.__wrapped__(handler, _copy(world), ScheduledEvent(**document))
 
 
-def test_a_handoff_the_rule_cannot_take_goes_to_python(world: WorldState, rules: Any) -> None:
+def test_a_handoff_without_its_program_is_the_rule_s_text(world: WorldState, rules: Any) -> None:
     """The whole of a handoff is compared in the gate's scenario, where a task is under way."""
     first, second = sorted(world.staff)[:2]
     payload = {
@@ -496,22 +506,25 @@ def test_a_handoff_the_rule_cannot_take_goes_to_python(world: WorldState, rules:
         provenance={KEY: {"program_id": "program-1", "effect_id": "effect-1"}},
     )
     handler = EffectProgramStructureHandler()
-    _refused(rules.structure, handler, world, event)
-    with pytest.raises(EventApplicationError):
-        type(handler).apply.__wrapped__(handler, _copy(world), event)
+    assert (
+        _python_s_outcome(rules.structure, handler, world, event)
+        == "staff handoff does not reference an approved program"
+    )
 
 
-def test_a_structure_event_with_other_fields_goes_to_python(world: WorldState, rules: Any) -> None:
+def test_a_structure_event_with_other_fields_is_the_rule_s_text(
+    world: WorldState, rules: Any
+) -> None:
     schedule_effect_program(
         world, _program(_action("add_staff", "zone", _a_zone(world), {"count": 2}, end=None))
     )
     document = _structure_event(world, "add_staff").to_dict()
     document["payload"]["other"] = 1
-    _refused(
-        rules.structure,
-        EffectProgramStructureHandler(),
-        world,
-        ScheduledEvent(**document),
+    assert (
+        _python_s_outcome(
+            rules.structure, EffectProgramStructureHandler(), world, ScheduledEvent(**document)
+        )
+        == "structural primitive payload fields do not match"
     )
 
 
