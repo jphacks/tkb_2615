@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from support.paths import FIXTURES, SMALL_REPLAY
 
+from sheltersim import native
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
+from sheltersim.core.engine import TraceLevel
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
 from sheltersim.domain.environment import (
@@ -30,7 +33,11 @@ from sheltersim.events.effects import (
 )
 from sheltersim.events.handlers import EventDispatcher
 from sheltersim.events.models import EventStatus
+from sheltersim.experiments.metrics import MetricsRecorder
+from sheltersim.experiments.phases.update import UpdatePhase
+from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.experiments.timeline import _MetricSink
 from sheltersim.inspection.traces import _model_assumptions
 from sheltersim.llm.config import LLMMode, LLMSettings
 from sheltersim.llm.contracts import ProviderResponse
@@ -447,3 +454,49 @@ def test_unseen_stories_compile_to_the_same_registered_environment_operators(
     assert result.draft_plan is not None
     assert {item.op for item in result.draft_plan.effects} == set(case["expected_operators"])
     assert all(item.target_selector.target_id == "sleeping" for item in result.draft_plan.effects)
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the Rust kernels")
+@pytest.mark.parametrize(
+    "level", [TraceLevel.SUMMARY, TraceLevel.FULL], ids=lambda item: item.value
+)
+def test_the_trace_of_a_noisy_zone_is_the_python_rule_s(level: TraceLevel) -> None:
+    """No gate scenario has noise with a trace, so this compares that part of the document."""
+    world = _world()
+    for agent in world.agents.values():
+        agent.activity = Activity.RESTING
+    world.agents["A004"].zone_id = "corridor"
+    _activate(
+        world,
+        _effect("night-noise", "set_ambient_noise", {"level": 0.8}),
+    )
+    documents: list[str] = []
+
+    def keep(trace: object, *, agent_contributions: object = ()) -> None:
+        documents.append(json.dumps([trace, list(agent_contributions)], ensure_ascii=False))
+
+    controller = SimpleNamespace(
+        psychology=SimplePsychologyPolicy(),
+        world=world,
+        artifacts=SimpleNamespace(trace_level=level, record_psychology_trace=keep),
+    )
+    view = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))._view_after_movement(
+        world
+    )
+    minute = world.minute_index
+    result = native.rules("psychology").update_psychology(controller, view, minute)
+    python = controller.psychology.explain_update(view, minute)
+    assert [trace.zone_environment_modifier_event_ids for trace in result.traces] == [
+        trace.zone_environment_modifier_event_ids for trace in python.traces
+    ]
+    assert list(result.traces) == list(python.traces)
+    native.rules("trace").record_psychology_trace(controller, result, result.deltas, minute)
+    UpdatePhase._record_psychology_trace(controller, python, python.deltas, minute)
+    assert documents[0] == documents[1]
+    reached = json.loads(documents[0])[0]["agents"]
+    assert any("zone_environment" in person for person in reached)
+    assert any(
+        cause["kind"] == "experimental_zone_noise_reduced_rest_efficiency"
+        for person in reached
+        for cause in person["direct_causes"]
+    )

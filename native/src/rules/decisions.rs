@@ -11,8 +11,8 @@
 //! order of its dict, and goes into `sink.observations` as bytes; the index reads them
 //! (`HistoryIndex.ingest`). Everything that can refuse the record is read before it is appended, so
 //! Unsupported from there runs the Python step, which changes nothing twice: a sink of another class,
-//! a trace (`RunArtifactWriter`'s document needs the Python objects, so a Run with a trace is left to
-//! Python and its document stays the same), a NaN, a large observed state, a tainted store. After the
+//! a NaN, a large observed state, a tainted store. A Run with a trace gives `RunArtifactWriter` the
+//! document of `_decision_document`, and the writer keeps it as before. After the
 //! append each rule says for itself: Unsupported from `commit_action` or `remember_decision` has
 //! changed nothing, and that one rule then runs in Python.
 
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString, PyTuple};
 
 use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, unsupported};
 use crate::core::world_core::{raw_dict_get, raw_list_append};
@@ -30,6 +30,7 @@ use crate::rules::agent_dynamics::{remember_decision, Decision};
 use crate::rules::behavior::{
     classes, demand_of, due_outcomes, observed_dict, person_of, proposal_of, snapshot_of, Common, Outcome,
 };
+use crate::rules::trace::Level;
 use crate::rules::world_view::RustView;
 use crate::state::entities::{entities_of, Activity, EntityStore, RequestStatus};
 use crate::{write_json_string, Encoder, Unsupported};
@@ -202,6 +203,8 @@ enum Sink<'py> {
     Silent,
     /// `_IndexedMetricSink`.
     Indexed(Bound<'py, PyAny>),
+    /// `RunArtifactWriter` with a trace, which takes the document.
+    Traced(Bound<'py, PyAny>, bool),
     /// `artifacts.record_decision` runs in Python.
     Python,
 }
@@ -221,16 +224,14 @@ fn sink_of<'py>(controller: &Bound<'py, PyAny>) -> PyResult<Sink<'py>> {
         "silent" => Sink::Silent,
         "indexed" => Sink::Indexed(artifacts),
         "artifacts" => {
-            let off = artifacts
-                .getattr(intern!(py, "trace_level"))?
-                .getattr(intern!(py, "value"))?
-                .eq(intern!(py, "off"))?;
+            let level = Level::of(&artifacts)?;
             let started = artifacts.getattr(intern!(py, "_started"))?.is_truthy()?;
             let finalized = artifacts.getattr(intern!(py, "_finalized"))?.is_truthy()?;
-            if off && started && !finalized {
-                Sink::Silent
-            } else {
-                Sink::Python
+            match level {
+                _ if !started || finalized => Sink::Python,
+                Level::Off => Sink::Silent,
+                Level::Summary => Sink::Traced(artifacts, false),
+                Level::Full => Sink::Traced(artifacts, true),
             }
         }
         _ => Sink::Python,
@@ -247,7 +248,7 @@ pub(crate) fn observed_row<'py>(
     let py = controller.py();
     let snapshot = snapshot_of(view)?;
     let index = person_of(snapshot.get(), agent_id)?;
-    if matches!(sink_of(controller)?, Sink::Python) {
+    if matches!(sink_of(controller)?, Sink::Python | Sink::Traced(..)) {
         return Ok(observed_dict(py, snapshot.get(), index)?.into_any());
     }
     Ok(Bound::new(py, ObservedRow { view: snapshot.unbind(), index, made: GILOnceCell::new() })?.into_any())
@@ -511,6 +512,77 @@ fn decision_bytes(
     Ok(out.out)
 }
 
+// ---- The record of a trace ---------------------------------------------------------------------
+
+/// `_decision_document` of `inspection/traces.py`, without the observed state its writer adds last.
+fn decision_document<'py>(
+    py: Python<'py>,
+    row: &ProposalRow,
+    target_id: Option<&str>,
+    next_decision_at: i64,
+    full: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let rust = row.view.get();
+    let data = rust.data();
+    let agent = &data.agents[row.index];
+    let id = rust.key(py, row.index);
+    let action = row.outcome.action.value();
+    let version = row.common.policy_version.bind(py);
+    let version_text = exact_str(version)?;
+    let document = PyDict::new(py);
+    document.set_item("minute_index", data.minute_index)?;
+    document.set_item("agent_id", id)?;
+    document.set_item("action", action)?;
+    document.set_item("target_id", target_id)?;
+    document.set_item("observed_state_hash", row.common.state_hash.bind(py))?;
+    document.set_item("trigger", TRIGGER)?;
+    document.set_item("selected_action", action)?;
+    document.set_item("selected_probability", row.outcome.selection_probability)?;
+    document.set_item("choice_value", row.outcome.choice_value)?;
+    let key = PyList::empty(py);
+    key.append("behavior")?;
+    key.append(&*agent.rng_key)?;
+    key.append(id)?;
+    key.append("minute")?;
+    key.append(data.minute_index)?;
+    key.append("policy")?;
+    key.append(row.common.scorer_version.bind(py))?;
+    key.append("choice")?;
+    if row.outcome.tie_broken {
+        key.append("priority-tie-break")?;
+    }
+    document.set_item("rng_key", key)?;
+    document.set_item("next_decision_at", next_decision_at)?;
+    document.set_item("policy_version", version)?;
+    document.set_item("source_type", "assumption")?;
+    document.set_item(
+        "source_id",
+        if version_text.starts_with("priority-rule-") {
+            "ASM-PRIORITY-RULE-BEHAVIOR-V1"
+        } else if version_text.starts_with("sleep-aware-utility-softmax-v2") {
+            "ASM-SLEEP-AWARE-BEHAVIOR-V2"
+        } else {
+            "ASM-UTILITY-BEHAVIOR-V1"
+        },
+    )?;
+    if full {
+        let modifiers = &data.zone_of(agent).demand_modifiers;
+        let candidates = PyList::empty(py);
+        for candidate in &row.outcome.candidates {
+            let item = PyDict::new(py);
+            item.set_item("action", candidate.action.value())?;
+            item.set_item("eligible", candidate.eligible)?;
+            item.set_item("trigger", row.common.triggers.of(py, candidate.action, demand_of(modifiers, candidate.action))?)?;
+            item.set_item("utility", candidate.utility)?;
+            item.set_item("urgency_priority", candidate.priority)?;
+            item.set_item("probability", candidate.probability)?;
+            candidates.append(item)?;
+        }
+        document.set_item("candidates", candidates)?;
+    }
+    Ok(document)
+}
+
 // ---- The step ----------------------------------------------------------------------------------
 
 /// `_record_outcome`.
@@ -549,8 +621,12 @@ pub(crate) fn record_outcome<'py>(
 
     // The decision's record. All of this reads, so a refusal here runs the Python step.
     match sink_of(controller)? {
-        Sink::Python => return unsupported("the sink is Python's, or the run keeps a trace"),
+        Sink::Python => return unsupported("the sink is Python's"),
         Sink::Silent => {}
+        Sink::Traced(sink, full) => {
+            let document = decision_document(py, row, target, next, full)?;
+            sink.call_method1(intern!(py, "record_decision_document"), (document, observed_state))?;
+        }
         Sink::Indexed(sink) => {
             let Ok(observed) = observed_state.downcast_exact::<ObservedRow>() else {
                 return unsupported("the observed state is a Python object");

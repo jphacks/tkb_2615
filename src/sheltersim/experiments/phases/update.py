@@ -60,7 +60,7 @@ class UpdatePhase:
     ) -> Any:
         if self.stress_policy.parameters.enabled:
             # With the Rust kernels this step is rules/social_propagation.rs (segments.py), and
-            # runs here for what the kernel leaves to these rules, such as a trace.
+            # runs here for what the kernel leaves to these rules.
             result = self.stress_policy.update(
                 view,
                 base_deltas,

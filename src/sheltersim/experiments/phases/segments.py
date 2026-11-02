@@ -3,8 +3,8 @@
 A phase's `_run_*_phase` lists its steps, each a method. A lane adds one line to SEGMENTS, and the
 controller's step tries the kernel first. A kernel gets the controller and the step's arguments,
 and returns what the step returns. Unsupported, raised before it has changed anything, runs the
-Python step, so it says what the kernel doesn't handle: a trace, a tainted namespace, a policy it
-doesn't know. Without the Rust kernels, or with nothing listed, the steps stay the plain methods
+Python step, so it says what the kernel doesn't handle: a tainted namespace, a policy it doesn't
+know. Without the Rust kernels, or with nothing listed, the steps stay the plain methods
 and a tick has nothing to pay. See docs/rust-port/lanes/p4-world-core.md.
 """
 
@@ -36,6 +36,7 @@ SEGMENTS: dict[str, tuple[str, str]] = {
     "_sample_information_contacts": ("information", "sample_contacts"),
     "_sample_proximity_contacts": ("proximity", "sample_contacts"),
     "_social_propagation": ("social_propagation", "update_social_propagation"),
+    "_record_psychology_trace": ("trace", "record_psychology_trace"),
 }
 
 

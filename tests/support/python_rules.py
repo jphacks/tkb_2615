@@ -215,6 +215,9 @@ PORTED_NAMES = frozenset(
         "_restore_person",
         "_schedule_relocation",
         "_set_presence",
+        # policies/psychology.py, inspection/traces.py: rules/trace.rs, rules/decisions.rs
+        "explain_update",
+        "_decision_document",
         # experiments/phases/propose.py, policies/space.py: rules/proposals.rs, rules/travel.rs
         "reserve_sleep_bed",
         "release_sleep_bed",
@@ -230,6 +233,9 @@ PORTED_METHODS = frozenset(
         ("_IndexedMetricSink", "record_decision"),
         ("UtilityBehaviorPolicy", "propose"),
         ("PriorityRuleBehaviorPolicy", "propose"),
+        ("PsychologyUpdateResult", "trace_document"),
+        ("SocialPropagationResult", "trace_document"),
+        ("InformationSpreadResult", "trace_document"),
         ("StressPropagationPolicy", "update"),
         ("ExpressivenessChannelOpennessPolicy", "update"),
         ("DeGrootContactPolicy", "update"),
@@ -264,6 +270,11 @@ def segment_steps() -> frozenset[str]:
 def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     if request.node.get_closest_marker("python_rules") is None:
         return
+    without_kernels(monkeypatch)
+
+
+def without_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mark's change, for a test that compares both within one test."""
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.core import world as world_module

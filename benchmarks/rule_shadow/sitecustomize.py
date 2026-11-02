@@ -168,7 +168,13 @@ elif OUTPUT and os.environ.get("SHELTERSIM_RULE_SHADOW_ONLY"):
     # Only these shadows, by the name after "shadow_", for a lane's own run.
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     for name in os.environ["SHELTERSIM_RULE_SHADOW_ONLY"].split(","):
-        importlib.import_module(f"shadow_{name}").prepare(OUTPUT)
+        if name == "update":
+            # The steps of the update phase, in this file: the psychology and the social model.
+            _install(OUTPUT)
+        elif name == "information":
+            importlib.import_module("information_shadow").install(OUTPUT)
+        else:
+            importlib.import_module(f"shadow_{name}").prepare(OUTPUT)
 elif OUTPUT:
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)
     for shadow in sorted(Path(__file__).parent.glob("shadow_*.py")):
