@@ -917,7 +917,7 @@ def _small_replay_document() -> dict[str, Any]:
 
 
 def test_many_draws_of_a_claim_and_a_correction_are_python_s(generated_scenario: Any) -> None:
-    """1% in a coefficient flips few draws, so these settings put the probability near the middle."""
+    """1% in a coefficient flips few draws: these settings put the probability near the middle."""
     world, _ = _small_world(generated_scenario)
     agent_id = sorted(world.agents)[0]
     world.agents[agent_id].trust = 1.0
