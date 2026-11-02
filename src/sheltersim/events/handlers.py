@@ -3302,8 +3302,17 @@ class SupportRequestTimeoutHandler:
 
 
 # The event types with a Rust function in rules/dispatch.rs. A patch of `apply` shows here, and the
-# handler then goes to Python.
+# handler then goes to Python. The EffectProgram handlers are there for an event whose guard held:
+# the loop asks the guard as `dispatch_one` does, then calls `apply`.
 if native.available():
+    from sheltersim.events.effects import (
+        EffectProgramEnvironmentHandler,
+        EffectProgramFacilityHandler,
+        EffectProgramGeometryHandler,
+        EffectProgramStructureHandler,
+        EffectProgramTemporarySpaceHandler,
+    )
+
     native.rules("dispatch").install_table(
         (SocialInteractionHandler, SocialInteractionHandler.apply),
         (AgentTravelCompletionHandler, AgentTravelCompletionHandler.apply),
@@ -3332,6 +3341,11 @@ if native.available():
                 StaffOperationArrivalHandler,
                 StaffOperationReliefHandler,
                 StaffOperationCompletionHandler,
+                EffectProgramFacilityHandler,
+                EffectProgramEnvironmentHandler,
+                EffectProgramTemporarySpaceHandler,
+                EffectProgramGeometryHandler,
+                EffectProgramStructureHandler,
             )
         ],
         AgentTravelCompletionHandler._after_arrival,

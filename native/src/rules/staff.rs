@@ -1568,7 +1568,7 @@ fn workload_of(world: &Bound<'_, PyAny>, row: &StaffOperationsRow, workers: &[Wo
 
 /// `create_staff_operations_formula` and what `assign_staff_operations` takes from it: its model, the
 /// source and policy of the events' provenance, and their `source_id`.
-fn formula_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<(bool, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+pub(crate) fn formula_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<(bool, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     let py = world.py();
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let formula = py.import("sheltersim.policies.registry")?.getattr("create_staff_operations_formula")?.call1((&configs,))?;

@@ -16,10 +16,10 @@
 //!
 //! The pydantic contracts of the parameters stay Python's: a rule calls `model_validate` where its
 //! Python rule does, through `_PARAMETER_MODELS` of `events/effects.py`. So do the rules of modules
-//! other lanes hold (`order_staff_operation`, the receipts): they're called by name, with no borrow
-//! held. Of `rules/overlay.rs`, a rule whose text the handler wraps (`apply_geometry_change`,
-//! `register_temporary_space`, `place_installed_facility`) is called by name too, its kernel first;
-//! the others are called directly. Nothing here reads LLM output: what
+//! other lanes hold (the receipts): they're called by name, with no borrow held. `order_staff_operation`
+//! is `rules/staff_order.rs`. Of `rules/overlay.rs`, a rule whose text the handler wraps
+//! (`apply_geometry_change`, `register_temporary_space`, `place_installed_facility`) is called by name,
+//! its kernel first; the others are called directly. Nothing here reads LLM output: what
 //! a program may do was validated before it was scheduled, by `validate_effect_program`, which is
 //! not touched (docs/rust-port/lanes/m6-effects.md).
 
@@ -40,10 +40,11 @@ use crate::core::value::V;
 use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::care_receipts::{facility_recovery_record, handoff_record};
 use crate::rules::staff_dynamics::{is_available, staff_status};
+use crate::rules::staff_order::{order_operation, Order};
 use crate::state::effect_program::{EffectProgramRow, Program, NAME};
 use crate::rules::overlay;
 use crate::state::entities::{entities_of, EntityStore};
-use crate::state::events::{is_stable_id, EventRow, EventWriter};
+use crate::state::events::{is_stable_id, EventRef, EventRow, EventWriter};
 use crate::state::resource_ledger::{held_mirror, resource_index, LedgerRow};
 use crate::Unsupported;
 
@@ -347,6 +348,25 @@ enum GuardField {
     StaffAvailable,
 }
 
+impl GuardField {
+    /// `field_name`, as `{field_name!r}` writes it: a fixed ASCII text in single quotes.
+    fn repr(self) -> &'static str {
+        match self {
+            GuardField::Minute => "'simulation.minute'",
+            GuardField::Capacity => "'target.capacity'",
+            GuardField::WorkingUnits => "'target.working_units'",
+            GuardField::QueueLength => "'target.queue_length'",
+            GuardField::ZoneOccupancy => "'zone.occupancy'",
+            GuardField::ResourceAvailable => "'resource.available_quantity'",
+            GuardField::StaffAvailable => "'staff.available'",
+        }
+    }
+}
+
+/// A guard's answer, or the text of the `EventApplicationError` the Python rule raises instead
+/// (`should_apply_effect_guard`, `_evaluate_guard_node`). Unsupported stays the `PyErr`.
+type Judged<T> = Result<T, String>;
+
 enum Guard<'a> {
     All(Vec<Guard<'a>>),
     Any(Vec<Guard<'a>>),
@@ -485,27 +505,32 @@ fn compare_guard(compare: Compare, actual: &Actual, expected: &V) -> PyResult<bo
     })
 }
 
-fn evaluate_guard(world: &Bound<'_, PyAny>, row: &EventRow, guard: &Guard<'_>) -> PyResult<bool> {
+/// `_evaluate_guard_node`: `all` and `any` stop at the first answer, so a later operand's failure is
+/// reached only where Python reaches it.
+fn evaluate_guard(world: &Bound<'_, PyAny>, row: &EventRow, guard: &Guard<'_>) -> PyResult<Judged<bool>> {
     match guard {
         Guard::All(children) => {
             for child in children {
-                if !evaluate_guard(world, row, child)? {
-                    return Ok(false);
+                match evaluate_guard(world, row, child)? {
+                    Ok(true) => {}
+                    other => return Ok(other),
                 }
             }
-            Ok(true)
+            Ok(Ok(true))
         }
         Guard::Any(children) => {
             for child in children {
-                if evaluate_guard(world, row, child)? {
-                    return Ok(true);
+                match evaluate_guard(world, row, child)? {
+                    Ok(false) => {}
+                    other => return Ok(other),
                 }
             }
-            Ok(false)
+            Ok(Ok(false))
         }
-        Guard::Leaf { compare, field, value } => {
-            compare_guard(*compare, &guard_field(world, row, *field)?, value)
-        }
+        Guard::Leaf { compare, field, value } => match guard_field(world, row, *field)? {
+            Ok(actual) => compare_guard(*compare, &actual, value).map(Ok),
+            Err(text) => Ok(Err(text)),
+        },
     }
 }
 
@@ -540,109 +565,158 @@ fn guard_target(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<Option<Arc
     }
 }
 
-fn guard_field(world: &Bound<'_, PyAny>, row: &EventRow, field: GuardField) -> PyResult<Actual> {
+/// The value a leaf reads, or the text `_evaluate_guard_node` raises for a target it can't find.
+fn guard_field(world: &Bound<'_, PyAny>, row: &EventRow, field: GuardField) -> PyResult<Judged<Actual>> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
     let target = guard_target(world, row)?;
     let target_text = target.as_deref().unwrap_or("");
     let store = entities_of(world)?;
     match field {
-        GuardField::Minute => Ok(Actual::Int(exact_int(&attribute(world, intern!(py, "minute_index"))?)?)),
+        GuardField::Minute => Ok(Ok(Actual::Int(exact_int(&attribute(world, intern!(py, "minute_index"))?)?))),
         GuardField::Capacity | GuardField::WorkingUnits | GuardField::QueueLength => {
-            EntityStore::with_rows(&store, |rows| {
-                let Some(facility) = rows.facilities.get(target_text) else {
-                    return unsupported("a guard has no facility target");
-                };
-                Ok(Actual::Int(match field {
-                    GuardField::Capacity => facility.capacity,
-                    GuardField::WorkingUnits => facility.working_units,
-                    _ => (facility.queue_agent_ids.len() + facility.resource_queue_agent_ids.len()) as i64,
+            // `world.facilities.get(target_id or "")`.
+            let actual = EntityStore::with_rows(&store, |rows| {
+                Ok(rows.facilities.get(target_text).map(|facility| {
+                    Actual::Int(match field {
+                        GuardField::Capacity => facility.capacity,
+                        GuardField::WorkingUnits => facility.working_units,
+                        _ => (facility.queue_agent_ids.len() + facility.resource_queue_agent_ids.len()) as i64,
+                    })
                 }))
-            })
+            })?;
+            Ok(actual.ok_or_else(|| format!("guard field {} has no facility target", field.repr())))
         }
         GuardField::ZoneOccupancy => {
+            // `event.payload.get("zone_id") or (...)`: a falsy value of another type is refused.
             let own_zone = match payload.get("zone_id") {
                 None | Some(V::Null) => None,
                 Some(V::Str(zone)) if zone.is_empty() => None,
                 Some(V::Str(zone)) => Some(zone.clone()),
                 Some(_) => return unsupported("a zone ID is another value"),
             };
-            let (zone, count) = EntityStore::with_rows(&store, |rows| {
-                let zone = match own_zone {
-                    Some(zone) => zone,
-                    None => match rows.facilities.get(target_text) {
-                        Some(facility) => facility.zone_id.clone(),
-                        None => match &target {
-                            Some(target) => target.clone(),
-                            None => return unsupported("a guard has no zone target"),
-                        },
-                    },
-                };
-                let count = rows.agents.iter().filter(|(_, agent)| agent.zone_id == zone).count();
-                Ok((zone, count))
-            })?;
+            let zone = match own_zone {
+                Some(zone) => Some(zone),
+                None => {
+                    let of_facility = EntityStore::with_rows(&store, |rows| {
+                        Ok(rows.facilities.get(target_text).map(|facility| facility.zone_id.clone()))
+                    })?;
+                    // A target that is no facility is the zone itself; None is no zone.
+                    of_facility.or_else(|| target.clone())
+                }
+            };
+            let Some(zone) = zone else {
+                return Ok(Err("guard zone.occupancy has no known zone target".to_owned()));
+            };
             if !attribute(world, intern!(py, "zones"))?.contains(&*zone)? {
-                return unsupported("a guard has no known zone target");
+                return Ok(Err("guard zone.occupancy has no known zone target".to_owned()));
             }
-            Ok(Actual::Int(count as i64))
+            let count = EntityStore::with_rows(&store, |rows| {
+                Ok(rows.agents.iter().filter(|(_, agent)| agent.zone_id == zone).count())
+            })?;
+            Ok(Ok(Actual::Int(count as i64)))
         }
         GuardField::ResourceAvailable => {
-            let resource = str_of(payload, "resource_id")
-                .map_or_else(|| unsupported("a guard has no ledger target"), Ok)?;
-            let Some(index) = resource_index(resource) else {
-                return unsupported("a guard has no ledger target");
+            let no_target = || Ok(Err("guard resource.available_quantity has no ledger target".to_owned()));
+            // `not isinstance(ledger, dict)` comes first.
+            if namespace_is_absent(world, intern!(py, "resource_ledger_v1"))? {
+                return no_target();
+            }
+            // `resource_id not in ledger["accounts"]`: None is in no ledger; the row's accounts are
+            // exactly its two resources. A value of another type is Python's to judge.
+            let resource = match payload.get("resource_id") {
+                None | Some(V::Null) => None,
+                Some(V::Str(resource)) => Some(resource.clone()),
+                Some(_) => return unsupported("a resource ID is another value"),
             };
             let mirror = held_mirror(world)?;
-            NamespaceMirror::with_row::<LedgerRow, _>(&mirror, |ledger| {
+            let left = NamespaceMirror::with_row::<LedgerRow, _>(&mirror, |ledger| {
+                let Some(index) = resource.as_deref().and_then(resource_index) else {
+                    return Ok(None);
+                };
                 let account = ledger.accounts.of(index);
                 account
                     .remaining
                     .checked_sub(account.reserved)
-                    .map_or_else(|| unsupported("a quantity past 64 bits"), |left| Ok(Actual::Int(left)))
-            })
+                    .map_or_else(|| unsupported("a quantity past 64 bits"), |left| Ok(Some(left)))
+            })?;
+            match left {
+                Some(left) => Ok(Ok(Actual::Int(left))),
+                None => no_target(),
+            }
         }
         GuardField::StaffAvailable => {
+            // `event.payload.get("staff_id") or target_id`.
             let staff_id = match payload.get("staff_id") {
-                Some(V::Str(staff)) if !staff.is_empty() => staff.clone(),
-                None | Some(V::Null) | Some(V::Str(_)) => match &target {
-                    Some(target) => target.clone(),
-                    None => return unsupported("a guard has no staff target"),
-                },
+                Some(V::Str(staff)) if !staff.is_empty() => Some(staff.clone()),
+                None | Some(V::Null) | Some(V::Str(_)) => target.clone(),
                 Some(_) => return unsupported("a staff ID is another value"),
             };
-            let known = EntityStore::with_rows(&store, |rows| Ok(rows.staff.get(&staff_id).is_some()))?;
-            if !known {
-                return unsupported("a guard has no known staff target");
-            }
+            let known = match &staff_id {
+                Some(staff_id) => EntityStore::with_rows(&store, |rows| Ok(rows.staff.get(staff_id).is_some()))?,
+                None => false,
+            };
+            let (Some(staff_id), true) = (staff_id, known) else {
+                return Ok(Err("guard staff.available has no known staff target".to_owned()));
+            };
             let status = staff_status(world)?;
             let id = PyString::new(py, &staff_id);
-            Ok(Actual::Bool(is_available(status.as_ref(), &id)?))
+            Ok(Ok(Actual::Bool(is_available(status.as_ref(), &id)?)))
         }
     }
 }
 
-fn guard_of_row(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<bool> {
+/// `should_apply_effect_guard` of an event's row. A guard the contract turns down is worded by the
+/// contract itself, from the event's own guard: `event` gives the event object, read only then, and
+/// None leaves that to the Python rule.
+fn guard_decides<'py>(
+    world: &Bound<'py, PyAny>,
+    row: &EventRow,
+    event: Option<&dyn Fn() -> PyResult<Bound<'py, PyAny>>>,
+) -> PyResult<Judged<bool>> {
     let marker = match map_of(&row.provenance)?.get(MARKER) {
         Some(V::Map(marker)) => marker,
-        _ => return Ok(true),
+        _ => return Ok(Ok(true)),
     };
     let guard = match marker.get("guard") {
-        None | Some(V::Null) => return Ok(true),
+        None | Some(V::Null) => return Ok(Ok(true)),
         Some(guard) => guard,
     };
     let mut nodes = 0;
-    let Some(parsed) = parse_guard(guard, 1, &mut nodes) else {
+    if let Some(parsed) = parse_guard(guard, 1, &mut nodes) {
+        return evaluate_guard(world, row, &parsed);
+    }
+    let Some(event) = event else {
         return unsupported("the guard isn't one the contract surely takes");
     };
-    evaluate_guard(world, row, &parsed)
+    invalid_guard(&event()?)
 }
 
-/// `effect_event_guard_or_suppress` of a rule: false is a suppressed effect, the Python rule's.
+/// `GuardExpression.model_validate(guard)` of a guard this kernel doesn't read: the text of its
+/// `ValueError`, as `should_apply_effect_guard` words it. One the contract takes is Python's to
+/// evaluate (an int past 64 bits).
+fn invalid_guard(event: &Bound<'_, PyAny>) -> PyResult<Judged<bool>> {
+    let py = event.py();
+    let marker = attribute(event, intern!(py, "provenance"))?.call_method1(intern!(py, "get"), (intern!(py, MARKER),))?;
+    let guard = marker.call_method1(intern!(py, "get"), (intern!(py, "guard"),))?;
+    let contract = py.import(intern!(py, "sheltersim.events.effects"))?.getattr(intern!(py, "GuardExpression"))?;
+    match contract.call_method1(intern!(py, "model_validate"), (guard,)) {
+        Ok(_) => unsupported("a guard the contract takes and this kernel does not read"),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyValueError>(py) => {
+            Ok(Err(format!("EffectProgram guard is invalid: {}", error.value(py).str()?.to_str()?)))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `effect_event_guard_or_suppress` of a rule: true goes on. Anything else is the Python rule's to
+/// say: the checks a handler makes before its guard are not all this kernel's yet. Through the
+/// dispatch loop the guard was asked before the handler (`guard_or_suppress`), so here it is true.
 fn guard_passes(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<()> {
-    if guard_of_row(world, row)? {
-        Ok(())
-    } else {
-        unsupported("the guard is false, so the effect is suppressed")
+    match guard_decides(world, row, None)? {
+        Ok(true) => Ok(()),
+        Ok(false) => unsupported("the guard is false, so the effect is suppressed"),
+        Err(_) => unsupported("the guard fails, which the Python rule says"),
     }
 }
 
@@ -655,9 +729,39 @@ fn should_apply_guard(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyR
         if provenance.call_method1(intern!(py, "get"), (intern!(py, MARKER),))?.is_none() {
             return Ok(true);
         }
-        guard_of_row(world, &event_row(event)?)
+        let object = || Ok(event.clone());
+        match guard_decides(world, &event_row(event)?, Some(&object))? {
+            Ok(answer) => Ok(answer),
+            Err(text) => errors::failed(py, text),
+        }
     })();
     counted(py, "guard", refused_by_python(py, result))
+}
+
+/// `effect_event_guard_or_suppress`, as `EventDispatcher.dispatch_one` asks it before the handler of
+/// an event with an EffectProgram's marker: Ok when the effect goes on, else the outcome
+/// (`EventSuppressed` for a false guard, `EventApplicationError` for one that can't be read). Read
+/// only; Unsupported or a Python call's exception leaves the event to the Python dispatcher.
+pub(crate) fn guard_or_suppress<'py>(
+    world: &Bound<'py, PyAny>,
+    event: EventRef<'_, 'py>,
+    object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+) -> PyResult<()> {
+    let py = world.py();
+    let made;
+    let row = match event {
+        EventRef::Row(row) => row,
+        EventRef::Object(event) => {
+            made = event_row(event)?;
+            &made
+        }
+    };
+    let result = match guard_decides(world, row, Some(object))? {
+        Ok(true) => Ok(()),
+        Ok(false) => errors::suppressed(py, "EffectProgram guard evaluated false"),
+        Err(text) => errors::failed(py, text),
+    };
+    counted(py, "dispatch_guard", result)
 }
 
 // ---- What other modules ask ----------------------------------------------------------------------
@@ -1180,8 +1284,12 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
     }
     // "temporary-space operator differs from its approved program" can't follow: the program's
     // operator for the effect and the payload's op were both just seen to be add_temporary_space.
-    if !guard_of_row(world, &row)? {
-        return errors::suppressed(py, "EffectProgram guard evaluated false");
+    // `effect_event_guard_or_suppress`: false suppresses; a guard that fails raises its own text.
+    let event_object = || Ok(event.clone());
+    match guard_decides(world, &row, Some(&event_object))? {
+        Ok(true) => {}
+        Ok(false) => return errors::suppressed(py, "EffectProgram guard evaluated false"),
+        Err(text) => return errors::failed(py, text),
     }
     let parsed = match parameters(py, "add_temporary_space", &payload_item(event, "parameters")?) {
         Ok(parsed) => parsed,
@@ -1327,7 +1435,6 @@ fn geometry(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<
 
 // ---- EffectProgramStructureHandler ---------------------------------------------------------------
 
-const STAFF_MODULE: &str = "sheltersim.domain.staff_operations";
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
 
 /// What the operators of a marker with an approved program have in common.
@@ -1375,16 +1482,23 @@ fn staff_task_order(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, row: &Ev
     }
     let order = parameters(py, "staff_task_order", &payload_item(event, "parameters")?)?;
     guard_passes(world, row)?;
+    let task_kind = attribute(&order, intern!(py, "task_kind"))?;
+    let target_zone_id = attribute(&order, intern!(py, "target_zone_id"))?;
+    let target_id = attribute(&order, intern!(py, "target_id"))?;
+    let reason = attribute(&order, intern!(py, "reason"))?;
+    let target_id = if target_id.is_none() { None } else { Some(exact_str(&target_id)?) };
+    let order = Order {
+        staff_id: required_str(payload, "staff_id")?,
+        task_kind: exact_str(&task_kind)?,
+        target_zone_id: exact_str(&target_zone_id)?,
+        target_id,
+        reason: exact_str(&reason)?,
+        causation_event_id: &row.event_id,
+        source_id: row.source_id.as_deref(),
+    };
     let candidate = copy_of(world)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("staff_id", &**required_str(payload, "staff_id")?)?;
-    keywords.set_item("task_kind", attribute(&order, intern!(py, "task_kind"))?)?;
-    keywords.set_item("target_zone_id", attribute(&order, intern!(py, "target_zone_id"))?)?;
-    keywords.set_item("target_id", attribute(&order, intern!(py, "target_id"))?)?;
-    keywords.set_item("reason", attribute(&order, intern!(py, "reason"))?)?;
-    keywords.set_item("causation_event_id", &*row.event_id)?;
-    keywords.set_item("source_id", row.source_id.as_deref())?;
-    call_rule(py, STAFF_MODULE, "order_staff_operation", (&candidate,), Some(&keywords))?;
+    // Its checks raise the rule's text before any change, on the copy; the world stays as it was.
+    order_operation(&candidate, &order)?;
     commit(world, &candidate)
 }
 

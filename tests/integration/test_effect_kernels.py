@@ -598,7 +598,7 @@ def test_each_guard_is_python_s_answer_or_python_s_to_give(world: WorldState, ru
     generator = random.Random(7)
     cases = _guard_cases(world)
     generator.shuffle(cases)
-    answered = refused = 0
+    answered = said = 0
     for guard, payload in cases[:6000]:
         event = _guarded(world, guard, payload)
         try:
@@ -608,12 +608,17 @@ def test_each_guard_is_python_s_answer_or_python_s_to_give(world: WorldState, ru
         try:
             answer = rules.should_apply_guard(world, event)
         except native.Unsupported:
-            refused += 1
+            continue
+        except EventApplicationError as made:
+            # An invalid guard or a missing target: the Python rule's text (l8-texts-events.md).
+            said += 1
+            assert type(expected) is EventApplicationError, (guard, payload, made, expected)
+            assert str(made) == str(expected), (guard, payload)
             continue
         answered += 1
         assert answer is expected, (guard, payload, answer, expected)
     # The test means nothing if the kernel only ever refuses.
-    assert answered > 500 and refused > 500
+    assert answered > 500 and said > 500
 
 
 def _random_guard(generator: random.Random, depth: int = 1) -> dict[str, Any]:
@@ -635,11 +640,13 @@ def _random_guard(generator: random.Random, depth: int = 1) -> dict[str, Any]:
     return guard
 
 
-def test_a_guard_the_contract_refuses_is_refused(world: WorldState, rules: Any) -> None:
+def test_a_guard_the_contract_refuses_has_the_contract_s_text(
+    world: WorldState, rules: Any
+) -> None:
     generator = random.Random(11)
     facility = _a_facility(world)
     payload = {"facility_id": facility, "staff_id": sorted(world.staff)[0]}
-    accepted = 0
+    accepted = refused_by_contract = 0
     for _ in range(1500):
         guard = _random_guard(generator)
         event = _guarded(world, guard, payload)
@@ -647,11 +654,18 @@ def test_a_guard_the_contract_refuses_is_refused(world: WorldState, rules: Any) 
             answer = rules.should_apply_guard(world, event)
         except native.Unsupported:
             continue
+        except EventApplicationError as made:
+            refused_by_contract += 1
+            with pytest.raises(EventApplicationError) as said:
+                should_apply_effect_guard.__wrapped__(world, event)
+            assert str(made) == str(said.value)
+            assert str(made).startswith("EffectProgram guard is invalid: ")
+            continue
         accepted += 1
         # What the kernel takes, the contract takes, with the same answer.
         GuardExpression.model_validate(event.provenance[KEY]["guard"])
         assert answer is should_apply_effect_guard.__wrapped__(world, event)
-    assert accepted > 50
+    assert accepted > 50 and refused_by_contract > 50
 
 
 def _nested(depth: int) -> dict[str, Any]:
@@ -691,10 +705,11 @@ def test_the_bounds_of_a_guard_are_the_contract_s(
         world, event
     )
     event = _guarded(world, turned_down, {})
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError) as made:
         rules.should_apply_guard(world, event)
-    with pytest.raises(EventApplicationError):
+    with pytest.raises(EventApplicationError) as said:
         should_apply_effect_guard.__wrapped__(world, event)
+    assert str(made.value) == str(said.value)
 
 
 def test_the_size_of_a_guard_counts_to_twenty(world: WorldState, rules: Any) -> None:
@@ -710,10 +725,11 @@ def test_the_size_of_a_guard_counts_to_twenty(world: WorldState, rules: Any) -> 
     assert rules.should_apply_guard(world, event) is True
     assert should_apply_effect_guard.__wrapped__(world, event) is True
     event = _guarded(world, tree(21), {})
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError) as made:
         rules.should_apply_guard(world, event)
-    with pytest.raises(EventApplicationError):
+    with pytest.raises(EventApplicationError) as said:
         should_apply_effect_guard.__wrapped__(world, event)
+    assert str(made.value) == str(said.value)
 
 
 def test_large_int_against_a_float_is_python_s(world: WorldState, rules: Any) -> None:
