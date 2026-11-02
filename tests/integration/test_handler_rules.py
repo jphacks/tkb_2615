@@ -539,8 +539,8 @@ def test_a_timeout_of_another_person_s_request_is_python_s_error(generated_scena
     _open_request(world, agent_id)
     other = next(key for key in sorted(world.agents) if key != agent_id)
     handler = SupportRequestTimeoutHandler(cooldown_minutes=30)
-    with pytest.raises(native.Unsupported, match="another person"):
-        native.rules("support").timeout(handler, world, _timeout_event(world, other))
+    _, said = kernel_says_python_s_text(handler, world, _timeout_event(world, other))
+    assert said == "support request 'support-t1' does not match its Agent"
 
 
 # ---- a staff member's support ends ---------------------------------------------------------------
