@@ -12,7 +12,6 @@ import copy
 from typing import Any
 
 import pytest
-
 from support.world import kernel_says_python_s_text
 
 from sheltersim import native

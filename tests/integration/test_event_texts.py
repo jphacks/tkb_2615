@@ -852,7 +852,7 @@ def test_the_loop_s_handlers_texts_are_python_s(
         _says(timeout, world, _event(world, "support_request_timeout", payload), text)
 
 
-# ---- Typed social interactions --------------------------------------------------------------------
+# ---- Typed social interactions ------------------------------------------------------------------
 
 
 def test_a_typed_social_event_s_first_texts_are_python_s(small_world: WorldState) -> None:
