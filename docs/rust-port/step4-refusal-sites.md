@@ -1356,14 +1356,14 @@
 | 行 | fn | 理由 | 記号 |
 |--:|---|---|---|
 | 178 | `field` | a payload is not a mapping | C |
-| 258 | `entity_rules_watching` | not a WorldState v6 | O |
+| 258 | `entity_rules_watching` | not a WorldState v6 | C（L7b で訂正。もとは O。今の文は `not a WorldState v5 or v6`） |
 | 261 | `entity_rules_watching` | no resource service config | C |
 | 266 | `entity_rules_watching` | the clock or seed is the Python rule's | C |
 | 287 | `entity_rules_watching` | a zone key is not its ID | C |
 | 335 | `entity_rules_watching` | an agent key is not its ID | C |
 | 400 | `entity_rules_watching` | a facility kind is not ASCII | C |
 | 420 | `entity_rules_watching` | a facility is over capacity | C |
-| 430 | `entity_rules_watching` | a resource facility uses the legacy queues | O |
+| 430 | `entity_rules_watching` | a resource facility uses the legacy queues | C（L7b で訂正。もとは O。v6 の状態の規則） |
 | 433 | `entity_rules_watching` | another facility holds resource slots | C |
 | 444 | `entity_rules_watching` | a facility queue is the Python rule's | C |
 | 449 | `entity_rules_watching` | a facility service is the Python rule's | C |

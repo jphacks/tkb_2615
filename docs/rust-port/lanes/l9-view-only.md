@@ -23,8 +23,8 @@
 
 - **列の旧方式：** 今は前と同じに移行して続きを計算できます（同じ版の Run の振る舞いは変えない）。閲覧でも同じ移行をして読みます。版を上げた後は、全部の旧 Run が閲覧のみなので、tick には届きません。
 - **情報の状態の schema 1：** 移行は tick の中（`upgrade_information_runtime_state`）で、続きを計算すると次の保存は schema 2 です。今のコードは schema 1 を書きません。
-- **切り替え `LEGACY_SHAPES_TICKABLE`：** `False` にすると、この2つの形を含む保存は版が同じでも閲覧のみになります（`legacy:facility_queues_fifo`、`legacy:information_schema_1`）。**L10 は L11 より前に Python を消すので、その間は版1のままです。O の断り（`information.rs:386`、`information_events.rs:50`、`tick_validation.rs:430`）の Python の道を消すときに、この切り替えを `False` にしてください。** テストは両方の値で確かめています。
-- **WorldState v5 は古い形ではありません。** 資源の運用がない Scenario は今も v5 で始まります（`resource_service_enabled != (schema_version == 6)`）。`tick_validation.rs:258` の `not a WorldState v6`（棚卸しの O）は普通の Run で届くので、閲覧のみにしても消えません。**記号の付け直しが要ります。**
+- **切り替え `LEGACY_SHAPES_TICKABLE`：** `False` にすると、この2つの形を含む保存は版が同じでも閲覧のみになります（`legacy:facility_queues_fifo`、`legacy:information_schema_1`）。**L10 は L11 より前に Python を消すので、その間は版1のままです。O の断り（`information.rs:386`、`information_events.rs:50`。`tick_validation.rs:430` は O ではなく v6 の状態の規則でした：L7b）の Python の道を消すときに、この切り替えを `False` にしてください。** テストは両方の値で確かめています。
+- **WorldState v5 は古い形ではありません。** 資源の運用がない Scenario は今も v5 で始まります（`resource_service_enabled != (schema_version == 6)`）。`tick_validation.rs:258` の `not a WorldState v6`（棚卸しの O）は普通の Run で届くので、閲覧のみにしても消えません。**記号の付け直しが要ります。**（L7b で C に直し、v5 の検証も Rust にしました：[l7b-world-v5.md](l7b-world-v5.md)）
 
 ## テストと fixture
 
