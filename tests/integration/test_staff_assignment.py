@@ -189,6 +189,95 @@ def test_the_rotation_reads_the_history_and_the_fatigue() -> None:
         assert len(answer) == 1
 
 
+def test_a_patrol_s_urgency_is_half_the_mean_stress_against_another_task() -> None:
+    """Either side of the rank: a 1% change of the factor swaps them."""
+
+    def make(sanitation: float) -> WorldState:
+        world = _world(staff=[_member("S01", "toilet", "cleaning", "patrol")])
+        _spread(world, "toilet", 0.8)
+        for zone, record in world.model_state[KEY]["zones"].items():
+            record["sanitation"] = sanitation if zone == "toilet" else 1.0
+        return world
+
+    for sanitation, kind in ((0.598, "cleaning"), (0.602, "patrol")):
+        first, second = make(sanitation), make(sanitation)
+        assert _both_assign(first, second, 0)
+        assert first.model_state[KEY]["staff"]["S01"]["task_kind"] == kind
+
+
+def test_the_rotation_counts_recent_work_from_four_hours_back() -> None:
+    def make() -> WorldState:
+        world = _world(staff=[_member(f"S{n}", "toilet", "patrol") for n in range(2)], duration=400)
+        _spread(world, "toilet", 0.9)
+        world.minute_index = 300
+        entry = {
+            "task_id": "old",
+            "task_kind": "patrol",
+            "target_id": None,
+            "target_zone_id": "toilet",
+            "reason": "r",
+            "status": "completed",
+            "start_minute": 0,
+            "arrival_minute": 0,
+            "travel_minutes": 0,
+            "causation_event_ids": [],
+        }
+        history = world.model_state[KEY]["history"]
+        history.append({**entry, "staff_id": "S0", "complete_minute": 60})
+        history.append({**entry, "staff_id": "S1", "complete_minute": 59})
+        return world
+
+    first, second = make(), make()
+    assert _both_assign(first, second, 300)
+    state = first.model_state[KEY]["staff"]
+    assert state["S1"]["phase"] != "idle" and state["S0"]["phase"] == "idle"
+
+
+def test_a_fatigue_rounds_at_a_thousandth_in_the_rotation() -> None:
+    def make() -> WorldState:
+        world = _world(staff=[_member(f"S{n}", "toilet", "patrol") for n in range(2)])
+        _spread(world, "toilet", 0.9)
+        state = world.model_state["staff_dynamics_v1"]["staff"]
+        state["S0"]["fatigue"] = 0.0504
+        state["S1"]["fatigue"] = 0.0498
+        return world
+
+    first, second = make(), make()
+    assert _both_assign(first, second, 0)
+    # Both round to 50, so the ID decides; 1010 * fatigue would give 51 and 50.
+    assert first.model_state[KEY]["staff"]["S0"]["phase"] != "idle"
+
+
+def test_the_travel_first_formula_takes_the_nearer_task() -> None:
+    def make(policy: str) -> WorldState:
+        world = _world(
+            staff=[_member("S01", "toilet", "cleaning")],
+            configs={"policy_registry": {"schema_version": 2, "staff_operations": policy}},
+        )
+        for zone, record in world.model_state[KEY]["zones"].items():
+            record["sanitation"] = 0.8 if zone == "toilet" else 0.2
+        return world
+
+    near = make("staff-travel-first-v1"), make("staff-travel-first-v1")
+    assert _both_assign(*near, 0)
+    assert near[0].model_state[KEY]["staff"]["S01"]["target_zone_id"] == "toilet"
+    urgent = make("staff-urgency-first-v1"), make("staff-urgency-first-v1")
+    assert _both_assign(*urgent, 0)
+    assert urgent[0].model_state[KEY]["staff"]["S01"]["target_zone_id"] != "toilet"
+
+
+def test_equal_ranks_go_by_the_kind_zone_and_target_as_python_compares_them() -> None:
+    def make() -> WorldState:
+        world = _world(staff=[_member("S01", "toilet", "cleaning")])
+        for record in world.model_state[KEY]["zones"].values():
+            record["sanitation"] = 0.5
+        world.zone_edges[next(iter(world.zone_edges))].closed = False
+        return world
+
+    first, second = make(), make()
+    assert _both_assign(first, second, 0)
+
+
 def test_a_full_passage_keeps_a_worker_from_a_task() -> None:
     capacities = {"layout_routing": _routing({})}
 
@@ -299,6 +388,24 @@ def test_a_relief_goes_to_the_replacement_the_python_rule_picks() -> None:
     ) in {"S02", "S03"}
 
 
+def test_a_relief_goes_to_the_replacement_with_the_least_work() -> None:
+    def make() -> WorldState:
+        world = _on_a_task()
+        world.minute_index = 1
+        world.model_state["staff_dynamics_v1"]["staff"]["S02"]["fatigue"] = 0.5
+        return world
+
+    first, second = make(), make()
+    answer = native.rules("staff").relief(first, 1)
+    assert answer == schedule_staff_operation_relief.__wrapped__(second, 1)
+    assert json.dumps(_state(first)) == json.dumps(_state(second))
+    assert next(
+        event.payload["replacement_staff_id"]
+        for event in first.event_queue.pending()
+        if event.event_type == "staff_operation_relief"
+    ) == "S03"
+
+
 def test_no_relief_for_a_worker_still_on_shift_or_too_near_the_end() -> None:
     world = _on_a_task()
     assert native.rules("staff").relief(world, 0) == ()
@@ -365,6 +472,37 @@ def test_a_route_past_the_end_of_the_run_is_its_reason() -> None:
         agent.zone_id = "sleeping"
     _pending(world, 1, sorted(world.agents)[0])
     assert _reasons(world) == [["insufficient_run_time"]]
+
+
+def test_a_route_that_ends_exactly_at_the_run_s_end_is_too_late() -> None:
+    plain = _world(staff=[_member("S01", "toilet", "support")])
+    route = _router(plain).route("sleeping", "toilet")
+    assert route is not None
+    # Its minutes, and ten of service.
+    last = route.travel_minutes + 10
+    for duration, too_late in ((last, True), (last + 1, False)):
+        world = _world(staff=[_member("S01", "toilet", "support")], duration=duration)
+        for agent in world.agents.values():
+            agent.zone_id = "sleeping"
+        _pending(world, 1, sorted(world.agents)[0])
+        assert ("insufficient_run_time" in _reasons(world)[0]) is too_late
+
+
+def test_a_full_destination_counts_who_is_on_the_way() -> None:
+    from sheltersim.domain.models import Activity
+
+    world = _world(staff=[_member("S01", "toilet", "support")])
+    people = sorted(world.agents)
+    for agent in world.agents.values():
+        agent.zone_id = "sleeping"
+    world.agents[people[1]].zone_id = "toilet"
+    world.agents[people[2]].activity = Activity.MOVING
+    world.agents[people[2]].target_id = "toilet"
+    _pending(world, 1, people[0])
+    world.zones["toilet"].capacity = 2
+    assert _reasons(world) == [["staff_destination_full"]]
+    world.zones["toilet"].capacity = 3
+    assert _reasons(world) != [["staff_destination_full"]]
 
 
 def test_a_full_destination_and_a_full_passage_are_their_reasons() -> None:

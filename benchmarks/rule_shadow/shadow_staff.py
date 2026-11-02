@@ -276,6 +276,18 @@ def prepare(output: str) -> None:
     rules.assign_none = assign_pending
     rules.wait_snapshot = wait_snapshot
 
+    # A minute's metrics read the same waits inside `snapshot_fields`, past this module.
+    metric_rules = native.rules("metrics")
+    fields_kernel = metric_rules.snapshot_fields
+
+    def snapshot_fields(world: Any, unsettled: Any, sample_minute: Any) -> Any:
+        active = [item for item in unsettled if item.status.value in ("pending", "assigned")]
+        if active:
+            wait_snapshot(world, active, sample_minute)
+        return fields_kernel(world, unsettled, sample_minute)
+
+    metric_rules.snapshot_fields = snapshot_fields
+
     # domain/staff_operations.py registers `validate` when it is imported, later than this.
     state_rules = native.state("staff_operations")
     rust_validate = state_rules.validate

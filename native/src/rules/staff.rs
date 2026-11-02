@@ -596,8 +596,14 @@ fn preempt_worker<'py>(
         intern!(py, "append"),
         (log_record(py, &event, at.into_pyobject(py)?.as_any(), "APPLIED", Some("A priority-1 support request preempted a routed background staff task."))?,),
     )?;
-    let interrupted = py.import("sheltersim.domain.staff_operations")?.getattr("interrupt_staff_operation")?.call1((world, &*worker.id, &event))?;
-    if !interrupted.is_truthy()? {
+    // Its reads refuse first, and then its Python rule takes it, as `kernel_first` would.
+    let interrupted = match crate::rules::staff_operation_events::interrupt_operation(world, &worker.id, &event, None) {
+        Err(error) if error.is_instance_of::<Unsupported>(py) => {
+            py.import("sheltersim.domain.staff_operations")?.getattr("interrupt_staff_operation")?.getattr("__wrapped__")?.call1((world, &*worker.id, &event))?.is_truthy()?
+        }
+        other => other?,
+    };
+    if !interrupted {
         return Err(pyo3::exceptions::PyValueError::new_err("urgent support preemption lost its active staff operation"));
     }
     Ok(Some(chosen))
