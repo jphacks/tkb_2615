@@ -103,6 +103,10 @@ def _install(output: str) -> None:
             python_step(self, world, view, final_deltas, minute)
             return
         seen["kernel_ran"] += 1
+        if not callable(update_long_term):
+            # A model with no long-term state: the Python step does nothing, nor does the kernel.
+            seen["no_long_term_state"] += 1
+            return
         if python_error is not None:
             differences.append(f"minute {minute}: the kernel took what Python turned down")
             return

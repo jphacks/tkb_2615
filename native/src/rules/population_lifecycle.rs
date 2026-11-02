@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
@@ -17,7 +18,7 @@ use crate::core::value::V;
 use crate::rules::movement::{mobility_text, start_movement};
 use crate::rules::movement_geometry::{Geo, Pt};
 use crate::rules::population::{
-    cancel_agent_events, check_admission_paths, check_information, check_queue_rows, check_relationship_keys, drop_support_requests, event_row,
+    schedule_population_retry, suppressed, cancel_agent_events, check_admission_paths, check_information, check_queue_rows, check_relationship_keys, drop_support_requests, event_row,
     filter_support_requests, get, get_map, has_namespace, identifier, is_dict, namespace, optional_identifier, optional_text, pair_of,
     payload, person_in, place_in_room, planning, presence_is_plain, presence_state, profile_object, record_hash, release_room, reset_position,
     sha_hex, sorted_keys, sorted_set, strings, text, v_map, write_presence, write_room_admission, writing, Person, Places, Transition, AGENT_DYNAMICS,
@@ -434,8 +435,9 @@ fn check_restore(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, agent_id: &
     if !is_dict(&snapshot) {
         return unsupported("the retained person is missing");
     }
+    // `_initial_dynamics` of a person saved without their record.
     if has_namespace(world, AGENT_DYNAMICS)? && snapshot.get_item("agent_dynamics")?.is_none() {
-        return unsupported("a new record of all people for one person is the Python rule's");
+        crate::rules::agent_dynamics::check_add_agent(world)?;
     }
     check_admission_paths(world, &[zone])
 }
@@ -468,7 +470,14 @@ fn restore_person(world: &Bound<'_, PyAny>, agent_id: &str, zone_id: &str, minut
     attribute(world, intern!(py, "agents"))?.set_item(agent_id, agent)?;
     if let Some(dynamics) = namespace(world, AGENT_DYNAMICS)? {
         let agents = dynamics.get_item("agents")?;
-        agents.set_item(agent_id, deep_copy(&snapshot.get_item("agent_dynamics")?)?)?;
+        let saved = snapshot.get_item("agent_dynamics")?;
+        // `_initial_dynamics`, of the person just added, for one saved without their record.
+        let record = if saved.is_none() {
+            crate::rules::agent_dynamics::create_state(world)?.get_item("agents")?.get_item(agent_id)?
+        } else {
+            deep_copy(&saved)?
+        };
+        agents.set_item(agent_id, record)?;
         agents.get_item(agent_id)?.set_item("decision_due_minute", minute)?;
     }
     if let Some(body) = namespace(world, BODY)? {
@@ -621,13 +630,31 @@ fn free(activity: Activity) -> bool {
     matches!(activity, Activity::Idle | Activity::Resting | Activity::Sleeping)
 }
 
-/// `_defer_while_busy`'s question.
-fn busy(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<bool> {
-    EntityStore::with_rows(&entities_of(world)?, |rows| {
+/// What `_defer_while_busy` says, on the world itself: None for someone who is free.
+fn busy_reason(world: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<Option<String>> {
+    let py = world.py();
+    let activity = EntityStore::with_rows(&entities_of(world)?, |rows| {
         let Some(agent) = rows.agents.get(agent_id) else {
             return unsupported("no such person");
         };
-        Ok(!free(agent.activity) || agent.support_request_id.is_some() || rows.active_tasks.iter().any(|(_, task)| task.agent_id.as_deref() == Some(agent_id)))
+        if !free(agent.activity) {
+            return Ok(Some((agent.activity, None)));
+        }
+        if agent.support_request_id.is_some() {
+            return Ok(Some((agent.activity, Some("the person is waiting for support"))));
+        }
+        if rows.active_tasks.iter().any(|(_, task)| task.agent_id.as_deref() == Some(agent_id)) {
+            return Ok(Some((agent.activity, Some("the person owns an active task"))));
+        }
+        Ok(None)
+    })?;
+    Ok(match activity {
+        None => None,
+        Some((_, Some(reason))) => Some(reason.to_owned()),
+        Some((activity, None)) => {
+            let value = activity.member(py)?.getattr(intern!(py, "value"))?;
+            Some(format!("the person is {}", exact_str(&value)?))
+        }
     })
 }
 
@@ -693,6 +720,10 @@ struct PlannedRoute {
 }
 
 enum Plan {
+    /// The rule's `EventSuppressed`, with nothing changed.
+    Suppress(&'static str),
+    /// `_defer_while_busy`: the retry on the world itself, and then the suppression.
+    Defer(String),
     Exit { agent_id: Arc<str>, from_zone: Arc<str> },
     Transfer { agent_id: Arc<str>, from_zone: Arc<str> },
     ReturnWait { agent_id: Arc<str>, destination: Arc<str>, household: Option<Arc<str>>, from_zone: Option<Arc<str>> },
@@ -791,10 +822,10 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
                 return unsupported("the person is not admitted");
             };
             if action == "temporary_exit" && program_minutes(world, row, &first, "return")?.iter().any(|due| *due <= minute) {
-                return unsupported("the return of the same program has passed");
+                return Ok(Plan::Suppress("temporary exit dropped: the person was not free before the return in the same EffectProgram"));
             }
-            if busy(world, &first)? {
-                return unsupported("the person is busy: the Python rule defers");
+            if let Some(reason) = busy_reason(world, &first)? {
+                return Ok(Plan::Defer(reason));
             }
             identifier(&first)?;
             identifier(&from_zone)?;
@@ -818,7 +849,7 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
         "return" => {
             let admitted = agents.contains(&*first)?;
             if admitted && program_minutes(world, row, &first, "temporary_exit")?.iter().any(|due| *due < minute) {
-                return unsupported("the exit of the same program was dropped");
+                return Ok(Plan::Suppress("return skipped: the person had not left before the return in the same EffectProgram"));
             }
             if admitted || !state.get_item("people")?.contains(&*first)? {
                 return unsupported("no retained absent person");
@@ -904,6 +935,7 @@ fn write_action<'py>(candidate: &Bound<'py, PyAny>, row: &EventRow, event: &Even
     let change = |value: PresenceChange| PresenceChange { household_id: command.household_id.clone(), source_ids: command.source_ids.clone(), ..value };
     let presence = namespace(candidate, PRESENCE)?.filter(is_dict);
     let receipt = match plan {
+        Plan::Suppress(_) | Plan::Defer(_) => return Err(PyRuntimeError::new_err("a deferral has nothing to write")),
         Plan::Exit { agent_id, from_zone } | Plan::Transfer { agent_id, from_zone } => {
             let exit = &*command.action == "temporary_exit";
             archive_person(candidate, &agent_id, row, state)?;
@@ -1049,7 +1081,71 @@ fn apply_presence_action<'py>(
         let plan = plan_action(world, candidate, &row, &command, &state)?;
         Ok((row, command, state, ids_of_event, plan))
     })())?;
-    writing(write_action(candidate, &row, &ids_of_event, &command, &state, plan))
+    match plan {
+        Plan::Suppress(text) => suppressed(candidate.py(), text.to_owned()),
+        Plan::Defer(reason) => {
+            schedule_population_retry(world, event, "presence-retry", "population exit")?;
+            suppressed(candidate.py(), format!("population exit waits until the person is free: {reason}"))
+        }
+        plan => writing(write_action(candidate, &row, &ids_of_event, &command, &state, plan)),
+    }
+}
+
+/// `apply_population_presence_command`. The command's contract and the copy's validation stay
+/// Python's, and what they refuse is the Python rule's, with its text.
+#[pyfunction]
+pub(crate) fn apply_presence_command<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, command: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = world.py();
+    let (typed, ids, candidate, dropped) = planning((|| {
+        let module = py.import("sheltersim.domain.population_lifecycle")?;
+        let contract = module.getattr("PopulationPresenceCommand")?;
+        let typed = if command.is_instance(&contract)? { command.clone() } else { contract.call_method1("model_validate", (command,))? };
+        let ids = typed.call_method0("selected_ids")?;
+        if !has_namespace(world, KEY)? {
+            return unsupported("the lifecycle is not installed");
+        }
+        let document = py.import("copy")?.getattr("deepcopy")?.call1((world.call_method0(intern!(py, "to_dict"))?,))?;
+        let class = py.import(intern!(py, "sheltersim.core.world"))?.getattr(intern!(py, "WorldState"))?;
+        let candidate = class.call_method1(intern!(py, "from_dict"), (document,))?;
+        let row = event_row(event)?;
+        if row.due_minute != exact_int(&attribute(&candidate, intern!(py, "minute_index"))?)? {
+            return unsupported("the command is at another minute");
+        }
+        let expected = attribute(&typed, intern!(py, "expected_return_minute"))?;
+        let mut dropped = false;
+        if !expected.is_none() && exact_int(&expected)? < row.due_minute {
+            if crate::rules::population::provenance(&row, "population_retry").is_none() {
+                return unsupported("the expected return precedes the event");
+            }
+            dropped = true;
+        }
+        Ok((typed, ids, candidate, dropped))
+    })())?;
+    if dropped {
+        return suppressed(py, "temporary exit dropped: the person was not free before the expected return".to_owned());
+    }
+    let receipt = apply_presence_action(world, &candidate, event, &typed, &ids)?;
+    let checked = (|| -> PyResult<()> {
+        validate_population_lifecycle_state(&candidate).or_else(|error| {
+            if error.is_instance_of::<Unsupported>(py) {
+                py.import("sheltersim.domain.population_lifecycle")?.getattr("validate_population_lifecycle_state")?.call1((&candidate,)).map(|_| ())
+            } else {
+                Err(error)
+            }
+        })?;
+        candidate.call_method0(intern!(py, "validate"))?;
+        py.import("sheltersim.domain.simulator_state")?.getattr("validate_simulator_extensions")?.call1((&candidate,))?;
+        Ok(())
+    })();
+    if let Err(error) = checked {
+        if error.is_instance_of::<PyTypeError>(py) || error.is_instance_of::<PyKeyError>(py) || error.is_instance_of::<PyValueError>(py) {
+            let failed = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventApplicationError"))?;
+            return Err(PyErr::from_value(failed.call1((format!("population command failed validation: {}", error.value(py).str()?),))?));
+        }
+        return Err(error);
+    }
+    crate::rules::effects::swap(world, &candidate)?;
+    Ok(receipt)
 }
 
 // ---- `admit_pending_returns` ---------------------------------------------------------------------
@@ -1172,12 +1268,46 @@ pub(crate) fn admit_pending_returns<'py>(world: &Bound<'py, PyAny>, minute: &Bou
     returns_inner(world, exact_int(minute)?)
 }
 
+/// What `returns_inner` asks of the waiting, whoever gets a place. A rule that writes and then
+/// admits asks this first: it can't refuse then.
+fn check_waiting_returns(world: &Bound<'_, PyAny>) -> PyResult<()> {
+    let Some(state) = namespace(world, KEY)?.filter(is_dict) else {
+        return Ok(());
+    };
+    let pending = state.get_item("pending_returns")?;
+    if !pending.is_truthy()? {
+        return Ok(());
+    }
+    presence_state(world)?;
+    let mut places = Places::of(world)?;
+    for item in pending.try_iter()? {
+        let item = item?;
+        exact_int(&item.get_item("minute")?)?;
+        let (event_id, agent_id, zone_id) = (text(&item.get_item("event_id")?)?, text(&item.get_item("agent_id")?)?, text(&item.get_item("zone_id")?)?);
+        places.has_room_for(&zone_id, None)?;
+        places.available_room(&zone_id)?;
+        check_restore(world, &state, &agent_id, &zone_id)?;
+        identifier(&event_id)?;
+        identifier(&agent_id)?;
+        identifier(&zone_id)?;
+        optional_identifier(optional_text(&item.get_item("household_id")?)?.as_deref())?;
+        for source in item.get_item("source_ids")?.try_iter()? {
+            identifier(exact_str(&source?)?)?;
+        }
+    }
+    check_information(world)?;
+    check_relationship_keys(world)
+}
+
 // ---- `complete_presence_relocation` --------------------------------------------------------------
 
-#[pyfunction]
-fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
-    let py = world.py();
-    let (row, state, agent_id, relocation, ids_of_event) = planning((|| {
+/// What `complete_presence_relocation` refuses, for a rule that writes first and then calls it.
+pub(crate) fn check_relocation_completes(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
+    plan_relocation_completion(world, event).map(|_| ())
+}
+
+fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<(EventRow, Bound<'py, PyAny>, Arc<str>, Bound<'py, PyAny>, EventIds)> {
+    planning((|| {
         let row = event_row(event)?;
         let Some(V::Str(agent_id)) = payload(&row, "agent_id").cloned() else {
             return unsupported("the event names no one");
@@ -1207,8 +1337,15 @@ fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAn
             identifier(exact_str(&source?)?)?;
         }
         check_lifecycle(world, Some(&agent_id))?;
+        check_waiting_returns(world)?;
         Ok((row, state, agent_id, relocation, ids_of_event))
-    })())?;
+    })())
+}
+
+#[pyfunction]
+pub(crate) fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let (row, state, agent_id, relocation, ids_of_event) = plan_relocation_completion(world, event)?;
     writing((|| {
         let from_zone = text(&relocation.get_item("from_zone_id")?)?;
         let to_zone = text(&relocation.get_item("to_zone_id")?)?;
@@ -1234,16 +1371,8 @@ fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAn
         pop(&state.get_item("pending_relocations")?, &agent_id)?;
         Ok(())
     })())?;
-    // Written, so the Python rule cannot start over: only this step can fall back to its rule.
-    match returns_inner(world, row.due_minute) {
-        Ok(_) => Ok(()),
-        Err(error) if error.is_instance_of::<Unsupported>(py) => {
-            crate::core::census::caught(py, "__wrapped__ admit_pending_returns (after writes)", &error);
-            py.import("sheltersim.domain.population_lifecycle")?.getattr("admit_pending_returns")?.getattr("__wrapped__")?.call1((world, row.due_minute))?;
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
+    // Written, so nothing can fall back from here: `check_waiting_returns` read what this reads.
+    writing(returns_inner(world, row.due_minute)).map(|_| ())
 }
 
 // ---- Room ----------------------------------------------------------------------------------------
@@ -1462,6 +1591,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_presence_action, m)?)?;
     m.add_function(wrap_pyfunction!(admit_pending_returns, m)?)?;
     m.add_function(wrap_pyfunction!(complete_presence_relocation, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_presence_command, m)?)?;
     m.add_function(wrap_pyfunction!(zone_has_room, m)?)?;
     m.add_function(wrap_pyfunction!(validate_population_lifecycle_state, m)?)?;
     Ok(())

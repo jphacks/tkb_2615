@@ -576,6 +576,10 @@ pub(crate) fn apply_event<'py>(
         Ok(())
     })?;
 
+    if &**purpose == "presence_relocation" {
+        crate::rules::population_lifecycle::check_relocation_completes(world, &object()?)?;
+    }
+
     // Everything is decided, and no Unsupported comes from here on.
     if let Some(bed) = bed {
         let update = PyDict::new(py);
@@ -607,7 +611,7 @@ pub(crate) fn apply_event<'py>(
     raw_setattr(&person, intern!(py, "target_id"), py.None().as_ptr())?;
 
     if &**purpose == "presence_relocation" {
-        py.import("sheltersim.domain.population_lifecycle")?.getattr("complete_presence_relocation")?.call1((world, object()?))?;
+        crate::rules::population::writing(crate::rules::population_lifecycle::complete_presence_relocation(world, &object()?))?;
     }
     if matches!(&**purpose, "toilet_request" | "resource_request") {
         let facility = facility_id.map(|id| &**id).unwrap_or_default();

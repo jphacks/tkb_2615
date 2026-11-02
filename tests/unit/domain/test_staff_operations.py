@@ -10,6 +10,7 @@ are checked on the 100-person fixture with two workers whose shifts meet.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 import pytest
 from support.paths import SCENARIO_100_AGENTS, SMALL_REPLAY
 
+from sheltersim import native
 from sheltersim.contracts.workspace import HistoryQuery
 from sheltersim.core.checkpoint import Checkpoint
 from sheltersim.core.world import WorldState
@@ -27,6 +29,7 @@ from sheltersim.domain.staff_dynamics import STAFF_DYNAMICS_STATE_KEY, update_st
 from sheltersim.domain.staff_operations import (
     STAFF_OPERATIONS_STATE_KEY,
     assign_staff_operations,
+    interrupt_staff_trips_on_closed_routes,
     schedule_staff_operation_relief,
     update_staff_operations,
 )
@@ -46,6 +49,7 @@ from sheltersim.events.handlers import (
     StaffOperationCompletionHandler,
     StaffOperationReliefHandler,
 )
+from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 from sheltersim.policies.space import SpaceRouter
 from sheltersim.storage.history_index import HistoryIndex
@@ -886,3 +890,35 @@ def test_normal_priority_support_does_not_preempt_routed_background_task() -> No
     assert not any(
         row.event.event_type == "staff_operation_preempted" for row in world.event_log.records
     )
+
+
+@pytest.mark.skipif(not native.available(), reason="the Rust kernels")
+def test_a_closed_route_stops_a_trip_as_the_rule_says() -> None:
+    world = _relief_world("sleeping")
+    router = SpaceRouter(ZoneGraph.from_states(world.zones, world.zone_edges))
+    assign_staff_operations(world, 0, router)
+    state = world.model_state[STAFF_OPERATIONS_STATE_KEY]["staff"]["S01"]
+    assert state["phase"] == "travel"
+    event = ScheduledEvent(
+        event_id="route-closed",
+        kind=EventKind.INTERVENTION,
+        due_minute=0,
+        priority=0,
+        sequence=900_000,
+        event_type="effect_program_geometry",
+        payload={"op": "set_route_access", "parameters": {"accessible": False}},
+        source_id="ASM-TEST",
+    )
+    kernel = native.rules("staff_operation_events").interrupt_trips
+    rule = interrupt_staff_trips_on_closed_routes.__wrapped__
+    # Open: nobody stops.
+    other = copy.deepcopy(world)
+    assert kernel(world, event) == rule(other, event) == ()
+    assert world.canonical_json() == other.canonical_json()
+    world.zone_edges[state["route_edge_ids"][0]].closed = True
+    other = copy.deepcopy(world)
+    assert kernel(world, event) == rule(other, event) == ("S01",)
+    assert world.canonical_json() == other.canonical_json()
+    assert [item.event_id for item in world.event_queue.pending()] == [
+        item.event_id for item in other.event_queue.pending()
+    ]

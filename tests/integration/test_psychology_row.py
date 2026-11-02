@@ -595,10 +595,30 @@ def test_a_bad_metric_leaves_it_to_the_python_rule() -> None:
 
 
 @needs_kernels
+def test_a_model_without_long_term_state_has_nothing_to_do() -> None:
+    """As `getattr(self.psychology, "update_long_term_state", None)` in the Python step."""
+    world = _world()
+    before = _documents(world)
+    controller = _controller(version="life-state-feedback-v1")
+    assert not hasattr(controller.psychology, "update_long_term_state")
+    deltas = _deltas({"a": 0.1, "b": 0.1})
+    _kernel()(controller, world, _view({"a": 0.1, "b": 0.1}), deltas, 0)
+    assert _documents(world) == before
+
+
+@needs_kernels
+def test_another_model_with_long_term_state_is_the_python_step_s() -> None:
+    world = _world()
+    controller = _controller(version="another-model")
+    controller.psychology.update_long_term_state = lambda *arguments: None
+    with pytest.raises(native.Unsupported):
+        _kernel()(controller, world, _view({"a": 0.1, "b": 0.1}), _deltas({"a": 0.1, "b": 0.1}), 0)
+
+
+@needs_kernels
 @pytest.mark.parametrize(
     ("controller", "view", "deltas"),
     [
-        (_controller(version="life-state-feedback-v1"), {"a": 0.1, "b": 0.1}, {"a": 0.1, "b": 0.1}),
         (_controller(threshold=1), {"a": 0.1, "b": 0.1}, {"a": 0.1, "b": 0.1}),
         (_controller(), {"a": 0, "b": 0.1}, {"a": 0.1, "b": 0.1}),
         (_controller(), {"a": 0.1, "b": 0.1}, {"a": 1, "b": 0.1}),

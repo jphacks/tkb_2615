@@ -424,9 +424,10 @@ fn validate_spaces(world: &Bound<'_, PyAny>) -> PyResult<bool> {
     counted(py, "validate_spaces", result)
 }
 
-struct Capacity {
+pub(crate) struct Capacity {
     effective: i64,
-    active_people: i64,
+    pub(crate) active_people: i64,
+    pub(crate) expired_people: i64,
     retained: i64,
     sleeping: i64,
     room_capacity: i64,
@@ -435,7 +436,7 @@ struct Capacity {
 }
 
 /// `capacity_metrics` of a zone with a capacity.
-fn capacity_of(world: &Bound<'_, PyAny>, zone_id: &str, nominal: i64, occupancy: Option<i64>) -> PyResult<Capacity> {
+pub(crate) fn capacity_of(world: &Bound<'_, PyAny>, zone_id: &str, nominal: i64, occupancy: Option<i64>) -> PyResult<Capacity> {
     let py = world.py();
     let current = match occupancy {
         Some(occupancy) => occupancy,
@@ -530,6 +531,7 @@ fn capacity_of(world: &Bound<'_, PyAny>, zone_id: &str, nominal: i64, occupancy:
     Ok(Capacity {
         effective,
         active_people,
+        expired_people,
         retained,
         sleeping,
         room_capacity,
@@ -740,6 +742,12 @@ fn position_of(mirror: &Option<Bound<'_, NamespaceMirror>>, agent_id: &str) -> P
 
 /// `room_admission_point`.
 fn admission_point(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, room_id: &str) -> PyResult<Option<Pt>> {
+    admission_point_after(world, state, room_id, &[])
+}
+
+/// `room_admission_point`, after the admissions a plan has given this far: `(room, point)`, the
+/// point being None in a world that keeps no positions.
+fn admission_point_after(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, room_id: &str, planned: &[(Arc<str>, Option<Pt>)]) -> PyResult<Option<Pt>> {
     let rooms = part(state, "temporary_rooms")?;
     let Some(V::Map(room)) = map_of(&rooms)?.get(room_id) else {
         return if map_of(&rooms)?.contains_key(room_id) { unsupported("a room is another value") } else { Ok(None) };
@@ -768,6 +776,11 @@ fn admission_point(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, room_id: 
             if let Some(point) = position_of(&movement, agent_id)? {
                 occupied.push(point);
             }
+        }
+    }
+    for (other, point) in planned {
+        if &**other == room_id {
+            occupied.extend(point.iter().copied());
         }
     }
     let mut candidates = match room.get("bed_points_m") {
@@ -860,37 +873,45 @@ fn room_admission_point<'py>(world: &Bound<'py, PyAny>, room_id: &Bound<'py, PyA
     counted(py, "room_admission_point", result)
 }
 
+/// `available_temporary_room`, after the admissions a plan has given this far, with the point
+/// `admit_to_temporary_room` then gives.
+pub(crate) fn available_room_after(world: &Bound<'_, PyAny>, zone_id: &str, planned: &[(Arc<str>, Option<Pt>)]) -> PyResult<Option<(Arc<str>, Pt)>> {
+    if !matches!(overlay_schema(world)?, Some(3 | 4)) {
+        return Ok(None);
+    }
+    let Some(state) = state_of(world, OVERLAY_KEY)? else {
+        return Ok(None);
+    };
+    exact_dict(&state)?;
+    let admissions = part(&state, "room_admissions")?;
+    let mut counts = admission_counts(&admissions)?;
+    for (room_id, _) in planned {
+        *counts.entry(room_id.clone()).or_insert(0) += 1;
+    }
+    let rooms = part(&state, "temporary_rooms")?;
+    for (room_id, room) in sorted_rooms(map_of(&rooms)?) {
+        let room = map_of(room)?;
+        if !matches!(room.get("active"), Some(V::Bool(true))) || !matches!(room.get("zone_id"), Some(V::Str(zone)) if &**zone == zone_id) {
+            continue;
+        }
+        let capacity = match room.get("people_capacity") {
+            Some(V::Int(capacity)) => *capacity,
+            None => 0,
+            _ => return unsupported("a room's capacity is not a plain int"),
+        };
+        if counts.get(room_id).copied().unwrap_or(0) < capacity {
+            if let Some(point) = admission_point_after(world, &state, room_id, planned)? {
+                return Ok(Some((room_id.clone(), point)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// `available_temporary_room`.
 #[pyfunction]
 fn available_temporary_room(world: &Bound<'_, PyAny>, zone_id: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    let result = (|| {
-        let zone_id = exact_str(zone_id)?;
-        if !matches!(overlay_schema(world)?, Some(3 | 4)) {
-            return Ok(None);
-        }
-        let Some(state) = state_of(world, OVERLAY_KEY)? else {
-            return Ok(None);
-        };
-        exact_dict(&state)?;
-        let admissions = part(&state, "room_admissions")?;
-        let counts = admission_counts(&admissions)?;
-        let rooms = part(&state, "temporary_rooms")?;
-        for (room_id, room) in sorted_rooms(map_of(&rooms)?) {
-            let room = map_of(room)?;
-            if !matches!(room.get("active"), Some(V::Bool(true))) || !matches!(room.get("zone_id"), Some(V::Str(zone)) if &**zone == zone_id) {
-                continue;
-            }
-            let capacity = match room.get("people_capacity") {
-                Some(V::Int(capacity)) => *capacity,
-                None => 0,
-                _ => return unsupported("a room's capacity is not a plain int"),
-            };
-            if counts.get(room_id).copied().unwrap_or(0) < capacity && admission_point(world, &state, room_id)?.is_some() {
-                return Ok(Some(room_id.to_string()));
-            }
-        }
-        Ok(None)
-    })();
+    let result = (|| Ok(available_room_after(world, exact_str(zone_id)?, &[])?.map(|(room_id, _)| room_id.to_string())))();
     counted(world.py(), "available_temporary_room", result)
 }
 

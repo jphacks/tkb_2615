@@ -177,7 +177,7 @@ pub(crate) fn queue_up<'py>(
     Ok((task_id, minute, position))
 }
 
-/// `ToiletServiceManager.request`, without the world's whole validation.
+/// `ToiletServiceManager.request`.
 #[pyfunction]
 #[pyo3(signature = (manager, agent_id, facility_id, *, minute=None, validate_state=None, queue_id=None))]
 fn request<'py>(
@@ -189,9 +189,7 @@ fn request<'py>(
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = manager.py();
-    if !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true())) {
-        return unsupported("the world's whole validation is Python's");
-    }
+    let validates = !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true()));
     let queue_name = queue_id.filter(|queue| !queue.is_none()).map(exact_str).transpose()?;
     let world = attribute(manager, intern!(py, "world"))?;
     if let Some(minute) = minute {
@@ -200,7 +198,14 @@ fn request<'py>(
             return unsupported("another minute");
         }
     }
+    // `world.validate()` stays Python's (D3). What it raises, it raises here too.
+    if validates {
+        world.call_method0(intern!(py, "validate"))?;
+    }
     let (task_id, requested_at, position) = queue_up(&world, agent_id, facility_id, queue_name)?;
+    if validates {
+        world.call_method0(intern!(py, "validate"))?;
+    }
     receipt_class(py)?.call1((agent_id, facility_id, requested_at, &*task_id, position))
 }
 
@@ -279,7 +284,7 @@ pub(crate) fn start_head<'py>(
 /// A pass of `_arbitrate_independent_facility`'s loop after the positions: the started event's ID,
 /// or None to stop the queue, with what stopped it marked on the queue.
 #[pyfunction]
-fn serve_independent_head<'py>(
+pub(crate) fn serve_independent_head<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     queue_id: &Bound<'py, PyAny>,

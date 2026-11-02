@@ -145,7 +145,7 @@ def _small(
 
 
 def _python_result(world: Any, controller: Any, view: Any, deltas: Any, rng: Any) -> Any:
-    state = json.loads(json.dumps(world.model_state[KEY]))
+    state = json.loads(json.dumps(world.model_state.get(KEY)))
     return controller.stress_policy.update(
         view, deltas, rng, zone_neighbors=controller.zone_neighbors, runtime_state=state
     )
@@ -446,9 +446,7 @@ def test_every_tick_of_a_run_matches_the_python_rule_and_writes_no_whole_namespa
         assert self.stress_policy.policy_version == policy
         worlds[:] = [world]
         try:
-            expected = None
-            if KEY in world.model_state:
-                expected = _python_result(world, self, view, deltas, rng)
+            expected = _python_result(world, self, view, deltas, rng)
             final = kernel(self, world, view, deltas, minute, rng)
         except native.Unsupported as reason:
             refused.append(str(reason))
@@ -461,8 +459,9 @@ def test_every_tick_of_a_run_matches_the_python_rule_and_writes_no_whole_namespa
 
     monkeypatch.setattr(OfflineSimulationController, "_social_propagation", step)
     run_scenario(scenario, tmp_path, trace_level=TraceLevel.OFF)
-    assert refused == ["the namespace has no row"]
-    assert len(ran) == 89 and sum(ran) > 0
+    # The first tick makes the namespace, as the Python rule does.
+    assert refused == []
+    assert len(ran) == 90 and sum(ran) > 0
     assert _mirror(worlds[0]).stats()["whole_writes"] == 1
 
 

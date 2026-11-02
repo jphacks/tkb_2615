@@ -7,7 +7,8 @@
 //! containers forward it to the namespace's row, and no kernel keeps a row of its own here. An
 //! exception of such an operation is the one Python raises at that point.
 //!
-//! Error texts stay in the Python rules until step 4, which a refusal runs.
+//! Error texts stay in the Python rules until step 4, which a refusal runs. A deferral isn't an
+//! error: its `EventSuppressed` and its text are here.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,11 +20,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
-use crate::core::mathx::{pow, py_max, py_min, py_round, py_sum};
+use crate::core::mathx::py_min;
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, unsupported};
 use crate::core::value::V;
-use crate::rules::movement::{mirror_held, refused, Scene};
-use crate::rules::movement_geometry::{point_in_polygon, Geo, Pt};
+use crate::rules::movement::{mirror_held, Scene};
+use crate::rules::movement_geometry::Pt;
 use crate::state::entities::{entities_of, Activity, EntityStore};
 use crate::state::events::{EventKind, EventRow, EventStatus, EventWriter};
 use crate::state::movement::MovementRow;
@@ -38,13 +39,11 @@ pub(crate) const AGENT_DYNAMICS: &str = "agent_dynamics_v1";
 pub(crate) const SOCIAL_NETWORK: &str = "social_network_v1";
 pub(crate) const SOCIAL_RUNTIME: &str = "social_propagation_v1";
 pub(crate) const OVERLAY: &str = "geometry_overlay_v1";
-const SPACES: &str = "temporary_spaces_v1";
 const POLICY_VERSION: &str = "capacity-aware-arrivals-departures-v1";
 pub(crate) const SOURCE_ID: &str = "ASM-POPULATION-DYNAMICS-V1";
 const ROOM_INTAKE_SOURCE: &str = "ASM-TEMPORARY-ROOM-INTAKE-V1";
 const MAX_ARRIVALS_PER_EVENT: i64 = 1000;
 const MAX_PENDING_ARRIVALS: i64 = 10_000;
-const MAX_ROOM_ADMISSION_POINTS: usize = 256;
 const MAX_PRESENCE_HISTORY: usize = 20_000;
 const MAX_RETRIES: i64 = 1440;
 const SUPPORT_KINDS: [&str; 9] = [
@@ -70,6 +69,12 @@ pub(crate) fn planning<T>(result: PyResult<T>) -> PyResult<T> {
 /// to see. Every other error is what the same operation raises in the Python rule.
 pub(crate) fn writing<T>(result: PyResult<T>) -> PyResult<T> {
     result.map_err(|error| Python::with_gil(|py| if error.is_instance_of::<Unsupported>(py) { PyRuntimeError::new_err(format!("a kernel refused after it began writing: {error}")) } else { error }))
+}
+
+/// `raise EventSuppressed(text)`.
+pub(crate) fn suppressed<T>(py: Python<'_>, text: String) -> PyResult<T> {
+    let class = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventSuppressed"))?;
+    Err(PyErr::from_value(class.call1((text,))?))
 }
 
 // ---- Reads through the object protocol -----------------------------------------------------------
@@ -593,15 +598,7 @@ impl Capacity {
     }
 }
 
-fn truth(value: &Bound<'_, PyAny>) -> PyResult<bool> {
-    match value.downcast_exact::<pyo3::types::PyBool>() {
-        Ok(flag) => Ok(flag.is_true()),
-        Err(_) if value.is_none() => Ok(false),
-        Err(_) => unsupported("a flag is not a bool"),
-    }
-}
-
-/// `capacity_metrics`' reads for this zone, each of which raises nothing on what is accepted here.
+/// `capacity_metrics`' reads for this zone (`rules/overlay.rs`).
 fn capacity_of(world: &Bound<'_, PyAny>, zone_id: &str) -> PyResult<Option<Capacity>> {
     let py = world.py();
     let zones = attribute(world, intern!(py, "zones"))?;
@@ -611,62 +608,8 @@ fn capacity_of(world: &Bound<'_, PyAny>, zone_id: &str) -> PyResult<Option<Capac
         return Ok(None);
     }
     let nominal = exact_int(&nominal)?;
-    let mut active_people = 0;
-    let mut expired_people = 0;
-    if let Some(state) = namespace(world, SPACES)?.filter(is_dict) {
-        let spaces = get_map(&state, "spaces")?;
-        for row in spaces.call_method0(intern!(py, "values"))?.try_iter()? {
-            let row = row?;
-            if !get(&row, "zone_id")?.eq(zone_id)? {
-                continue;
-            }
-            let people = exact_int(&row.get_item("people_capacity")?)?;
-            if truth(&row.get_item("active")?)? {
-                active_people += people;
-                exact_int(&row.get_item("sleeping_capacity")?)?;
-            } else {
-                expired_people += people;
-            }
-        }
-    }
-    if let Some(overlay) = namespace(world, OVERLAY)?.filter(is_dict) {
-        let rooms = get_map(&overlay, "temporary_rooms")?;
-        if is_dict(&rooms) {
-            for row in rooms.call_method0(intern!(py, "values"))?.try_iter()? {
-                let row = row?;
-                if is_dict(&row) && get(&row, "zone_id")?.eq(zone_id)? {
-                    exact_int(&row.get_item("people_capacity")?)?;
-                    exact_str(&row.get_item("room_id")?)?;
-                    truth(&get(&row, "active")?)?;
-                }
-            }
-        }
-    }
-    Ok(Some(Capacity { nominal, active_people, expired_people }))
-}
-
-/// A point the Python rule's `Point2D.model_validate` certainly accepts.
-fn plain_point(value: &V) -> PyResult<Pt> {
-    let V::Map(map) = value else {
-        return unsupported("a point is not a mapping");
-    };
-    match (map.len(), map.get("x"), map.get("y")) {
-        (2, Some(V::Float(x)), Some(V::Float(y))) if x.is_finite() && y.is_finite() => Ok(Pt { x: *x, y: *y }),
-        _ => unsupported("a point is not two finite floats"),
-    }
-}
-
-fn points_of(room: &IndexMap<Arc<str>, V>, key: &str) -> PyResult<Vec<Pt>> {
-    match room.get(key) {
-        None => Ok(Vec::new()),
-        Some(V::List(items)) => items.iter().map(plain_point).collect(),
-        Some(_) => unsupported("the points of a room are something else"),
-    }
-}
-
-/// `value ** 2.0`.
-fn squared(value: f64) -> PyResult<f64> {
-    pow(value, 2.0).ok_or_else(|| Unsupported::new_err("a square overflows"))
+    let read = crate::rules::overlay::capacity_of(world, zone_id, nominal, Some(nominal))?;
+    Ok(Some(Capacity { nominal, active_people: read.active_people, expired_people: read.expired_people }))
 }
 
 /// The people of a world and the rooms given in this plan, as admission counts them.
@@ -753,162 +696,7 @@ impl<'py> Places<'py> {
 
     /// `available_temporary_room`, and the point `admit_to_temporary_room` then gives.
     pub(crate) fn available_room(&self, zone_id: &str) -> PyResult<Option<(Arc<str>, Pt)>> {
-        let py = self.world.py();
-        let configs = attribute(&self.world, intern!(py, "model_configs"))?;
-        let config = get_map(&configs, "geometry_overlay")?;
-        if !is_dict(&config) || !schema_has_rooms(&config)? {
-            return Ok(None);
-        }
-        let Some(state) = namespace(&self.world, OVERLAY)?.filter(is_dict) else {
-            return Ok(None);
-        };
-        let admissions = get_map(&state, "room_admissions")?;
-        let mut counts: HashMap<Arc<str>, i64> = HashMap::new();
-        if is_dict(&admissions) {
-            for row in admissions.call_method0(intern!(py, "values"))?.try_iter()? {
-                let row = row?;
-                if is_dict(&row) {
-                    let room = get(&row, "room_id")?;
-                    if room.is_exact_instance_of::<PyString>() {
-                        *counts.entry(text(&room)?).or_default() += 1;
-                    } else if room.is_instance_of::<PyString>() {
-                        return unsupported("a room ID is a str subclass");
-                    }
-                }
-            }
-        }
-        for (room_id, _) in &self.planned_rooms {
-            *counts.entry(room_id.clone()).or_default() += 1;
-        }
-        let rooms = get_map(&state, "temporary_rooms")?;
-        for room_id in sorted_keys(&rooms)? {
-            let room = rooms.get_item(&*room_id)?;
-            if !get(&room, "active")?.is_exact_instance_of::<pyo3::types::PyBool>() || !truth(&get(&room, "active")?)? {
-                continue;
-            }
-            if !get(&room, "zone_id")?.eq(zone_id)? {
-                continue;
-            }
-            let people = room.call_method1(intern!(py, "get"), ("people_capacity", 0))?;
-            if counts.get(&room_id).copied().unwrap_or(0) >= exact_int(&people)? {
-                continue;
-            }
-            if let Some(point) = self.admission_point(&state, &room_id, &room)? {
-                return Ok(Some((room_id, point)));
-            }
-        }
-        Ok(None)
-    }
-
-    /// `room_admission_point`.
-    fn admission_point(&self, state: &Bound<'py, PyAny>, room_id: &str, room: &Bound<'py, PyAny>) -> PyResult<Option<Pt>> {
-        let py = self.world.py();
-        let V::Map(fields) = V::from_py(room)? else {
-            return unsupported("a room is not a mapping");
-        };
-        let polygon = points_of(&fields, "polygon_m")?;
-        if polygon.len() < 3 {
-            return Ok(None);
-        }
-        let first = polygon[0];
-        let (mut min_x, mut max_x, mut min_y, mut max_y) = (first.x, first.x, first.y, first.y);
-        for point in &polygon[1..] {
-            min_x = py_min(min_x, point.x);
-            max_x = py_max(max_x, point.x);
-            min_y = py_min(min_y, point.y);
-            max_y = py_max(max_y, point.y);
-        }
-        let mut occupied = Vec::new();
-        let movement = namespace(&self.world, MOVEMENT)?;
-        let positions = match &movement {
-            Some(movement) if is_dict(movement) => Some(get_map(movement, "positions")?),
-            _ => None,
-        };
-        let admissions = get_map(state, "room_admissions")?;
-        if is_dict(&admissions) {
-            for item in admissions.call_method0(intern!(py, "items"))?.try_iter()? {
-                let (agent_id, admission): (Bound<'py, PyAny>, Bound<'py, PyAny>) = item?.extract()?;
-                if !is_dict(&admission) || !get(&admission, "room_id")?.eq(room_id)? {
-                    continue;
-                }
-                let Some(positions) = positions.as_ref().filter(|positions| is_dict(positions)) else {
-                    continue;
-                };
-                let record = positions.call_method1(intern!(py, "get"), (&agent_id, PyDict::new(py)))?;
-                let raw = if is_dict(&record) { get(&record, "point")? } else { py.None().into_bound(py) };
-                if is_dict(&raw) {
-                    occupied.push(plain_point(&V::from_py(&raw)?)?);
-                }
-            }
-        }
-        for (other, point) in &self.planned_rooms {
-            if &**other == room_id {
-                occupied.extend(point.iter().copied());
-            }
-        }
-        let mut candidates = points_of(&fields, "bed_points_m")?;
-        let step = 0.75;
-        let mut x = min_x + step / 2.0;
-        let mut inspected = 0;
-        while x < max_x && inspected < MAX_ROOM_ADMISSION_POINTS {
-            let mut y = min_y + step / 2.0;
-            while y < max_y && inspected < MAX_ROOM_ADMISSION_POINTS {
-                let candidate = Pt { x, y };
-                if point_in_polygon(candidate, &polygon) {
-                    candidates.push(candidate);
-                }
-                inspected += 1;
-                y += step;
-            }
-            x += step;
-        }
-        // A dict keeps a key's first place and its last value.
-        let mut unique: Vec<Pt> = Vec::with_capacity(candidates.len());
-        let mut places: HashMap<(u64, u64), usize> = HashMap::with_capacity(candidates.len());
-        for point in candidates {
-            let rounded = |value: f64| -> PyResult<u64> {
-                let value = py_round(value, 8).ok_or_else(|| Unsupported::new_err("a point does not round"))?;
-                // 0.0 and -0.0 are one key.
-                Ok(if value == 0.0 { 0.0f64.to_bits() } else { value.to_bits() })
-            };
-            let key = (rounded(point.x)?, rounded(point.y)?);
-            match places.get(&key) {
-                Some(&place) => unique[place] = point,
-                None => {
-                    places.insert(key, unique.len());
-                    unique.push(point);
-                }
-            }
-        }
-        let center_x = py_sum(&polygon.iter().map(|point| point.x).collect::<Vec<_>>()) / polygon.len() as f64;
-        let center_y = py_sum(&polygon.iter().map(|point| point.y).collect::<Vec<_>>()) / polygon.len() as f64;
-        let mut ordered = Vec::with_capacity(unique.len());
-        for point in unique {
-            ordered.push((squared(point.x - center_x)? + squared(point.y - center_y)?, point));
-        }
-        ordered.sort_by(|first, second| {
-            (first.0, first.1.x, first.1.y).partial_cmp(&(second.0, second.1.x, second.1.y)).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let Some(V::Str(zone)) = fields.get("zone_id") else {
-            return unsupported("a room's zone is not a str");
-        };
-        let geo = Geo::of(&self.world)?;
-        for (_, candidate) in ordered.into_iter().take(MAX_ROOM_ADMISSION_POINTS) {
-            let mut taken = false;
-            for other in &occupied {
-                if squared(candidate.x - other.x)? + squared(candidate.y - other.y)? < 0.25 {
-                    taken = true;
-                    break;
-                }
-            }
-            if taken {
-                continue;
-            }
-            if geo.room_route(zone, Some(candidate), candidate, "independent").map_err(refused)?.is_some() {
-                return Ok(Some(candidate));
-            }
-        }
-        Ok(None)
+        crate::rules::overlay::available_room_after(&self.world, zone_id, &self.planned_rooms)
     }
 
     /// The room this plan fills, for the admissions that follow it.
@@ -1425,7 +1213,7 @@ fn generated_context(items: &[Prepared]) -> PyResult<Vec<(Arc<str>, V)>> {
 #[pyfunction]
 #[pyo3(signature = (world, *, event, zone_id, count, household_size=None, mobility=None, language=None, admission_zone_ids=None, approach_route_id=None, person_context_overrides=None))]
 #[allow(clippy::too_many_arguments)]
-fn queue_arrivals<'py>(
+pub(crate) fn queue_arrivals<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     zone_id: &Bound<'py, PyAny>,
@@ -1451,6 +1239,8 @@ struct ArrivalsPlan {
     due_minute: i64,
     route_sources: Vec<Arc<str>>,
     admitted: i64,
+    /// A state `_state` makes on first use, for the first write to install.
+    new_state: Option<Py<PyAny>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1544,9 +1334,7 @@ fn plan_arrivals<'py>(
             care_by_index.insert(index, needs);
         }
     }
-    let Some(state) = namespace(world, DYNAMICS)? else {
-        return unsupported("the population state is made on first use by the Python rule");
-    };
+    let (state, is_new) = dynamics_or_new(world)?;
     let pending = state.get_item("pending_arrivals")?;
     let pending_count = pending.len()? as i64;
     if pending_count + count > MAX_PENDING_ARRIVALS {
@@ -1727,7 +1515,8 @@ fn plan_arrivals<'py>(
         "waiting_count" => V::Int(count - admitted),
         "minute" => V::Int(row.due_minute),
     });
-    Ok(ArrivalsPlan { zone, prepared, contexts, summary, event_id: row.event_id.clone(), due_minute: row.due_minute, route_sources, admitted })
+    let new_state = is_new.then(|| state.unbind());
+    Ok(ArrivalsPlan { zone, prepared, contexts, summary, event_id: row.event_id.clone(), due_minute: row.due_minute, route_sources, admitted, new_state })
 }
 
 fn check_waiting_person(presence: Option<&Bound<'_, PyAny>>, item: &Prepared, zone: &str, event_id: &str, route_sources: &[Arc<str>]) -> PyResult<()> {
@@ -1842,6 +1631,9 @@ fn write_waiting_presence(world: &Bound<'_, PyAny>, prepared: &Prepared, event_i
 
 fn write_arrivals(world: &Bound<'_, PyAny>, plan: &ArrivalsPlan) -> PyResult<()> {
     let py = world.py();
+    if let Some(state) = &plan.new_state {
+        install_dynamics(world, state.clone_ref(py).into_bound(py), true)?;
+    }
     let state = namespace(world, DYNAMICS)?.ok_or_else(|| PyRuntimeError::new_err("the population state left"))?;
     let contexts = state.call_method1(intern!(py, "setdefault"), ("profile_context", PyDict::new(py)))?;
     let update = PyDict::new(py);
@@ -1885,7 +1677,7 @@ fn write_arrivals(world: &Bound<'_, PyAny>, plan: &ArrivalsPlan) -> PyResult<()>
 // ---- `apply_arrival_approach_completion` ---------------------------------------------------------
 
 #[pyfunction]
-fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     let (pending, plan) = planning((|| {
         let row = event_row(event)?;
@@ -2012,6 +1804,53 @@ fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event: &Bound<'_,
     })())
 }
 
+// ---- `_state` -------------------------------------------------------------------------------------
+
+/// `create_population_dynamics_state`. The contract of the Scenario's population stays Python's.
+fn new_dynamics_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = world.py();
+    let traits = PyDict::new(py);
+    let raw = get(&attribute(world, intern!(py, "model_configs"))?, "population")?;
+    if !raw.is_none() {
+        let contract = py.import("sheltersim.contracts.extensions")?.getattr("PopulationSpec")?;
+        let spec = contract.call_method1("model_validate", (raw,))?;
+        let people = attribute(&spec, intern!(py, "people"))?;
+        let options = PyDict::new(py);
+        options.set_item("mode", "json")?;
+        for agent_id in sorted_keys(&people)? {
+            traits.set_item(&*agent_id, people.get_item(&*agent_id)?.call_method("model_dump", (), Some(&options))?)?;
+        }
+    }
+    let state = PyDict::new(py);
+    state.set_item("schema_version", 1)?;
+    state.set_item("policy_version", POLICY_VERSION)?;
+    state.set_item("source_id", SOURCE_ID)?;
+    state.set_item("initial_agent_ids", new_list(py, &sorted_keys(&attribute(world, intern!(py, "agents"))?)?)?)?;
+    state.set_item("profile_traits", traits)?;
+    state.set_item("profile_context", PyDict::new(py))?;
+    for name in ["pending_arrivals", "arrivals", "departures"] {
+        state.set_item(name, PyList::empty(py))?;
+    }
+    Ok(state.into_any())
+}
+
+/// What `_state` gives, to plan with: the state, and whether it is new, so the first write installs it.
+fn dynamics_or_new<'py>(world: &Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, bool)> {
+    match namespace(world, DYNAMICS)? {
+        Some(state) => Ok((state, false)),
+        None => Ok((new_dynamics_state(world)?, true)),
+    }
+}
+
+/// The first write of a rule that planned on a new state: the world's holds it from here on.
+fn install_dynamics<'py>(world: &Bound<'py, PyAny>, state: Bound<'py, PyAny>, is_new: bool) -> PyResult<Bound<'py, PyAny>> {
+    if !is_new {
+        return Ok(state);
+    }
+    attribute(world, intern!(world.py(), "model_state"))?.set_item(DYNAMICS, state)?;
+    namespace(world, DYNAMICS)?.ok_or_else(|| PyRuntimeError::new_err("the population state left"))
+}
+
 // ---- `schedule_population_retry` -----------------------------------------------------------------
 
 /// The plan of a retry: the row needs the sequence, which is the next one when it is written.
@@ -2020,24 +1859,27 @@ struct Retry {
     program: Option<Arc<str>>,
 }
 
-fn plan_retry(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, id_prefix: &str) -> PyResult<Retry> {
+/// The plan of `schedule_population_retry`: Err(text) is the rule's `EventSuppressed`.
+fn plan_retry(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, id_prefix: &str, subject: &str) -> PyResult<Result<Retry, String>> {
     let py = world.py();
     let row = event_row(event)?;
     let writer = EventWriter::of(world)?;
     let due = exact_int(&attribute(world, intern!(py, "minute_index"))?)? + 1;
     if due >= writer.duration() {
-        return unsupported("the retry is past the scenario");
+        return Ok(Err(format!("{subject} could not complete before the scenario ended")));
     }
     let retry_count = match provenance(&row, "population_retry") {
         Some(V::Map(retry)) => match retry.get("count") {
             None => 0,
             Some(V::Int(count)) => *count,
-            Some(_) => return unsupported("a retry count is not an int"),
+            // `isinstance(True, int)`, which a retry count never is.
+            Some(V::Bool(_)) => return unsupported("a retry count is a bool"),
+            Some(_) => MAX_RETRIES,
         },
         _ => 0,
     };
     if retry_count >= MAX_RETRIES {
-        return unsupported("the retry limit is reached");
+        return Ok(Err(format!("{subject} reached the bounded deferral limit")));
     }
     let sequence = writer.next_sequence()?;
     let digest = sha_hex(&format!("{}:{sequence}", row.event_id));
@@ -2067,15 +1909,17 @@ fn plan_retry(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, id_prefix: &st
     };
     let retry = EventRow::new(next_id, EventKind::Endogenous, due, row.priority, sequence, row.event_type.clone(), fields, row.source_id.clone(), Some(row.event_id.clone()), record)
         .ok_or_else(|| Unsupported::new_err("ScheduledEvent refuses the retry"))?;
-    Ok(Retry { row: retry, program })
+    Ok(Ok(Retry { row: retry, program }))
 }
 
 #[pyfunction]
 #[pyo3(signature = (world, event, *, id_prefix="departure-retry", subject="departure"))]
-fn schedule_population_retry(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, id_prefix: &str, subject: &str) -> PyResult<()> {
+pub(crate) fn schedule_population_retry(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, id_prefix: &str, subject: &str) -> PyResult<()> {
     let py = world.py();
-    let _ = subject;
-    let plan = planning(plan_retry(world, event, id_prefix))?;
+    let plan = match planning(plan_retry(world, event, id_prefix, subject))? {
+        Ok(plan) => plan,
+        Err(text) => return suppressed(py, text),
+    };
     writing((|| {
         let writer = EventWriter::of(world)?;
         writer.allocate_sequence()?;
@@ -2406,7 +2250,7 @@ fn write_departure(world: &Bound<'_, PyAny>, agent_id: &str, row: &EventRow, sta
 
 #[pyfunction]
 #[pyo3(signature = (world, *, event, zone_id, count, include_initial=None))]
-fn queue_departures<'py>(
+pub(crate) fn queue_departures<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     zone_id: &Bound<'py, PyAny>,
@@ -2414,7 +2258,7 @@ fn queue_departures<'py>(
     include_initial: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<usize> {
     let py = world.py();
-    let (row, state, selected) = planning((|| {
+    let (row, state, is_new, selected, busy) = planning((|| {
         let zone = exact_str(zone_id)?;
         if !attribute(world, intern!(py, "zones"))?.contains(zone)? {
             return unsupported("an unknown zone");
@@ -2427,9 +2271,7 @@ fn queue_departures<'py>(
             None => false,
             Some(flag) => flag.downcast_exact::<pyo3::types::PyBool>().map_err(|_| Unsupported::new_err("include_initial is not a bool"))?.is_true(),
         };
-        let Some(state) = namespace(world, DYNAMICS)? else {
-            return unsupported("the population state is made on first use by the Python rule");
-        };
+        let (state, is_new) = dynamics_or_new(world)?;
         let mut initial: HashSet<Arc<str>> = HashSet::new();
         for id in state.get_item("initial_agent_ids")?.try_iter()? {
             initial.insert(text(&id?)?);
@@ -2458,10 +2300,10 @@ fn queue_departures<'py>(
                 rows.agents.get(id).is_none_or(|agent| !matches!(agent.activity, Activity::Idle | Activity::Resting | Activity::Sleeping) || agent.support_request_id.is_some())
             }))
         })?;
-        if busy {
-            return unsupported("the residents are busy: the Python rule defers");
-        }
         let row = event_row(event)?;
+        if busy {
+            return Ok((row, state, is_new, selected, busy));
+        }
         identifier(&row.event_id)?;
         if row.due_minute < 0 {
             return unsupported("a minute before the Run");
@@ -2473,8 +2315,20 @@ fn queue_departures<'py>(
         check_information(world)?;
         check_relationship_keys(world)?;
         check_queue_rows(world)?;
-        Ok((row, state, selected))
+        check_waiting_for_admission(world)?;
+        Ok((row, state, is_new, selected, busy))
     })())?;
+    if busy {
+        // Waits for their active tasks: the retry and the suppression of the rule. `_state` has run.
+        let plan = planning(plan_retry(world, event, "departure-retry", "departure"))?;
+        install_dynamics(world, state, is_new)?;
+        match plan {
+            Ok(_) => schedule_population_retry(world, event, "departure-retry", "departure")?,
+            Err(text) => return suppressed(py, text),
+        }
+        return suppressed(py, "departure waits for the selected residents' active tasks".to_owned());
+    }
+    let state = writing(install_dynamics(world, state, is_new))?;
     writing((|| {
         for agent_id in &selected {
             write_departure(world, agent_id, &row, &state)?;
@@ -2485,17 +2339,59 @@ fn queue_departures<'py>(
         metrics.set_item("population_waiting_count", PyFloat::new(py, state.get_item("pending_arrivals")?.len()? as f64))
     })())?;
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
-    // The departures are written, so the Python rule cannot start over: only this step can fall
-    // back, and the wrapper of the module's function then runs the rule of this step.
-    match admit_inner(world, minute) {
-        Ok(_) => {}
-        Err(error) if error.is_instance_of::<Unsupported>(py) => {
-            crate::core::census::caught(py, "__wrapped__ admit_pending_arrivals (after writes)", &error);
-            py.import("sheltersim.domain.population")?.getattr("admit_pending_arrivals")?.getattr("__wrapped__")?.call1((world, minute))?;
-        }
-        Err(error) => return Err(error),
-    }
+    // Written, so nothing can fall back from here: `check_waiting_for_admission` read what this reads.
+    writing(admit_inner(world, minute))?;
     Ok(selected.len())
+}
+
+/// What `admit_inner` asks of the waiting, whoever gets a place. A rule that writes and then admits
+/// asks this first: which of them get a place depends on the writes, and it can't refuse then.
+pub(crate) fn check_waiting_for_admission(world: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let Some(state) = namespace(world, DYNAMICS)? else {
+        return Ok(());
+    };
+    let pending = state.get_item("pending_arrivals")?;
+    if !pending.is_truthy()? {
+        return Ok(());
+    }
+    let mut places = Places::of(world)?;
+    let mut zones: Vec<Arc<str>> = Vec::new();
+    for item in pending.try_iter()? {
+        let item = item?;
+        exact_int(&item.get_item("created_minute")?)?;
+        text(&item.get_item("event_id")?)?;
+        text(&item.get_item("profile")?.get_item("id")?)?;
+        if item.contains("approach_route_id")? {
+            exact_str(&item.get_item("approach_route_id")?)?;
+        }
+        let mut targets = vec![text(&item.get_item("zone_id")?)?];
+        for zone in item.call_method1(intern!(py, "get"), ("admission_zone_ids", PyTuple::empty(py)))?.try_iter()? {
+            targets.push(text(&zone?)?);
+        }
+        for zone in targets {
+            check_item_for_admission(&item, &zone)?;
+            places.has_room(&zone)?;
+            places.available_room(&zone)?;
+            zones.push(zone);
+        }
+    }
+    let zones: Vec<&str> = zones.iter().map(|zone| &**zone).collect();
+    check_admission_paths(world, &zones)?;
+    presence_state(world)?;
+    if let Some(overlay) = namespace(world, OVERLAY)? {
+        if !is_dict(&get(&overlay, "room_admissions")?) && overlay.contains("temporary_rooms")? {
+            return unsupported("a room admission has no admissions to join");
+        }
+    }
+    for record in state.get_item("arrivals")?.try_iter()? {
+        let record = record?;
+        if record.contains("requested_count")? {
+            exact_int(&record.get_item("requested_count")?)?;
+            text(&record.get_item("event_id")?)?;
+        }
+    }
+    Ok(())
 }
 
 // ---- Read-only rules -----------------------------------------------------------------------------
@@ -2602,7 +2498,7 @@ fn context_is_plain(value: &V) -> PyResult<(Option<Arc<str>>, Vec<Arc<str>>, Vec
 
 /// `validate_population_dynamics_state`, of a state it certainly accepts.
 #[pyfunction]
-fn validate_population_dynamics_state(world: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn validate_population_dynamics_state(world: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     planning((|| {
         let Some(state) = namespace(world, DYNAMICS)? else {

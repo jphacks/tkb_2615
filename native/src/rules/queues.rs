@@ -7,10 +7,7 @@
 //! the moment of the call; the caller's loop is Python, and nobody else moves between its calls, so
 //! the order of the people served is the order of those calls, as in the Python rules.
 //!
-//! What goes to Python, before anything is written:
-//! - a person who gives up on the queue (`_abandon_and_retry`, 4 times in 7 days): that writes a
-//!   return walk, and the whole call is the Python rule's then;
-//! - anything not plainly what the Python rule accepts.
+//! What goes to Python, before anything is written: anything not plainly what the Python rule accepts.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -26,14 +23,18 @@ use crate::core::row::{attribute, exact_dict, exact_int, exact_str, map_set, uns
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
 use crate::core::world_core::{field_mirror_of, raw_dict_get, NamespaceMirror};
-use crate::rules::facility_queues::{independent_heads, point_of, with_queues};
+use crate::rules::facility_queues::{
+    independent_heads, point_of, request_of_task, transition_row, with_queues, write_finish, write_transition,
+};
 use crate::rules::movement::{
     approach_point, is_queue_trip, mirror_held, mobility_text, plan_start, position_point, queue_slot_in, refused, room_minutes,
     write_tree, Changes, Scene, EXACT_INT, KEY, MOVEMENT_SOURCE_ID, POLICY_VERSION,
 };
 use crate::rules::movement_geometry::{distance, polyline_length, usable, Geo, Pt};
+use crate::rules::population::writing;
+use crate::rules::service::{active_task_class, add_one, metrics_of, set_agent};
 use crate::state::entities::{entities_of, raw_setattr, Activity, Entities, EntityStore, FacilityRow, NeedRow};
-use crate::state::events::{EventKind, EventRow, EventWriter};
+use crate::state::events::{EventKind, EventRow, EventStatus, EventWriter};
 use crate::state::facility_queues::QueueRequest;
 use crate::state::metric_state::MetricRow;
 use crate::state::movement::{Journey, MovementRow, Point};
@@ -51,6 +52,11 @@ const AGING_WEIGHT: f64 = 0.1;
 const AGING_MINUTES: f64 = 1440.0;
 /// How near a person counts as standing in their slot, in metres.
 const SLOT_TOLERANCE: f64 = 0.05;
+/// `NeedWeightedPhysicalQueuePolicy.model_id`, `source_id`, and its `retry_delay_minutes` by default.
+const NEED_WEIGHTED_ID: &str = "need-weighted-physical-queue-v1";
+const NEED_WEIGHTED_SOURCE: &str = "ASM-NEED-WEIGHTED-PHYSICAL-QUEUE-V1";
+const RETRY_DELAY: i64 = 15;
+const ABANDON_DETAIL: &str = "Agent left a prolonged low-urgency queue and will reconsider after a bounded delay";
 
 fn exact_bool(value: &Bound<'_, PyAny>) -> PyResult<bool> {
     match value.downcast_exact::<PyBool>() {
@@ -163,7 +169,7 @@ fn need_of(needs: &NeedRow, service: Service) -> PyResult<f64> {
 /// `create_queue_policy`, for the two bundled policies.
 enum Policy {
     Strict,
-    NeedWeighted { limits: [i64; 3], threshold: f64 },
+    NeedWeighted { limits: [i64; 3], threshold: f64, retry: i64 },
 }
 
 fn selected_queue_model<'py>(configs: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -192,7 +198,7 @@ fn policy_of(world: &Bound<'_, PyAny>) -> PyResult<Policy> {
     let raw = table.get_item(intern!(py, "facility_queues"))?;
     let Some(raw) = raw else {
         return Ok(if need_weighted {
-            Policy::NeedWeighted { limits: [LIMIT_TOILET, LIMIT_WATER, LIMIT_MEAL], threshold: PERSISTENCE_THRESHOLD }
+            Policy::NeedWeighted { limits: [LIMIT_TOILET, LIMIT_WATER, LIMIT_MEAL], threshold: PERSISTENCE_THRESHOLD, retry: RETRY_DELAY }
         } else {
             Policy::Strict
         });
@@ -248,7 +254,7 @@ fn policy_of(world: &Bound<'_, PyAny>) -> PyResult<Policy> {
     if !limits.iter().all(good_limit) || !good_retry || !(0.0..=1.0).contains(&threshold) {
         return unsupported("the queue config is out of its bounds");
     }
-    Ok(Policy::NeedWeighted { limits, threshold })
+    Ok(Policy::NeedWeighted { limits, threshold, retry: retry.unwrap_or(RETRY_DELAY) })
 }
 
 /// `priority`.
@@ -263,7 +269,7 @@ fn priority(policy: &Policy, need: f64, waited: i64) -> f64 {
 fn abandons(policy: &Policy, service: Service, need: f64, waited: i64) -> bool {
     match policy {
         Policy::Strict => false,
-        Policy::NeedWeighted { limits, threshold } => {
+        Policy::NeedWeighted { limits, threshold, .. } => {
             let limit = match service {
                 Service::Toilet => limits[0],
                 Service::Water => limits[1],
@@ -361,20 +367,20 @@ pub(crate) fn prepare_facility_queue<'py>(
             return Ok(());
         }
     }
-    let (current, new_order) = EntityStore::with_rows(&store, |rows| {
+    let (current, new_order, leaving, service) = EntityStore::with_rows(&store, |rows| {
         let Some(facility) = rows.facilities.get(facility_name) else {
             return unsupported("no such facility");
         };
         let service = service_of(&facility.kind)?;
         let kind = if resource { "resource_service_queue" } else { "toilet_queue" };
-        let mut tasks: BTreeMap<&str, i64> = BTreeMap::new();
+        let mut tasks: BTreeMap<&str, (i64, &Arc<str>)> = BTreeMap::new();
         for (_, task) in rows.active_tasks.iter() {
             if task.resource_id.as_deref() == Some(facility_name) && &*task.kind == kind {
                 let Some(agent_id) = &task.agent_id else {
                     return unsupported("a queue task has no agent");
                 };
                 // The last in the map's order, as a dict comprehension keeps.
-                tasks.insert(agent_id, task.start_minute);
+                tasks.insert(agent_id, (task.start_minute, &task.id));
             }
         }
         let queue = members(facility, resource);
@@ -384,7 +390,7 @@ pub(crate) fn prepare_facility_queue<'py>(
             if !seen.insert(&**agent_id) {
                 return unsupported("a person stands in the queue twice");
             }
-            let Some(&start) = tasks.get(&**agent_id) else {
+            let Some(&(start, task_id)) = tasks.get(&**agent_id) else {
                 continue;
             };
             let waited = minute.checked_sub(start).ok_or_else(|| Unsupported::new_err("a start out of range"))?.max(0);
@@ -398,19 +404,24 @@ pub(crate) fn prepare_facility_queue<'py>(
                 Policy::Strict => 0.0,
                 Policy::NeedWeighted { .. } => need_of(&agent.needs, service)?,
             };
-            if abandons(&policy, service, need, waited) {
-                return unsupported("someone gives up on the queue");
-            }
-            ranked.push((-priority(&policy, need, waited), start, order, agent_id.clone()));
+            let leaves = abandons(&policy, service, need, waited).then(|| Leaving { agent_id: agent_id.clone(), task_id: task_id.clone(), start });
+            ranked.push((-priority(&policy, need, waited), start, order, agent_id.clone(), leaves));
         }
         // As `sorted` on the tuples: -0.0 equals 0.0, and every value is finite.
         ranked.sort_by(|first, second| {
             let by_urgency = first.0.partial_cmp(&second.0).unwrap_or(std::cmp::Ordering::Equal);
             by_urgency.then(first.1.cmp(&second.1)).then(first.2.cmp(&second.2))
         });
-        let new_order: Vec<Arc<str>> = ranked.into_iter().map(|entry| entry.3).collect();
-        Ok((queue.clone(), new_order))
+        let mut new_order = Vec::with_capacity(ranked.len());
+        let mut leaving = Vec::new();
+        for (_, _, _, agent_id, leaves) in ranked {
+            new_order.push(agent_id);
+            leaving.extend(leaves);
+        }
+        Ok((queue.clone(), new_order, leaving, service))
     })?;
+    let leave = LeaveCall { world, facility_id, facility_name, resource, minute, service, retry: policy_retry(&policy), queue_id: None };
+    plan_all_leaving(&leave, &leaving)?;
     let stale = if resource { stale_stall(world, table, facility_name, &new_order)? } else { None };
     if new_order != current {
         let facilities = attribute(world, intern!(py, "facilities"))?;
@@ -427,14 +438,14 @@ pub(crate) fn prepare_facility_queue<'py>(
         // Through the map's own method: the map may be a tree's.
         stalls.del_item(facility_id)?;
     }
-    Ok(())
+    writing(write_all_leaving(&leave, &leaving))
 }
 
-/// `prepare_independent_facility_queue`: whoever gives up goes to the Python rule, and otherwise
-/// nothing changes, since an independent FIFO keeps its order.
+/// `prepare_independent_facility_queue`: an independent FIFO keeps its order, and only those who
+/// give up change anything.
 #[pyfunction]
 #[pyo3(signature = (world, queue_id, *, minute, resource))]
-fn prepare_independent_facility_queue<'py>(
+pub(crate) fn prepare_independent_facility_queue<'py>(
     world: &Bound<'py, PyAny>,
     queue_id: &Bound<'py, PyAny>,
     minute: &Bound<'py, PyAny>,
@@ -442,7 +453,7 @@ fn prepare_independent_facility_queue<'py>(
 ) -> PyResult<()> {
     let py = world.py();
     let queue_name = exact_str(queue_id)?;
-    exact_bool(resource)?;
+    let resource = exact_bool(resource)?;
     let minute = plain_minute(minute)?;
     let found = with_queues(world, |row| {
         let Some(queue) = row.queues.get(queue_name) else {
@@ -474,11 +485,12 @@ fn prepare_independent_facility_queue<'py>(
     }
     let policy = policy_of(world)?;
     let store = entities_of(world)?;
-    EntityStore::with_rows(&store, |rows| {
+    let (leaving, service) = EntityStore::with_rows(&store, |rows| {
         let Some(facility) = rows.facilities.get(&*facility_id) else {
             return unsupported("no such facility");
         };
         let service = service_of(&facility.kind)?;
+        let mut leaving = Vec::new();
         for (agent_id, task_id) in &requests {
             let Some(task) = rows.active_tasks.get(task_id) else {
                 continue;
@@ -491,12 +503,352 @@ fn prepare_independent_facility_queue<'py>(
                     None => return unsupported("no such agent"),
                 },
             };
-            if abandons(&policy, service, need, waited) {
-                return unsupported("someone gives up on the queue");
+            // `_abandon_and_retry`'s first check: someone not in the facility's list stays as they are.
+            if abandons(&policy, service, need, waited) && members(facility, resource).contains(agent_id) {
+                leaving.push(Leaving { agent_id: agent_id.clone(), task_id: task.id.clone(), start: task.start_minute });
             }
         }
-        Ok(())
-    })
+        Ok((leaving, service))
+    })?;
+    if leaving.is_empty() {
+        return Ok(());
+    }
+    let facility_object = PyString::new(py, &facility_id);
+    let leave = LeaveCall {
+        world,
+        facility_id: facility_object.as_any(),
+        facility_name: &facility_id,
+        resource,
+        minute,
+        service,
+        retry: policy_retry(&policy),
+        queue_id: Some(queue_name),
+    };
+    plan_all_leaving(&leave, &leaving)?;
+    writing(write_all_leaving(&leave, &leaving))
+}
+
+// ---- _abandon_and_retry --------------------------------------------------------------------------
+
+/// Someone `should_abandon` picked, in the order the rule goes through them.
+struct Leaving {
+    agent_id: Arc<str>,
+    task_id: Arc<str>,
+    start: i64,
+}
+
+/// What a call of `_abandon_and_retry` has in common for those who leave.
+struct LeaveCall<'a, 'py> {
+    world: &'a Bound<'py, PyAny>,
+    facility_id: &'a Bound<'py, PyAny>,
+    facility_name: &'a str,
+    resource: bool,
+    minute: i64,
+    service: Service,
+    retry: i64,
+    queue_id: Option<&'a str>,
+}
+
+/// What `_abandon_and_retry` writes for a person, with the sequences it takes from `sequence`.
+struct LeavePlan {
+    abandon: EventRow,
+    /// `finish_service`'s request and `record_queue_transition`'s record.
+    transition: Option<(QueueRequest, EventRow)>,
+    walk: Option<LeaveWalk>,
+    sequences: i64,
+}
+
+struct LeaveWalk {
+    task_id: Arc<str>,
+    destination: Arc<str>,
+    due: i64,
+    event: EventRow,
+    changes: Changes,
+}
+
+fn policy_retry(policy: &Policy) -> i64 {
+    match policy {
+        Policy::Strict => RETRY_DELAY,
+        Policy::NeedWeighted { retry, .. } => *retry,
+    }
+}
+
+impl Service {
+    fn name(self) -> &'static str {
+        match self {
+            Service::Toilet => "toilet",
+            Service::Water => "water",
+            Service::Meal => "meal",
+        }
+    }
+}
+
+/// The walk back to the middle of the zone: None to leave at once, `Some(None)` when no path lets
+/// the person out, so the rule leaves them in line.
+fn return_path(geo: &Geo, movement: &MovementRow, rows: &Entities, raw_model: Option<Bound<'_, PyAny>>, agent_id: &str) -> PyResult<Option<Option<(i64, Arc<[Pt]>)>>> {
+    let Some(agent) = rows.agents.get(agent_id) else {
+        return unsupported("no such agent");
+    };
+    let current = position_point(movement.positions.get(agent_id));
+    let destination = geo.zone_center(&agent.zone_id)?;
+    let (Some(current), Some(destination)) = (current, destination) else {
+        return Ok(None);
+    };
+    if !usable(current.x, current.y) {
+        return unsupported("a position is not a usable point");
+    }
+    let mobility = mobility_text(agent);
+    let Some(path) = geo.room_route(&agent.zone_id, Some(current), destination, mobility).map_err(refused)? else {
+        return Ok(Some(None));
+    };
+    let mut minutes = 0;
+    if path.len() >= 2 {
+        let length = polyline_length(&path).ok_or_else(|| Unsupported::new_err("not a plain sum"))?;
+        minutes = room_minutes(raw_model, geo, rows, &agent.zone_id, mobility, length)?;
+    }
+    Ok(Some(Some((minutes, path))))
+}
+
+fn identity_is_free(writer: &EventWriter<'_>, event_id: &str, sequence: i64) -> bool {
+    let past = writer.log().borrow();
+    !(past.has_event_id(event_id) || past.has_sequence(sequence) || writer.queue().borrow().has_event(event_id))
+}
+
+/// `_abandon_and_retry` of one person, changing nothing. None when the rule returns at once and the
+/// person stays in line. Whether someone leaves doesn't turn on who left before: the path and the
+/// crowd of the zone stay what they were.
+fn plan_leave(call: &LeaveCall<'_, '_>, person: &Leaving, sequence: i64) -> PyResult<Option<LeavePlan>> {
+    let (world, minute) = (call.world, call.minute);
+    let py = world.py();
+    let writer = EventWriter::of(world)?;
+    let store = entities_of(world)?;
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let configs = attribute(world, intern!(py, "model_configs"))?;
+    let placed = exact_dict(&table)?.get_item(KEY)?.is_some_and(|state| !state.is_none())
+        && exact_dict(&configs)?.contains(intern!(py, "facility_geometry"))?;
+    let geo = if placed { Some(Geo::of(world)?) } else { None };
+    let mirror = if placed { Some(mirror_held(world)?) } else { None };
+    let raw_model = raw_movement_model(world)?;
+    let path = match (&geo, &mirror) {
+        (Some(geo), Some(mirror)) => NamespaceMirror::with_row::<MovementRow, _>(mirror, |row| {
+            EntityStore::with_rows(&store, |rows| return_path(geo, row, rows, raw_model, &person.agent_id))
+        })?,
+        _ => None,
+    };
+    let (minutes, points) = match path {
+        Some(None) => return Ok(None),
+        Some(Some((minutes, points))) => (minutes, Some(points)),
+        None => (0, None),
+    };
+    let due = minute.checked_add(minutes).ok_or_else(|| Unsupported::new_err("a due minute out of range"))?;
+    if due >= writer.duration() {
+        return Ok(None);
+    }
+    let retry_at = minute.checked_add(call.retry).ok_or_else(|| Unsupported::new_err("a minute out of range"))?;
+    let abandon_id: Arc<str> = Arc::from(format!("facility-queue-abandon-{sequence}"));
+    if !identity_is_free(&writer, &abandon_id, sequence) {
+        return unsupported("the event's identity is taken");
+    }
+    let mut payload = IndexMap::with_capacity(8);
+    payload.insert(Arc::from("facility_id"), text(call.facility_name));
+    payload.insert(Arc::from("agent_id"), V::Str(person.agent_id.clone()));
+    payload.insert(Arc::from("task_id"), V::Str(person.task_id.clone()));
+    payload.insert(Arc::from("service"), text(call.service.name()));
+    payload.insert(Arc::from("start_minute"), V::Int(person.start));
+    payload.insert(Arc::from("wait_minutes"), V::Int(minute - person.start));
+    payload.insert(Arc::from("retry_at_minute"), V::Int(retry_at));
+    payload.insert(Arc::from("reason"), text("need_weighted_wait_threshold"));
+    let mut provenance = IndexMap::with_capacity(4);
+    provenance.insert(Arc::from("source_type"), text("assumption"));
+    provenance.insert(Arc::from("source_id"), text(NEED_WEIGHTED_SOURCE));
+    provenance.insert(Arc::from("policy_version"), text(NEED_WEIGHTED_ID));
+    provenance.insert(Arc::from("transition"), text("abandon_queue_then_retry"));
+    let Some(abandon) = EventRow::new(
+        abandon_id.clone(),
+        EventKind::Endogenous,
+        minute,
+        0,
+        sequence,
+        Arc::from("facility_queue_abandon"),
+        payload,
+        Some(Arc::from(NEED_WEIGHTED_SOURCE)),
+        Some(person.task_id.clone()),
+        provenance,
+    ) else {
+        return unsupported("the event's values are not what an event takes");
+    };
+    let mut next = sequence + 1;
+    let transition = match call.queue_id {
+        None => None,
+        Some(queue_id) => {
+            match with_queues(world, |row| Ok(request_of_task(row, &person.task_id).cloned()))?.flatten() {
+                None => None,
+                Some(request) => {
+                    let capacity = point_of(&*Geo::of(world)?, queue_id).map(|point| point.service_capacity);
+                    // After `finish_service` the request has no place in the queue.
+                    let row = transition_row(py, &writer, &request, "abandoned", &person.task_id, Some(minute - request.requested_minute), Some(&person.task_id), None, capacity, next, minute)?;
+                    next += 1;
+                    Some((request, row))
+                }
+            }
+        }
+    };
+    let walk = match points.filter(|_| minutes > 0) {
+        None => None,
+        Some(points) => {
+            let task_id: Arc<str> = Arc::from(format!("queue-abandon-travel-{next}"));
+            let event_id: Arc<str> = Arc::from(format!("queue-abandon-arrival-{next}"));
+            if !identity_is_free(&writer, &event_id, next) {
+                return unsupported("the event's identity is taken");
+            }
+            if points.iter().any(|point| !usable(point.x, point.y)) {
+                return unsupported("a route point is not a usable point");
+            }
+            let Some(mirror) = &mirror else {
+                return unsupported("a walk without the floor plan");
+            };
+            let scene = Scene::of(world)?;
+            let (event, destination, changes) = NamespaceMirror::with_row::<MovementRow, _>(mirror, |row| {
+                EntityStore::with_rows(&store, |rows| {
+                    let Some(agent) = rows.agents.get(&person.agent_id) else {
+                        return unsupported("no such agent");
+                    };
+                    let zone = agent.zone_id.clone();
+                    let mut payload = IndexMap::with_capacity(9);
+                    payload.insert(Arc::from("agent_id"), V::Str(person.agent_id.clone()));
+                    payload.insert(Arc::from("task_id"), V::Str(task_id.clone()));
+                    payload.insert(Arc::from("purpose"), text("queue_abandon"));
+                    payload.insert(Arc::from("destination_zone_id"), V::Str(zone.clone()));
+                    payload.insert(Arc::from("origin_zone_id"), V::Str(zone.clone()));
+                    payload.insert(Arc::from("route_zone_ids"), V::List(vec![V::Str(zone.clone()), V::Str(zone.clone())]));
+                    payload.insert(Arc::from("route_edge_ids"), V::List(Vec::new()));
+                    payload.insert(Arc::from("travel_minutes"), V::Int(minutes));
+                    payload.insert(Arc::from("start_minute"), V::Int(minute));
+                    let mut provenance = IndexMap::with_capacity(4);
+                    provenance.insert(Arc::from("source_type"), text("assumption"));
+                    provenance.insert(Arc::from("source_id"), text(NEED_WEIGHTED_SOURCE));
+                    provenance.insert(Arc::from("policy_version"), text(NEED_WEIGHTED_ID));
+                    provenance.insert(Arc::from("movement"), text("in_room_return_to_zone_anchor"));
+                    let Some(event) = EventRow::new(
+                        event_id.clone(),
+                        EventKind::Completion,
+                        due,
+                        0,
+                        next,
+                        Arc::from("agent_travel_complete"),
+                        payload,
+                        Some(task_id.clone()),
+                        Some(abandon_id.clone()),
+                        provenance,
+                    ) else {
+                        return unsupported("the event's values are not what an event takes");
+                    };
+                    let journey = Journey {
+                        event_id: event_id.clone(),
+                        task_id: task_id.clone(),
+                        purpose: Arc::from("queue_abandon"),
+                        facility_id: None,
+                        destination_zone_id: zone.clone(),
+                        route_zone_ids: vec![zone.clone(), zone.clone()],
+                        route_edge_ids: Vec::new(),
+                        route_points: points.iter().map(|point| Point { x: point.x, y: point.y }).collect(),
+                        started_minute: minute,
+                        due_minute: due,
+                        queue_id: None,
+                        support_request_id: None,
+                        support_staff_id: None,
+                    };
+                    let changes = plan_start(&scene, row, rows, &person.agent_id, journey, &zone, &points, &[], minute, minutes)?;
+                    Ok((event, zone, changes))
+                })
+            })?;
+            next += 1;
+            Some(LeaveWalk { task_id, destination, due, event, changes })
+        }
+    };
+    Ok(Some(LeavePlan { abandon, transition, walk, sequences: next - sequence }))
+}
+
+/// Everyone's plan, for what it refuses: the writes then plan again, on the state they find.
+fn plan_all_leaving(call: &LeaveCall<'_, '_>, leaving: &[Leaving]) -> PyResult<()> {
+    if leaving.is_empty() {
+        return Ok(());
+    }
+    let mut sequence = EventWriter::of(call.world)?.next_sequence()?;
+    metrics_of(call.world)?;
+    for person in leaving {
+        if let Some(plan) = plan_leave(call, person, sequence)? {
+            sequence += plan.sequences;
+        }
+    }
+    Ok(())
+}
+
+/// `_abandon_and_retry`, in the order of its writes.
+fn write_all_leaving(call: &LeaveCall<'_, '_>, leaving: &[Leaving]) -> PyResult<()> {
+    let (world, minute) = (call.world, call.minute);
+    let py = world.py();
+    for person in leaving {
+        let writer = EventWriter::of(world)?;
+        let Some(plan) = plan_leave(call, person, writer.next_sequence()?)? else {
+            continue;
+        };
+        let store = entities_of(world)?;
+        writer.allocate_sequence()?;
+        let facilities = attribute(world, intern!(py, "facilities"))?;
+        let Some(facility) = raw_dict_get(&facilities, call.facility_id)? else {
+            return unsupported("the rows' facility has no object");
+        };
+        let name = if call.resource { intern!(py, "resource_queue_agent_ids") } else { intern!(py, "queue_agent_ids") };
+        let agent_text = PyString::new(py, &person.agent_id);
+        attribute(&facility, name)?.call_method1(intern!(py, "remove"), (&agent_text,))?;
+        if call.resource {
+            let remaining = EntityStore::with_rows(&store, |rows| match rows.facilities.get(call.facility_name) {
+                Some(facility) => Ok(members(facility, true).clone()),
+                None => unsupported("no such facility"),
+            })?;
+            let table = attribute(world, intern!(py, "model_state"))?;
+            if let Some(stalls) = stale_stall(world, exact_dict(&table)?, call.facility_name, &remaining)? {
+                stalls.del_item(call.facility_id)?;
+            }
+        }
+        if let Some((request, row)) = &plan.transition {
+            write_finish(world, request)?;
+            write_transition(&writer, row, minute)?;
+        }
+        let tasks = attribute(world, intern!(py, "active_tasks"))?;
+        tasks.del_item(&*person.task_id)?;
+        let next = minute + call.retry;
+        EntityStore::with_rows(&store, |rows| {
+            let Some(row) = rows.agents.get_mut(&person.agent_id) else {
+                return unsupported("no such agent");
+            };
+            row.next_decision_at = next;
+            Ok(())
+        })?;
+        let agents = attribute(world, intern!(py, "agents"))?;
+        let Some(agent) = raw_dict_get(&agents, agent_text.as_any())? else {
+            return unsupported("a row has no object");
+        };
+        raw_setattr(&agent, intern!(py, "next_decision_at"), next.into_pyobject(py)?.as_ptr())?;
+        writer.record(&plan.abandon, minute, EventStatus::Applied, Some(ABANDON_DETAIL))?;
+        match plan.walk {
+            Some(LeaveWalk { task_id, destination, due, event, changes }) => {
+                writer.allocate_sequence()?;
+                let task_text = PyString::new(py, &task_id);
+                let task = active_task_class(py)?.call1((&task_text, "travel_return", &agent_text, py.None(), minute, due))?;
+                tasks.set_item(&task_text, task)?;
+                set_agent(world, &store, agent_text.as_any(), Activity::Moving, Some(PyString::new(py, &destination).as_any()))?;
+                writer.schedule(event)?;
+                let mirror = mirror_held(world)?;
+                let writes = NamespaceMirror::with_row_tree::<MovementRow, _>(&mirror, |row, tree| changes.apply(row, tree))?;
+                write_tree(&mirror, writes)?;
+            }
+            None => set_agent(world, &store, agent_text.as_any(), Activity::Idle, None)?,
+        }
+        add_one(&metrics_of(world)?, "facility_queue_abandon_count")?;
+    }
+    Ok(())
 }
 
 // ---- progress_physical_queue_positions and _head_to_service --------------------------------------

@@ -118,6 +118,15 @@ def prepare(output: str) -> None:
                     recorder.differ(f"{label}: the kernel raised {raised!r}, Python {error!r}")
                 else:
                     recorder.seen[f"{label}.same_error"] += 1
+                    # A deferral schedules its retry on the world, and each left the same.
+                    try:
+                        same = document(target) == document(copied[worlds[-1]])
+                    except Exception:  # noqa: BLE001 - the state can't be written out
+                        recorder.reasons[f"{label}: no document after an error"] += 1
+                    else:
+                        recorder.seen[f"{label}.error_worlds_compared"] += 1
+                        if not same:
+                            recorder.differ(f"{label}: the worlds after {raised!r} differ")
                 raise
             recorder.seen[f"{label}.kernel_ran"] += 1
             if error is not None:
@@ -200,6 +209,11 @@ def prepare(output: str) -> None:
         lifecycle.apply_presence_action,
         rule_of("population_lifecycle", "_apply_presence_action"),
         worlds=(0, 1),
+    )
+    lifecycle.apply_presence_command = writer(
+        "apply_presence_command",
+        lifecycle.apply_presence_command,
+        rule_of("population_lifecycle", "apply_population_presence_command"),
     )
     lifecycle.admit_pending_returns = writer(
         "admit_pending_returns",

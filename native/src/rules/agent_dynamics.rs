@@ -210,7 +210,7 @@ fn new_memory(rows: &Entities, agent: &AgentRow, oriented: bool, awareness: Opti
 
 /// `create_agent_dynamics_state`.
 #[pyfunction]
-fn create_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn create_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let policy = policy_of(world)?;
     let awareness = awareness_of(world)?;
     let store = entities_of(world)?;

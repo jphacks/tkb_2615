@@ -272,6 +272,7 @@ def validate_population_lifecycle_state(world: WorldState) -> None:
                 raise ValueError("pending return is inconsistent with population_presence_v1")
 
 
+@kernel_first("population_lifecycle", "apply_presence_command")
 def apply_population_presence_command(
     world: WorldState,
     event: ScheduledEvent,

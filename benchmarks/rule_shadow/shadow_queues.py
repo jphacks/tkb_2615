@@ -5,6 +5,9 @@ plain copies of the movement state, the metrics, the event counter, the faciliti
 and a list of what it schedules. Everything those hold must come out the same, floats by their bits,
 along with the result and each event's repr. What the kernel refuses isn't compared: the Python rule
 runs on the world then.
+
+Someone who gives up writes much more (`_abandon_and_retry`): that call copies the whole world, the
+Python rule runs on the copy, and the two must leave the same canonical JSON and pending events.
 """
 
 from __future__ import annotations
@@ -129,6 +132,31 @@ def _compare(recorder: Recorder, where: str, world: Any, twin: Any, pending_befo
             recorder.seen[f"trips.{phase}"] += 1
 
 
+def _someone_gives_up(world: Any, facility: Any, *, resource: bool, minute: int) -> bool:
+    from sheltersim.domain.queueing import _service_name
+    from sheltersim.policies.queueing import create_queue_policy
+
+    policy = create_queue_policy(world.model_configs)
+    kind = "resource_service_queue" if resource else "toilet_queue"
+    queue = facility.resource_queue_agent_ids if resource else facility.queue_agent_ids
+    service = _service_name(facility.kind)
+    for task in world.active_tasks.values():
+        if (
+            task.kind == kind
+            and task.resource_id == facility.id
+            and task.agent_id in queue
+            and policy.should_abandon(
+                world, task.agent_id, service, max(0, minute - task.start_minute)
+            )
+        ):
+            return True
+    return False
+
+
+def _whole(world: Any) -> str:
+    return world._canonical_text(world._canonical_data())
+
+
 def prepare(output: str) -> None:
     from sheltersim import native
 
@@ -157,6 +185,45 @@ def prepare(output: str) -> None:
 
         return get
 
+    prepare_kernel = rules.prepare_facility_queue
+
+    def leaving(world: Any, *arguments: Any, **options: Any) -> None:
+        """The whole world, for a call where someone gives up."""
+        from copy import deepcopy
+
+        name = "prepare_facility_queue"
+        where = f"{name} {arguments!r:.100} {options!r:.100} at {world.minute_index}"
+        other = deepcopy(world)
+        logged_before = len(world.event_log)
+        rule_of("queueing", name)()(other, *arguments, **options)
+        try:
+            prepare_kernel(world, *arguments, **options)
+        except unsupported as reason:
+            recorder.reasons[f"{name}: {reason}"] += 1
+            raise
+        recorder.seen[f"{name}.kernel_ran"] += 1
+        recorder.seen["leaving.calls"] += 1
+        recorder.seen["leaving.people"] += len(world.event_log) - logged_before
+        mine, theirs = _whole(world), _whole(other)
+        recorder.seen["leaving.bytes_compared"] += len(mine)
+        if mine != theirs:
+            place = next((i for i, (a, b) in enumerate(zip(mine, theirs)) if a != b), 0)
+            recorder.differ(
+                f"{where}: differs at {place}: {mine[max(0, place - 80) : place + 60]!r} / "
+                f"{theirs[max(0, place - 80) : place + 60]!r}"
+            )
+        ours = [repr(event) for event in world.event_queue.pending()]
+        if ours != [repr(event) for event in other.event_queue.pending()]:
+            recorder.differ(f"{where}: the pending events")
+        recorder.seen["leaving.walks"] += sum(
+            event.event_id.startswith("queue-abandon-arrival-")
+            and event.due_minute > world.minute_index
+            for event in world.event_queue.pending()
+        )
+        if world.id_counters != other.id_counters:
+            recorder.differ(f"{where}: {world.id_counters} not {other.id_counters}")
+        row_check(world, where)
+
     def writer(name: str, module: str, kernel: Any) -> Any:
         def run(world: Any, *arguments: Any, **options: Any) -> Any:
             if isinstance(world, _Twin):
@@ -176,6 +243,10 @@ def prepare(output: str) -> None:
                 result = kernel(world, *arguments, **options)
                 recorder.seen[f"{name}.kernel_ran"] += 1
                 return result
+            if name == "prepare_facility_queue" and _someone_gives_up(
+                world, facility, resource=options["resource"], minute=options["minute"]
+            ):
+                return leaving(world, *arguments, **options)
             twin = _QueueTwin(world, _plain_movement(world))
             metric_before = _document(world.metric_state)
             pending_before = len(world.event_queue.pending())

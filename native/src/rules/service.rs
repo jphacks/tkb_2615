@@ -3,9 +3,8 @@
 //! for the comparison, and for every case below, which is also how a bad value gets its error text
 //! (docs/rust-port/lanes/m4-service.md).
 //!
-//! What goes to Python, before anything is written:
-//! - `cancel` and `interrupt_for_staff`, which no 7-day Run reaches;
-//! - anything not plainly what the Python rule accepts, such as a reservation ID in use.
+//! What goes to Python, before anything is written: anything not plainly what the Python rule
+//! accepts, such as a reservation ID in use.
 
 use std::sync::{Arc, LazyLock};
 
@@ -118,6 +117,22 @@ impl<'py> Manager<'py> {
         let table = attribute(&world, intern!(py, "model_state"))?;
         exact_dict(&table)?;
         Ok(Self { world, config, table })
+    }
+
+    /// `ResourceServiceManager(world)`, which holds nothing else.
+    fn of_world(world: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let py = world.py();
+        let configs = attribute(world, intern!(py, "model_configs"))?;
+        let table = attribute(world, intern!(py, "model_state"))?;
+        let Some(raw) = exact_dict(&configs)?.get_item(intern!(py, "resource_service"))? else {
+            return unsupported("no resource service");
+        };
+        if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 || !exact_dict(&table)?.contains(intern!(py, "resource_service_v1"))? || !exact_dict(&table)?.contains(intern!(py, "resource_ledger_v1"))? {
+            return unsupported("not an opted-in world");
+        }
+        let config = pyo3::types::PyDict::new(py);
+        config.call_method1(intern!(py, "update"), (raw,))?;
+        Ok(Self { world: world.clone(), config: config.into_any(), table })
     }
 
     fn text(&self, name: &Bound<'py, PyString>) -> PyResult<Arc<str>> {
@@ -457,7 +472,7 @@ pub(crate) fn serve_head<'py>(
 /// One pass of `_arbitrate_independent_facility`'s loop after the positions: the started event's
 /// ID or None to stop, and the head's wait as `(agent, reason)`.
 #[pyfunction]
-fn serve_independent_head<'py>(
+pub(crate) fn serve_independent_head<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     resource_id: &Bound<'py, PyAny>,
@@ -479,7 +494,7 @@ fn serve_independent_head<'py>(
 
 /// `_record_independent_queue_stall`.
 #[pyfunction]
-fn record_independent_stall<'py>(
+pub(crate) fn record_independent_stall<'py>(
     manager: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
     stalls: &Bound<'py, PyAny>,
@@ -1150,7 +1165,7 @@ pub(crate) fn queue_up<'py>(
     request(manager, agent_id, facility_id, None, Some(PyBool::new(py, false).as_any()), None)
 }
 
-/// `ResourceServiceManager.request`, without the world's whole validation.
+/// `ResourceServiceManager.request`.
 #[pyfunction]
 #[pyo3(signature = (manager, agent_id, facility_id, *, minute=None, validate_state=None, queue_id=None))]
 fn request<'py>(
@@ -1162,9 +1177,7 @@ fn request<'py>(
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = manager.py();
-    if !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true())) {
-        return unsupported("the world's whole validation is Python's");
-    }
+    let validates = !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true()));
     let manager = Manager::of(manager)?;
     let world = &manager.world;
     let world_minute = manager.minute()?;
@@ -1185,6 +1198,10 @@ fn request<'py>(
         Some(counter) => exact_int(&counter)?,
         None => 0,
     };
+    // `world.validate()` stays Python's (D3). What it raises, it raises here too.
+    if validates {
+        world.call_method0(intern!(py, "validate"))?;
+    }
     let given_queue = queue_id.filter(|queue| !queue.is_none()).map(exact_str).transpose()?;
     let independent = has_independent(world, facility_name)?;
     if given_queue.is_some() && !independent {
@@ -1234,16 +1251,7 @@ fn request<'py>(
         }
         Ok((agent.zone_id.clone(), resource, queue_tail.unwrap_or(facility.resource_queue_agent_ids.len() as i64 + 1)))
     })?;
-    // `_next_queue_task_id`.
-    let task_id: Arc<str> = loop {
-        let candidate = format!("resource-service-task-{counter}");
-        counter = counter.checked_add(1).ok_or_else(|| Unsupported::new_err("a counter past 64 bits"))?;
-        let is_task = EntityStore::with_rows(&store, |rows| Ok(rows.active_tasks.get(&candidate).is_some()))?;
-        let is_used = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| Ok(row.used_reservation_ids.contains(&candidate)))?;
-        if !is_task && !is_used && !pending_reserves(&writer, &candidate)? {
-            break Arc::from(candidate);
-        }
-    };
+    let task_id = next_queue_task_id(&store, &ledger, &writer, &mut counter)?;
     let facilities = attribute(world, intern!(py, "facilities"))?;
     let Some(facility) = raw_dict_get(&facilities, facility_id)? else {
         return unsupported("a row has no object");
@@ -1303,7 +1311,428 @@ fn request<'py>(
             detail: None,
         },
     )?;
+    if validates {
+        world.call_method0(intern!(py, "validate"))?;
+    }
     receipt_class(py)?.call1((agent_id, facility_id, resource, world_minute, &task_text, queue_position))
+}
+
+/// `_next_queue_task_id`: the ID, with `counter` left after it.
+fn next_queue_task_id(store: &Bound<'_, EntityStore>, ledger: &Bound<'_, NamespaceMirror>, writer: &EventWriter<'_>, counter: &mut i64) -> PyResult<Arc<str>> {
+    loop {
+        let candidate = format!("resource-service-task-{counter}");
+        *counter = counter.checked_add(1).ok_or_else(|| Unsupported::new_err("a counter past 64 bits"))?;
+        let is_task = EntityStore::with_rows(store, |rows| Ok(rows.active_tasks.get(&candidate).is_some()))?;
+        let is_used = NamespaceMirror::with_row::<LedgerRow, _>(ledger, |row| Ok(row.used_reservation_ids.contains(&candidate)))?;
+        if !is_task && !is_used && !pending_reserves(writer, &candidate)? {
+            return Ok(Arc::from(candidate));
+        }
+    }
+}
+
+// ---- cancel and interrupt_for_staff -------------------------------------------------------------
+
+/// What `cancel` releases of a service under way.
+struct Releasing {
+    resource_id: &'static str,
+    index: usize,
+    staff_id: Arc<str>,
+    warehouse: Arc<str>,
+    audit: EventRow,
+}
+
+struct CancelPlan {
+    task_id: Arc<str>,
+    agent_id: Arc<str>,
+    facility_id: Arc<str>,
+    releasing: Option<Releasing>,
+    finishing: Option<(QueueRequest, EventRow)>,
+    sequences: i64,
+}
+
+/// `cancel` of a task, changing nothing, with the sequences it takes from `sequence`. What it
+/// would turn down is the Python rule's, with its text.
+fn plan_cancel(manager: &Manager<'_>, event_id: &Arc<str>, task_id: &str, interrupted: bool, sequence: i64) -> PyResult<CancelPlan> {
+    let world = &manager.world;
+    let py = world.py();
+    let mirror = held_mirror(world)?;
+    let writer = EventWriter::of(world)?;
+    let ledger = ledger_mirror(world)?;
+    metrics_of(world)?;
+    let minute = manager.minute()?;
+    let (cancelled, owned) = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| {
+        Ok((row.cancelled_task_ids.iter().any(|id| &**id == task_id), row.active_reservation_ids.iter().any(|id| &**id == task_id)))
+    })?;
+    if cancelled {
+        return unsupported("the task was already cancelled");
+    }
+    let store = entities_of(world)?;
+    let (agent_id, facility_id, active) = EntityStore::with_rows(&store, |rows| {
+        let Some(task) = rows.active_tasks.get(task_id) else {
+            return unsupported("no active task");
+        };
+        let queued = &*task.kind == "resource_service_queue";
+        if !queued && !matches!(&*task.kind, "resource_service_water" | "resource_service_food") {
+            return unsupported("the task is another kind");
+        }
+        let (Some(agent_id), Some(facility_id)) = (&task.agent_id, &task.resource_id) else {
+            return unsupported("the task has incomplete ownership");
+        };
+        let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
+            return unsupported("the task's person or facility is gone");
+        };
+        let active = if queued {
+            if !facility.resource_queue_agent_ids.contains(&agent.profile.id) {
+                return unsupported("the queue has no such person");
+            }
+            None
+        } else {
+            let Some(resource) = resource_of(&facility.kind) else {
+                return unsupported("not a resource facility");
+            };
+            if !facility.resource_active_agent_ids.contains(&agent.profile.id) {
+                return unsupported("the facility has no such slot");
+            }
+            let Some(staff_id) = &task.staff_id else {
+                return unsupported("the service has no staff");
+            };
+            let Some(staff) = rows.staff.get(staff_id) else {
+                return unsupported("the service's staff is gone");
+            };
+            if staff.active_task_id.as_deref() != Some(task_id) || staff.work_queue.len() != 1 || &*staff.work_queue[0] != task_id {
+                return unsupported("the cancellation does not match its staff");
+            }
+            Some((resource, staff_id.clone()))
+        };
+        Ok((agent.profile.id.clone(), facility_id.clone(), active))
+    })?;
+    let task_arc: Arc<str> = Arc::from(task_id);
+    let mut next = sequence;
+    let releasing = match active {
+        None => None,
+        Some((resource_id, staff_id)) => {
+            let Some(index) = resource_index(resource_id) else {
+                return unsupported("an unknown resource");
+            };
+            let (matches, warehouse) = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
+                let matches = row.accounts.of(index).reservations.get(task_id).is_some_and(|found| &*found.agent_id == &*agent_id && &*found.resource_id == resource_id);
+                Ok((matches, row.warehouse_id.clone()))
+            })?;
+            if !matches || !owned {
+                return unsupported("the cancellation does not match its reservation");
+            }
+            let source = Source::of(manager)?;
+            let resource_arc = if resource_id == WATER { NAMES.water.clone() } else { NAMES.food.clone() };
+            let mut payload = IndexMap::with_capacity(4);
+            payload.insert(NAMES.warehouse_id.clone(), V::Str(warehouse.clone()));
+            payload.insert(NAMES.resource_id.clone(), V::Str(resource_arc));
+            payload.insert(NAMES.reservation_id.clone(), V::Str(task_arc.clone()));
+            payload.insert(NAMES.agent_id.clone(), V::Str(agent_id.clone()));
+            let audit = audit_row(&writer, &source, "release", next, minute, payload, event_id.clone())?;
+            next += 1;
+            Some(Releasing { resource_id, index, staff_id, warehouse, audit })
+        }
+    };
+    let found = with_queues(world, |row| {
+        let Some(request) = request_of_task(row, task_id).cloned() else {
+            return Ok(None);
+        };
+        let Some(queue) = row.queues.get(&*request.queue_id) else {
+            return unsupported("no such queue");
+        };
+        let position = if &*request.status == "queued" { None } else { position_in(queue, &request.request_id) };
+        Ok(Some((request, position)))
+    })?
+    .flatten();
+    let finishing = match found {
+        None => None,
+        Some((request, position)) => {
+            let capacity = point_of(&*Geo::of(world)?, &request.queue_id).map(|point| point.service_capacity);
+            let transition = if interrupted { "interrupted" } else { "cancelled" };
+            let record = transition_row(py, &writer, &request, transition, task_id, None, Some(event_id), position, capacity, next, minute)?;
+            next += 1;
+            Some((request, record))
+        }
+    };
+    Ok(CancelPlan { task_id: task_arc, agent_id, facility_id, releasing, finishing, sequences: next - sequence })
+}
+
+/// `cancel`'s writes, after the plan: the ledger first, which alone can still say no.
+fn apply_release(manager: &Manager<'_>, plan: &CancelPlan) -> PyResult<()> {
+    let Some(releasing) = &plan.releasing else {
+        return Ok(());
+    };
+    let world = &manager.world;
+    let source = Source::of(manager)?;
+    apply_planned(
+        world,
+        &ledger_mirror(world)?,
+        &Operation {
+            operation: "release",
+            warehouse_id: &releasing.warehouse,
+            resource_id: releasing.resource_id,
+            index: releasing.index,
+            quantity: 0,
+            reservation_id: Some(&plan.task_id),
+            agent_id: Some(&plan.agent_id),
+            source_id: &source.source_id,
+            event_id: &releasing.audit.event_id,
+        },
+    )
+}
+
+fn write_cancel(manager: &Manager<'_>, plan: &CancelPlan) -> PyResult<()> {
+    let world = &manager.world;
+    let py = world.py();
+    let store = entities_of(world)?;
+    let mirror = held_mirror(world)?;
+    let writer = EventWriter::of(world)?;
+    let minute = manager.minute()?;
+    let facilities = attribute(world, intern!(py, "facilities"))?;
+    let Some(facility) = raw_dict_get(&facilities, PyString::new(py, &plan.facility_id).as_any())? else {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("a row has no object"));
+    };
+    let agent_text = PyString::new(py, &plan.agent_id);
+    let task_text = PyString::new(py, &plan.task_id);
+    match &plan.releasing {
+        None => {
+            attribute(&facility, intern!(py, "resource_queue_agent_ids"))?.call_method1(intern!(py, "remove"), (&agent_text,))?;
+            clear_stall(&mirror, &plan.facility_id)?;
+        }
+        Some(releasing) => {
+            writer.allocate_sequence()?;
+            writer.record(&releasing.audit, minute, EventStatus::Applied, None)?;
+            service_list(&manager.table, intern!(py, "active_reservation_ids"))?.call_method1(intern!(py, "remove"), (&task_text,))?;
+            attribute(&facility, intern!(py, "resource_active_agent_ids"))?.call_method1(intern!(py, "remove"), (&agent_text,))?;
+            release_staff(world, &store, &releasing.staff_id)?;
+        }
+    }
+    if let Some((request, record)) = &plan.finishing {
+        write_finish(world, request)?;
+        write_transition(&writer, record, minute)?;
+    }
+    attribute(world, intern!(py, "active_tasks"))?.del_item(&task_text)?;
+    set_agent(world, &store, agent_text.as_any(), Activity::Idle, None)?;
+    service_list(&manager.table, intern!(py, "cancelled_task_ids"))?.call_method1(intern!(py, "append"), (&task_text,))?;
+    add_one(&metrics_of(world)?, "resource_service_cancelled_count")
+}
+
+/// `_release_staff`.
+fn release_staff<'py>(world: &Bound<'py, PyAny>, store: &Bound<'py, EntityStore>, staff_id: &str) -> PyResult<()> {
+    let py = world.py();
+    let staff_map = attribute(world, intern!(py, "staff"))?;
+    let Some(staff) = raw_dict_get(&staff_map, PyString::new(py, staff_id).as_any())? else {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("a row has no object"));
+    };
+    attribute(&staff, intern!(py, "work_queue"))?.call_method0(intern!(py, "clear"))?;
+    EntityStore::with_rows(store, |rows| {
+        let Some(row) = rows.staff.get_mut(staff_id) else {
+            return unsupported("no such staff");
+        };
+        row.active_task_id = None;
+        row.busy_until = 0;
+        Ok(())
+    })?;
+    raw_setattr(&staff, intern!(py, "active_task_id"), py.None().as_ptr())?;
+    raw_setattr(&staff, intern!(py, "busy_until"), 0_i64.into_pyobject(py)?.as_ptr())
+}
+
+/// `ResourceServiceManager.cancel`.
+pub(crate) fn cancel_service<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = manager.py();
+    let manager = Manager::of(manager)?;
+    let payload = attribute(event, intern!(py, "payload"))?;
+    if payload.len()? != 2 || !payload.contains("task_id")? || !payload.contains("reason")? {
+        return unsupported("the cancellation is for the Python rule to judge");
+    }
+    let task_object = payload.get_item("task_id")?;
+    let task_id = exact_str(&task_object)?;
+    let reason = payload.get_item("reason")?;
+    let reason = exact_str(&reason)?;
+    if task_id.is_empty() || !matches!(reason, "operator_cancelled" | "facility_stopped" | "staff_unavailable") {
+        return unsupported("the cancellation is for the Python rule to judge");
+    }
+    let event_id: Arc<str> = Arc::from(exact_str(&attribute(event, intern!(py, "event_id"))?)?);
+    let sequence = EventWriter::of(&manager.world)?.next_sequence()?;
+    let plan = plan_cancel(&manager, &event_id, task_id, reason == "staff_unavailable", sequence)?;
+    apply_release(&manager, &plan)?;
+    write_cancel(&manager, &plan)
+}
+
+/// `interrupt_for_staff` of the manager's world.
+pub(crate) fn interrupt_service<'py>(manager: &Bound<'py, PyAny>, staff_id: &Bound<'py, PyAny>, causation_event: &Bound<'py, PyAny>) -> PyResult<()> {
+    interrupt_with(&Manager::of(manager)?, staff_id, causation_event)
+}
+
+/// `ResourceServiceManager(world).interrupt_for_staff(staff_id, causation_event=event)`.
+pub(crate) fn interrupt_service_of_world<'py>(world: &Bound<'py, PyAny>, staff_id: &Bound<'py, PyAny>, causation_event: &Bound<'py, PyAny>) -> PyResult<()> {
+    interrupt_with(&Manager::of_world(world)?, staff_id, causation_event)
+}
+
+fn interrupt_with<'py>(manager: &Manager<'py>, staff_id: &Bound<'py, PyAny>, causation_event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let world = &manager.world;
+    let py = world.py();
+    let staff_name = exact_str(staff_id)?;
+    let store = entities_of(world)?;
+    let found = EntityStore::with_rows(&store, |rows| {
+        let mut tasks = rows
+            .active_tasks
+            .iter()
+            .filter(|(_, task)| task.staff_id.as_deref() == Some(staff_name) && matches!(&*task.kind, "resource_service_water" | "resource_service_food"))
+            .map(|(_, task)| task);
+        let Some(task) = tasks.next() else {
+            return Ok(None);
+        };
+        if tasks.next().is_some() {
+            return unsupported("the staff member owns several services");
+        }
+        let (Some(agent_id), Some(facility_id)) = (&task.agent_id, &task.resource_id) else {
+            return unsupported("the service has incomplete ownership");
+        };
+        let (Some(agent), Some(facility), Some(staff)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id), rows.staff.get(staff_name)) else {
+            return unsupported("the service has inconsistent state");
+        };
+        if agent.zone_id != facility.zone_id
+            || agent.activity != Activity::InService
+            || staff.active_task_id.as_deref() != Some(&*task.id)
+            || staff.work_queue.len() != 1
+            || staff.work_queue[0] != task.id
+            || staff.busy_until != task.due_minute
+            || !facility.resource_active_agent_ids.contains(&agent.profile.id)
+        {
+            return unsupported("the service has inconsistent state");
+        }
+        let Some(resource) = resource_of(&facility.kind) else {
+            return unsupported("not a resource facility");
+        };
+        Ok(Some((task.id.clone(), agent.profile.id.clone(), facility_id.clone(), agent.zone_id.clone(), resource)))
+    })?;
+    let Some((task_id, agent_id, facility_id, zone_id, resource)) = found else {
+        return Ok(());
+    };
+    let prior = with_queues(world, |row| Ok(request_of_task(row, &task_id).cloned()))?.flatten();
+    let writer = EventWriter::of(world)?;
+    let ledger = ledger_mirror(world)?;
+    let mirror = held_mirror(world)?;
+    let counters = attribute(world, intern!(py, "id_counters"))?;
+    let counters = exact_dict(&counters)?;
+    let mut counter = match counters.get_item(intern!(py, "resource_task"))? {
+        Some(counter) => exact_int(&counter)?,
+        None => 0,
+    };
+    let queue_task_id = next_queue_task_id(&store, &ledger, &writer, &mut counter)?;
+    let minute = manager.minute()?;
+    let queued_at = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| {
+        Ok(row
+            .request_history
+            .iter()
+            .rev()
+            .find(|record| record.agent_id == agent_id && record.facility_id.as_deref() == Some(&*facility_id) && &*record.outcome == "queued")
+            .map_or(minute, |record| record.minute))
+    })?;
+    let sequence = writer.next_sequence()?;
+    let cancel_id: Arc<str> = Arc::from(format!("resource-service-cancel-{sequence}"));
+    {
+        let past = writer.log().borrow();
+        if past.has_event_id(&cancel_id) || past.has_sequence(sequence) || writer.queue().borrow().has_event(&cancel_id) {
+            return unsupported("the event's identity is taken");
+        }
+    }
+    let source = Source::of(manager)?;
+    let mut provenance = source.provenance(V::Str(Arc::from("staff_interrupted")));
+    provenance.insert(NAMES.staff_id.clone(), V::Str(Arc::from(staff_name)));
+    let mut payload = IndexMap::with_capacity(2);
+    payload.insert(NAMES.task_id.clone(), V::Str(task_id.clone()));
+    payload.insert(Arc::from("reason"), V::Str(Arc::from("staff_unavailable")));
+    let cause: Arc<str> = Arc::from(exact_str(&attribute(causation_event, intern!(py, "event_id"))?)?);
+    let Some(cancellation) = EventRow::new(
+        cancel_id.clone(),
+        EventKind::Endogenous,
+        minute,
+        0,
+        sequence,
+        Arc::from("resource_service_cancel"),
+        payload,
+        Some(source.source_id.clone()),
+        Some(cause.clone()),
+        provenance,
+    ) else {
+        return unsupported("the event's values are not what an event takes");
+    };
+    let plan = plan_cancel(manager, &cancel_id, &task_id, true, sequence + 1)?;
+    if plan.releasing.is_none() {
+        return unsupported("the service has no reservation to release");
+    }
+    let geo = Geo::of(world)?;
+    let requeue = match &prior {
+        None => None,
+        Some(prior) => {
+            let Some(point) = point_of(&geo, &prior.queue_id) else {
+                return unsupported("no such service point");
+            };
+            let fits = with_queues(world, |row| Ok(!row.requests.contains_key(&*queue_task_id) && row.queues.contains_key(&*prior.queue_id)))?;
+            if fits != Some(true) {
+                return unsupported("the queue is not installed or the request's ID is in use");
+            }
+            let request = QueueRequest {
+                request_id: queue_task_id.clone(),
+                queue_id: point.queue_id.clone(),
+                service_point_id: point.id.clone(),
+                facility_id: point.facility_id.clone(),
+                agent_id: agent_id.clone(),
+                service_kind: prior.service_kind.clone(),
+                requested_minute: queued_at,
+                status: Arc::from("queued"),
+                queue_task_id: queue_task_id.clone(),
+                active_task_id: queue_task_id.clone(),
+            };
+            // First in its queue by then.
+            let record = transition_row(py, &writer, &request, "requeued", &queue_task_id, None, Some(&cause), Some(1), Some(point.service_capacity), sequence + 1 + plan.sequences, minute)?;
+            Some((point, record))
+        }
+    };
+    apply_release(manager, &plan)?;
+
+    // Write.
+    writer.allocate_sequence()?;
+    write_cancel(manager, &plan)?;
+    writer.record(&cancellation, minute, EventStatus::Applied, None)?;
+    let facility_text = PyString::new(py, &facility_id);
+    let agent_text = PyString::new(py, &agent_id);
+    set_agent(world, &store, agent_text.as_any(), Activity::Queued, Some(facility_text.as_any()))?;
+    let queue_text = PyString::new(py, &queue_task_id);
+    let task = active_task_class(py)?.call1((&queue_text, "resource_service_queue", &agent_text, &facility_text, queued_at, queued_at))?;
+    counters.set_item(intern!(py, "resource_task"), counter)?;
+    attribute(world, intern!(py, "active_tasks"))?.set_item(&queue_text, task)?;
+    let facilities = attribute(world, intern!(py, "facilities"))?;
+    let Some(facility) = raw_dict_get(&facilities, facility_text.as_any())? else {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("a row has no object"));
+    };
+    attribute(&facility, intern!(py, "resource_queue_agent_ids"))?.call_method1(intern!(py, "insert"), (0, &agent_text))?;
+    if let (Some(prior), Some((point, record))) = (&prior, &requeue) {
+        write_enqueue(world, point, &queue_task_id, &queue_task_id, &agent_id, &prior.service_kind, queued_at)?;
+        let table = exact_dict(&manager.table)?;
+        let queues = table.get_item(intern!(py, "facility_queues_v1"))?.ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("the queues left"))?;
+        let queued = queues.get_item("queues")?.get_item(&*prior.queue_id)?.get_item("queued_request_ids")?;
+        queued.call_method1(intern!(py, "remove"), (&queue_text,))?;
+        queued.call_method1(intern!(py, "insert"), (0, &queue_text))?;
+        write_transition(&writer, record, minute)?;
+    }
+    clear_stall(&mirror, &facility_id)?;
+    append_outcome(
+        py,
+        &mirror,
+        RequestRecord {
+            minute,
+            agent_id: agent_id.clone(),
+            action: Arc::from(if resource == WATER { "fetch_water" } else { "collect_meal" }),
+            outcome: Arc::from("queued"),
+            reason: Arc::from("arrived_at_facility"),
+            facility_id: Some(facility_id.clone()),
+            origin_zone_id: zone_id,
+            detail: Some(Arc::from("service_requeued_after_staff_unavailable")),
+        },
+    )
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

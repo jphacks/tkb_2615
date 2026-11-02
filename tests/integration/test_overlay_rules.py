@@ -15,7 +15,13 @@ import pytest
 
 from sheltersim import native
 from sheltersim.core.world import WorldState
-from sheltersim.domain import facility_queues, geometry_overlay, queueing, temporary_spaces
+from sheltersim.domain import (
+    facility_queues,
+    geometry_overlay,
+    movement,
+    queueing,
+    temporary_spaces,
+)
 from sheltersim.domain.facilities import ToiletServiceManager
 from sheltersim.domain.resource_service import ResourceServiceManager
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
@@ -1007,16 +1013,26 @@ def test_a_fifo_keeps_its_order_and_only_a_wait_ends_it(queued: WorldState) -> N
     rule = queueing.prepare_independent_facility_queue.__wrapped__
     _same(queued, prepare, rule, "toilet_01-left-fifo", minute=queued.minute_index, resource=False)
     _same(queued, prepare, rule, "none", minute=queued.minute_index, resource=False)
-    # Past the toilet's default wait, with a low need: the kernel leaves it to the Python rule.
+    queued.minute_index = 119
+    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=119, resource=False)
+    # Past the toilet's default wait, with a low need: this person leaves the queue.
     queued.agents["A002"].needs.toilet_urgency = 0.1
     queued.active_tasks[tasks[1]].start_minute = 0
     queued.minute_index = 121
-    before = _bytes(queued)
-    with pytest.raises(native.Unsupported):
-        prepare(queued, "toilet_01-left-fifo", minute=121, resource=False)
-    assert _bytes(queued) == before
-    queued.minute_index = 119
-    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=119, resource=False)
+    center = movement._zone_center(movement._geometry(queued), queued.agents["A002"].zone_id)
+    queued.model_state["movement_v1"]["positions"]["A002"]["point"] = {"x": center.x, "y": center.y}
+    _same(queued, prepare, rule, "toilet_01-left-fifo", minute=121, resource=False)
+    prepare(queued, "toilet_01-left-fifo", minute=121, resource=False)
+    state = queued.model_state["facility_queues_v1"]
+    assert tasks[1] not in state["queues"]["toilet_01-left-fifo"]["queued_request_ids"]
+    assert "A002" not in queued.facilities["toilet_01"].queue_agent_ids
+    transitions = [
+        record.event.payload
+        for record in queued.event_log.records
+        if record.event.event_type == "facility_queue_transition"
+        and record.event.payload["transition"] == "abandoned"
+    ]
+    assert [(item["agent_id"], item["wait_minutes"]) for item in transitions] == [("A002", 121)]
 
 
 @pytest.mark.parametrize("queue_id", ["toilet_01-left-fifo", "toilet_01-right-fifo"])

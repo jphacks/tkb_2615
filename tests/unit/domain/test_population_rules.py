@@ -32,7 +32,13 @@ from sheltersim.events.effects import (
     schedule_effect_program,
 )
 from sheltersim.events.handlers import EventDispatcher
-from sheltersim.events.models import EventApplicationError, EventKind, ScheduledEvent
+from sheltersim.domain.models import ActiveTask, Activity
+from sheltersim.events.models import (
+    EventApplicationError,
+    EventKind,
+    EventSuppressed,
+    ScheduledEvent,
+)
 from sheltersim.experiments.scenario import ScenarioSpec
 
 pytestmark = pytest.mark.skipif(not native.available(), reason="the kernels are the subject")
@@ -353,20 +359,205 @@ def test_the_last_retry_runs_and_the_next_is_the_rule_s_to_refuse(world) -> None
         world,
         _retry_event(population_retry={"count": 1439}),
     )
-    before = _document(world)
-    with pytest.raises(native.Unsupported):
-        native.rules("population").schedule_population_retry(
-            world, _retry_event(population_retry={"count": 1440})
-        )
-    assert _document(world) == before
+    _same_suppression(
+        world,
+        "departure reached the bounded deferral limit",
+        _retry_event(population_retry={"count": 1440}),
+    )
+    _same_suppression(
+        world,
+        "departure reached the bounded deferral limit",
+        _retry_event(population_retry={"count": "many"}),
+    )
 
 
-def test_a_retry_at_the_end_of_the_scenario_is_refused(world) -> None:
+def test_a_retry_at_the_end_of_the_scenario_is_suppressed(world) -> None:
     world.minute_index = world.duration_minutes - 1
+    _same_suppression(
+        world,
+        "population exit could not complete before the scenario ended",
+        _retry_event(),
+        id_prefix="presence-retry",
+        subject="population exit",
+    )
+
+
+def _same_suppression(world: WorldState, text: str, *arguments: Any, **options: Any) -> None:
+    """Kernel and rule stop with the same text, and the world keeps what each scheduled."""
+    other = copy.deepcopy(world)
+    kernel = native.rules("population").schedule_population_retry
+    with pytest.raises(EventSuppressed) as ours:
+        kernel(world, *arguments, **options)
+    with pytest.raises(EventSuppressed) as theirs:
+        population.schedule_population_retry.__wrapped__(other, *arguments, **options)
+    assert str(ours.value) == str(theirs.value) == text
+    assert _document(world) == _document(other)
+
+
+def _busy(world: WorldState, person: str) -> None:
+    world.agents[person].activity = Activity.QUEUED
+
+
+def _waiting_for_the_person(world: WorldState, person: str, zone: str, kernel_name: str) -> None:
+    """Depart with `person` selected and busy: the kernel and the rule defer the same way."""
+    event = _event("departure-event", minute=world.minute_index)
+    other = copy.deepcopy(world)
+    rule = population.queue_departures.__wrapped__
+    with pytest.raises(EventSuppressed) as theirs:
+        rule(other, event=event, zone_id=zone, count=1, include_initial=True)
+    with pytest.raises(EventSuppressed) as ours:
+        getattr(native.rules("population"), kernel_name)(
+            world, event=event, zone_id=zone, count=1, include_initial=True
+        )
+    assert str(ours.value) == str(theirs.value)
+    assert _document(world) == _document(other)
+    assert [event.event_id for event in world.event_queue.pending()] == [
+        event.event_id for event in other.event_queue.pending()
+    ]
+
+
+def test_a_departure_of_someone_busy_waits_as_the_rule_says(world) -> None:
+    person = min(world.agents)
+    _busy(world, person)
+    for agent in world.agents.values():
+        if agent.id != person:
+            agent.zone_id = _other_zone(world)
+    _waiting_for_the_person(world, person, world.agents[person].zone_id, "queue_departures")
+    retry = next(
+        item for item in world.event_queue.pending() if item.event_id.startswith("departure-retry")
+    )
+    assert retry.provenance["population_retry"] == {"count": 1}
+
+
+def test_first_use_makes_the_population_state_as_the_rule_does(world) -> None:
+    del world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]
+    world.zones[_zone(world)].capacity = None
+    assert _arrive(world, count=2) == 2
+    assert world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]["schema_version"] == 1
+
+
+def test_first_use_by_a_departure_makes_the_state_as_the_rule_does(world) -> None:
+    del world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]
+    assert _depart(world, count=1, include_initial=True) == 1
+
+
+def test_first_use_by_a_deferred_departure_keeps_the_state(world) -> None:
+    del world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]
+    person = min(world.agents)
+    _busy(world, person)
+    for agent in world.agents.values():
+        if agent.id != person:
+            agent.zone_id = _other_zone(world)
+    _waiting_for_the_person(world, person, world.agents[person].zone_id, "queue_departures")
+    assert population.POPULATION_DYNAMICS_STATE_KEY in world.model_state
+
+
+def _full_zone_with_waiters(world: WorldState) -> str:
+    """A full zone, someone new in it to leave, and one arrival waiting for their place."""
+    zone = _zone(world)
+    world.zones[zone].capacity = None
+    assert _arrive(world, count=1, household_size=1) == 1
+    world.zones[zone].capacity = _occupancy(world, zone)
+    _same_as_rule(
+        population,
+        "population",
+        "queue_arrivals",
+        world,
+        event=_event("arrival-waiting"),
+        zone_id=zone,
+        count=1,
+        household_size=1,
+    )
+    state = world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]
+    assert len(state["pending_arrivals"]) == 1
+    return zone
+
+
+def test_who_waits_is_checked_before_a_departure_writes(world) -> None:
+    """The admission after a departure used to fall back to the rule, past the writes."""
+    zone = _full_zone_with_waiters(world)
+    state = world.model_state[population.POPULATION_DYNAMICS_STATE_KEY]
+    # What the Python rule takes and the kernel leaves to it: an int of another type.
+    state["pending_arrivals"][0]["created_minute"] = True
+    arguments = {"event": _event("departure-event"), "zone_id": zone, "count": 1}
     before = _document(world)
     with pytest.raises(native.Unsupported):
-        native.rules("population").schedule_population_retry(world, _retry_event())
+        native.rules("population").queue_departures(world, **arguments)
     assert _document(world) == before
+    other = copy.deepcopy(world)
+    population.queue_departures.__wrapped__(other, **arguments)
+    population.queue_departures(world, **arguments)
+    assert _document(world) == _document(other)
+    assert (
+        state["pending_arrivals"]
+        == other.model_state[population.POPULATION_DYNAMICS_STATE_KEY]["pending_arrivals"]
+    )
+
+
+def _return_waiting(world: WorldState, person: str) -> str:
+    zone = world.agents[person].zone_id
+    _command(world, minute=1, action="temporary_exit", agent_id=person, expected_return_minute=9)
+    world.zones[zone].capacity = _occupancy(world, zone)
+    _command(world, minute=2, action="return", agent_id=person)
+    assert [
+        item["agent_id"]
+        for item in world.model_state[POPULATION_LIFECYCLE_STATE_KEY]["pending_returns"]
+    ] == [person]
+    return zone
+
+
+def test_an_admission_after_a_relocation_is_the_kernel_s_too(world) -> None:
+    """It used to fall back to the rule, past the writes: `_initial_dynamics` was the rule's."""
+    from sheltersim.domain.agent_dynamics import (
+        AGENT_DYNAMICS_STATE_KEY,
+        create_agent_dynamics_state,
+    )
+
+    world.model_state.setdefault(AGENT_DYNAMICS_STATE_KEY, create_agent_dynamics_state(world))
+    person, walker = sorted(world.agents)[:2]
+    zone = _return_waiting(world, person)
+    world.zones[zone].capacity = None
+    origin = world.agents[walker].zone_id
+    destination = next(
+        edge.to_zone_id for edge in world.zone_edges.values() if edge.from_zone_id == origin
+    )
+    world.zones[destination].capacity = None
+    _command(world, minute=3, action="relocate", agent_id=walker, zone_id=destination)
+    state = world.model_state[POPULATION_LIFECYCLE_STATE_KEY]
+    relocation = state["pending_relocations"][walker]
+    event = next(
+        item for item in world.event_queue.pending() if item.event_id == relocation["event_id"]
+    )
+    world.minute_index = event.due_minute
+    agent = world.agents[walker]
+    agent.zone_id = destination
+    agent.activity = type(agent.activity).IDLE
+    agent.target_id = None
+    world.active_tasks.pop(relocation["task_id"])
+    # The admission that follows the writes makes this person's record.
+    state["people"][person]["agent_dynamics"] = None
+    _same_as_rule(
+        population_lifecycle, "population_lifecycle", "complete_presence_relocation", world, event
+    )
+    assert person in world.agents
+    assert world.model_state[AGENT_DYNAMICS_STATE_KEY]["agents"][person]["decision_due_minute"] == (
+        event.due_minute
+    )
+
+
+def test_someone_saved_without_their_dynamics_gets_a_new_record(world) -> None:
+    from sheltersim.domain.agent_dynamics import (
+        AGENT_DYNAMICS_STATE_KEY,
+        create_agent_dynamics_state,
+    )
+
+    world.model_state.setdefault(AGENT_DYNAMICS_STATE_KEY, create_agent_dynamics_state(world))
+    person = _free_person(world)
+    _command(world, minute=1, action="temporary_exit", agent_id=person, expected_return_minute=9)
+    state = world.model_state[POPULATION_LIFECYCLE_STATE_KEY]
+    state["people"][person]["agent_dynamics"] = None
+    _command(world, minute=2, action="return", agent_id=person)
+    assert world.model_state[AGENT_DYNAMICS_STATE_KEY]["agents"][person]["decision_due_minute"] == 2
 
 
 def _command(world: WorldState, minute: int = 0, **fields: Any) -> dict[str, Any]:
@@ -443,6 +634,85 @@ def test_a_return_to_a_full_zone_waits_and_the_rule_admits_it_later(world) -> No
     assert state["pending_returns"] == []
     assert world.model_state[PRESENCE_NAMESPACE]["people"][person]["status"] == "admitted"
     assert world.model_state[PRESENCE_NAMESPACE]["history"][-1]["action"] == "returned"
+
+
+def _command_suppressed(world: WorldState, text: str, minute: int = 3, **fields: Any) -> None:
+    """A deferred command, by the kernel and by the rule: the text, and the world each leaves."""
+    world.minute_index = minute
+    typed = PopulationPresenceCommand.model_validate(fields)
+    ids = typed.selected_ids()
+    event = _event(f"command-{fields['action']}-{minute}", minute=minute)
+    other, candidate, other_candidate = (copy.deepcopy(world) for _ in range(3))
+    with pytest.raises(EventSuppressed) as theirs:
+        population_lifecycle._apply_presence_action.__wrapped__(
+            other, other_candidate, event, typed, ids
+        )
+    with pytest.raises(EventSuppressed) as ours:
+        native.rules("population_lifecycle").apply_presence_action(
+            world, candidate, event, typed, ids
+        )
+    assert str(ours.value) == str(theirs.value)
+    assert text in str(ours.value)
+    assert _document(world) == _document(other)
+
+
+@pytest.mark.parametrize(
+    ("how", "text"),
+    [
+        (Activity.QUEUED, "the person is queued"),
+        ("request", "the person is waiting for support"),
+        ("task", "the person owns an active task"),
+    ],
+)
+def test_an_exit_of_someone_busy_is_deferred_as_the_rule_says(world, how: Any, text: str) -> None:
+    person = _free_person(world)
+    if how == "request":
+        world.agents[person].support_request_id = "some-request"
+    elif how == "task":
+        world.active_tasks["some-task"] = ActiveTask(
+            id="some-task",
+            kind="travel_return",
+            agent_id=person,
+            resource_id=None,
+            start_minute=0,
+            due_minute=5,
+        )
+    else:
+        world.agents[person].activity = how
+    _command_suppressed(world, text, action="transfer", agent_id=person)
+    assert any(item.event_id.startswith("presence-retry-") for item in world.event_queue.pending())
+
+
+def test_an_exit_past_its_expected_return_is_dropped(world) -> None:
+    person = _free_person(world)
+    event = _event("late-exit", minute=9)
+    event = ScheduledEvent(
+        **{**event.to_dict(), "kind": event.kind, "provenance": {"population_retry": {"count": 1}}}
+    )
+    world.minute_index = 9
+    fields = {"action": "temporary_exit", "agent_id": person, "expected_return_minute": 5}
+    other = copy.deepcopy(world)
+    with pytest.raises(EventSuppressed) as theirs:
+        population_lifecycle.apply_population_presence_command.__wrapped__(other, event, fields)
+    with pytest.raises(EventSuppressed) as ours:
+        native.rules("population_lifecycle").apply_presence_command(world, event, fields)
+    assert str(ours.value) == str(theirs.value)
+    assert _document(world) == _document(other)
+
+
+def test_a_whole_command_is_the_rule_s(world) -> None:
+    person = _free_person(world)
+    world.minute_index = 1
+    event = _event("whole-command", minute=1)
+    fields = {"action": "temporary_exit", "agent_id": person, "expected_return_minute": 9}
+    other = copy.deepcopy(world)
+    expected = population_lifecycle.apply_population_presence_command.__wrapped__(
+        other, event, fields
+    )
+    receipt = native.rules("population_lifecycle").apply_presence_command(world, event, fields)
+    assert receipt == expected
+    assert _document(world) == _document(other)
+    assert person not in world.agents
 
 
 def test_a_reunion_and_a_relocation_in_place_are_the_rule_s(world) -> None:

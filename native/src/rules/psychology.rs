@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use pyo3::exceptions::PyAttributeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -360,7 +361,14 @@ pub(crate) fn update_long_term<'py>(
             .is_ok_and(|text| text.to_str().is_ok_and(|text| LONG_TERM_POLICIES.contains(&text)))
     });
     if !known {
-        return unsupported("the policy has no long-term state this kernel knows");
+        // `getattr(self.psychology, "update_long_term_state", None)`: a model without it keeps no
+        // long-term state, and this step does nothing.
+        return match policy.getattr(intern!(py, "update_long_term_state")) {
+            Ok(update) if update.is_callable() => unsupported("a model's long-term state this kernel does not know"),
+            Ok(_) => Ok(()),
+            Err(error) if error.is_instance_of::<PyAttributeError>(py) => Ok(()),
+            Err(error) => Err(error),
+        };
     }
     let Ok(minute) = minute.downcast_exact::<PyInt>() else {
         return unsupported("the minute is not an int");

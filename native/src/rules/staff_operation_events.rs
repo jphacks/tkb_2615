@@ -18,6 +18,7 @@ use crate::rules::effects::{active_outage, has_active_modifier, refused_by_pytho
 use crate::rules::handlers::{
     assumption, counted, fields_are, get, get_is, kind_is, log_record, new_event, number, pending_of, text_is, NewEvent,
 };
+use crate::rules::movement_geometry::Geo;
 use crate::rules::staff_dynamics::{is_available, staff_status};
 
 const NAME: &str = "staff_operations_v1";
@@ -687,7 +688,11 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
                 }
                 Work::People { people }
             }
-            "intake" => Work::Intake,
+            "intake" => {
+                // What the admission will ask, while this can still refuse.
+                crate::rules::population::check_waiting_for_admission(world)?;
+                Work::Intake
+            }
             _ => Work::None,
         };
         let causation = causation_with(&record, &[exact_str(&attribute(event, intern!(py, "event_id"))?)?.to_owned()])?;
@@ -744,7 +749,7 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
             }
         }
         Work::Intake => {
-            py.import("sheltersim.domain.population")?.getattr("admit_pending_arrivals")?.call1((world, &now))?;
+            crate::rules::population::admit_pending_arrivals(world, &now)?;
         }
     }
     let operation = PyDict::new(py);
@@ -814,7 +819,65 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
     Ok(Some(PyTuple::new(py, followups)?))
 }
 
+/// `interrupt_staff_trips_on_closed_routes`.
+#[pyfunction]
+pub(crate) fn interrupt_trips<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+    let py = world.py();
+    let state = get(&table_of(world)?, NAME)?;
+    if !state.is_instance_of::<PyDict>() {
+        return Ok(PyTuple::empty(py));
+    }
+    let geo = Geo::of(world)?;
+    let edges = attribute(world, intern!(py, "zone_edges"))?;
+    let staff = state.get_item("staff")?;
+    let event_id = attribute(event, intern!(py, "event_id"))?;
+    let mut ids: Vec<String> = Vec::new();
+    for id in staff.try_iter()? {
+        ids.push(exact_str(&id?)?.to_owned());
+    }
+    ids.sort_unstable();
+    let mut interrupted: Vec<String> = Vec::new();
+    for staff_id in ids {
+        let record = staff.get_item(&*staff_id)?;
+        if !get_is(&record, "phase", "travel")? {
+            continue;
+        }
+        let route = record.call_method1(intern!(py, "get"), ("route_edge_ids", PyTuple::empty(py)))?;
+        let mut blocked = false;
+        for edge_id in route.try_iter()? {
+            let edge_id = edge_id?;
+            let edge = edges.call_method1(intern!(py, "get"), (&edge_id,))?;
+            if edge.is_none() || attribute(&edge, intern!(py, "closed"))?.is_truthy()? || !geo.route_is_clear(exact_str(&edge_id)?, "independent") {
+                blocked = true;
+                break;
+            }
+        }
+        if blocked && interrupt_operation(world, &staff_id, event, Some(exact_str(&event_id)?))? {
+            interrupted.push(staff_id);
+        }
+    }
+    if !interrupted.is_empty() && table_of(world)?.contains("movement_v1")? {
+        position_snapshots(world, &attribute(event, intern!(py, "due_minute"))?)?;
+    }
+    PyTuple::new(py, interrupted)
+}
+
+/// `_interrupt_trips_of_event`: a route just closed stops the trips that use it.
+pub(crate) fn interrupt_trips_of_event<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let payload = attribute(event, intern!(py, "payload"))?;
+    let parameters = payload.call_method1(intern!(py, "get"), ("parameters", PyDict::new(py)))?;
+    if get_is(&payload, "op", "set_route_access")?
+        && parameters.downcast::<pyo3::types::PyMapping>().is_ok()
+        && parameters.call_method1(intern!(py, "get"), ("accessible",))?.downcast_exact::<pyo3::types::PyBool>().is_ok_and(|flag| !flag.is_true())
+    {
+        interrupt_trips(world, event)?;
+    }
+    Ok(())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(interrupt_trips, m)?)?;
     m.add_function(wrap_pyfunction!(interrupt, m)?)?;
     m.add_function(wrap_pyfunction!(arrive, m)?)?;
     m.add_function(wrap_pyfunction!(relief, m)?)?;

@@ -411,7 +411,7 @@ pub(crate) fn choose_queue_id(world: &Bound<'_, PyAny>, facility_id: &Bound<'_, 
 
 /// `queue_ids_for_facility`.
 #[pyfunction]
-fn queue_ids_for_facility<'py>(world: &Bound<'py, PyAny>, facility_id: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
+pub(crate) fn queue_ids_for_facility<'py>(world: &Bound<'py, PyAny>, facility_id: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let facility_id = exact_str(facility_id)?;
     let geo = Geo::of(world)?;
     let mut ids: Vec<&str> = geo

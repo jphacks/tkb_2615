@@ -1313,6 +1313,7 @@ def complete_staff_operation(world: WorldState, event: ScheduledEvent) -> dict[s
     return deepcopy(completed_operation)
 
 
+@kernel_first("staff_operation_events", "interrupt_trips")
 def interrupt_staff_trips_on_closed_routes(
     world: WorldState, event: ScheduledEvent
 ) -> tuple[str, ...]:

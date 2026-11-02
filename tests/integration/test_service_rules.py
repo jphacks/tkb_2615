@@ -729,11 +729,17 @@ def test_a_request_refused_has_python_s_text(
         manager.request(agent_id, facility.id, validate_state=False)
 
 
-def test_a_full_validation_of_a_request_is_python_s(generated_scenario: Any) -> None:
+def test_a_request_validates_the_whole_world_when_asked_to(generated_scenario: Any) -> None:
     world, _ = _run(generated_scenario, 5)
+    twin = copy.deepcopy(world)
     facility, agent_id = _at_facility(world)
-    with pytest.raises(native.Unsupported, match="whole validation"):
+    other = _at_facility(twin)[0]
+    # This world has someone moved by hand, which the whole validation turns down in both.
+    with pytest.raises(StateInvariantError) as ours:
         native.rules("service").request(ResourceServiceManager(world), agent_id, facility.id)
+    with pytest.raises(StateInvariantError) as theirs:
+        ResourceServiceManager.request.__wrapped__(ResourceServiceManager(twin), agent_id, other.id)
+    assert str(ours.value) == str(theirs.value)
 
 
 def test_a_record_of_a_request_is_python_s(generated_scenario: Any) -> None:

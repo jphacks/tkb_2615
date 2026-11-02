@@ -147,6 +147,51 @@ def test_each_phase_ends_in_the_same_state_through_the_driver_and_the_phases(
     assert len({item[3] for item in driven}) > 90, "the digests did not see the phases' work"
 
 
+def _whole_run(
+    scenario: Any, directory: Path, *, minutes: int = 180
+) -> tuple[dict[str, Any], set[str]]:
+    """Run on the driver, noting which Python loops of the two managers ran."""
+    world, controller, engine = _build(scenario, directory)
+    loops: set[str] = set()
+
+    def watch(frame: Any, event: str, _argument: Any) -> None:
+        code = frame.f_code
+        if (
+            event == "call"
+            and code.co_name in {"arbitrate", "_arbitrate_independent_facility"}
+            and code.co_filename.endswith(("domain/facilities.py", "domain/resource_service.py"))
+        ):
+            loops.add(code.co_name)
+
+    sys.setprofile(watch)
+    try:
+        for _ in range(minutes):
+            engine.step()
+    finally:
+        sys.setprofile(None)
+    return _saved(world, controller), loops
+
+
+@needs_rust
+def test_the_driver_serves_independent_queues_itself_as_the_phases_do(
+    generated_scenario_with_split_queues: Any, tmp_path: Path
+) -> None:
+    before = _ticks()
+    driven, loops = _whole_run(generated_scenario_with_split_queues, tmp_path / "driver")
+    assert _ticks() == before + 180
+    assert loops == set()
+    with _on_the_phases():
+        phases, loops = _whole_run(generated_scenario_with_split_queues, tmp_path / "phases")
+    assert "_arbitrate_independent_facility" in loops
+    assert driven == phases
+    requests = [
+        event
+        for event in phases["records"]
+        if '"facility_queue_transition"' in event and '"service_started"' in event
+    ]
+    assert requests, "nobody was served, so the queues were not tried"
+
+
 @needs_rust
 def test_the_driver_keeps_the_view_the_next_phase_builds_on(
     generated_scenario: Any, tmp_path: Path

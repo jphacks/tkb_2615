@@ -244,7 +244,8 @@ each OS, because both call the same libm.
   `progress_physical_queue_positions` and `progress_physical_queue_head_to_service` (same
   arguments, optional `queue_id`). `domain/queueing.py` and `domain/movement.py` call them through
   `kernel_first`. Each plans and then writes, in one call.
-  A person who gives up on the queue gives `Unsupported` before any write.
+  A person who gives up on the queue leaves it here too (`_abandon_and_retry`), with the walk
+  back and, for an independent FIFO, the queue's record (lane L4).
   See `docs/rust-port/lanes/m4-queues.md`.
 
 - `state.staff_operations.ROW`: Rust owns `staff_operations_v1` (`src/state/staff_operations.rs`).
