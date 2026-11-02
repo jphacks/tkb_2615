@@ -111,6 +111,19 @@ def _refused(world: WorldState, kernel: Any, rule: Any, *arguments: Any, **optio
         rule(_copy(world), *arguments, **options)
 
 
+def _raises_as_python(
+    world: WorldState, kernel: Any, rule: Any, *arguments: Any, **options: Any
+) -> None:
+    """The Python rule's error, class and text, with nothing changed (native/src/core/errors.rs)."""
+    before = _bytes(world)
+    with pytest.raises(Exception) as ours:
+        kernel(world, *arguments, **options)
+    _same_bytes(_bytes(world), before)
+    with pytest.raises(Exception) as theirs:
+        rule(_copy(world), *arguments, **options)
+    assert (type(ours.value), str(ours.value)) == (type(theirs.value), str(theirs.value))
+
+
 def _world(scenario: Any) -> WorldState:
     world = WorldState.from_scenario(scenario)
     initialize_simulator_extensions(world)
@@ -645,9 +658,11 @@ def test_each_change_is_checked_and_applied_as_the_python_rule_does(world: World
         try:
             rule(_copy(world), op, target, parameters, end)
         except ValueError:
-            _refused(world, _rules().validate_geometry_change, rule, op, target, parameters, end)
+            _raises_as_python(
+                world, _rules().validate_geometry_change, rule, op, target, parameters, end
+            )
             event = _event(world, op, target, parameters, end)
-            _refused(
+            _raises_as_python(
                 world,
                 _rules().apply_geometry_change,
                 geometry_overlay.apply_geometry_change.__wrapped__,
@@ -664,6 +679,199 @@ def test_each_change_is_checked_and_applied_as_the_python_rule_does(world: World
         )
         applied += 1
     assert applied >= 5
+
+
+def _square(x: float, y: float, size: float) -> list[dict[str, float]]:
+    return [
+        {"x": x, "y": y},
+        {"x": x + size, "y": y},
+        {"x": x + size, "y": y + size},
+        {"x": x, "y": y + size},
+    ]
+
+
+def _sweep_cases(world: WorldState) -> list[tuple[str, str, Any, int | None]]:
+    """Many changes, most of them wrong, over the zones of the plan: each check of the rule."""
+    geometry = world.model_configs["facility_geometry"]
+    zones = {zone["zone_id"]: zone["polygon"] for zone in geometry["zones"]}
+    points = geometry["facility_points"]
+    cases: list[tuple[str, str, Any, int | None]] = []
+    for zone_id, polygon in zones.items():
+        left, top = min(p["x"] for p in polygon), min(p["y"] for p in polygon)
+        right, bottom = max(p["x"] for p in polygon), max(p["y"] for p in polygon)
+        for fx in (0.05, 0.3, 0.5, 0.97):
+            for fy in (0.05, 0.5, 0.95):
+                x, y = left + (right - left) * fx, top + (bottom - top) * fy
+                for size in (0.4, 1.5, 30.0):
+                    cases.append(("set_partition", zone_id, {"polygon_m": _square(x, y, size)}, 50))
+                room = _room_record(world, "sweep-room")
+                room["zone_id"] = zone_id
+                room["polygon_m"] = _square(x, y, 1.2)
+                room["bed_points_m"] = [{"x": x + 0.6, "y": y + 0.6}]
+                room["route_edge_ids"] = [f"route_corridor_{zone_id}", f"route_{zone_id}_corridor"]
+                plain = {key: room[key] for key in _ROOM_FIELDS}
+                cases.append(("temporary_room_geometry", zone_id, plain, 50))
+                for facility_id in points:
+                    move = {"point_m": {"x": x, "y": y}}
+                    cases.append(("move_facility", facility_id, move, None))
+                    source = world.facilities[facility_id].zone_id
+                    transfer = {
+                        "schema_version": 1,
+                        "equipment_id": facility_id,
+                        "from_zone_id": source,
+                        "to_zone_id": zone_id,
+                        "point_m": {"x": x, "y": y},
+                    }
+                    cases.append(("transfer_equipment", facility_id, transfer, None))
+    for facility_id, point in points.items():
+        zone_id = world.facilities[facility_id].zone_id
+        around = _square(point["x"] - 0.2, point["y"] - 0.2, 0.4)
+        cases.append(("set_partition", zone_id, {"polygon_m": around}, 50))
+        room = {key: _room_record(world, "sweep-room")[key] for key in _ROOM_FIELDS}
+        room.update(zone_id=zone_id, polygon_m=_square(point["x"] - 0.6, point["y"] - 0.6, 1.2))
+        room["bed_points_m"] = [{"x": point["x"] + 0.3, "y": point["y"] + 0.3}]
+        room["route_edge_ids"] = [f"route_corridor_{zone_id}", f"route_{zone_id}_corridor"]
+        cases.append(("temporary_room_geometry", zone_id, room, 50))
+        elsewhere = "sleeping" if zone_id != "sleeping" else "food"
+        transfer = {
+            "schema_version": 1,
+            "equipment_id": facility_id,
+            "from_zone_id": zone_id,
+            "to_zone_id": elsewhere,
+            "point_m": point,
+        }
+        cases.append(("transfer_equipment", facility_id, transfer, None))
+    room = {key: _room_record(world, "sweep-room")[key] for key in _ROOM_FIELDS}
+    cases.append(("temporary_room_geometry", ROOM_ZONE, {**room, "room_id": "room"}, 50))
+    for routes in ([], ["route_corridor_sleeping"], ["route_food_corridor"], ["no_route"]):
+        cases.append(("temporary_room_geometry", ROOM_ZONE, {**room, "route_edge_ids": routes}, 50))
+    cases.append(("temporary_room_geometry", ROOM_ZONE, {**room, "zone_id": "food"}, 50))
+    cases.append(("temporary_room_geometry", ROOM_ZONE, room, world.duration_minutes))
+    cases.append(("temporary_room_geometry", "no_zone", {**room, "zone_id": "no_zone"}, 50))
+    flat = [{"x": 1.0, "y": 3.0}, {"x": 2.0, "y": 3.0}, {"x": 3.0, "y": 3.0}]
+    cases.append(("temporary_room_geometry", ROOM_ZONE, {**room, "polygon_m": flat}, 50))
+    cases.append(("set_partition", ROOM_ZONE, {"polygon_m": flat}, 50))
+    for facility_id, point in points.items():
+        transfer = {
+            "schema_version": 1,
+            "equipment_id": facility_id,
+            "from_zone_id": world.facilities[facility_id].zone_id,
+            "to_zone_id": "sleeping",
+            "point_m": point,
+        }
+        cases.append(("transfer_equipment", facility_id, {**transfer, "equipment_id": "x"}, None))
+        nowhere = {**transfer, "to_zone_id": "nowhere"}
+        cases.append(("transfer_equipment", facility_id, nowhere, None))
+        cases.append(("transfer_equipment", facility_id, transfer, 50))
+        cases.append(("transfer_equipment", "no_facility", transfer, None))
+        cases.append(("transfer_equipment", facility_id, {"schema_version": 2}, None))
+    for edge_id in ("route_corridor_sleeping", "route_sleeping_corridor", "route_corridor_food"):
+        for accessible in (True, False):
+            cases.append(("set_route_access", edge_id, {"accessible": accessible}, 50))
+    cases.append(("set_route_access", "route_corridor_food", {"accessible": "yes"}, 50))
+    cases.append(("no_such_operator", ROOM_ZONE, {}, 50))
+    return cases
+
+
+_ROOM_FIELDS = (
+    "schema_version",
+    "room_id",
+    "zone_id",
+    "polygon_m",
+    "people_capacity",
+    "sleeping_capacity",
+    "bed_points_m",
+    "route_edge_ids",
+    "source_ids",
+)
+
+
+def _sweep_worlds(world: WorldState) -> list[WorldState]:
+    """The world, and copies with what the checks look at: a room, people, tasks, a closure."""
+    worlds = [world]
+    roomy = _copy(world)
+    _room_world(roomy)
+    geometry_overlay.reserve_sleep_bed.__wrapped__(roomy, _person_in_room_zone(roomy))
+    worlds.append(roomy)
+    busy = _copy(world)
+    for facility in busy.facilities.values():
+        facility.queue_agent_ids.append(next(iter(busy.agents)))
+        break
+    tasks = busy.model_state.get("staff_operations_v1", {}).get("staff")
+    if isinstance(tasks, dict) and tasks:
+        first = next(iter(tasks))
+        if isinstance(tasks[first], dict):
+            tasks[first]["target_id"] = list(busy.facilities)[1]
+    worlds.append(busy)
+    closed = _copy(world)
+    closed.zone_edges["route_corridor_food"].closed = True
+    closed.zone_edges["route_corridor_toilet"].closed = True
+    worlds.append(closed)
+    unstaffed = _copy(world)
+    for staff in unstaffed.staff.values():
+        staff.zone_id = "staff"
+    worlds.append(unstaffed)
+    without = _copy(world)
+    del without.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]
+    worlds.append(without)
+    unplanned = _copy(world)
+    unplanned.model_configs["facility_geometry"] = None
+    worlds.append(unplanned)
+    points = world.model_configs["facility_geometry"]["facility_points"]
+    for obstacles in ([], [{"id": "crate", "polygon": _square(2.0, 4.0, 1.0)}]):
+        footprinted = _copy(world)
+        raw = deepcopy(footprinted.model_configs["spatial_constraints"])
+        raw["equipment_footprints"] = [
+            {
+                "facility_id": facility_id,
+                "polygon": _square(
+                    points[facility_id]["x"] - 0.3, points[facility_id]["y"] - 0.3, 0.6
+                ),
+                "area_m2": 0.36,
+            }
+            for facility_id in ("toilet_01", "meal_distribution_main", "water_station_main")
+        ]
+        raw["obstacles"] = obstacles
+        footprinted.model_configs["spatial_constraints"] = raw
+        worlds.append(footprinted)
+    reserved = _copy(roomy)
+    rooms = reserved.model_state[geometry_overlay.GEOMETRY_OVERLAY_KEY]["temporary_rooms"]
+    rooms["room"]["active"] = False
+    worlds.append(reserved)
+    return worlds
+
+
+def test_every_refusal_of_a_change_is_the_python_rule_s_error(world: WorldState) -> None:
+    """Each check raises the Python rule's ValueError, class and text, in its order; where the rule
+    passes, the kernel does too (docs/rust-port/lanes/l8-texts-rest.md)."""
+    rule = geometry_overlay.validate_geometry_change.__wrapped__
+    kernel = _rules().validate_geometry_change
+    texts: set[str] = set()
+    passed = left = 0
+    cases = _sweep_cases(world)
+    for variant in _sweep_worlds(world):
+        for op, target, parameters, end in cases:
+            try:
+                kernel(variant, op, target, deepcopy(parameters), end)
+                ours: Exception | None = None
+            except native.Unsupported:
+                # Left to the Python rule: a value the rows don't judge as it does.
+                left += 1
+                continue
+            except Exception as error:  # noqa: BLE001 - compared below
+                ours = error
+            try:
+                rule(variant, op, target, deepcopy(parameters), end)
+            except Exception as error:  # noqa: BLE001 - whatever the rule raises, the kernel must
+                assert ours is not None, (op, target, parameters, end, str(error))
+                assert (type(ours), str(ours)) == (type(error), str(error)), (op, target, end)
+                texts.add(str(error).split("\n")[0])
+                continue
+            assert ours is None, (op, target, parameters, end, str(ours))
+            passed += 1
+    assert passed > 0 and left < passed // 10
+    # The texts this sweep reaches; a check it no longer reaches shows as a smaller set.
+    assert len(texts) >= 45, "\n".join(sorted(texts))
 
 
 @pytest.mark.parametrize("op", ["set_partition", "set_route_access", "temporary_room_geometry"])
@@ -1515,9 +1723,10 @@ def test_a_wall_s_clearance_is_the_python_rule_s(world: WorldState) -> None:
                     parameters = {"point_m": point}
                     try:
                         rule(world, "move_facility", toilet, parameters, None)
-                    except ValueError:
-                        with pytest.raises(native.Unsupported):
+                    except ValueError as error:
+                        with pytest.raises(ValueError) as ours:
                             kernel(world, "move_facility", toilet, parameters, None)
+                        assert str(ours.value) == str(error)
                         continue
                     kernel(world, "move_facility", toilet, parameters, None)
                     accepted += clearance == 0.503

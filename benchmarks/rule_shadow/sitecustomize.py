@@ -167,6 +167,11 @@ if TEXT_OUTPUT:
         TEXT_OUTPUT, os.environ.get("SHELTERSIM_TEXT_CHECK_STRICT") == "1"
     )
 
+# Not a shadow either: it compares the kernels' moved errors with the Python rules'
+# (error_compare.py).
+if os.environ.get("SHELTERSIM_ERROR_COMPARE"):
+    importlib.import_module("error_compare").install(os.environ["SHELTERSIM_ERROR_COMPARE"])
+
 if OUTPUT and os.environ.get("SHELTERSIM_DISPATCH_COUNT_ONLY") == "1":
     # A plain run that only says what the dispatch loop's direct calls did (shadow_dispatch.py).
     Path(OUTPUT).mkdir(parents=True, exist_ok=True)

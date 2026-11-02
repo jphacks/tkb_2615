@@ -16,6 +16,7 @@ use std::panic::Location;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -244,4 +245,214 @@ pub(crate) fn raise_noted<T>(py: Python<'_>, outcome: Outcome, text: &str) -> Py
         Ok(PyErr::from_value(instance))
     })();
     Err(made.unwrap_or_else(|error| error))
+
+// ---- The other errors of the Python rules (lane L8b, docs/rust-port/lanes/l8-texts-rest.md) -------
+//
+// Where a kernel used to say `Unsupported` so that the Python rule ran and raised `ValueError`,
+// `StateInvariantError` or another class of the rules, it raises the rule's error itself through one
+// of these: the same class and the same text, before it has changed anything, as a refusal must be.
+//
+// While the Python rules exist, `errors_switch(True)` (benchmarks/rule_shadow/error_compare.py)
+// turns the comparison on: an entry that falls back to the Python rule (`kernel_first`,
+// `segments.py`, the driver's `or_rule!`) then also runs the rule after such an error, on the same
+// unchanged state, and counts whether it raised the same class and text. Off, an error made here
+// costs the load of two flags, and only when it is raised.
+//
+// `corrupt` is the one exit for a state the checks of the Python rules never let through (the C
+// group of docs/rust-port/step4-plan.md): its text names the namespace and the check and is not
+// Python's, so it is not compared.
+
+static COMPARING: AtomicBool = AtomicBool::new(false);
+/// With the comparison: a difference raises AssertionError at once, so a test or a Run fails.
+static STRICT: AtomicBool = AtomicBool::new(false);
+static STATE: Mutex<Compared> = Mutex::new(Compared { last: None, seen: BTreeMap::new() });
+
+struct Compared {
+    /// The site and text of the last moved error, while comparing.
+    last: Option<(Site, String)>,
+    /// By `(site, verdict, Rust's class and text, Python's class and text)`.
+    seen: BTreeMap<(Site, &'static str, String, String), u64>,
+}
+
+#[cold]
+#[inline(never)]
+#[track_caller]
+fn moved(text: &str) {
+    crate::core::census::moved(text);
+    if !COMPARING.load(Ordering::Relaxed) {
+        return;
+    }
+    let location = Location::caller();
+    if let Ok(mut state) = STATE.lock() {
+        state.last = Some(((location.file(), location.line()), text.to_owned()));
+    }
+}
+
+/// A Python class, imported once.
+macro_rules! python_class {
+    ($name:ident, $module:literal, $class:literal) => {
+        pub(crate) struct $name;
+
+        impl $name {
+            #[track_caller]
+            pub(crate) fn new_err(text: impl Into<String>) -> PyErr {
+                let text = text.into();
+                moved(&text);
+                PyErr::new::<$name, _>(text)
+            }
+        }
+
+        // SAFETY: the type object is the class of that name in that module, or ValueError, its
+        // base, if the module can't be imported (it is part of the package, so it can).
+        unsafe impl pyo3::PyTypeInfo for $name {
+            const NAME: &'static str = $class;
+            const MODULE: Option<&'static str> = Some($module);
+
+            fn type_object_raw(py: Python<'_>) -> *mut pyo3::ffi::PyTypeObject {
+                static CLASS: GILOnceCell<Py<PyType>> = GILOnceCell::new();
+                let class = CLASS.get_or_try_init(py, || -> PyResult<Py<PyType>> {
+                    Ok(py.import($module)?.getattr($class)?.downcast_into::<PyType>()?.unbind())
+                });
+                match class {
+                    Ok(class) => class.as_ptr().cast(),
+                    Err(_) => PyValueError::type_object_raw(py),
+                }
+            }
+        }
+    };
+}
+
+// Used by `invariant` and `corrupt`, which wait for the step-4 entry (docs/rust-port/lanes/l8-texts-rest.md).
+#[allow(dead_code)]
+mod invariant_class {
+    use super::*;
+    python_class!(StateInvariantError, "sheltersim.core.world", "StateInvariantError");
+}
+#[allow(unused_imports)]
+pub(crate) use invariant_class::StateInvariantError;
+
+/// `raise ValueError(text)` of a Python rule.
+#[track_caller]
+pub(crate) fn value_error(text: impl Into<String>) -> PyErr {
+    let text = text.into();
+    moved(&text);
+    PyValueError::new_err(text)
+}
+
+/// `raise StateInvariantError(text)` of a Python rule.
+#[track_caller]
+#[allow(dead_code)]
+pub(crate) fn invariant(text: impl Into<String>) -> PyErr {
+    StateInvariantError::new_err(text)
+}
+
+/// The error of a Python call that the rule makes too (a contract's `model_validate`), raised as
+/// it is: the same call on the same value, so the same class and text. Noted as made here.
+#[track_caller]
+pub(crate) fn relayed(py: Python<'_>, error: PyErr) -> PyErr {
+    moved(&error.value(py).to_string());
+    error
+}
+
+/// The one exit for a state the Python rules' checks never let through: a `StateInvariantError`
+/// whose text names the namespace and the check. Not the Python rule's text, so it is not compared.
+#[track_caller]
+#[allow(dead_code)]
+pub(crate) fn corrupt(namespace: &str, check: &str) -> PyErr {
+    let text = format!("{namespace}: corrupt state: {check}");
+    crate::core::census::moved(&text);
+    PyErr::new::<StateInvariantError, _>(text)
+}
+
+/// While comparing, the site of `error` if it is the last moved error, which is then taken.
+pub(crate) fn moved_site(py: Python<'_>, error: &PyErr) -> Option<Site> {
+    if !COMPARING.load(Ordering::Relaxed) {
+        return None;
+    }
+    let text = error.value(py).to_string();
+    let mut state = STATE.lock().ok()?;
+    match state.last.take() {
+        Some((site, last)) if last == text => Some(site),
+        other => {
+            state.last = other;
+            None
+        }
+    }
+}
+
+fn described(py: Python<'_>, error: &PyErr) -> String {
+    let class = error.get_type(py).qualname().map(|name| name.to_string()).unwrap_or_default();
+    format!("{class}: {}", error.value(py))
+}
+
+/// Count what the Python rule did after the moved error of `site`: the same class and text, or not.
+/// In strict mode a difference gives the AssertionError to raise instead.
+pub(crate) fn compared(py: Python<'_>, site: Site, rust: &PyErr, python: Option<&PyErr>) -> Option<PyErr> {
+    let rust_text = described(py, rust);
+    let (verdict, python_text) = match python {
+        None => ("python returned", String::new()),
+        Some(python) => {
+            let same_class = python.get_type(py).is(&rust.get_type(py));
+            let python_text = described(py, python);
+            if same_class && python_text == rust_text {
+                ("same", String::new())
+            } else {
+                ("differs", python_text)
+            }
+        }
+    };
+    let failure = (verdict != "same" && STRICT.load(Ordering::Relaxed)).then(|| {
+        pyo3::exceptions::PyAssertionError::new_err(format!(
+            "{}:{}: the kernel raised {rust_text:?} where the Python rule {verdict} {python_text:?}",
+            site.0, site.1
+        ))
+    });
+    let rust_text = if verdict == "same" { String::new() } else { rust_text };
+    if let Ok(mut state) = STATE.lock() {
+        *state.seen.entry((site, verdict, rust_text, python_text)).or_default() += 1;
+    }
+    failure
+}
+
+/// Turn the comparison on or off for this process.
+#[pyfunction]
+#[pyo3(signature = (on, strict=false))]
+pub(crate) fn errors_switch(on: bool, strict: bool) {
+    COMPARING.store(on, Ordering::Relaxed);
+    STRICT.store(on && strict, Ordering::Relaxed);
+    if let Ok(mut state) = STATE.lock() {
+        state.last = None;
+    }
+}
+
+/// At a Python entry that caught `error` from a kernel: if it is a moved error and the comparison
+/// is on, run `rule` (the Python rule on the same arguments) and count what it raised.
+#[pyfunction]
+pub(crate) fn errors_compare(py: Python<'_>, error: Bound<'_, PyAny>, rule: Bound<'_, PyAny>) -> PyResult<()> {
+    if !COMPARING.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let error = PyErr::from_value(error);
+    let Some(site) = moved_site(py, &error) else {
+        return Ok(());
+    };
+    let python = rule.call0().err();
+    match compared(py, site, &error, python.as_ref()) {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
+}
+
+/// Take the comparisons counted: rows of `(file, line, verdict, rust, python, n)`, and start again.
+#[pyfunction]
+pub(crate) fn errors_take<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+    let seen = match STATE.lock() {
+        Ok(mut state) => std::mem::take(&mut state.seen),
+        Err(_) => BTreeMap::new(),
+    };
+    let rows = PyList::empty(py);
+    for (((file, line), verdict, rust, python), n) in seen {
+        rows.append((file, line, verdict, rust, python, n))?;
+    }
+    Ok(rows)
 }
