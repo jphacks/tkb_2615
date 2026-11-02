@@ -283,19 +283,21 @@ each OS, because both call the same libm.
 - `rules.tick_validation`: the per-tick check (`src/rules/tick_validation.rs`):
   `entity_rules(world, requests, resource_config, initial_needs_type, needs_type)` answers for the
   entity and event rules of `WorldState.validate` at the end of a tick, reading the objects and not
-  the entity rows. It has no text: it returns the zones whose capacity is still the Python rule's,
+  the entity rows, for a WorldState v6 with its resource config and a v5 one (no resource_service)
+  with None. It has no text: it returns the zones whose capacity is still the Python rule's,
   or says Unsupported and the Python rules run. `population_dynamics(world)` is the validator of
   that namespace with no one pending, `validate_presence(world)` the one of the declared
   `population_presence_v1`. See `docs/rust-port/lanes/m5-metrics.md`.
 - `rules.after_tick`: all of `WorldState.validate_after_tick` (`src/rules/after_tick.rs`), at every
-  tick of a WorldState v6: `after_tick(world, memo, shadow=False)` returns with the memo
+  tick of a WorldState v5 or v6: `after_tick(world, memo, shadow=False)` returns with the memo
   (`TickMemo`, in `world.__dict__["_tick_memo"]`) moved on, or says Unsupported with the memo as it
   was but for the configs' plan, and `validate(validate_event_history=False)` runs with no memo.
   `Plan` is what it reads of `model_configs`, made by the contracts in `core/tick_validation.py`
   (`tick_plan`) when the configs change. Validators come from `_RUST_VALIDATORS`; a namespace with
   none is refused. `TickMemo.unsettled_requests` serves `WorldState.unsettled_support_requests`;
   `facts()` is for tests and shadows. `install` lists what a patch of sends the tick to the Python
-  check. `stats()` says what ran. See `docs/rust-port/lanes/l7-validate.md`.
+  check. `stats()` says what ran. See `docs/rust-port/lanes/l7-validate.md` and, for v5,
+  `l7b-world-v5.md`.
 - `state.shared_operations.ROW`: Rust owns `shared_operations_v1`
   (`src/state/shared_operations.rs`): the heads typed, each receipt its canonical bytes.
   `validate_tick(world)` accepts a tick's state (no replay of the history) when the kernel that

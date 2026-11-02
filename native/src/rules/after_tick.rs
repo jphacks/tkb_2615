@@ -680,10 +680,13 @@ fn check(table: &Table, world: &Bound<'_, PyAny>, memo: &Bound<'_, TickMemo>) ->
     let mirrors = attribute(model_state, intern!(py, "_mirrors"))?;
     let validators = table.validators.bind(py);
     let cx = Check { world, model_state, mirrors: &mirrors, validators };
-    // A WorldState v5 is a model before resource_service: docs/rust-port/step4-plan.md, L9.
-    if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 {
-        return unsupported("not a WorldState v6");
-    }
+    // A WorldState v5 is the world of a Scenario without resource_service, written today
+    // (docs/rust-port/lanes/l7b-world-v5.md); it differs only in the resource service's rules.
+    let v6 = match exact_int(&attribute(world, intern!(py, "schema_version"))?)? {
+        6 => true,
+        5 => false,
+        _ => return unsupported("not a WorldState v5 or v6"),
+    };
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
 
     // ---- The configs: the plan of the configs the world holds.
@@ -716,6 +719,9 @@ fn check(table: &Table, world: &Bound<'_, PyAny>, memo: &Bound<'_, TickMemo>) ->
     }
     let plan = memo.borrow().plan.as_ref().map(|plan| plan.clone_ref(py)).ok_or_else(|| Unsupported::new_err("no plan"))?;
     let plan = plan.get();
+    // "resource_service requires WorldState v6; v6 requires resource_service": the plan has a
+    // resource config exactly when the configs hold resource_service, and the entity rules below
+    // take a v6 world only with one and a v5 world only without.
 
     // ---- What the memo compares.
     let agents = attribute(world, intern!(py, "agents"))?;
@@ -893,10 +899,17 @@ fn check(table: &Table, world: &Bound<'_, PyAny>, memo: &Bound<'_, TickMemo>) ->
     }
 
     // ---- The rest of `validate`.
-    if !model_state.contains(LEDGER)? {
-        return unsupported("WorldState v6 without a ledger");
+    // A v6 world has a ledger and the service state; a v5 world has no service state, and a ledger
+    // only with an initial stock.
+    let ledger = model_state.contains(LEDGER)?;
+    if v6 {
+        if !ledger {
+            return unsupported("WorldState v6 without a ledger");
+        }
+        cx.must_validate(SERVICE)?;
+    } else if model_state.contains(SERVICE)? {
+        return unsupported("resource service state in a WorldState v5");
     }
-    cx.must_validate(SERVICE)?;
     if plan.information_enabled {
         cx.must_validate(INFORMATION)?;
     } else if model_state.contains(INFORMATION)? {
@@ -955,7 +968,9 @@ fn check(table: &Table, world: &Bound<'_, PyAny>, memo: &Bound<'_, TickMemo>) ->
     if let Some(reason) = event_rule_broken {
         return unsupported(reason);
     }
-    cx.must_validate(LEDGER)?;
+    if ledger {
+        cx.must_validate(LEDGER)?;
+    }
     // `_validate_zone_capacity` of the zones the entity rules leave: their temporary spaces and
     // rooms count too (`rules/overlay.rs`).
     for item in left.iter() {

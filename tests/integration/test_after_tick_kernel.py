@@ -6,7 +6,9 @@ with no memo. So what must hold is that a yes means the Python rules pass, and t
 leaves is what the next check and the scans of a tick may rely on.
 
 The gate only reaches good states, so each rule the kernel holds is shown here by a state that
-breaks it: dropping the rule makes its test fail.
+breaks it: dropping the rule makes its test fail. The same breaks run on WorldState v5, the world of
+a Scenario without resource_service (docs/rust-port/lanes/l7b-world-v5.md), so a rule gated on v6
+fails its v5 case.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from support.paths import BASELINE_100_7D
 
 from sheltersim import native
 from sheltersim.core import tick_validation
@@ -40,8 +43,9 @@ from sheltersim.domain.population_lifecycle import (
     apply_population_presence_command,
 )
 from sheltersim.events.models import EventKind, ScheduledEvent
+from sheltersim.experiments.benchmark import build_benchmark_scenario
 from sheltersim.experiments.runner import run_scenario
-from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.experiments.scenario import ResourceServiceConfig, ScenarioSpec
 
 pytestmark = pytest.mark.skipif(not native.available(), reason="needs the Rust kernels")
 
@@ -998,6 +1002,190 @@ def test_random_writes_taken_by_the_kernel_pass_the_python_rules(runs) -> None:
             *state["staff_operations_v1"]["staff"].values(),
             *state["population_presence_v1"]["people"].values(),
             *world.agents.values(),
+            *world.facilities.values(),
+            *world.staff.values(),
+            *world.active_tasks.values(),
+        ]
+        holder = generator.choice(holders)
+        value = generator.choice(values)
+        if isinstance(holder, dict):
+            if not holder:
+                continue
+            name = generator.choice(sorted(holder))
+            holder[name] = value
+        else:
+            name = generator.choice(sorted(holder.__dict__))
+            holder.__dict__[name] = value
+        if _takes(world, memo):
+            taken += 1
+            assert _python_error(world) is None, (type(holder).__name__, name, value)
+        else:
+            refused += 1
+    assert taken > 0 and refused > 0
+
+
+# ---- WorldState v5 ------------------------------------------------------------------------------
+
+
+def _every_20_minutes(scenario: ScenarioSpec, directory: Any) -> list[dict]:
+    taken: list[dict] = []
+
+    def every(world: WorldState) -> bool:
+        if world.minute_index % 20 == 0 and world.minute_index > 0:
+            taken.append(world.to_dict())
+        return False
+
+    _record_run(scenario, directory, every)
+    assert taken and all(document["schema_version"] == 5 for document in taken)
+    return taken
+
+
+@pytest.fixture(scope="module")
+def v5_documents(tmp_path_factory, generated_scenario_preview) -> list[dict]:
+    """Worlds of the generated Scenario without resource_service: WorldState v5 with every
+    namespace of an operator's Scenario, its ledger and its water and meal points."""
+    document = copy.deepcopy(generated_scenario_preview["scenario"])
+    del document["model_configs"]["resource_service"]
+    return _every_20_minutes(ScenarioSpec.model_validate(document), tmp_path_factory.mktemp("v5"))
+
+
+@pytest.fixture(scope="module")
+def old_form_documents(tmp_path_factory) -> list[dict]:
+    """Worlds of the older Scenario form of the fixtures, which is v5 with no model state."""
+    scenario = build_benchmark_scenario(
+        ScenarioSpec.load(BASELINE_100_7D), agent_count=30, seed=7, duration_minutes=200
+    )
+    return _every_20_minutes(scenario, tmp_path_factory.mktemp("old-form"))
+
+
+# Breaks of the resource service, which a v5 world has not.
+V6_ONLY_BREAKS = {
+    "a resource config field added",
+    "the service state removed",
+    "the ledger removed",
+    "a schema version",
+}
+
+
+def _resource_config() -> dict[str, Any]:
+    return ResourceServiceConfig.model_validate(
+        {
+            "schema_version": 1,
+            "policy_version": "resource-service-v1",
+            "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
+            "source_type": "assumption",
+            "service_minutes": 5,
+            "water_ml_per_service": 250,
+            "food_meal_units_per_service": 1,
+            "hydration_growth_per_minute": 0.006,
+        }
+    ).model_dump(mode="json")
+
+
+V5_BREAKS: dict[str, Callable[[WorldState], Any]] = {
+    # The configs are canonical, so only the version can turn them down.
+    "a resource config": lambda w: _set_item(
+        w.model_configs, "resource_service", _resource_config()
+    ),
+    "a resource service state": lambda w: _set_item(
+        w.model_state,
+        "resource_service_v1",
+        {
+            "schema_version": 1,
+            "cancelled_task_ids": [],
+            "active_reservation_ids": [],
+            "request_history": [],
+            "queue_stall_history": [],
+            "stall_state": {},
+        },
+    ),
+    "a hydration need": lambda w: next(iter(w.agents.values())).needs.__dict__.__setitem__(
+        "hydration_need", 0.5
+    ),
+    "a schema version 6": lambda w: w.__dict__.__setitem__("schema_version", 6),
+}
+
+
+def test_the_kernel_takes_the_v5_worlds_of_a_run(v5_documents, old_form_documents) -> None:
+    for document in v5_documents + old_form_documents:
+        world, memo = _primed(document)
+        _kernel(world, memo)
+        assert _python_error(world) is None
+
+
+def test_every_tick_of_a_v5_world_goes_through_the_kernel(v5_documents) -> None:
+    world = WorldState.from_dict(copy.deepcopy(v5_documents[0]))
+    taken = native.rules("after_tick").stats()[0]
+    for _ in range(5):
+        world.validate_after_tick()
+    assert native.rules("after_tick").stats()[0] == taken + 5
+
+
+@pytest.mark.parametrize("what", sorted(set(BREAKS) - V6_ONLY_BREAKS) + sorted(V5_BREAKS))
+def test_a_broken_v5_state_is_left_to_the_python_check_with_the_memo_as_it_was(
+    v5_documents, what: str
+) -> None:
+    world, memo = _primed(v5_documents[0])
+    {**BREAKS, **V5_BREAKS}[what](world)
+    before = _memo_facts(memo)
+    assert not _takes(world, memo)
+    assert _memo_facts(memo) == before
+    assert _python_error(world) is not None or what in {
+        "the memo's requests out of the dict",
+        "a tree stored past the table",
+        "the table replaced",
+    }
+
+
+@pytest.mark.parametrize("what", ["a resource config", "a resource service state"])
+def test_a_broken_v5_state_stops_the_tick_with_the_python_text(v5_documents, what: str) -> None:
+    world, _ = _primed(v5_documents[-1])
+    twin = copy.deepcopy(world)
+    V5_BREAKS[what](world)
+    V5_BREAKS[what](twin)
+    expected = _python_error(twin)
+    assert expected is not None
+    with pytest.raises(StateInvariantError) as raised:
+        world.validate_after_tick()
+    assert "_tick_memo" not in world.__dict__
+    assert str(raised.value) == expected
+
+
+def test_a_v5_world_needs_no_ledger(v5_documents, old_form_documents) -> None:
+    assert all("resource_ledger_v1" not in item["model_state"] for item in old_form_documents)
+    world, memo = _primed(v5_documents[0])
+    _remove(world, "resource_ledger_v1")
+    assert _python_error(world) is None
+    _kernel(world, memo)
+
+
+def test_the_resource_config_of_a_v6_world_is_needed(documents) -> None:
+    """Without it the plan has no resource config, and the entity rules turn the world down."""
+    world, memo = _primed(documents[0])
+    del world.model_configs["resource_service"]
+    assert not _takes(world, memo)
+    assert _python_error(world) is not None
+
+
+def test_random_writes_to_a_v5_world_taken_by_the_kernel_pass_the_python_rules(
+    v5_documents,
+) -> None:
+    generator = random.Random(4119)
+    values = [None, -1, 0, 1, 2, 1.01, 0.5, 0.0, True, "", "x", "A001", float("nan"), [], ()]
+    taken = refused = 0
+    for _ in range(300):
+        world, memo = _primed(generator.choice(v5_documents))
+        state = world.model_state
+        holders: list[Any] = [
+            state["resource_ledger_v1"],
+            *state["resource_ledger_v1"]["accounts"].values(),
+            state["body_state_v1"]["config"],
+            state["population_presence_v1"],
+            *state["population_presence_v1"]["people"].values(),
+            state["operational_events_v1"],
+            *world.agents.values(),
+            *(agent.needs for agent in world.agents.values()),
+            *(agent.profile.initial_needs for agent in world.agents.values()),
             *world.facilities.values(),
             *world.staff.values(),
             *world.active_tasks.values(),

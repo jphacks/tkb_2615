@@ -23,7 +23,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyInt, PyList, PyString, PyTuple};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::core::row::{attribute, exact_dict, exact_int, exact_list, exact_str, str_value, unsupported};
+use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_list, exact_str, str_value, unsupported};
 use crate::core::tracked::as_readable_list;
 use crate::core::value::V;
 use crate::core::world_core::{raw_dict_get, NamespaceMirror};
@@ -229,9 +229,16 @@ macro_rules! f {
     };
 }
 
-/// The entity and event rules of `validate`, for a world v6 at the end of a tick. `requests` is
-/// `TickValidationMemo.requests_to_check`. The result lists `(zone_id, occupancy)` of the zones
-/// whose capacity is the Python rule's: their temporary spaces and rooms count too.
+/// The entity and event rules of `validate`, for a WorldState v5 or v6 at the end of a tick.
+/// `requests` is the requests the memo has not settled. `resource_config` is the parsed
+/// `resource_service` config of a v6 world and None for a v5 one. The result lists
+/// `(zone_id, occupancy)` of the zones whose capacity is the Python rule's: their temporary spaces
+/// and rooms count too.
+///
+/// A v5 world is one whose Scenario has no resource service, and is written today. Its rules are the
+/// v6 rules but for the resource service: no resource slots, tasks, completions or service state, no
+/// ledger reservations to match, both hydration levels 0, and a water or meal facility may use the
+/// ordinary queues (`_validate_entity_rules`, `if self.schema_version == 5`).
 #[pyfunction]
 fn entity_rules<'py>(
     world: &Bound<'py, PyAny>,
@@ -255,11 +262,16 @@ pub(crate) fn entity_rules_watching<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let py = world.py();
     let held = Held::new();
-    if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 {
-        return unsupported("not a WorldState v6");
-    }
-    if resource_config.is_none() {
+    let v6 = match exact_int(&attribute(world, intern!(py, "schema_version"))?)? {
+        6 => true,
+        5 => false,
+        _ => return unsupported("not a WorldState v5 or v6"),
+    };
+    if v6 && resource_config.is_none() {
         return unsupported("no resource service config");
+    }
+    if !v6 && !resource_config.is_none() {
+        return unsupported("a resource service config for a WorldState v5");
     }
     let minute = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
     let duration = exact_int(&attribute(world, intern!(py, "duration_minutes"))?)?;
@@ -275,9 +287,15 @@ pub(crate) fn entity_rules_watching<'py>(
     let support_requests = map_of(world, intern!(py, "support_requests"))?;
     let id_name = intern!(py, "id");
 
-    // A ledger the Python rules would stumble over is theirs, even with no reservation to read.
-    let ledger = held_mirror(world)?;
-    NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |_| Ok(()))?;
+    // A ledger the Python rules would stumble over is theirs, even with no reservation to read. The
+    // rules of a v5 world read no reservation, and its ledger, if any, is checked by its own kernel.
+    let ledger = if v6 {
+        let ledger = held_mirror(world)?;
+        NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |_| Ok(()))?;
+        Some(ledger)
+    } else {
+        None
+    };
 
     // ---- Zones and edges. Each map's key is the item's stable ID.
     let mut occupancy: FxHashMap<&str, i64> = FxHashMap::default();
@@ -351,6 +369,15 @@ pub(crate) fn entity_rules_watching<'py>(
             if !is_unit(attribute(&current, level)?.as_ptr()) {
                 return unsupported("a need is the Python rule's");
             }
+        }
+        // "WorldState v5 requires hydration_need to be zero": `!= 0.0` in Python, which takes an int
+        // 0 as well; only a float is taken here.
+        if !v6
+            && (exact_float(&attribute(&current, intern!(py, "hydration_need"))?)? != 0.0
+                || exact_float(&attribute(&attribute(&profile, intern!(py, "initial_needs"))?, intern!(py, "hydration_need"))?)?
+                    != 0.0)
+        {
+            return unsupported("a WorldState v5 person has a hydration need");
         }
         if !is_unit(attribute(&agent, intern!(py, "stress"))?.as_ptr())
             || !is_unit(attribute(&agent, intern!(py, "trust"))?.as_ptr())
@@ -427,7 +454,10 @@ pub(crate) fn entity_rules_watching<'py>(
         {
             return unsupported("a facility has duplicate entries");
         }
-        if place.is_resource && (!place.queue.is_empty() || !place.active.is_empty()) {
+        // A v5 world has no resource service: its water and meal facilities use the ordinary queues.
+        // "WorldState v5 cannot contain resource service occupancy" needs no rule of its own here:
+        // a resource slot needs its resource task below, which a v5 world may not have.
+        if v6 && place.is_resource && (!place.queue.is_empty() || !place.active.is_empty()) {
             return unsupported("a resource facility uses the legacy queues");
         }
         if !place.is_resource && (!place.resource_queue.is_empty() || !place.resource_active.is_empty()) {
@@ -509,6 +539,10 @@ pub(crate) fn entity_rules_watching<'py>(
             _ => continue,
         };
         // A task ID that is no str names no task here, as it fills no list in Python.
+        if kind == "resource_service_complete" && !v6 {
+            // Python reads the v6 service state for it, which a v5 world has not.
+            return unsupported("a resource completion in a WorldState v5");
+        }
         if let Some(task_id) = f!(event, &held, py, "task_id").text() {
             add_named(target, task_id, index);
         } else if kind == "resource_service_complete" {
@@ -549,6 +583,9 @@ pub(crate) fn entity_rules_watching<'py>(
                 }
             }
             "resource_service_queue" | "resource_service_water" | "resource_service_food" => {
+                if !v6 {
+                    return unsupported("a resource task in a WorldState v5");
+                }
                 let (Some(agent), Some(resource)) = (work.agent, work.resource) else {
                     return unsupported("a resource task's references are the Python rule's");
                 };
@@ -720,7 +757,10 @@ pub(crate) fn entity_rules_watching<'py>(
             {
                 return unsupported("a resource service task's completion is the Python rule's");
             }
-            let reserved = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
+            let Some(ledger) = &ledger else {
+                return unsupported("a resource service task without a ledger");
+            };
+            let reserved = NamespaceMirror::with_row::<LedgerRow, _>(ledger, |row| {
                 let account = row.accounts.of(usize::from(!is_water));
                 Ok(account.reservations.get(work.id).is_some_and(|reservation| {
                     &*reservation.agent_id == *agent && &*reservation.resource_id == resource_id && reservation.quantity == quantity
@@ -746,28 +786,31 @@ pub(crate) fn entity_rules_watching<'py>(
     }
     let table = attribute(world, intern!(py, "model_state"))?;
     let table = exact_dict(&table)?;
-    let Some(service) = raw_dict_get(table, intern!(py, "resource_service_v1").as_any())? else {
-        return unsupported("no resource service state");
-    };
-    let service = exact_dict(&service)?;
-    let Some(cancelled) = service.get_item(intern!(py, "cancelled_task_ids"))? else {
-        return unsupported("the resource service state lacks a field");
-    };
-    let cancelled = held.ids(cancelled)?;
-    for (task_id, _) in resource_events.iter() {
-        if !work_at.contains_key(task_id) && !cancelled.contains(task_id) {
-            return unsupported("a resource completion names an inactive task");
+    // A v5 world has no service state: no resource task or completion came this far.
+    if v6 {
+        let Some(service) = raw_dict_get(table, intern!(py, "resource_service_v1").as_any())? else {
+            return unsupported("no resource service state");
+        };
+        let service = exact_dict(&service)?;
+        let Some(cancelled) = service.get_item(intern!(py, "cancelled_task_ids"))? else {
+            return unsupported("the resource service state lacks a field");
+        };
+        let cancelled = held.ids(cancelled)?;
+        for (task_id, _) in resource_events.iter() {
+            if !work_at.contains_key(task_id) && !cancelled.contains(task_id) {
+                return unsupported("a resource completion names an inactive task");
+            }
         }
+        let Some(listed) = service.get_item(intern!(py, "active_reservation_ids"))? else {
+            return unsupported("the resource service state lacks a field");
+        };
+        let listed = held.ids(listed)?;
+        let listed_set: FxHashSet<&str> = listed.iter().copied().collect();
+        if listed_set != active_reservations {
+            return unsupported("the active reservations differ from the active tasks");
+        }
+        // Each of these was found in the ledger above, in its task's account.
     }
-    let Some(listed) = service.get_item(intern!(py, "active_reservation_ids"))? else {
-        return unsupported("the resource service state lacks a field");
-    };
-    let listed = held.ids(listed)?;
-    let listed_set: FxHashSet<&str> = listed.iter().copied().collect();
-    if listed_set != active_reservations {
-        return unsupported("the active reservations differ from the active tasks");
-    }
-    // Each of these was found in the ledger above, in its task's account.
 
     // ---- Travel.
     for (agent_id, index) in &travel_by_agent {

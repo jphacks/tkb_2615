@@ -3,7 +3,9 @@
 native/src/rules/metrics.rs and tick_validation.rs (docs/rust-port/lanes/m5-metrics.md). The KPI
 kernels must give the Python rule's values to the bit. The check kernel has no text: what must hold
 is that a yes means the Python rules pass, and that a state it turns down gets the Python text.
-These run on worlds from the middle of a Run, where queues, trips and open requests are in use.
+These run on worlds from the middle of a Run, where queues, trips and open requests are in use, of
+WorldState v6 (a Scenario with resource_service) and v5 (one without, docs/rust-port/lanes/
+l7b-world-v5.md).
 """
 
 from __future__ import annotations
@@ -14,14 +16,24 @@ import random
 from typing import Any
 
 import pytest
+from support.paths import BASELINE_100_7D
 
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.world import ResourceServiceConfig, StateInvariantError, WorldState
 from sheltersim.core.world import _entity_rules_kernel as entity_kernel
-from sheltersim.domain.models import Activity, InitialNeedProfile, NeedState, SupportRequestStatus
+from sheltersim.domain.models import (
+    ActiveTask,
+    Activity,
+    FacilityState,
+    InitialNeedProfile,
+    NeedState,
+    SupportRequestStatus,
+)
 from sheltersim.domain.population import validate_population_dynamics_state
+from sheltersim.events.models import EventKind, ScheduledEvent
 from sheltersim.experiments import metrics
+from sheltersim.experiments.benchmark import build_benchmark_scenario
 from sheltersim.experiments.operational_kpis import operational_kpi_values
 from sheltersim.experiments.runner import run_scenario
 from sheltersim.experiments.scenario import ScenarioSpec
@@ -52,6 +64,31 @@ def documents(tmp_path_factory, generated_scenario_preview) -> list[dict]:
     return taken
 
 
+@pytest.fixture(scope="module")
+def v5_documents(tmp_path_factory) -> list[dict]:
+    """The world every 10 minutes of a Run of a Scenario without resource_service: WorldState v5."""
+    scenario = build_benchmark_scenario(
+        ScenarioSpec.load(BASELINE_100_7D), agent_count=30, seed=7, duration_minutes=200
+    )
+    taken: list[dict] = []
+    step = TickEngine.step
+
+    def recording(engine: TickEngine) -> Any:
+        result = step(engine)
+        if engine.world.minute_index % 10 == 0 and engine.world.minute_index > 0:
+            taken.append(engine.world.to_dict())
+        return result
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(TickEngine, "step", recording)
+    try:
+        run_scenario(scenario, tmp_path_factory.mktemp("v5"))
+    finally:
+        patch.undo()
+    assert taken and all(document["schema_version"] == 5 for document in taken)
+    return taken
+
+
 def _world(document: dict) -> WorldState:
     return WorldState.from_dict(copy.deepcopy(document))
 
@@ -72,6 +109,9 @@ def _accepts(world: WorldState) -> bool:
 
 
 def _resource_config(world: WorldState) -> Any:
+    """The parsed config of a v6 world, and None for a v5 one, as validate passes them."""
+    if "resource_service" not in world.model_configs:
+        return None
     return ResourceServiceConfig.model_validate(world.model_configs["resource_service"])
 
 
@@ -296,6 +336,187 @@ def test_random_writes_taken_by_the_check_pass_the_python_rules(documents) -> No
         else:
             refused += 1
     # Fields no rule reads leave the check's yes standing, and most writes break something.
+    assert taken > 0 and refused > 0
+
+
+# ---- WorldState v5 ------------------------------------------------------------------------------
+
+# What a v5 world of the Run does not have: resource slots, tasks, the service state and a stock
+# (its inventory is broken in V5_BREAKS instead).
+V6_ONLY_BREAKS = {"resource slot lost", "service reservations", "inventory"}
+
+
+def _idle(world: WorldState) -> Any:
+    return next(
+        a
+        for a in world.agents.values()
+        if a.activity is Activity.IDLE and a.support_request_id is None
+    )
+
+
+def _water_station(world: WorldState, zone_id: str) -> FacilityState:
+    facility = FacilityState(
+        id="water-probe", kind="water_station", zone_id=zone_id, capacity=2, working_units=2
+    )
+    world.facilities[facility.id] = facility
+    return facility
+
+
+def _queued_at_water(world: WorldState, *, slot: str) -> tuple[Any, FacilityState]:
+    """An idle person queued at a new water station, in its ordinary or its resource queue."""
+    agent = _idle(world)
+    facility = _water_station(world, agent.zone_id)
+    _set(agent, "activity", Activity.QUEUED)
+    _set(agent, "target_id", facility.id)
+    _set(facility, slot, [agent.id])
+    return agent, facility
+
+
+def _resource_queue_task_in_v5(world: WorldState) -> None:
+    """A resource queue slot with its task: all that pairs up, but a v5 world has no service."""
+    agent, facility = _queued_at_water(world, slot="resource_queue_agent_ids")
+    task = ActiveTask(
+        id="resource-probe",
+        kind="resource_service_queue",
+        agent_id=agent.id,
+        resource_id=facility.id,
+        start_minute=world.minute_index,
+        due_minute=world.minute_index,
+    )
+    world.active_tasks[task.id] = task
+
+
+def _resource_completion_in_v5(world: WorldState) -> None:
+    """A completion of no active task, which Python looks up in the v6 service state."""
+    sequence = world.allocate_event_sequence()
+    world.schedule_event(
+        ScheduledEvent(
+            event_id=f"probe-{sequence}",
+            due_minute=world.minute_index + 1,
+            priority=0,
+            sequence=sequence,
+            event_type="resource_service_complete",
+            kind=EventKind.COMPLETION,
+            payload={"task_id": "nothing"},
+            provenance={},
+        )
+    )
+
+
+V5_BREAKS = {
+    "a hydration need": lambda w: _set(_agent(w).needs, "hydration_need", 0.5),
+    "an initial hydration need": lambda w: _set(
+        _agent(w).profile.initial_needs, "hydration_need", 0.5
+    ),
+    "a resource queue task": _resource_queue_task_in_v5,
+    "a resource completion": _resource_completion_in_v5,
+    "a resource slot without its task": lambda w: _queued_at_water(
+        w, slot="resource_queue_agent_ids"
+    ),
+    "an inventory below 0 without a stock": lambda w: dict.__setitem__(w.resources, "water_ml", -1),
+}
+
+
+def _broken_v5_world(documents: list[dict], break_state: Any) -> WorldState:
+    for document in documents:
+        world = _world(document)
+        assert _accepts(world)
+        try:
+            break_state(world)
+        except StopIteration:
+            continue
+        return world
+    pytest.fail("no v5 document has what the break writes")
+
+
+def test_the_check_takes_the_v5_worlds_of_a_run(v5_documents) -> None:
+    for document in v5_documents:
+        world = _world(document)
+        assert _python_error(world) is None
+        assert _accepts(world), world.minute_index
+
+
+@pytest.mark.parametrize("name", sorted(set(BREAKS) - V6_ONLY_BREAKS))
+def test_the_rules_of_both_versions_turn_down_a_broken_v5_world(v5_documents, name) -> None:
+    """Each rule v5 shares with v6 holds for v5: gating one on v6 fails its case here."""
+    world = _broken_v5_world(v5_documents, BREAKS[name])
+    if name != "request status":
+        assert _python_error(world) is not None
+    assert not _accepts(world)
+
+
+@pytest.mark.parametrize("name", sorted(V5_BREAKS))
+def test_the_v5_rules_turn_down_what_the_python_rules_turn_down(v5_documents, name) -> None:
+    world = _broken_v5_world(v5_documents, V5_BREAKS[name])
+    assert _python_error(world) is not None
+    assert not _accepts(world)
+
+
+def test_a_v5_water_station_may_use_the_ordinary_queue(v5_documents) -> None:
+    """v5 has no resource service, so the v6 rule against ordinary queues there is not v5's."""
+    world = _broken_v5_world(v5_documents, lambda w: _queued_at_water(w, slot="queue_agent_ids"))
+    assert _python_error(world) is None
+    assert _accepts(world)
+
+
+def test_a_v5_world_is_not_taken_with_a_resource_config(v5_documents) -> None:
+    world = _world(v5_documents[0])
+    config = ResourceServiceConfig.model_validate(
+        {
+            "schema_version": 1,
+            "policy_version": "resource-service-v1",
+            "source_id": "ASM-H02-RESOURCE-SERVICE-V1",
+            "source_type": "assumption",
+            "service_minutes": 5,
+            "water_ml_per_service": 250,
+            "food_meal_units_per_service": 1,
+            "hydration_growth_per_minute": 0.006,
+        }
+    )
+    with pytest.raises(native.Unsupported):
+        entity_kernel(
+            world, list(world.support_requests.values()), config, InitialNeedProfile, NeedState
+        )
+
+
+def test_a_v6_world_is_not_taken_without_its_resource_config(documents) -> None:
+    world = _world(documents[0])
+    with pytest.raises(native.Unsupported):
+        entity_kernel(
+            world, list(world.support_requests.values()), None, InitialNeedProfile, NeedState
+        )
+
+
+def test_random_writes_to_a_v5_world_taken_by_the_check_pass_the_python_rules(
+    v5_documents,
+) -> None:
+    generator = random.Random(4105)
+    values = [None, -1, 0, 1, 2, 1.01, 0.5, 0.0, True, "", "x", "A001", float("nan"), [], ()]
+    taken = refused = 0
+    for _ in range(300):
+        world = _world(generator.choice(v5_documents))
+        holders = [
+            *world.agents.values(),
+            *(agent.needs for agent in world.agents.values()),
+            *(agent.profile.initial_needs for agent in world.agents.values()),
+            *world.facilities.values(),
+            *world.staff.values(),
+            *world.active_tasks.values(),
+            *world.zone_edges.values(),
+            *(
+                request
+                for request in world.support_requests.values()
+                if request.status in (SupportRequestStatus.PENDING, SupportRequestStatus.ASSIGNED)
+            ),
+        ]
+        holder = generator.choice(holders)
+        name = generator.choice(sorted(holder.__dict__))
+        holder.__dict__[name] = generator.choice(values)
+        if _accepts(world):
+            taken += 1
+            assert _python_error(world) is None, (type(holder).__name__, name)
+        else:
+            refused += 1
     assert taken > 0 and refused > 0
 
 
