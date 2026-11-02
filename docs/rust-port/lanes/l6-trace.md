@@ -36,7 +36,7 @@ trace つきの Run と、Provider を呼べる router の Run が、kernel と 
 | `the sink is Python's, or the run keeps a trace`（`record_outcome`） | 696 → **0** | 0 → 0 |
 | `a trace records the contacts`（`inputs`） | 480 → **0** | 0 → 0 |
 | `a trace needs the Python contact records` | 480 → **0** | 0 → 0 |
-| driver が動いた tick | 28,892 → **31,532**（段階の数 31,530 のすべて。差の2は段階の前に失敗する回です） | 10,080 → 10,080 |
+| driver が動いた tick | 28,892 → **31,532**（数えた手順は 31,530。差の2は M6 の文書のとおり、エラーで終わる tick と見ていますが、追っていません） | 10,080 → 10,080 |
 
 kernel の断りの合計はゲートで 6,280 → 6,847 に増えました。trace と Provider の tick が driver に来て、別の理由（`a free worker can take a request` など）が数えられるようになったからで、増えた分は他のレーンの理由です。7日分は 720 のままです。
 
@@ -65,7 +65,7 @@ kernel が今も Python に任せる条件（ゲートではすべて0回）：P
 
 | 確認 | 結果 |
 |---|---|
-| 全テスト | Rust あり 4,406件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,079件成功、2,333件 skip（`821319e` の前の木。その後に足したのは Rust のないテスト1つと benchmarks です） |
+| 全テスト | Rust あり 4,408件成功、6件 skip。`SHELTERSIM_NATIVE=0` 2,079件成功、2,335件 skip |
 | `gate_all_paths.py --expect`（計測あり、なし） | どちらも 55シナリオ、問題0件 |
 | `--reversed-order` | 55シナリオ、問題0件。段階の終わりの回（`reversed_order`）は driver を通り、段階の途中の回は Python の経路です |
 | 7日分 `--expect`（driver、計測あり） | world `69aba6590f6b`、events `5e4c7645ef7f`、KPI `94c8cbb26041`。一致 |
