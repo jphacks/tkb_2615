@@ -354,12 +354,7 @@ const COLUMNS: [[&str; 6]; 2] = [
 
 /// `resource_metric_values`.
 #[pyfunction]
-#[pyo3(signature = (world, *, tick_memo=None))]
-pub(crate) fn metric_values<'py>(
-    world: &Bound<'py, PyAny>,
-    tick_memo: Option<&Bound<'py, PyAny>>,
-) -> PyResult<Option<Bound<'py, PyDict>>> {
-    let _ = tick_memo;
+pub(crate) fn metric_values<'py>(world: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyDict>>> {
     let py = world.py();
     if namespace_is_absent(world, intern!(py, "resource_ledger_v1"))? {
         return Ok(None);

@@ -306,7 +306,7 @@ impl ValuesSnapshot {
 
     /// The dict's values after the snapshot's, or None unless the dict starts with
     /// the very objects of the snapshot, in order.
-    fn added_values<'py>(
+    pub(crate) fn added_values<'py>(
         &self,
         values: &Bound<'py, PyDict>,
     ) -> PyResult<Option<Bound<'py, PyList>>> {
@@ -328,12 +328,17 @@ impl ValuesSnapshot {
     }
 
     /// Hold these values after the ones held already.
-    fn extend(&mut self, added: &Bound<'_, PyList>) {
+    pub(crate) fn extend(&mut self, added: &Bound<'_, PyList>) {
         self.values.extend(added.iter().map(Bound::unbind));
     }
 
     /// Forget every value.
-    fn clear(&mut self) {
+    /// The values held, in order.
+    pub(crate) fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        PyList::new(py, self.values.iter().map(|value| value.bind(py)))
+    }
+
+    pub(crate) fn clear(&mut self) {
         self.values.clear();
     }
 

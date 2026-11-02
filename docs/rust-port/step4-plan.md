@@ -26,6 +26,7 @@
 | driver（#344、`rules/tick.rs`） | マージ済み | tick の段階の順序は Rust です。**`rule_shadow` と `--reversed-order` は driver を通りません**（`m6-driver.md`）。L6 で Provider を呼べる router と trace も driver に載りました（[l6-trace.md](lanes/l6-trace.md)）。L0 は driver の `or_rule!` も数えます |
 | overlay（#345、`rules/overlay.rs` ほか） | マージ済み | `an independent FIFO*`、`a temporary room may have a bed`、`a surveyed service point` の断りはなくなりました。`rules/population.rs` の読みを `overlay.rs` に寄せる宿題が残ります（L1） |
 | validate（#346、`rules/after_tick.rs`、`rules/metrics.rs` の `capture`） | マージ済み | **L7 が小さくなりました。** 7日分では Plan のない最初の1 tick を除く全 tick を kernel が受けます。実測の断りは下の L7 |
+| L7（`rust/l7-validate`） | レーン済み | v6 の tick の検証は最初の tick も含めて毎 tick Rust で、記憶も Rust です。断りはゲートの v5 の 2,320 だけ（7日分0）。v5 は L9（[l7-validate.md](lanes/l7-validate.md)） |
 | `rust/m6-handlers-rest`（`wt-m6-handlers2`、`df84748`） | **未マージ。** 込みの木で計測済み | 7日分で Python に渡るイベントが 10,495 件から 8 件に。文書 `m6-handlers.md` は同じブランチにあります。マージのときの衝突は `sitecustomize.py` と `docs/architecture.md` だけでした（試しマージ） |
 
 ## 結論

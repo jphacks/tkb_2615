@@ -12,7 +12,6 @@ from sheltersim import native
 from sheltersim.core.history import records_since_previous_tick
 from sheltersim.core.kernels import kernel_first
 from sheltersim.core.state_mirror import rust_accepts
-from sheltersim.core.tick_validation import saved_json
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import ordered_pair_key
 from sheltersim.policies.affect import create_affect_policy
@@ -245,9 +244,10 @@ _RELATIONSHIP_FIELDS = frozenset(
 )
 
 
-def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
-    """Check the saved config; return whether the check read only it, the configs and
-    the current Agent IDs."""
+def validate_body_config(world: WorldState, state: dict[str, Any]) -> set[str]:
+    """Check the saved config; return the people its per-person parameters name. Past the saved
+    config and the configs, the check reads only whether each of them is here now or in the
+    population state's history (native/src/rules/after_tick.rs checks that at each tick)."""
     config = canonical_body_config(state["config"])
     per_agent_fields = (
         "sleep_debt_stress_rate_by_agent",
@@ -266,8 +266,8 @@ def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
         "dependent_assistance_reassurance_gain_by_agent",
     )
     configured_agent_ids = set().union(*(set(config.get(field, {})) for field in per_agent_fields))
-    only_current_residents = not configured_agent_ids - set(world.agents)
-    if not only_current_residents:
+    past_residents = configured_agent_ids - set(world.agents)
+    if past_residents:
         population = world.model_state.get("population_dynamics_v1", {})
         historical_ids = set(world.agents)
         if isinstance(population, dict):
@@ -308,7 +308,7 @@ def _validate_body_config(world: WorldState, state: dict[str, Any]) -> bool:
         or any(saved[key] is not config[key] and saved[key] != config[key] for key in saved)
     ):
         raise ValueError("body_state_v1 config is not canonical")
-    return only_current_residents
+    return configured_agent_ids
 
 
 def _validate_body_rows(world: WorldState, state: dict[str, Any]) -> None:
@@ -373,7 +373,6 @@ def validate_body_state(
     world: WorldState,
     *,
     validate_event_history: bool = True,
-    tick_memo: Any = None,
     history_memo: Any = None,
 ) -> None:
     """Reject partial state, unknown people, out-of-range values and malformed evidence."""
@@ -406,16 +405,7 @@ def validate_body_state(
         or len(state["history"]) > MAX_SOCIAL_HISTORY
     ):
         raise ValueError("body_state_v1 has an invalid exact schema")
-    config_json = None
-    if tick_memo is not None and tick_memo.configs_unchanged and tick_memo.agents_unchanged:
-        config_json = saved_json(state["config"])
-    if config_json is None or config_json != tick_memo.body_config_json:
-        depends_on_config_only = _validate_body_config(world, state)
-        if tick_memo is not None:
-            # Past residents named in the config are compared with the population state.
-            tick_memo.body_config_json = (
-                saved_json(state["config"]) if depends_on_config_only else None
-            )
+    validate_body_config(world, state)
     if not rows_accepted:
         _validate_body_rows(world, state)
     population = world.model_state.get("population_dynamics_v1", {})

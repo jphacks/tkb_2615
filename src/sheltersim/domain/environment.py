@@ -22,6 +22,18 @@ ZONE_ENVIRONMENT_POLICY = "zone_environment_v1"
 ZONE_ENVIRONMENT_SOURCE_ID = "ASM-H19-ZONE-ENVIRONMENT-V2"
 _LEGACY_ZONE_ENVIRONMENT_SOURCE_ID = "ASM-H19-ZONE-ENVIRONMENT-V1"
 MAX_ZONE_ENVIRONMENT_MODIFIERS = 16
+# Fields an older canonical config lacks, which a config may still lack.
+LEGACY_ZONE_ENVIRONMENT_FIELDS = frozenset(
+    {
+        "lighting_sleep_efficiency_loss",
+        "ventilation_hygiene_growth_per_minute",
+        "privacy_discontent_per_minute",
+        "temperature_stress_per_degree_minute",
+        "comfortable_min_temperature_c",
+        "comfortable_max_temperature_c",
+        "baseline_by_zone",
+    }
+)
 
 _StableId = Annotated[
     str,
@@ -387,23 +399,10 @@ def validate_zone_environment_runtime_state(
     world: WorldState,
     *,
     validate_event_history: bool = True,
-    tick_memo: Any = None,
 ) -> None:
-    """Validate opt-in config and active modifier/event/provenance links.
-
-    With a tick_memo a config that passed is not read again while it and the zones are unchanged.
-    """
+    """Validate opt-in config and active modifier/event/provenance links."""
     config_data = world.model_configs.get("zone_environment")
     state = world.model_state.get(ZONE_ENVIRONMENT_STATE_KEY)
-    if (
-        tick_memo is not None
-        and tick_memo.configs_unchanged
-        and tick_memo.zones_unchanged
-        and tick_memo.environment_config_passed
-    ):
-        if _has_exact_schema(state):
-            return
-        raise ValueError("zone_environment_v1 has an invalid exact schema")
     if config_data is None:
         if state is not None:
             raise ValueError("zone environment state requires a zone_environment config")
@@ -423,16 +422,7 @@ def validate_zone_environment_runtime_state(
     legacy_config = {
         key: value
         for key, value in canonical_config.items()
-        if key
-        not in {
-            "lighting_sleep_efficiency_loss",
-            "ventilation_hygiene_growth_per_minute",
-            "privacy_discontent_per_minute",
-            "temperature_stress_per_degree_minute",
-            "comfortable_min_temperature_c",
-            "comfortable_max_temperature_c",
-            "baseline_by_zone",
-        }
+        if key not in LEGACY_ZONE_ENVIRONMENT_FIELDS
     }
     if config_data not in (canonical_config, legacy_config):
         raise ValueError("zone_environment config must contain canonical v1 values")
@@ -440,8 +430,6 @@ def validate_zone_environment_runtime_state(
         raise ValueError("zone environment baseline references an unknown zone")
     if not _has_exact_schema(state):
         raise ValueError("zone_environment_v1 has an invalid exact schema")
-    if tick_memo is not None:
-        tick_memo.environment_config_passed = True
 
     if not validate_event_history:
         return
