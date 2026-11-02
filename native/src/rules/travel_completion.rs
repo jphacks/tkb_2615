@@ -577,7 +577,7 @@ pub(crate) fn apply_event<'py>(
     })?;
 
     if &**purpose == "presence_relocation" {
-        crate::rules::population_lifecycle::check_relocation_completes(world, &object()?)?;
+        crate::rules::population_lifecycle::check_relocation_completes(world, &object()?, destination)?;
     }
 
     // Everything is decided, and no Unsupported comes from here on.

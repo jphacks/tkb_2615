@@ -142,12 +142,22 @@ def test_what_a_toilet_request_refuses_is_python_s_text(
         controller.toilet_service.request(agent_id, _toilet(world), validate_state=False)
 
 
-def test_a_request_with_the_world_s_validation_is_python_s(generated_scenario: Any) -> None:
+def test_a_request_with_the_world_s_validation_validates_it(
+    generated_scenario: Any, monkeypatch: Any
+) -> None:
     world, controller = _run(generated_scenario, 5)
-    with pytest.raises(native.Unsupported, match="validation"):
-        native.rules("toilet").request(
-            controller.toilet_service, _idle_person(world), _toilet(world), validate_state=True
-        )
+    person, toilet = _idle_person(world), _toilet(world)
+    calls = []
+    validate = WorldState.validate
+
+    def counted(self: Any, *arguments: Any, **options: Any) -> Any:
+        calls.append(self)
+        return validate(self, *arguments, **options)
+
+    monkeypatch.setattr(WorldState, "validate", counted)
+    native.rules("toilet").request(controller.toilet_service, person, toilet, validate_state=True)
+    assert calls == [world, world]
+    assert world.agents[person].activity.value == "queued"
 
 
 def test_the_facilities_to_serve_leave_out_only_an_empty_queue(generated_scenario: Any) -> None:

@@ -18,6 +18,7 @@ from sheltersim import native
 from sheltersim.contracts.presence import PRESENCE_NAMESPACE, PresenceState
 from sheltersim.core.world import WorldState
 from sheltersim.domain import population, population_lifecycle
+from sheltersim.domain.models import ActiveTask, Activity
 from sheltersim.domain.population_lifecycle import (
     POPULATION_LIFECYCLE_STATE_KEY,
     PopulationPresenceCommand,
@@ -32,7 +33,6 @@ from sheltersim.events.effects import (
     schedule_effect_program,
 )
 from sheltersim.events.handlers import EventDispatcher
-from sheltersim.domain.models import ActiveTask, Activity
 from sheltersim.events.models import (
     EventApplicationError,
     EventKind,

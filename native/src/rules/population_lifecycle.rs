@@ -1302,11 +1302,12 @@ fn check_waiting_returns(world: &Bound<'_, PyAny>) -> PyResult<()> {
 // ---- `complete_presence_relocation` --------------------------------------------------------------
 
 /// What `complete_presence_relocation` refuses, for a rule that writes first and then calls it.
-pub(crate) fn check_relocation_completes(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
-    plan_relocation_completion(world, event).map(|_| ())
+/// `arriving` is the zone the caller's writes will put the person in.
+pub(crate) fn check_relocation_completes(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, arriving: &str) -> PyResult<()> {
+    plan_relocation_completion(world, event, Some(arriving)).map(|_| ())
 }
 
-fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<(EventRow, Bound<'py, PyAny>, Arc<str>, Bound<'py, PyAny>, EventIds)> {
+fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, arriving: Option<&str>) -> PyResult<(EventRow, Bound<'py, PyAny>, Arc<str>, Bound<'py, PyAny>, EventIds)> {
     planning((|| {
         let row = event_row(event)?;
         let Some(V::Str(agent_id)) = payload(&row, "agent_id").cloned() else {
@@ -1323,7 +1324,8 @@ fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py,
             return unsupported("the completion does not match its route");
         }
         let to_zone = text(&relocation.get_item("to_zone_id")?)?;
-        let in_place = EntityStore::with_rows(&entities_of(world)?, |rows| Ok(rows.agents.get(&*agent_id).is_some_and(|agent| agent.zone_id == to_zone)))?;
+        let in_place = arriving == Some(&*to_zone)
+            || EntityStore::with_rows(&entities_of(world)?, |rows| Ok(rows.agents.get(&*agent_id).is_some_and(|agent| agent.zone_id == to_zone)))?;
         if !in_place {
             return unsupported("the person is not at the destination");
         }
@@ -1345,7 +1347,7 @@ fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py,
 #[pyfunction]
 pub(crate) fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let (row, state, agent_id, relocation, ids_of_event) = plan_relocation_completion(world, event)?;
+    let (row, state, agent_id, relocation, ids_of_event) = plan_relocation_completion(world, event, None)?;
     writing((|| {
         let from_zone = text(&relocation.get_item("from_zone_id")?)?;
         let to_zone = text(&relocation.get_item("to_zone_id")?)?;

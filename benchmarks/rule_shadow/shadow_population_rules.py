@@ -39,6 +39,8 @@ def prepare(output: str) -> None:
 
     if not native.available():
         return
+    # The driver calls its kernels directly, past these stand-ins.
+    native.rules("tick").python_path_only(True)
     recorder = Recorder(output, "population_rules")
     unsupported = native.Unsupported
     state = {"python": 0}

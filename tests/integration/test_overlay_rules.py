@@ -1176,6 +1176,111 @@ def test_a_resource_fifo_serves_as_the_python_rule_does(queued: WorldState) -> N
         _same_world(ours, theirs)
 
 
+def _serving(queued: WorldState) -> tuple[str, str]:
+    """Someone in service at an independent queue: the task's ID and the staff member's."""
+    facility_id, _ = _resource_queues(queued)
+    zone = queued.facilities[facility_id].zone_id
+    for agent_id in ("A001", "A002"):
+        queued.agents[agent_id].zone_id = zone
+        queued.model_state["movement_v1"]["positions"][agent_id]["zone_id"] = zone
+    manager = ResourceServiceManager(queued)
+    manager.request("A001", facility_id, validate_state=False)
+    for staff in queued.staff.values():
+        staff.zone_id = zone
+    queue_state = queued.model_state[facility_queues.FACILITY_QUEUES_STATE_KEY]
+    request = next(iter(queue_state["requests"].values()))
+    point = next(
+        item
+        for item in queued.model_configs["facility_geometry"]["service_points"]
+        if item["queue_id"] == request["queue_id"]
+    )
+    queued.model_state["movement_v1"]["positions"]["A001"]["point"] = point["point_m"]
+    for _ in range(30):
+        manager.arbitrate(queued.minute_index, validate_state=False)
+        for task in queued.active_tasks.values():
+            if task.kind in ("resource_service_water", "resource_service_food"):
+                return task.id, task.staff_id
+        queued.minute_index += 1
+    pytest.fail("the service never started")
+
+
+def test_a_service_interrupted_goes_back_first_in_its_fifo_as_the_python_rule_says(
+    queued: WorldState,
+) -> None:
+    _, staff_id = _serving(queued)
+    facility_id, _ = _resource_queues(queued)
+    # Someone else waits, so going back first in line shows.
+    ResourceServiceManager(queued).request("A002", facility_id, validate_state=False)
+    cause = ScheduledEvent(
+        event_id="staff-away",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="staff_unavailable",
+        payload={"staff_id": staff_id},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.interrupt_for_staff.__wrapped__(
+        ResourceServiceManager(theirs), staff_id, causation_event=cause
+    )
+    _rules("handlers").interrupt_for_staff(
+        ResourceServiceManager(ours), staff_id, causation_event=cause
+    )
+    _same_world(ours, theirs)
+    assert ours.id_counters == theirs.id_counters
+    records = [
+        record.event.payload
+        for record in ours.event_log.records
+        if record.event.event_type == "facility_queue_transition"
+    ]
+    assert [item["transition"] for item in records[-2:]] == ["interrupted", "requeued"]
+    assert records[-1]["queue_position"] == 1
+
+
+@pytest.mark.parametrize("reason", ["operator_cancelled", "facility_stopped", "staff_unavailable"])
+def test_a_cancelled_service_is_the_python_rule_s(queued: WorldState, reason: str) -> None:
+    task_id, _ = _serving(queued)
+    event = ScheduledEvent(
+        event_id="cancel-it",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="resource_service_cancel",
+        payload={"task_id": task_id, "reason": reason},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.cancel.__wrapped__(ResourceServiceManager(theirs), event)
+    _rules("handlers").cancel(ResourceServiceManager(ours), event)
+    _same_world(ours, theirs)
+    assert task_id in ours.model_state["resource_service_v1"]["cancelled_task_ids"]
+
+
+def test_a_cancelled_place_in_a_queue_is_the_python_rule_s(queued: WorldState) -> None:
+    facility_id, _ = _resource_queues(queued)
+    zone = queued.facilities[facility_id].zone_id
+    queued.agents["A001"].zone_id = zone
+    queued.model_state["movement_v1"]["positions"]["A001"]["zone_id"] = zone
+    receipt = ResourceServiceManager(queued).request("A001", facility_id, validate_state=False)
+    event = ScheduledEvent(
+        event_id="cancel-place",
+        kind=EventKind.ENDOGENOUS,
+        due_minute=queued.minute_index,
+        priority=0,
+        sequence=900_000,
+        event_type="resource_service_cancel",
+        payload={"task_id": receipt.queue_task_id, "reason": "operator_cancelled"},
+        source_id="ASM-TEST",
+    )
+    ours, theirs = _copy(queued), _copy(queued)
+    ResourceServiceManager.cancel.__wrapped__(ResourceServiceManager(theirs), event)
+    _rules("handlers").cancel(ResourceServiceManager(ours), event)
+    _same_world(ours, theirs)
+
+
 def test_a_completed_service_leaves_its_fifo_as_the_python_rule_does(queued: WorldState) -> None:
     found = _resource_queues(queued)
     assert found is not None
