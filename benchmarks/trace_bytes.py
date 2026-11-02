@@ -3,10 +3,11 @@
 The gate compares hashes of the state; the files a Run keeps, its traces among them, are compared
 here, byte by byte. Each gate scenario runs in two processes, under SHELTERSIM_NATIVE=1 and =0, and
 every file of a Run's folder is compared. The gate selects each model of the registry with no trace,
-so each is also run here with a full trace (`--models`). The Rust side says how many ticks its
-driver took and which it refused. See docs/rust-port/lanes/l6-trace.md.
+so each is also run here with a full trace (`--models`). `--traced` gives every Run of a gate
+scenario that takes a level a full trace, so a trace meets what those scenarios reach. The Rust side
+says how many ticks its driver took and which it refused. See docs/rust-port/lanes/l6-trace.md.
 
-    python benchmarks/trace_bytes.py --output DIR [--only NAME] [--models] [--jobs N]
+    python benchmarks/trace_bytes.py --output DIR [--only NAME] [--models | --traced] [--jobs N]
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
+import gate_scenarios
 from gate_scenarios import _model_scenario, all_scenarios, selectable_models
 
 from sheltersim import native
@@ -43,16 +45,39 @@ TRACE_FILES = (
     "llm_calls.jsonl",
     "social_decisions.jsonl",
 )
+# What each document can hold that a scenario may not reach: counted, to say what was compared.
+REACHED = (
+    '"zone_environment"',
+    '"environment_conditions"',
+    '"information_belief_effect"',
+    '"life_state"',
+    '"facility_queue_wait"',
+    '"staff_support_wait"',
+    '"experimental_environmental_stress":{',
+    '"kind":"experimental_environmental_stress"',
+    '"kind":"experimental_zone_noise_reduced_rest_efficiency"',
+)
 # Not a Run's result: the gate's own report of its wall time, and files with the run's own path.
 SKIPPED_NAMES = frozenset({"result.json"})
 
 
-def _run_one(name: str, directory: Path, native: str) -> None:
+def _run_traced(name: str, directory: Path) -> None:
+    """A gate scenario in its own process, whose library Runs keep a full trace."""
+    import gate_all_paths
+
+    gate_scenarios.run_library.__kwdefaults__["trace_level"] = TraceLevel.FULL
+    gate_all_paths.run_one(name, directory)
+
+
+def _run_one(name: str, directory: Path, native: str, traced: bool = False) -> None:
     directory.mkdir(parents=True)
     env = {**os.environ, "SHELTERSIM_NATIVE": native, "SHELTERSIM_LLM_MODE": "offline"}
+    command = [str(GATE), "--run-one", name, "--output", str(directory)]
+    if traced:
+        command = [__file__, "--run-traced", name, str(directory)]
     with (directory / "log.txt").open("w", encoding="utf-8") as log:
         subprocess.run(
-            [sys.executable, str(GATE), "--run-one", name, "--output", str(directory)],
+            [sys.executable, *command],
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -101,10 +126,10 @@ def compare_model(domain: str, model: str, level: str, output: Path) -> dict:
     return result
 
 
-def compare(name: str, output: Path) -> dict:
+def compare(name: str, output: Path, traced: bool = False) -> dict:
     driver, python = output / name / "driver", output / name / "python"
-    _run_one(name, driver, "1")
-    _run_one(name, python, "0")
+    _run_one(name, driver, "1", traced)
+    _run_one(name, python, "0", traced)
     return compare_trees(name, driver, python)
 
 
@@ -120,6 +145,10 @@ def compare_trees(name: str, driver: Path, python: Path) -> dict:
         base = Path(item).name
         if base in TRACE_FILES and item not in different:
             sizes[base] += (driver / item).stat().st_size
+            if base == "psychology_contributions.jsonl":
+                raw = (driver / item).read_bytes()
+                for part in REACHED:
+                    sizes[part] += raw.count(part.encode())
     return {
         "scenario": name,
         "files": len(on_driver & on_python),
@@ -143,12 +172,17 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--only", action="append", help="scenarios whose name starts with this")
     parser.add_argument("--models", action="store_true", help="each model with a full trace")
+    parser.add_argument("--traced", action="store_true", help="the library Runs with a full trace")
     parser.add_argument("--jobs", type=int, default=6)
+    parser.add_argument("--run-traced", nargs=2, help=argparse.SUPPRESS)
     parser.add_argument("--run-model", nargs=4, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.run_model:
         domain, model, level, directory = args.run_model
         _run_model(domain, model, level, Path(directory))
+        return 0
+    if args.run_traced:
+        _run_traced(args.run_traced[0], Path(args.run_traced[1]))
         return 0
     if args.output is None:
         parser.error("--output is required")
@@ -165,7 +199,7 @@ def main() -> int:
             if not args.only or any(name.startswith(prefix) for prefix in args.only):
                 work.append((name, partial(compare_model, domain, model, "full", args.output)))
     else:
-        work = [(name, partial(compare, name, args.output)) for name in names]
+        work = [(name, partial(compare, name, args.output, args.traced)) for name in names]
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda item: _keeping(item[0], args.output, item[1]), work))
     totals: Counter[str] = Counter()
