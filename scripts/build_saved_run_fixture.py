@@ -2,9 +2,9 @@
 
 The Run is h00_small_replay without scheduled events, 90 minutes long: branch main
 saved at minutes 0, 30 and 60, and branch child forked from main at minute 30 and
-computed to 60, so both may be continued to 90. Only the files a Run needs to be read are kept, with its history index
-(history.sqlite) as the writer left it; the frame cache, the write ledger, locks and
-worker leases are left out.
+computed to 60, so both may be continued to 90. Only the files a Run needs to be read
+are kept, with its history index (history.sqlite) as the writer left it; the frame
+cache, the write ledger, locks and worker leases are left out.
 
 fixtures/saved_runs/engine-v1-small was built with this script (SHELTERSIM_NATIVE=0
 and SHELTERSIM_LLM_MODE=offline) in a worktree of 6d5662c, before

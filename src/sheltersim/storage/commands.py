@@ -202,6 +202,8 @@ def execute(arguments: Any) -> dict[str, Any]:
     if action == "frame":
         return timeline.frame(arguments.branch_id, arguments.minute)
     if action == "fork":
+        # A Run of another model version is view-only (core/model_version.py).
+        timeline.require_current_model(arguments.branch_id)
         runtime = timeline.fork(arguments.branch_id, arguments.minute, arguments.child_id)
         # The child's saved head holds the hash of its world.
         head = store.branch_reference(project_id, arguments.run_id, runtime.branch_id)
@@ -214,6 +216,7 @@ def execute(arguments: Any) -> dict[str, Any]:
             "state_hash": saved["state_hash"],
         }
     if action == "resume":
+        timeline.require_current_model(arguments.branch_id)
         _, checkpoint = store.load_branch(project_id, arguments.run_id, arguments.branch_id)
         router = None
         if "llm" in checkpoint.runtime_state:

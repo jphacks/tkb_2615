@@ -2,6 +2,9 @@
 (() => {
   "use strict";
   const frames = (p) => p.frames || [p];
+  // A Run of an older model shows the saved point before a minute and says which
+  // minute it answers (saved_point_rounding); its own minute is the saved one.
+  const answers = (f) => f.saved_point_rounding?.requested_minute ?? f.minute;
   class Player {
     constructor(options) {
       this.options = options;
@@ -65,7 +68,7 @@
             payloads.length !== end - minute + 1 ||
             payloads.some((payload, i) =>
               frames(payload).some(
-                (f) => f.minute !== minute + i || f.computed_until < minute + i,
+                (f) => answers(f) !== minute + i || f.computed_until < minute + i,
               ),
             )
           )

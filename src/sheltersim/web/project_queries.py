@@ -8,7 +8,8 @@ from typing import Any
 
 from sheltersim.contracts.workspace import ComparisonQuery, HistoryQuery
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
-from sheltersim.experiments.timeline import TimelineStore
+from sheltersim.core.model_version import same_models, saved_point_view
+from sheltersim.experiments.timeline import TimelineStore, requested_minute
 from sheltersim.storage.projects import ProjectStore, StorageError, canonical, digest
 
 # Ticks a replay may take instead of restoring a Checkpoint: one restore of a day-long
@@ -113,11 +114,13 @@ class ProjectQueries:
         for minute in requested_minutes:
             # Replaying from the previous minute gives the same world as restoring this
             # one; it is cheaper while the gap is shorter than a restore takes.
-            if world is None or minute - world.minute_index > _REPLAY_RATHER_THAN_RESTORE:
+            # A Run of another model version yields its saved points (D2), one per minute.
+            if world is None or minute - requested_minute(world) > _REPLAY_RATHER_THAN_RESTORE:
                 replay = iter(timeline.iter_worlds(branch_id, minute, requested_minutes[-1]))
             world = next(replay)
-            while world.minute_index < minute:
+            while requested_minute(world) < minute:
                 world = next(replay)
+            view = saved_point_view(world)
             from sheltersim.inspection.frames import person_projection, social_event_records
 
             presence = world.model_state.get("population_presence_v1", {}).get("people", {})
@@ -164,7 +167,7 @@ class ProjectQueries:
             rows.append(
                 {
                     "minute": minute,
-                    "exact": True,
+                    "exact": view is None or not view.rounded,
                     "time_semantics": "before_tick",
                     "run_id": run_id,
                     "branch_id": branch_id,
@@ -173,6 +176,7 @@ class ProjectQueries:
                     "integrity_scope": "selected_records_only",
                     **data,
                     "absent": not people,
+                    **(view.describe() if view is not None else {}),
                 }
             )
         result["items"] = rows
@@ -206,6 +210,13 @@ class ProjectQueries:
                 "complete_lifetime_history": False,
             }
         )
+        if any(not row["exact"] for row in rows):
+            result["coverage"] = "saved_points_of_an_older_model_run"
+            result["completeness_reason"] = (
+                "This Run was computed with another model version and is view-only: a minute "
+                "between saved points shows the saved point before it (saved_point_rounding) "
+                "and is not computed again."
+            )
         return result
 
     @staticmethod
@@ -272,7 +283,7 @@ class ProjectQueries:
             {
                 "target": item,
                 "same_seed": item["seed"] == baseline["seed"],
-                "same_models": item["model_versions"] == baseline["model_versions"],
+                "same_models": same_models(item["model_versions"], baseline["model_versions"]),
                 "same_configuration": item["configuration_hash"] == baseline["configuration_hash"],
                 "same_initial_conditions": item["initial_conditions_hash"]
                 == baseline["initial_conditions_hash"],
@@ -346,6 +357,8 @@ class ProjectQueries:
             ]
         found = None
         missing = []
+        # Samples of a Run of another model version are its saved points (D2).
+        rounded: list[dict[str, Any]] = []
         for minute in range(start, end + 1):
             samples = []
             world_hashes = []
@@ -366,6 +379,15 @@ class ProjectQueries:
                     samples.append({key: row[key] for key in keys})
                 else:
                     world = next(stream)
+                    view = saved_point_view(world)
+                    if view is not None and view.rounded:
+                        rounded.append(
+                            {
+                                "target_index": index,
+                                "minute": minute,
+                                "saved_minute": view.saved_minute,
+                            }
+                        )
                     if query.mode == "world":
                         world.validate()
                         document, _, encoder = histories[index].documents(world, None)
@@ -400,6 +422,7 @@ class ProjectQueries:
             "scanned_range": [query.start, found["minute"] if found else end],
             "page_scanned_range": [start, found["minute"] if found else end],
             "missing_samples": missing,
+            "saved_point_rounding": rounded,
             "earlier_pages_have_missing_samples": prior_gap,
             "complete": complete,
             "anchor_hash": anchor,

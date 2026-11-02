@@ -289,7 +289,8 @@ class DemoService:
                             "any-minute replay."
                         ),
                     }
-                world = checkpoint.restore_world()
+                # Read only: a view is restored even of another model version.
+                world, _ = checkpoint.restore_view()
             frame = world_frame(
                 world,
                 run_id="legacy-demo",
@@ -1021,13 +1022,14 @@ class DemoService:
                 item for item in checkpoints if item[1].simulation_minute <= requested_minute
             ]
             checkpoint_id, checkpoint = eligible[-1] if eligible else checkpoints[0]
-            world = checkpoint.restore_world()
+            # Read only: a view is restored even of another model version.
+            world, restored_metrics = checkpoint.restore_view()
             if agent_id is not None and not _IDEMPOTENCY_KEY.fullmatch(agent_id):
                 raise DemoError("agent_id contains unsupported characters")
             agent = world.agents.get(agent_id) if agent_id is not None else None
             if agent_id is not None and agent is None:
                 raise DemoError("unknown agent_id")
-            metric_samples = checkpoint.restore_metrics().snapshots
+            metric_samples = restored_metrics.snapshots
             selected_metric = next(
                 (
                     sample.csv_row()

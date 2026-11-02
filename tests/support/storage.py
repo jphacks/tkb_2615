@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from support.paths import SCENARIO_100_AGENTS
+from support.paths import SAVED_RUN_ENGINE_V1, SCENARIO_100_AGENTS
 
 
 @pytest.fixture
@@ -56,6 +56,37 @@ def saved_timeline() -> Callable[..., tuple[Any, Any]]:
     saved_timeline(tmp_path, generated_scenario) for a Run with a floor plan.
     """
     return _saved_timeline
+
+
+@pytest.fixture
+def engine_v1_run(tmp_path: Path) -> tuple[Any, Any]:
+    """A copy of fixtures/saved_runs/engine-v1-small: project p, Run r of h00_small_replay
+    (90 minutes), main saved at minutes 0, 30 and 60 and child forked at 30 and saved at
+    60. It was saved before Checkpoints recorded the model version, so it was computed by
+    engine version 1. Returns its store and TimelineStore.
+    """
+    import shutil
+
+    from sheltersim.experiments.timeline import TimelineStore
+    from sheltersim.storage.projects import ProjectStore
+
+    root = tmp_path / "engine-v1"
+    shutil.copytree(SAVED_RUN_ENGINE_V1, root)
+    store = ProjectStore(root)
+    return store, TimelineStore(store, "p", "r")
+
+
+@pytest.fixture
+def newer_engine(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Install an engine version newer than 1, as the change that raises it will.
+
+    Once the installed version is past 1 this changes nothing. Returns the version.
+    """
+    from sheltersim.core import model_version
+
+    if model_version.ENGINE_VERSION == "1":
+        monkeypatch.setattr(model_version, "ENGINE_VERSION", "2")
+    return model_version.ENGINE_VERSION
 
 
 def _fake_msvcrt() -> Any:

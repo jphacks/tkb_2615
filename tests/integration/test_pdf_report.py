@@ -397,7 +397,8 @@ def test_pdf_of_a_generated_run_with_an_effect_program_renders_every_section(
     facts = analysis_facts(data)
     pdf = render_pdf(data, generate_analysis(facts, report_router()), facts)
     reader = PdfReader(BytesIO(pdf))
-    assert 5 <= len(reader.pages) <= 7
+    # The model versions row names the whole-model version too (core/model_version.py).
+    assert 5 <= len(reader.pages) <= 8
     text = "\n".join(page.extract_text() for page in reader.pages)
     for heading in (
         "エグゼクティブサマリー",

@@ -10,6 +10,7 @@ from typing import Any, ClassVar, TypeAlias
 
 from sheltersim.core.checkpoint import Checkpoint, CheckpointError
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+from sheltersim.core.model_version import ViewOnlyRunError, require_tickable
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import FacilityState, StaffState
 from sheltersim.domain.zones import ZoneGraph
@@ -252,6 +253,8 @@ class BranchRuntime:
     CURRENT_SCHEMA_VERSION: ClassVar[int] = 1
 
     def __post_init__(self) -> None:
+        # A world restored for viewing can't be continued (core/model_version.py).
+        require_tickable(self.world, "continued")
         _validate_identifier("branch_id", self.branch_id)
         if self.parent_branch_id is not None:
             _validate_identifier("parent_branch_id", self.parent_branch_id)
@@ -296,6 +299,8 @@ class BranchRuntime:
                     checkpoint.scenario_id, int(checkpoint.world_state["seed"])
                 ),
             )
+        except ViewOnlyRunError:
+            raise
         except (CheckpointError, KeyError, TypeError, ValueError) as exc:
             raise BranchError(f"checkpoint cannot seed a branch: {exc}") from exc
 
@@ -357,6 +362,7 @@ class BranchRuntime:
 
     def apply(self, command: BranchCommand) -> CommandReceipt:
         """Apply a typed command atomically and record it in the realized event log."""
+        require_tickable(self.world, "changed")
         if self.world.minute_index >= self.world.duration_minutes:
             raise BranchError("cannot intervene after the simulation has completed")
         if not isinstance(
@@ -406,6 +412,7 @@ class BranchRuntime:
 
     def apply_effect_program(self, program: EffectProgram) -> ScheduledEffectProgram:
         """Atomically schedule one whole validated EffectProgram on this branch."""
+        require_tickable(self.world, "changed")
         if not isinstance(program, EffectProgram):
             raise BranchError("branch EffectProgram must use the versioned EffectProgram contract")
         try:

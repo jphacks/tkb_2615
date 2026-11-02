@@ -108,7 +108,13 @@ def collect_report(
     start = max(start, refs[0].fork_minute)
     branches = []
     for key in ids:
-        runtime = TimelineStore(store, project, run_id).seek(key, minute)
+        # A Run of another model version is read at its saved points only (D2).
+        runtime = TimelineStore(store, project, run_id).view_at(key, minute)
+        if runtime.view.rounded:
+            raise StorageError(
+                f"pdf_saved_point_required: {runtime.view.status.message()}"
+                f"レポートは保存した時点（{runtime.view.saved_minute}分など）を選んでください。"
+            )
         final = MetricSnapshot.from_world(runtime.world).csv_row()
         series = [
             {
