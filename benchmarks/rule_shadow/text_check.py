@@ -33,6 +33,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 CHECK: Any = None
@@ -102,6 +103,9 @@ class _Check:
             "queue_departures",
             "apply_arrival_approach_completion",
             "AgentTravelCompletionHandler.apply",
+            # A worker who became unavailable: the operation stops, then the event is suppressed.
+            "StaffOperationArrivalHandler.apply",
+            "StaffOperationCompletionHandler.apply",
         }
     )
 
@@ -150,8 +154,24 @@ class _Check:
         if self.depth:
             return
         name = {"suppressed": "EventSuppressed", "failed": "EventApplicationError"}[status]
+        if handler is None:
+            # An EffectProgram marker's guard, which the dispatch loop asks before the handler.
+            self.compare("direct guard", name, text, lambda: _python_guard(world, event))
+            return
         apply = type(handler).apply
         python_rule = getattr(apply, "__wrapped__", apply)
+        if type(handler).__name__ == "ResourceServiceCompletionHandler":
+            # Its apply has no kernel of its own: the kernel is its manager's `complete`. Its own
+            # check runs, with the manager's Python rule behind it.
+            complete = type(handler.service).complete.__wrapped__
+            service = handler.service
+
+            def python_rule(handler: Any, world: Any, event: Any) -> None:
+                shim = SimpleNamespace(
+                    service=SimpleNamespace(complete=lambda e: complete(service, e))
+                )
+                apply(shim, world, event)
+
         label = f"direct {type(handler).__name__}"
         self.compare(label, name, text, lambda: python_rule(handler, world, event))
 
@@ -183,6 +203,18 @@ class _Check:
             for row, n in self.rows.items():
                 output.write(json.dumps([*row, n], ensure_ascii=False) + "\n")
         self.rows.clear()
+
+
+def _python_guard(world: Any, event: Any) -> None:
+    """`effect_event_guard_or_suppress`, with `should_apply_effect_guard`'s Python rule in it."""
+    from sheltersim.events import effects
+
+    entry = effects.should_apply_effect_guard
+    effects.should_apply_effect_guard = getattr(entry, "__wrapped__", entry)
+    try:
+        effects.effect_event_guard_or_suppress(world, event)
+    finally:
+        effects.should_apply_effect_guard = entry
 
 
 def install(output: str, strict: bool = False) -> None:

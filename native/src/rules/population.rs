@@ -7,8 +7,12 @@
 //! containers forward it to the namespace's row, and no kernel keeps a row of its own here. An
 //! exception of such an operation is the one Python raises at that point.
 //!
-//! Error texts stay in the Python rules until step 4, which a refusal runs. A deferral isn't an
-//! error: its `EventSuppressed` and its text are here.
+//! The saved texts of the rules (`EventSuppressed`, `EventApplicationError`) are raised here, through
+//! `core/errors.rs`, in the rule's order of checks (docs/rust-port/lanes/l8-texts-events.md). A
+//! rule that raises after some of its writes (`_state` making its state, a text of an arrival's
+//! item, a completion without its presence) makes the same writes first and then raises. What
+//! Rust can't decide as Python does (a subclass, an object whose `==` Python would call) is still
+//! refused, and the Python rule says it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -61,9 +65,24 @@ const SUPPORT_KINDS: [&str; 9] = [
 
 // ---- The two stages ------------------------------------------------------------------------------
 
-/// A plan's result: any error of what it read means the Python rule has something to say.
+/// A plan's result: any error of what it read means the Python rule has something to say. An
+/// outcome the plan raised with the rule's text (`core/errors.rs`) goes on as it is.
 pub(crate) fn planning<T>(result: PyResult<T>) -> PyResult<T> {
-    result.map_err(|error| Python::with_gil(|py| if error.is_instance_of::<Unsupported>(py) { error } else { Unsupported::new_err(format!("the plan read: {error}")) }))
+    result.map_err(|error| {
+        Python::with_gil(|py| if error.is_instance_of::<Unsupported>(py) || errors::made_here(py, &error) { error } else { Unsupported::new_err(format!("the plan read: {error}")) })
+    })
+}
+
+/// The error of a Python call that the Python rule catches as `except (TypeError, ValueError)` and
+/// turns into its own text: Some(text) for those, the error itself for any other.
+pub(crate) fn caught_as<T>(py: Python<'_>, result: PyResult<T>, text: &'static str) -> PyResult<T> {
+    result.map_err(|error| {
+        if !error.is_instance_of::<Unsupported>(py) && (error.is_instance_of::<pyo3::exceptions::PyTypeError>(py) || error.is_instance_of::<pyo3::exceptions::PyValueError>(py)) {
+            errors::error(py, errors::Outcome::Failed, text)
+        } else {
+            error
+        }
+    })
 }
 
 /// A write stage's result: the Python rule must not run after a write, so a refusal here is a bug
@@ -702,12 +721,6 @@ impl<'py> Places<'py> {
     }
 }
 
-/// The overlay config's `schema_version`, in {3, 4}.
-fn schema_has_rooms(config: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let version = get(config, "schema_version")?;
-    Ok(version.eq(3)? || version.eq(4)?)
-}
-
 // ---- `_admit_profile` ----------------------------------------------------------------------------
 
 /// `admit_to_temporary_room`, whose checks the plan made, and a point of a position's record.
@@ -1205,24 +1218,76 @@ fn generated_context(items: &[Prepared]) -> PyResult<Vec<(Arc<str>, V)>> {
     Ok(contexts)
 }
 
+/// The optional arguments of `queue_arrivals` as a call gives them: None for one not given (the
+/// rule's default), Some for one given, None included.
+#[derive(Default)]
+pub(crate) struct ArrivalOptions<'py> {
+    pub(crate) household_size: Option<Bound<'py, PyAny>>,
+    pub(crate) mobility: Option<Bound<'py, PyAny>>,
+    pub(crate) language: Option<Bound<'py, PyAny>>,
+    pub(crate) admission_zone_ids: Option<Bound<'py, PyAny>>,
+    pub(crate) approach_route_id: Option<Bound<'py, PyAny>>,
+    pub(crate) person_context_overrides: Option<Bound<'py, PyAny>>,
+}
+
+impl<'py> ArrivalOptions<'py> {
+    fn of(options: Option<&Bound<'py, PyDict>>) -> PyResult<Self> {
+        let mut parsed = Self::default();
+        let Some(options) = options else {
+            return Ok(parsed);
+        };
+        for (key, value) in options.iter() {
+            let slot = match exact_str(&key)? {
+                "household_size" => &mut parsed.household_size,
+                "mobility" => &mut parsed.mobility,
+                "language" => &mut parsed.language,
+                "admission_zone_ids" => &mut parsed.admission_zone_ids,
+                "approach_route_id" => &mut parsed.approach_route_id,
+                "person_context_overrides" => &mut parsed.person_context_overrides,
+                _ => return unsupported("an argument the rule does not take"),
+            };
+            *slot = Some(value);
+        }
+        Ok(parsed)
+    }
+}
+
 #[pyfunction]
-#[pyo3(signature = (world, *, event, zone_id, count, household_size=None, mobility=None, language=None, admission_zone_ids=None, approach_route_id=None, person_context_overrides=None))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (world, *, event, zone_id, count, **options))]
 pub(crate) fn queue_arrivals<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     zone_id: &Bound<'py, PyAny>,
     count: &Bound<'py, PyAny>,
-    household_size: Option<&Bound<'py, PyAny>>,
-    mobility: Option<&Bound<'py, PyAny>>,
-    language: Option<&Bound<'py, PyAny>>,
-    admission_zone_ids: Option<&Bound<'py, PyAny>>,
-    approach_route_id: Option<&Bound<'py, PyAny>>,
-    person_context_overrides: Option<&Bound<'py, PyAny>>,
+    options: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<i64> {
-    let plan = planning(plan_arrivals(world, event, zone_id, count, household_size, mobility, language, admission_zone_ids, approach_route_id, person_context_overrides))?;
+    let options = ArrivalOptions::of(options)?;
+    arrivals(world, event, zone_id, count, &options)
+}
+
+/// `queue_arrivals`.
+pub(crate) fn arrivals<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, zone_id: &Bound<'py, PyAny>, count: &Bound<'py, PyAny>, options: &ArrivalOptions<'py>) -> PyResult<i64> {
+    let plan = planning(plan_arrivals(world, event, zone_id, count, options))?;
     writing(write_arrivals(world, &plan))?;
     Ok(plan.admitted)
+}
+
+/// Where a rule that writes first stops with its text, in the item's writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// `_schedule_arrival_approach_completion`, before it takes a sequence.
+    BeforeSequence,
+    /// The same, after it took one.
+    AfterSequence,
+    /// `_record_waiting_presence`, after the item joined the waiting.
+    WaitingPresence,
+}
+
+/// The text an item stops the writes with, and where.
+struct Failure {
+    index: usize,
+    stop: Stop,
+    text: &'static str,
 }
 
 struct ArrivalsPlan {
@@ -1232,10 +1297,75 @@ struct ArrivalsPlan {
     summary: V,
     event_id: Arc<str>,
     due_minute: i64,
+    approaching: bool,
     route_sources: Vec<Arc<str>>,
     admitted: i64,
     /// A state `_state` makes on first use, for the first write to install.
     new_state: Option<Py<PyAny>>,
+    /// The rule's text after some of its writes: they are made up to there, and then it raises.
+    failure: Option<Failure>,
+}
+
+/// A text the rule raises after `_state` has made its state: that state stays in the world.
+fn failed_after_state<T>(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, is_new: bool, text: impl Into<String>) -> PyResult<T> {
+    install_dynamics(world, state.clone(), is_new)?;
+    errors::failed(world.py(), text)
+}
+
+/// `geometry_overlay.get("schema_version") not in {3, 4}`, as the set membership.
+fn room_schema(config: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = config.py();
+    pyo3::types::PySet::new(py, [3, 4])?.contains(get(config, "schema_version")?)
+}
+
+/// The alternate zones of `queue_arrivals`, checked as the rule checks them.
+fn alternate_zones(zones: &Bound<'_, PyAny>, zone: &str, given: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<Arc<str>>> {
+    let py = zones.py();
+    let invalid = || errors::failed(py, "population arrival alternate admission zones are invalid");
+    let Some(given) = given else {
+        return Ok(Vec::new());
+    };
+    if !(given.is_exact_instance_of::<PyTuple>() || given.is_exact_instance_of::<PyList>()) {
+        if given.is_instance_of::<PyTuple>() || given.is_instance_of::<PyList>() {
+            return unsupported("the alternate zones are a subclass of list or tuple");
+        }
+        return invalid();
+    }
+    let items: Vec<Bound<'_, PyAny>> = given.try_iter()?.collect::<PyResult<_>>()?;
+    if items.iter().any(|item| !item.is_instance_of::<PyString>()) {
+        return invalid();
+    }
+    let mut alternates: Vec<Arc<str>> = Vec::with_capacity(items.len());
+    for item in &items {
+        alternates.push(text(item)?);
+    }
+    let distinct: HashSet<&str> = alternates.iter().map(|item| &**item).collect();
+    if distinct.len() != alternates.len() {
+        return invalid();
+    }
+    for item in &alternates {
+        if !zones.contains(&**item)? {
+            return invalid();
+        }
+    }
+    if alternates.iter().any(|item| &**item == zone) {
+        return invalid();
+    }
+    Ok(alternates)
+}
+
+const MOBILITIES: [&str; 3] = ["independent", "assisted", "wheelchair"];
+
+/// `Mobility(value)`: Some(the value) for a member's value, None where the enum raises ValueError. A
+/// value of another type than these, whose `==` or repr the enum would call, is the Python rule's.
+fn mobility_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<&'a str>> {
+    if value.is_instance_of::<PyString>() {
+        return errors::member_of(value, &MOBILITIES);
+    }
+    if value.is_none() || value.is_exact_instance_of::<pyo3::types::PyBool>() || value.is_exact_instance_of::<PyInt>() || value.is_exact_instance_of::<PyFloat>() {
+        return Ok(None);
+    }
+    unsupported("a mobility of another type")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1244,82 +1374,111 @@ fn plan_arrivals<'py>(
     event: &Bound<'py, PyAny>,
     zone_id: &Bound<'py, PyAny>,
     count: &Bound<'py, PyAny>,
-    household_size: Option<&Bound<'py, PyAny>>,
-    mobility: Option<&Bound<'py, PyAny>>,
-    language: Option<&Bound<'py, PyAny>>,
-    admission_zone_ids: Option<&Bound<'py, PyAny>>,
-    approach_route_id: Option<&Bound<'py, PyAny>>,
-    person_context_overrides: Option<&Bound<'py, PyAny>>,
+    options: &ArrivalOptions<'py>,
 ) -> PyResult<ArrivalsPlan> {
     let py = world.py();
+    // The rule's checks, in its order, each with its text.
     let zones = attribute(world, intern!(py, "zones"))?;
+    if !zones.contains(zone_id)? {
+        return errors::failed(py, "population arrival references an unknown zone");
+    }
     let zone = text(zone_id)?;
-    if !zones.contains(&*zone)? {
-        return unsupported("an unknown zone");
-    }
-    let mut alternates = Vec::new();
-    if let Some(given) = admission_zone_ids {
-        if !(given.is_exact_instance_of::<PyTuple>() || given.is_exact_instance_of::<PyList>()) {
-            return unsupported("the alternate zones are not a list or tuple");
-        }
-        for item in given.try_iter()? {
-            let item = text(&item?)?;
-            if alternates.contains(&item) || !zones.contains(&*item)? || item == zone {
-                return unsupported("the alternate zones are invalid");
-            }
-            alternates.push(item);
-        }
-    }
-    let route = match approach_route_id.filter(|route| !route.is_none()) {
+    let alternates = alternate_zones(&zones, &zone, options.admission_zone_ids.as_ref())?;
+    let route = match options.approach_route_id.as_ref().filter(|route| !route.is_none()) {
         None => None,
         Some(route_id) => {
             if !alternates.is_empty() {
-                return unsupported("an approach route with alternate zones");
+                return errors::failed(py, "one arrival approach route cannot combine with alternate admission zones");
             }
-            let route_id = exact_str(route_id)?;
-            let mut found = None;
-            for route in approach_routes(world)? {
-                if attribute(&route, intern!(py, "route_id"))?.eq(route_id)? {
-                    if !attribute(&route, intern!(py, "destination_zone_id"))?.eq(&*zone)? {
-                        return unsupported("the route targets another zone");
+            // `next(...)` in the rule's `try`: what the contract or the comparison raises, and no route.
+            let found = caught_as(
+                py,
+                (|| -> PyResult<Option<Bound<'py, PyAny>>> {
+                    for route in approach_routes(world)? {
+                        if attribute(&route, intern!(py, "route_id"))?.eq(route_id)? {
+                            return Ok(Some(route));
+                        }
                     }
-                    found = Some(read_route(&route)?);
-                    break;
-                }
+                    Ok(None)
+                })(),
+                "population arrival approach route is invalid",
+            )?;
+            let Some(found) = found else {
+                return errors::failed(py, "population arrival approach route is invalid");
+            };
+            if attribute(&found, intern!(py, "destination_zone_id"))?.ne(zone_id)? {
+                return errors::failed(py, "population arrival approach route targets a different zone");
             }
-            Some(found.ok_or_else(|| Unsupported::new_err("the route is unknown"))?)
+            Some(read_route(&found)?)
         }
     };
     let configs = attribute(world, intern!(py, "model_configs"))?;
     let overlay_config = get_map(&configs, "geometry_overlay")?;
-    if !alternates.is_empty() && (!is_dict(&overlay_config) || !schema_has_rooms(&overlay_config)?) {
-        return unsupported("alternate rooms need another overlay schema");
+    if !alternates.is_empty() && (!is_dict(&overlay_config) || !room_schema(&overlay_config)?) {
+        return errors::failed(py, "alternate room admission requires geometry_overlay schema_version=3 or 4");
     }
-    let count = exact_int(count)?;
-    if !(1..=MAX_ARRIVALS_PER_EVENT).contains(&count) {
-        return unsupported("the count is out of range");
-    }
-    let household_size = household_size.map_or(Ok(1), exact_int)?;
-    if !(1..=12).contains(&household_size) {
-        return unsupported("the household size is out of range");
-    }
-    let mobility = mobility.map_or(Ok("independent"), exact_str)?;
-    if !["independent", "assisted", "wheelchair"].contains(&mobility) {
-        return unsupported("the mobility is not a member, or is the Python rule's to check");
-    }
-    let language = language.map_or(Ok("ja"), exact_str)?;
-    identifier(language)?;
-    let mut care_by_index: HashMap<i64, Vec<Arc<str>>> = HashMap::new();
-    if let Some(overrides) = person_context_overrides {
-        let model = py.import("sheltersim.contracts.population")?.getattr("DynamicArrivalPersonContext")?;
-        for item in overrides.try_iter()? {
-            let parsed = model.call_method1(intern!(py, "model_validate"), (item?,))?;
-            let index = exact_int(&attribute(&parsed, intern!(py, "member_index"))?)?;
-            if index >= count || care_by_index.contains_key(&index) {
-                return unsupported("a context's member index is invalid");
+    let count = match errors::int_not_bool(count)? {
+        Some(count) if (1..=MAX_ARRIVALS_PER_EVENT).contains(&count) => count,
+        _ => return errors::failed(py, "population arrival count is outside its supported range"),
+    };
+    let household_size = match &options.household_size {
+        None => 1,
+        Some(size) => match errors::int_not_bool(size)? {
+            Some(size) if (1..=12).contains(&size) => size,
+            _ => return errors::failed(py, "population arrival household_size is outside its supported range"),
+        },
+    };
+    let mobility = match &options.mobility {
+        None => "independent",
+        Some(value) => match mobility_of(value)? {
+            Some(mobility) => mobility,
+            None => return errors::failed(py, "population arrival mobility is invalid"),
+        },
+    };
+    let language = match &options.language {
+        None => "ja",
+        Some(value) => match errors::str_of(value)?.filter(|text| is_identifier(text)) {
+            Some(language) => language,
+            None => {
+                // The contract decides what Rust doesn't: its ValueError is the rule's text.
+                let contract = py.import("sheltersim.contracts.extensions")?.getattr("PersonTraits")?;
+                let fields = PyDict::new(py);
+                fields.set_item("age_years", 30)?;
+                fields.set_item("household_role", "adult")?;
+                fields.set_item("languages", PyTuple::new(py, [value])?)?;
+                return match contract.call((), Some(&fields)) {
+                    Ok(_) => unsupported("a language the contract takes and Rust does not"),
+                    Err(error) if error.is_instance_of::<pyo3::exceptions::PyValueError>(py) => errors::failed(py, "population arrival language is invalid"),
+                    Err(error) => Err(error),
+                };
             }
+        },
+    };
+    let mut care_by_index: HashMap<i64, Vec<Arc<str>>> = HashMap::new();
+    if let Some(overrides) = &options.person_context_overrides {
+        let model = py.import("sheltersim.contracts.population")?.getattr("DynamicArrivalPersonContext")?;
+        let parsed = caught_as(
+            py,
+            (|| -> PyResult<Vec<Bound<'py, PyAny>>> {
+                let mut parsed = Vec::new();
+                for item in overrides.try_iter()? {
+                    parsed.push(model.call_method1(intern!(py, "model_validate"), (item?,))?);
+                }
+                Ok(parsed)
+            })(),
+            "population arrival person context is invalid",
+        )?;
+        let mut indices = Vec::with_capacity(parsed.len());
+        for item in &parsed {
+            indices.push(exact_int(&attribute(item, intern!(py, "member_index"))?)?);
+        }
+        let distinct: HashSet<i64> = indices.iter().copied().collect();
+        if distinct.len() != indices.len() || indices.iter().any(|index| *index >= count) {
+            return errors::failed(py, "population arrival person context index is invalid");
+        }
+        for (item, index) in parsed.iter().zip(indices) {
             let mut needs = Vec::new();
-            for kind in attribute(&parsed, intern!(py, "care_support_needs"))?.try_iter()? {
+            for kind in attribute(item, intern!(py, "care_support_needs"))?.try_iter()? {
                 let kind = text(&kind?)?;
                 if !SUPPORT_KINDS.contains(&&*kind) {
                     return unsupported("a support kind is not known");
@@ -1333,11 +1492,11 @@ fn plan_arrivals<'py>(
     let pending = state.get_item("pending_arrivals")?;
     let pending_count = pending.len()? as i64;
     if pending_count + count > MAX_PENDING_ARRIVALS {
-        return unsupported("past the pending bound");
+        return failed_after_state(world, &state, is_new, "population arrival exceeds the pending capacity bound");
     }
     let agents = attribute(world, intern!(py, "agents"))?;
     if agents.len()? as i64 + pending_count + count > 10_000 {
-        return unsupported("past the runtime bound");
+        return failed_after_state(world, &state, is_new, "population arrival exceeds the 10000-resident runtime bound");
     }
     let mut known: HashSet<Arc<str>> = HashSet::new();
     for id in state.get_item("initial_agent_ids")?.try_iter()? {
@@ -1348,7 +1507,7 @@ fn plan_arrivals<'py>(
         known.insert(text(&id?)?);
     }
     if known.len() as i64 + count > 10_000 {
-        return unsupported("past the history bound");
+        return failed_after_state(world, &state, is_new, "population arrival exceeds the 10000-profile history bound");
     }
     let mut reserved: HashSet<Arc<str>> = HashSet::new();
     for id in agents.try_iter()? {
@@ -1374,7 +1533,7 @@ fn plan_arrivals<'py>(
         let byte = |start: usize| -> i64 { i64::from_str_radix(&digest[start..start + 2], 16).unwrap_or(0) };
         let agent_id: Arc<str> = Arc::from(format!("arrival-{}", &digest[..28]));
         if !reserved.insert(agent_id.clone()) {
-            return unsupported("a stable ID repeats");
+            return failed_after_state(world, &state, is_new, "population arrival generated a duplicate stable ID");
         }
         let group_id: Arc<str> = Arc::from(format!("household-{event_digest}-{:03}", index / household_size));
         let age_years = 5 + byte(0) % 79;
@@ -1458,16 +1617,28 @@ fn plan_arrivals<'py>(
     let route_sources = route.as_ref().map_or(Vec::new(), |route| route.source_ids.clone());
     let zone_list: Vec<&str> = std::iter::once(&*zone).chain(alternates.iter().map(|zone| &**zone)).collect();
     let mut any_admission = false;
-    for item in &mut prepared {
+    let mut failure = None;
+    for (index, item) in prepared.iter_mut().enumerate() {
         if let Some(route) = &route {
             let due = row.due_minute + route.travel_minutes;
             if due < writer.duration() {
-                let completion = plan_completion(world, &row, item, route, due, sequence)?;
-                sequence += 1;
-                item.item.insert(Arc::from("approach_completion_event_id"), V::Str(completion.event_id.clone()));
-                item.completion = Some(completion);
+                match plan_completion(world, &row, item, route, due, sequence)? {
+                    Ok(completion) => {
+                        sequence += 1;
+                        item.item.insert(Arc::from("approach_completion_event_id"), V::Str(completion.event_id.clone()));
+                        item.completion = Some(completion);
+                    }
+                    Err((stop, text)) => {
+                        failure = Some(Failure { index, stop, text });
+                        break;
+                    }
+                }
             }
-            check_waiting_person(presence.as_ref(), item, &zone, &row.event_id, &route_sources)?;
+            if waiting_has_record(presence.as_ref(), item)? {
+                failure = Some(Failure { index, stop: Stop::WaitingPresence, text: WAITING_HAS_RECORD });
+                break;
+            }
+            check_waiting_ids(presence.as_ref(), item, &zone, &row.event_id, &route_sources)?;
             continue;
         }
         let mut decision = None;
@@ -1496,7 +1667,13 @@ fn plan_arrivals<'py>(
                 admitted += 1;
                 item.decision = Some((target, room));
             }
-            None => check_waiting_person(presence.as_ref(), item, &zone, &row.event_id, &route_sources)?,
+            None => {
+                if waiting_has_record(presence.as_ref(), item)? {
+                    failure = Some(Failure { index, stop: Stop::WaitingPresence, text: WAITING_HAS_RECORD });
+                    break;
+                }
+                check_waiting_ids(presence.as_ref(), item, &zone, &row.event_id, &route_sources)?;
+            }
         }
     }
     if any_admission {
@@ -1511,15 +1688,35 @@ fn plan_arrivals<'py>(
         "minute" => V::Int(row.due_minute),
     });
     let new_state = is_new.then(|| state.unbind());
-    Ok(ArrivalsPlan { zone, prepared, contexts, summary, event_id: row.event_id.clone(), due_minute: row.due_minute, route_sources, admitted, new_state })
+    Ok(ArrivalsPlan {
+        zone,
+        prepared,
+        contexts,
+        summary,
+        event_id: row.event_id.clone(),
+        due_minute: row.due_minute,
+        approaching: route.is_some(),
+        route_sources,
+        admitted,
+        new_state,
+        failure,
+    })
 }
 
-fn check_waiting_person(presence: Option<&Bound<'_, PyAny>>, item: &Prepared, zone: &str, event_id: &str, route_sources: &[Arc<str>]) -> PyResult<()> {
-    let Some(raw) = presence else {
+const WAITING_HAS_RECORD: &str = "waiting arrival already has a presence record";
+
+/// `agent_id in raw["people"]` of `_record_waiting_presence`, whose text stops the writes there.
+fn waiting_has_record(presence: Option<&Bound<'_, PyAny>>, item: &Prepared) -> PyResult<bool> {
+    match presence {
+        None => Ok(false),
+        Some(raw) => raw.get_item("people")?.contains(&*item.agent_id),
+    }
+}
+
+/// What `_record_waiting_presence` validates of the IDs it will write.
+fn check_waiting_ids(presence: Option<&Bound<'_, PyAny>>, item: &Prepared, zone: &str, event_id: &str, route_sources: &[Arc<str>]) -> PyResult<()> {
+    if presence.is_none() {
         return Ok(());
-    };
-    if raw.get_item("people")?.contains(&*item.agent_id)? {
-        return unsupported("a waiting arrival already has a presence record");
     }
     identifier(zone)?;
     identifier(event_id)?;
@@ -1530,34 +1727,36 @@ fn check_waiting_person(presence: Option<&Bound<'_, PyAny>>, item: &Prepared, zo
     Ok(())
 }
 
-/// `_schedule_arrival_approach_completion`, as a row.
-fn plan_completion(world: &Bound<'_, PyAny>, arrival: &EventRow, item: &Prepared, route: &ApproachRoute, due: i64, sequence: i64) -> PyResult<EventRow> {
+/// `_schedule_arrival_approach_completion`, as a row, or the text it stops with and where.
+fn plan_completion(world: &Bound<'_, PyAny>, arrival: &EventRow, item: &Prepared, route: &ApproachRoute, due: i64, sequence: i64) -> PyResult<Result<EventRow, (Stop, &'static str)>> {
+    let py = world.py();
     let program_id = payload(arrival, "program_id").cloned().unwrap_or(V::Null);
     let effect_id = payload(arrival, "effect_id").cloned().unwrap_or(V::Null);
-    let V::Str(program_key) = &program_id else {
-        return unsupported("the arrival has no program ID");
+    if !matches!(program_id, V::Str(_) | V::Null) || !matches!(effect_id, V::Str(_) | V::Null) {
+        return unsupported("a program's IDs are something else");
+    }
+    // `world.model_state.get("effect_program_v1", {}).get("programs", {}).get(program_id)`, as the rule reads it.
+    let table = attribute(world, intern!(py, "model_state"))?;
+    let effect_state = match exact_dict(&table)?.get_item("effect_program_v1")? {
+        Some(state) => state,
+        None => PyDict::new(py).into_any(),
     };
-    let V::Str(effect_key) = &effect_id else {
-        return unsupported("the arrival has no effect ID");
-    };
-    let Some(effect_state) = namespace(world, "effect_program_v1")? else {
-        return unsupported("no approved program");
-    };
-    let program = get(&get_map(&effect_state, "programs")?, program_key)?;
-    if !is_dict(&program)
-        || !get(&program, "effect_ids")?.contains(&**effect_key)?
-        || !get(&get_map(&program, "operators")?, effect_key)?.eq("add_evacuees")?
-    {
-        return unsupported("the approach is not in an approved program");
+    let program = get_map(&effect_state, "programs")?.call_method1(intern!(py, "get"), (program_id.to_py(py)?,))?;
+    let effect_key = effect_id.to_py(py)?;
+    let approved = is_dict(&program)
+        && program.call_method1(intern!(py, "get"), ("effect_ids", PyList::empty(py)))?.contains(&effect_key)?
+        && !get_map(&program, "operators")?.call_method1(intern!(py, "get"), (&effect_key,))?.ne("add_evacuees")?;
+    if !approved {
+        return Ok(Err((Stop::BeforeSequence, "arrival approach is not part of an approved EffectProgram")));
     }
     let Some(V::Map(marker)) = provenance(arrival, "effect_program_v1") else {
-        return unsupported("the arrival lacks its program's provenance");
+        return Ok(Err((Stop::AfterSequence, "arrival event lacks its approved EffectProgram provenance")));
     };
     let mut derived = marker.clone();
     derived.insert(Arc::from("phase"), v_str("derived"));
     let completion_id: Arc<str> = Arc::from(format!("arrival-approach-complete-{sequence}"));
     let source = route.source_ids.first().cloned().ok_or_else(|| Unsupported::new_err("a route has no sources"))?;
-    EventRow::new(
+    let completion = EventRow::new(
         completion_id,
         EventKind::Completion,
         due,
@@ -1584,7 +1783,8 @@ fn plan_completion(world: &Bound<'_, PyAny>, arrival: &EventRow, item: &Prepared
             }),
         },
     )
-    .ok_or_else(|| Unsupported::new_err("ScheduledEvent refuses the completion"))
+    .ok_or_else(|| Unsupported::new_err("ScheduledEvent refuses the completion"))?;
+    Ok(Ok(completion))
 }
 
 fn write_waiting_presence(world: &Bound<'_, PyAny>, prepared: &Prepared, event_id: &str, created: i64, zone: &Arc<str>, route_sources: &[Arc<str>], approaching: bool) -> PyResult<()> {
@@ -1624,6 +1824,7 @@ fn write_waiting_presence(world: &Bound<'_, PyAny>, prepared: &Prepared, event_i
     write_presence(&raw, &person, &transition)
 }
 
+
 fn write_arrivals(world: &Bound<'_, PyAny>, plan: &ArrivalsPlan) -> PyResult<()> {
     let py = world.py();
     if let Some(state) = &plan.new_state {
@@ -1638,17 +1839,29 @@ fn write_arrivals(world: &Bound<'_, PyAny>, plan: &ArrivalsPlan) -> PyResult<()>
     contexts.call_method1(intern!(py, "update"), (update,))?;
     let writer = EventWriter::of(world)?;
     let pending_list = || state.get_item("pending_arrivals");
-    for prepared in &plan.prepared {
+    for (index, prepared) in plan.prepared.iter().enumerate() {
+        // The rule's text stops its writes at this item, at this point.
+        let stop = plan.failure.as_ref().filter(|failure| failure.index == index);
+        let stops_at = |at: Stop| stop.filter(|failure| failure.stop == at).map(|failure| failure.text);
         let document = V::Map(prepared.item.clone());
         let traits = map_get(&document, "traits").ok_or_else(|| PyRuntimeError::new_err("an item lost its traits"))?;
         state.get_item("profile_traits")?.set_item(&*prepared.agent_id, traits.to_py(py)?)?;
-        let approaching = !plan.route_sources.is_empty();
-        if approaching {
+        if plan.approaching {
+            if let Some(text) = stops_at(Stop::BeforeSequence) {
+                return errors::failed(py, text);
+            }
+            if let Some(text) = stops_at(Stop::AfterSequence) {
+                writer.allocate_sequence()?;
+                return errors::failed(py, text);
+            }
             if let Some(completion) = &prepared.completion {
                 writer.allocate_sequence()?;
                 writer.schedule(completion.clone())?;
             }
             pending_list()?.call_method1(intern!(py, "append"), (document.to_py(py)?,))?;
+            if let Some(text) = stops_at(Stop::WaitingPresence) {
+                return errors::failed(py, text);
+            }
             write_waiting_presence(world, prepared, &plan.event_id, plan.due_minute, &plan.zone, &plan.route_sources, true)?;
             continue;
         }
@@ -1658,6 +1871,9 @@ fn write_arrivals(world: &Bound<'_, PyAny>, plan: &ArrivalsPlan) -> PyResult<()>
             }
             None => {
                 pending_list()?.call_method1(intern!(py, "append"), (document.to_py(py)?,))?;
+                if let Some(text) = stops_at(Stop::WaitingPresence) {
+                    return errors::failed(py, text);
+                }
                 write_waiting_presence(world, prepared, &plan.event_id, plan.due_minute, &plan.zone, &plan.route_sources, false)?;
             }
         }
@@ -1676,15 +1892,12 @@ pub(crate) fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event:
     let py = world.py();
     let (pending, plan) = planning((|| {
         let row = event_row(event)?;
-        if &*row.event_type != "population_approach_complete" {
-            return unsupported("another event type");
-        }
         let V::Map(fields) = &row.payload else {
             return unsupported("a payload is not a mapping");
         };
         let expected = ["program_id", "effect_id", "agent_id", "arrival_event_id", "route_id", "zone_id"];
-        if fields.len() != expected.len() || expected.iter().any(|key| !fields.contains_key(*key)) {
-            return unsupported("the payload's fields do not match");
+        if &*row.event_type != "population_approach_complete" || fields.len() != expected.len() || expected.iter().any(|key| !fields.contains_key(*key)) {
+            return errors::failed(py, "arrival approach completion payload fields do not match");
         }
         let (Some(V::Str(program_id)), Some(V::Str(effect_id)), Some(V::Str(agent_id)), Some(V::Str(arrival_id)), Some(V::Str(route_id)), Some(V::Str(zone_id))) = (
             fields.get("program_id"),
@@ -1696,22 +1909,26 @@ pub(crate) fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event:
         ) else {
             return unsupported("a payload value is not a str");
         };
-        let Some(effect_state) = namespace(world, "effect_program_v1")? else {
-            return unsupported("no approved program");
+        // `world.model_state.get("effect_program_v1", {}).get("programs", {}).get(program_id)`.
+        let table = attribute(world, intern!(py, "model_state"))?;
+        let effect_state = match exact_dict(&table)?.get_item("effect_program_v1")? {
+            Some(state) => state,
+            None => PyDict::new(py).into_any(),
         };
         let program = get(&get_map(&effect_state, "programs")?, program_id)?;
         if !is_dict(&program)
-            || !get(&program, "effect_ids")?.contains(&**effect_id)?
-            || !get(&get_map(&program, "operators")?, effect_id)?.eq("add_evacuees")?
+            || !program.call_method1(intern!(py, "get"), ("effect_ids", PyList::empty(py)))?.contains(&**effect_id)?
+            || get(&get_map(&program, "operators")?, effect_id)?.ne("add_evacuees")?
             || row.causation_id.as_deref() != Some(&**arrival_id)
         {
-            return unsupported("the completion is outside its program");
+            return errors::failed(py, "arrival approach completion is outside its approved program");
         }
+        let mismatch = || errors::failed(py, "arrival approach completion does not match pending arrival");
         let Some(state) = namespace(world, DYNAMICS)?.filter(is_dict) else {
-            return unsupported("no population state");
+            return mismatch();
         };
         let mut found = None;
-        for item in state.get_item("pending_arrivals")?.try_iter()? {
+        for item in state.call_method1(intern!(py, "get"), ("pending_arrivals", PyList::empty(py)))?.try_iter()? {
             let item = item?;
             if item.get_item("profile")?.get_item("id")?.eq(&**agent_id)? {
                 found = Some(item);
@@ -1719,16 +1936,16 @@ pub(crate) fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event:
             }
         }
         let Some(pending) = found else {
-            return unsupported("no such pending arrival");
+            return mismatch();
         };
-        if !get(&pending, "approach_completion_event_id")?.eq(&*row.event_id)?
-            || !get(&pending, "approach_route_id")?.eq(&**route_id)?
-            || !get(&pending, "event_id")?.eq(&**arrival_id)?
-            || !get(&pending, "zone_id")?.eq(&**zone_id)?
-            || !get(&pending, "approach_due_minute")?.eq(row.due_minute)?
+        if get(&pending, "approach_completion_event_id")?.ne(&*row.event_id)?
+            || get(&pending, "approach_route_id")?.ne(&**route_id)?
+            || get(&pending, "event_id")?.ne(&**arrival_id)?
+            || get(&pending, "zone_id")?.ne(&**zone_id)?
+            || get(&pending, "approach_due_minute")?.ne(row.due_minute)?
             || !get(&pending, "approach_completed_minute")?.is_none()
         {
-            return unsupported("the completion does not match its arrival");
+            return mismatch();
         }
         let mut route = None;
         for candidate in approach_routes(world)? {
@@ -1737,41 +1954,50 @@ pub(crate) fn apply_arrival_approach_completion(world: &Bound<'_, PyAny>, event:
                 break;
             }
         }
+        let provenance_differs = || errors::failed(py, "arrival approach route provenance does not match");
         let Some(route) = route else {
-            return unsupported("the route is unknown");
+            return provenance_differs();
         };
-        let route = {
-            if !attribute(&route, intern!(py, "destination_zone_id"))?.eq(&**zone_id)? {
-                return unsupported("the route targets another zone");
-            }
-            read_route(&route)?
-        };
-        if !row.source_id.as_ref().is_some_and(|source| route.source_ids.contains(source)) {
-            return unsupported("the route's provenance does not match");
+        if attribute(&route, intern!(py, "destination_zone_id"))?.ne(&**zone_id)? {
+            return provenance_differs();
         }
+        let source_listed = match &row.source_id {
+            None => false,
+            Some(source) => attribute(&route, intern!(py, "source_ids"))?.contains(&**source)?,
+        };
+        if !source_listed {
+            return provenance_differs();
+        }
+        let route = read_route(&route)?;
+        // `_record_approach_completed`, which raises after the two writes to the pending arrival.
         let presence = namespace(world, PRESENCE)?.filter(is_dict);
         let mut record = None;
+        let mut no_presence = false;
         if let Some(raw) = &presence {
             let previous = get(&get_map(raw, "people")?, agent_id)?;
-            if !is_dict(&previous) || !get(&previous, "status")?.eq("approaching")? {
-                return unsupported("the approach has no presence");
+            if !is_dict(&previous) || get(&previous, "status")?.ne("approaching")? {
+                no_presence = true;
+            } else {
+                let person = Person::parse(&V::from_py(&previous)?)?;
+                identifier(&row.event_id)?;
+                identifier(agent_id)?;
+                identifier(zone_id)?;
+                optional_identifier(row.causation_id.as_deref())?;
+                for source in &route.source_ids {
+                    identifier(source)?;
+                }
+                record = Some(person);
             }
-            let person = Person::parse(&V::from_py(&previous)?)?;
-            identifier(&row.event_id)?;
-            identifier(agent_id)?;
-            identifier(zone_id)?;
-            optional_identifier(row.causation_id.as_deref())?;
-            for source in &route.source_ids {
-                identifier(source)?;
-            }
-            record = Some(person);
         }
-        Ok((pending, (row.clone(), zone_id.clone(), agent_id.clone(), route.source_ids, presence, record)))
+        Ok((pending, (row.clone(), zone_id.clone(), agent_id.clone(), route.source_ids, presence, record, no_presence)))
     })())?;
     writing((|| {
-        let (row, zone_id, agent_id, route_sources, presence, record) = &plan;
+        let (row, zone_id, agent_id, route_sources, presence, record, no_presence) = &plan;
         pending.call_method1(intern!(py, "pop"), ("approach_completion_event_id",))?;
         pending.set_item("approach_completed_minute", row.due_minute)?;
+        if *no_presence {
+            return errors::failed(py, "arrival approach has no matching presence state");
+        }
         let (Some(raw), Some(old)) = (presence, record) else {
             return Ok(());
         };
@@ -1833,6 +2059,8 @@ fn new_dynamics_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyA
 fn dynamics_or_new<'py>(world: &Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, bool)> {
     match namespace(world, DYNAMICS)? {
         Some(state) => Ok((state, false)),
+        // `_state` returns the None it finds, and the rule raises on it.
+        None if has_namespace(world, DYNAMICS)? => unsupported("the population state is None"),
         None => Ok((new_dynamics_state(world)?, true)),
     }
 }
@@ -2244,8 +2472,28 @@ fn write_departure(world: &Bound<'_, PyAny>, agent_id: &str, row: &EventRow, sta
 }
 
 #[pyfunction]
-#[pyo3(signature = (world, *, event, zone_id, count, include_initial=None))]
+#[pyo3(signature = (world, *, event, zone_id, count, **options))]
 pub(crate) fn queue_departures<'py>(
+    world: &Bound<'py, PyAny>,
+    event: &Bound<'py, PyAny>,
+    zone_id: &Bound<'py, PyAny>,
+    count: &Bound<'py, PyAny>,
+    options: Option<&Bound<'py, PyDict>>,
+) -> PyResult<usize> {
+    let mut include_initial = None;
+    if let Some(options) = options {
+        for (key, value) in options.iter() {
+            if exact_str(&key)? != "include_initial" {
+                return unsupported("an argument the rule does not take");
+            }
+            include_initial = Some(value);
+        }
+    }
+    departures(world, event, zone_id, count, include_initial.as_ref())
+}
+
+/// `queue_departures`. `include_initial` is None when the call doesn't give it.
+pub(crate) fn departures<'py>(
     world: &Bound<'py, PyAny>,
     event: &Bound<'py, PyAny>,
     zone_id: &Bound<'py, PyAny>,
@@ -2254,17 +2502,20 @@ pub(crate) fn queue_departures<'py>(
 ) -> PyResult<usize> {
     let py = world.py();
     let (row, state, is_new, selected, busy) = planning((|| {
+        if !attribute(world, intern!(py, "zones"))?.contains(zone_id)? {
+            return errors::failed(py, "population departure references an unknown zone");
+        }
         let zone = exact_str(zone_id)?;
-        if !attribute(world, intern!(py, "zones"))?.contains(zone)? {
-            return unsupported("an unknown zone");
-        }
-        let count = exact_int(count)?;
-        if !(1..=MAX_ARRIVALS_PER_EVENT).contains(&count) {
-            return unsupported("the count is out of range");
-        }
+        let count = match errors::int_not_bool(count)? {
+            Some(count) if (1..=MAX_ARRIVALS_PER_EVENT).contains(&count) => count,
+            _ => return errors::failed(py, "population departure count is outside its supported range"),
+        };
         let include_initial = match include_initial {
             None => false,
-            Some(flag) => flag.downcast_exact::<pyo3::types::PyBool>().map_err(|_| Unsupported::new_err("include_initial is not a bool"))?.is_true(),
+            Some(flag) => match flag.downcast_exact::<pyo3::types::PyBool>() {
+                Ok(flag) => flag.is_true(),
+                Err(_) => return errors::failed(py, "population departure include_initial must be boolean"),
+            },
         };
         let (state, is_new) = dynamics_or_new(world)?;
         let mut initial: HashSet<Arc<str>> = HashSet::new();
@@ -2287,7 +2538,7 @@ pub(crate) fn queue_departures<'py>(
         }
         keyed.sort_by(|first, second| (first.0, first.1.as_bytes()).cmp(&(second.0, second.1.as_bytes())));
         if (keyed.len() as i64) < count {
-            return unsupported("too few residents to leave");
+            return failed_after_state(world, &state, is_new, format!("only {} admitted dynamic residents are available to leave", keyed.len()));
         }
         let selected: Vec<Arc<str>> = keyed.into_iter().take(count as usize).map(|(_, id)| id).collect();
         let busy = EntityStore::with_rows(&store, |rows| {

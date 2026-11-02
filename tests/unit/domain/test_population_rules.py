@@ -2,8 +2,9 @@
 
 The gate reaches these rules at a few events, so what it can't reach is compared here: each case
 runs the Python rule on a copy of the world and the kernel on the world, and the two must leave
-the same document and return the same value. A kernel refuses what the rule raises on, before it
-changes anything, and the rule then raises its own text.
+the same document and return the same value. A kernel raises the rule's own saved text where the
+rule raises one (tests/unit/domain/test_population_texts.py), and refuses what it can't decide
+before it changes anything, so the rule then raises its own text.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import hashlib
 from typing import Any
 
 import pytest
+from support.world import NATIVE_OUTCOME
 
 from sheltersim import native
 from sheltersim.contracts.presence import PRESENCE_NAMESPACE, PresenceState
@@ -273,15 +275,19 @@ def test_a_departure_of_initial_people_keeps_their_history_and_withdraws_their_e
 
 
 def test_the_rule_says_why_a_departure_can_not_happen(world) -> None:
+    # The kernel raises the rule's own text (tests/unit/domain/test_population_texts.py).
     kernels = native.rules("population")
     before = _document(world)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError, match="count is outside"):
         kernels.queue_departures(world, event=_event(), zone_id=_zone(world), count=5000)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError, match="unknown zone") as made:
         kernels.queue_departures(world, event=_event(), zone_id="no-such-zone", count=1)
+    assert getattr(made.value, NATIVE_OUTCOME)
     assert _document(world) == before
     with pytest.raises(EventApplicationError, match="unknown zone"):
-        population.queue_departures(world, event=_event(), zone_id="no-such-zone", count=1)
+        population.queue_departures.__wrapped__(
+            world, event=_event(), zone_id="no-such-zone", count=1
+        )
 
 
 @pytest.mark.parametrize(
@@ -297,16 +303,17 @@ def test_the_rule_says_why_a_departure_can_not_happen(world) -> None:
         ({"person_context_overrides": ({"member_index": 9},)}, "person context is invalid"),
     ],
 )
-def test_a_refused_arrival_changes_nothing_and_raises_the_rule_s_text(
+def test_a_refused_arrival_changes_nothing_and_says_the_rule_s_text(
     world, options: dict[str, Any], text: str
 ) -> None:
     arguments = {"event": _event(), "zone_id": _zone(world), "count": 1, **options}
     before = _document(world)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError, match=text) as made:
         native.rules("population").queue_arrivals(world, **arguments)
+    assert getattr(made.value, NATIVE_OUTCOME)
     assert _document(world) == before
     with pytest.raises(EventApplicationError, match=text):
-        population.queue_arrivals(world, **arguments)
+        population.queue_arrivals.__wrapped__(world, **arguments)
 
 
 def _retry_event(**provenance: Any) -> ScheduledEvent:
@@ -773,20 +780,22 @@ def test_a_relocation_walks_and_its_completion_is_the_rule_s(world) -> None:
         {"action": "reunite", "agent_ids": ("nobody", "nor-them"), "household_id": "h"},
     ],
 )
-def test_a_command_the_rule_refuses_is_refused_with_nothing_changed(world, fields) -> None:
+def test_a_command_the_rule_refuses_says_its_text_with_nothing_changed(world, fields) -> None:
     typed = PopulationPresenceCommand.model_validate(fields)
     event = _event("refused-command")
     candidate = copy.deepcopy(world)
     before = _document(candidate)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError) as made:
         native.rules("population_lifecycle").apply_presence_action(
             world, candidate, event, typed, typed.selected_ids()
         )
+    assert getattr(made.value, NATIVE_OUTCOME)
     assert _document(candidate) == before
-    with pytest.raises(EventApplicationError):
-        population_lifecycle._apply_presence_action(
+    with pytest.raises(EventApplicationError) as said:
+        population_lifecycle._apply_presence_action.__wrapped__(
             world, candidate, event, typed, typed.selected_ids()
         )
+    assert str(made.value) == str(said.value)
 
 
 def _world_with_a_room(scenario: Any) -> WorldState:

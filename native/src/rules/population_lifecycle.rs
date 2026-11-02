@@ -2,8 +2,10 @@
 //! docs/rust-port/lanes/m6-population-rules.md and the head of `rules/population.rs`, whose two
 //! stages and whose way of writing these kernels share.
 //!
-//! `apply_population_presence_command` keeps its parsing of the command and its copy of the world
-//! in Python until step 4: `apply_presence_action` is the part of it between those two.
+//! `apply_population_presence_command` keeps its parsing of the command (the contract, a Python call)
+//! and its copy of the world in Python calls: `apply_presence_action` is the part of it between
+//! those two. The saved texts of these rules are raised here, before anything is written, as in
+//! `rules/population.rs`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -321,7 +323,7 @@ fn all_finite(value: &V) -> bool {
 /// `_archive_person`.
 fn check_archive(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, agent_id: &str) -> PyResult<()> {
     if state.get_item("people")?.contains(agent_id)? {
-        return unsupported("the person already has an archive");
+        return errors::failed(world.py(), "person already has a retained lifecycle archive");
     }
     EntityStore::with_rows(&entities_of(world)?, |rows| {
         let Some(agent) = rows.agents.get(agent_id) else {
@@ -741,15 +743,16 @@ fn plan_relocation(candidate: &Bound<'_, PyAny>, row: &EventRow, agent_id: &Arc<
     if capacities.is_truthy()? {
         return unsupported("passage capacities read every trip under way");
     }
+    const NO_ROUTE: &str = "no accessible, physically clear relocation route is available";
     let Some(route) = world_route(candidate, from_zone, destination)? else {
-        return unsupported("no route");
+        return errors::failed(py, NO_ROUTE);
     };
     let mobility = EntityStore::with_rows(&entities_of(candidate)?, |rows| {
         rows.agents.get(&**agent_id).map(mobility_text).ok_or_else(|| Unsupported::new_err("no such person"))
     })?;
     let geo = Geo::of(candidate)?;
     if route.edge_ids.iter().any(|edge| !geo.route_is_clear(edge, mobility)) {
-        return unsupported("the route is not clear");
+        return errors::failed(py, NO_ROUTE);
     }
     let zones = PyTuple::new(py, route.zone_ids.iter().map(|id| &**id))?;
     let edges = PyTuple::new(py, route.edge_ids.iter().map(|id| &**id))?;
@@ -760,7 +763,7 @@ fn plan_relocation(candidate: &Bound<'_, PyAny>, row: &EventRow, agent_id: &Arc<
     let due = row.due_minute + minutes;
     let writer = EventWriter::of(candidate)?;
     if due >= writer.duration() {
-        return unsupported("the route ends after the scenario");
+        return errors::failed(py, "relocation route would finish after the scenario boundary");
     }
     if has_namespace(candidate, MOVEMENT)? {
         if minutes <= 0 {
@@ -820,7 +823,7 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
     match action {
         "temporary_exit" | "transfer" => {
             let Some(from_zone) = zone_of(&first)? else {
-                return unsupported("the person is not admitted");
+                return errors::failed(py, if action == "temporary_exit" { "temporary exit requires an admitted person" } else { "transfer requires an admitted person" });
             };
             if action == "temporary_exit" && program_minutes(world, row, &first, "return")?.iter().any(|due| *due <= minute) {
                 return Ok(Plan::Suppress("temporary exit dropped: the person was not free before the return in the same EffectProgram"));
@@ -853,15 +856,16 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
                 return Ok(Plan::Suppress("return skipped: the person had not left before the return in the same EffectProgram"));
             }
             if admitted || !state.get_item("people")?.contains(&*first)? {
-                return unsupported("no retained absent person");
+                return errors::failed(py, "return requires a retained absent person");
             }
             let old = match &presence {
                 Some(raw) => person_in(raw, &first)?,
                 None => None,
             };
             let destination = command.zone_id.clone().or_else(|| old.as_ref().and_then(|person| person.return_zone_id.clone()));
-            let Some(destination) = destination.filter(|zone| zones.contains(&**zone).unwrap_or(false)) else {
-                return unsupported("no valid destination");
+            let destination = match destination {
+                Some(zone) if zones.contains(&*zone)? => zone,
+                _ => return errors::failed(py, "return requires a valid destination zone"),
             };
             identifier(&destination)?;
             identifier(&first)?;
@@ -882,20 +886,22 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
             }
         }
         "relocate" => {
+            let not_here = || errors::failed(py, "relocation requires an admitted person and valid destination");
             let Some(from_zone) = zone_of(&first)? else {
-                return unsupported("the person is not admitted");
+                return not_here();
             };
-            let Some(destination) = command.zone_id.clone().filter(|zone| zones.contains(&**zone).unwrap_or(false)) else {
-                return unsupported("no valid destination");
+            let destination = match command.zone_id.clone() {
+                Some(zone) if zones.contains(&*zone)? => zone,
+                _ => return not_here(),
             };
             let activity = EntityStore::with_rows(&entities_of(candidate)?, |rows| {
                 rows.agents.get(&*first).map(|agent| agent.activity).ok_or_else(|| Unsupported::new_err("no row"))
             })?;
             if !free(activity) {
-                return unsupported("the person is in an active task");
+                return errors::failed(py, "relocation requires a person who is not in an active task");
             }
             if !Places::of(candidate)?.has_room_for(&destination, Some(&first))? {
-                return unsupported("the destination has no room");
+                return errors::failed(py, "relocation destination has no available capacity");
             }
             identifier(&first)?;
             identifier(&from_zone)?;
@@ -908,21 +914,34 @@ fn plan_action(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>, row: &Eve
             }
         }
         "reunite" => {
-            if command.household_id.is_none() || presence.is_none() {
-                return unsupported("a reunion needs a household and the presence contract");
+            if command.household_id.is_none() {
+                return errors::failed(py, "reunion requires a target household id");
             }
-            let mut zone: Option<Arc<str>> = None;
+            // `candidate.agents.get(id)` of each, then each one's zone: the rule's order of checks.
+            let mut people = Vec::with_capacity(command.ids.len());
             for id in &command.ids {
-                identifier(id)?;
-                let Some(found) = zone_of(id)? else {
-                    return unsupported("someone is not admitted");
-                };
-                match &zone {
-                    Some(known) if *known != found => return unsupported("the people are not co-located"),
-                    _ => zone = Some(found),
+                people.push(get(&agents, id)?);
+            }
+            if people.iter().any(|agent| agent.is_none()) {
+                return errors::failed(py, "reunion requires every person to be admitted");
+            }
+            let mut zones_of_people: Vec<Arc<str>> = Vec::with_capacity(people.len());
+            for agent in &people {
+                let zone = text(&attribute(agent, intern!(py, "zone_id"))?)?;
+                if !zones_of_people.contains(&zone) {
+                    zones_of_people.push(zone);
                 }
             }
-            let zone = zone.ok_or_else(|| Unsupported::new_err("no one is selected"))?;
+            if zones_of_people.len() != 1 {
+                return errors::failed(py, "reunion requires people to be physically co-located");
+            }
+            if presence.is_none() {
+                return errors::failed(py, "reunion requires the population presence contract");
+            }
+            for id in &command.ids {
+                identifier(id)?;
+            }
+            let zone = zones_of_people[0].clone();
             identifier(&zone)?;
             Ok(Plan::Reunite { zone })
         }
@@ -1100,23 +1119,34 @@ pub(crate) fn apply_presence_command<'py>(world: &Bound<'py, PyAny>, event: &Bou
     let (typed, ids, candidate, dropped) = planning((|| {
         let module = py.import("sheltersim.domain.population_lifecycle")?;
         let contract = module.getattr("PopulationPresenceCommand")?;
-        let typed = if command.is_instance(&contract)? { command.clone() } else { contract.call_method1("model_validate", (command,))? };
-        let ids = typed.call_method0("selected_ids")?;
+        // The contract's parse in the rule's `try`: its TypeError or ValueError is the rule's text.
+        let parsed = (|| -> PyResult<_> {
+            let typed = if command.is_instance(&contract)? { command.clone() } else { contract.call_method1("model_validate", (command,))? };
+            let ids = typed.call_method0("selected_ids")?;
+            Ok((typed, ids))
+        })();
+        let (typed, ids) = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) if !error.is_instance_of::<Unsupported>(py) && (error.is_instance_of::<PyTypeError>(py) || error.is_instance_of::<PyValueError>(py)) => {
+                return errors::failed(py, format!("population command is invalid: {}", error.value(py).str()?));
+            }
+            Err(error) => return Err(error),
+        };
         if !has_namespace(world, KEY)? {
-            return unsupported("the lifecycle is not installed");
+            return errors::failed(py, "population lifecycle contract is not installed");
         }
         let document = py.import("copy")?.getattr("deepcopy")?.call1((world.call_method0(intern!(py, "to_dict"))?,))?;
         let class = py.import(intern!(py, "sheltersim.core.world"))?.getattr(intern!(py, "WorldState"))?;
         let candidate = class.call_method1(intern!(py, "from_dict"), (document,))?;
         let row = event_row(event)?;
         if row.due_minute != exact_int(&attribute(&candidate, intern!(py, "minute_index"))?)? {
-            return unsupported("the command is at another minute");
+            return errors::failed(py, "population command minute must match the current event boundary");
         }
         let expected = attribute(&typed, intern!(py, "expected_return_minute"))?;
         let mut dropped = false;
         if !expected.is_none() && exact_int(&expected)? < row.due_minute {
             if crate::rules::population::provenance(&row, "population_retry").is_none() {
-                return unsupported("the expected return precedes the event");
+                return errors::failed(py, "expected return minute precedes the departure event");
             }
             dropped = true;
         }
@@ -1304,30 +1334,34 @@ fn check_waiting_returns(world: &Bound<'_, PyAny>) -> PyResult<()> {
 /// What `complete_presence_relocation` refuses, for a rule that writes first and then calls it.
 /// `arriving` is the zone the caller's writes will put the person in.
 pub(crate) fn check_relocation_completes(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, arriving: &str) -> PyResult<()> {
-    plan_relocation_completion(world, event, Some(arriving)).map(|_| ())
+    match plan_relocation_completion(world, event, Some(arriving))? {
+        Ok(_) => Ok(()),
+        // Raised after the caller's writes: that caller's Python rule says it.
+        Err(_) => unsupported("the completion does not match its route"),
+    }
 }
 
-fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, arriving: Option<&str>) -> PyResult<(EventRow, Bound<'py, PyAny>, Arc<str>, Bound<'py, PyAny>, EventIds)> {
+/// The plan of `complete_presence_relocation`, or the rule's text, before anything is written.
+#[allow(clippy::type_complexity)]
+fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, arriving: Option<&str>) -> PyResult<Result<(EventRow, Bound<'py, PyAny>, Arc<str>, Bound<'py, PyAny>, EventIds), &'static str>> {
+    const MISMATCH: &str = "relocation completion does not match its pending route";
     planning((|| {
         let row = event_row(event)?;
         let Some(V::Str(agent_id)) = payload(&row, "agent_id").cloned() else {
             return unsupported("the event names no one");
         };
         let Some(state) = namespace(world, KEY)?.filter(is_dict) else {
-            return unsupported("no lifecycle state");
+            return Ok(Err(MISMATCH));
         };
         let relocation = get(&get_map(&state, "pending_relocations")?, &agent_id)?;
-        if !is_dict(&relocation)
-            || !relocation.get_item("event_id")?.eq(&*row.event_id)?
-            || !relocation.get_item("due_minute")?.eq(row.due_minute)?
-        {
-            return unsupported("the completion does not match its route");
+        if !is_dict(&relocation) || relocation.get_item("event_id")?.ne(&*row.event_id)? || relocation.get_item("due_minute")?.ne(row.due_minute)? {
+            return Ok(Err(MISMATCH));
         }
         let to_zone = text(&relocation.get_item("to_zone_id")?)?;
         let in_place = arriving == Some(&*to_zone)
             || EntityStore::with_rows(&entities_of(world)?, |rows| Ok(rows.agents.get(&*agent_id).is_some_and(|agent| agent.zone_id == to_zone)))?;
         if !in_place {
-            return unsupported("the person is not at the destination");
+            return Ok(Err(MISMATCH));
         }
         presence_state(world)?;
         let ids_of_event = EventIds::of(&row)?;
@@ -1340,14 +1374,17 @@ fn plan_relocation_completion<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py,
         }
         check_lifecycle(world, Some(&agent_id))?;
         check_waiting_returns(world)?;
-        Ok((row, state, agent_id, relocation, ids_of_event))
+        Ok(Ok((row, state, agent_id, relocation, ids_of_event)))
     })())
 }
 
 #[pyfunction]
 pub(crate) fn complete_presence_relocation(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let (row, state, agent_id, relocation, ids_of_event) = plan_relocation_completion(world, event, None)?;
+    let (row, state, agent_id, relocation, ids_of_event) = match plan_relocation_completion(world, event, None)? {
+        Ok(plan) => plan,
+        Err(text) => return errors::failed(py, text),
+    };
     writing((|| {
         let from_zone = text(&relocation.get_item("from_zone_id")?)?;
         let to_zone = text(&relocation.get_item("to_zone_id")?)?;

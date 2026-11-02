@@ -5,16 +5,21 @@
 //! The rules here do the same through the same calls (`copy_of`, `commit`). That transaction is the
 //! design's until `core.fork()`: docs/rust-port/step3-design.md.
 //!
-//! Anything but a success says Unsupported with the world as it was: a suppressed effect, a failed
-//! one, a value the rule isn't sure of, and any exception from a call before the swap. The Python
-//! rule then runs from the start and says it in its own words. Two rules change the world in place
-//! after their checks and let an exception pass, as their Python rules do: `facility_repair`'s
-//! `world.validate()` and the receipts after a swap.
+//! A suppressed or failed effect raises the Python rule's text, in its order of checks, through
+//! `core/errors.rs`, with the world as it was (docs/rust-port/lanes/l8-texts-events.md). Where the
+//! Python rule wraps what a call raises (`str(exc)` of `apply_geometry_change`, a pydantic contract,
+//! the check of the copy), the rule makes the same call and wraps the same classes. A value the rule
+//! isn't sure of, and any other exception from a call before the swap, says Unsupported with the
+//! world as it was: the Python rule then runs from the start and decides. Two rules change the
+//! world in place after their checks and let an exception pass, as their Python rules do:
+//! `facility_repair`'s `world.validate()` and the receipts after a swap.
 //!
 //! The pydantic contracts of the parameters stay Python's: a rule calls `model_validate` where its
 //! Python rule does, through `_PARAMETER_MODELS` of `events/effects.py`. So do the rules of modules
-//! other lanes hold (`order_staff_operation`, the receipts): they're called by name, with no borrow
-//! held. `rules/overlay.rs` is called directly. Nothing here reads LLM output: what
+//! other lanes hold (the receipts): they're called by name, with no borrow held. `order_staff_operation`
+//! is `rules/staff_order.rs`. Of `rules/overlay.rs`, a rule whose text the handler wraps
+//! (`apply_geometry_change`, `register_temporary_space`, `place_installed_facility`) is called by name,
+//! its kernel first; the others are called directly. Nothing here reads LLM output: what
 //! a program may do was validated before it was scheduled, by `validate_effect_program`, which is
 //! not touched (docs/rust-port/lanes/m6-effects.md).
 
@@ -24,7 +29,8 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PySlice, PyString, PyTuple};
+use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
+use pyo3::types::{PyBool, PyDict, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
 use crate::core::errors::{self, Outcome};
@@ -34,10 +40,11 @@ use crate::core::value::V;
 use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::care_receipts::{facility_recovery_record, handoff_record};
 use crate::rules::staff_dynamics::{is_available, staff_status};
+use crate::rules::staff_order::{order_operation, Order};
 use crate::state::effect_program::{EffectProgramRow, Program, NAME};
 use crate::rules::overlay;
 use crate::state::entities::{entities_of, EntityStore};
-use crate::state::events::{is_stable_id, EventRow, EventWriter};
+use crate::state::events::{is_stable_id, EventRef, EventRow, EventWriter};
 use crate::state::resource_ledger::{held_mirror, resource_index, LedgerRow};
 use crate::Unsupported;
 
@@ -180,6 +187,87 @@ fn ints_equal(value: &Bound<'_, PyAny>, wanted: i64) -> PyResult<bool> {
     Ok(exact_int(value)? == wanted)
 }
 
+// ---- Python's answers on the values of a frozen payload ------------------------------------------
+//
+// An event's payload and provenance are frozen (`_freeze_json`): a dict is a mappingproxy, a list a
+// tuple, and every other value an exact JSON type. The checks that raise a rule's text answer
+// as Python's operators do on them; where Python would raise instead, they say Unsupported.
+
+/// Whether Python can hash the value (`x in a_set`, `a_dict.get(x)`): a mappingproxy can't, and a
+/// tuple can when its items can.
+fn hashable(value: &V) -> bool {
+    match value {
+        V::Map(_) => false,
+        V::List(items) => items.iter().all(hashable),
+        _ => true,
+    }
+}
+
+/// `value == text`, for a value that may be absent (None): only a str equals a str.
+fn is_text(value: Option<&V>, text: &str) -> bool {
+    matches!(value, Some(V::Str(item)) if **item == *text)
+}
+
+/// `a != b` for two values that may be absent (None), where Rust can tell what Python says.
+fn differ(a: Option<&V>, b: Option<&V>) -> PyResult<bool> {
+    let null = |value: Option<&V>| matches!(value, None | Some(V::Null));
+    match (a, b) {
+        (Some(V::Str(a)), Some(V::Str(b))) => Ok(a != b),
+        (Some(V::Str(_)), _) | (_, Some(V::Str(_))) => Ok(true),
+        _ if null(a) && null(b) => Ok(false),
+        _ if null(a) || null(b) => Ok(true),
+        _ => unsupported("two values Python compares by its own rules"),
+    }
+}
+
+/// `needle in marker.get(key, [])`: absent is the empty list, a str is searched for a substring and
+/// a mapping for a key. In anything else Python can't search, and raises.
+fn holds(value: Option<&V>, needle: &str) -> PyResult<bool> {
+    match value {
+        None => Ok(false),
+        Some(V::List(items)) => Ok(items.iter().any(|item| matches!(item, V::Str(item) if **item == *needle))),
+        Some(V::Str(text)) => Ok(text.contains(needle)),
+        Some(V::Map(map)) => Ok(map.contains_key(needle)),
+        Some(_) => unsupported("`in` of a value Python can't search"),
+    }
+}
+
+/// `key in mapping` for a dict of the world whose keys are str (`world.zones`, `world.staff`): any
+/// other value Python can hash is not a key; one it can't hash raises.
+fn key_in(mapping: &Bound<'_, PyAny>, key: Option<&V>) -> PyResult<bool> {
+    match key {
+        Some(V::Str(text)) => mapping.contains(&**text),
+        Some(value) if !hashable(value) => unsupported("a key Python can't hash"),
+        _ => Ok(false),
+    }
+}
+
+/// The classes of a Python rule's `except ... as exc`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Catch {
+    Value,
+    ValueOrType,
+    ValueKeyOrType,
+}
+
+/// `str(exc)` of an exception a Python call raised, when it is one the rule catches; any other goes
+/// on as it is. Unsupported is not a ValueError, so a kernel's refusal is never caught.
+fn caught(py: Python<'_>, error: PyErr, catch: Catch) -> PyResult<String> {
+    let taken = error.is_instance_of::<PyValueError>(py)
+        || (catch != Catch::Value && error.is_instance_of::<PyTypeError>(py))
+        || (catch == Catch::ValueKeyOrType && error.is_instance_of::<PyKeyError>(py));
+    if !taken {
+        return Err(error);
+    }
+    Ok(error.value(py).str()?.to_str()?.to_owned())
+}
+
+/// `map.get(key, {})`, as the Python rule reads a nested record.
+fn get_or_empty<'py, K: IntoPyObject<'py>>(map: &Bound<'py, PyAny>, key: K) -> PyResult<Bound<'py, PyAny>> {
+    let py = map.py();
+    map.call_method1(intern!(py, "get"), (key, PyDict::new(py)))
+}
+
 // ---- The transaction -----------------------------------------------------------------------------
 
 /// `MutableWorldState.from_dict(world.to_dict())`.
@@ -259,6 +347,25 @@ enum GuardField {
     ResourceAvailable,
     StaffAvailable,
 }
+
+impl GuardField {
+    /// `field_name`, as `{field_name!r}` writes it: a fixed ASCII text in single quotes.
+    fn repr(self) -> &'static str {
+        match self {
+            GuardField::Minute => "'simulation.minute'",
+            GuardField::Capacity => "'target.capacity'",
+            GuardField::WorkingUnits => "'target.working_units'",
+            GuardField::QueueLength => "'target.queue_length'",
+            GuardField::ZoneOccupancy => "'zone.occupancy'",
+            GuardField::ResourceAvailable => "'resource.available_quantity'",
+            GuardField::StaffAvailable => "'staff.available'",
+        }
+    }
+}
+
+/// A guard's answer, or the text of the `EventApplicationError` the Python rule raises instead
+/// (`should_apply_effect_guard`, `_evaluate_guard_node`). Unsupported stays the `PyErr`.
+type Judged<T> = Result<T, String>;
 
 enum Guard<'a> {
     All(Vec<Guard<'a>>),
@@ -398,27 +505,32 @@ fn compare_guard(compare: Compare, actual: &Actual, expected: &V) -> PyResult<bo
     })
 }
 
-fn evaluate_guard(world: &Bound<'_, PyAny>, row: &EventRow, guard: &Guard<'_>) -> PyResult<bool> {
+/// `_evaluate_guard_node`: `all` and `any` stop at the first answer, so a later operand's failure is
+/// reached only where Python reaches it.
+fn evaluate_guard(world: &Bound<'_, PyAny>, row: &EventRow, guard: &Guard<'_>) -> PyResult<Judged<bool>> {
     match guard {
         Guard::All(children) => {
             for child in children {
-                if !evaluate_guard(world, row, child)? {
-                    return Ok(false);
+                match evaluate_guard(world, row, child)? {
+                    Ok(true) => {}
+                    other => return Ok(other),
                 }
             }
-            Ok(true)
+            Ok(Ok(true))
         }
         Guard::Any(children) => {
             for child in children {
-                if evaluate_guard(world, row, child)? {
-                    return Ok(true);
+                match evaluate_guard(world, row, child)? {
+                    Ok(false) => {}
+                    other => return Ok(other),
                 }
             }
-            Ok(false)
+            Ok(Ok(false))
         }
-        Guard::Leaf { compare, field, value } => {
-            compare_guard(*compare, &guard_field(world, row, *field)?, value)
-        }
+        Guard::Leaf { compare, field, value } => match guard_field(world, row, *field)? {
+            Ok(actual) => compare_guard(*compare, &actual, value).map(Ok),
+            Err(text) => Ok(Err(text)),
+        },
     }
 }
 
@@ -453,109 +565,160 @@ fn guard_target(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<Option<Arc
     }
 }
 
-fn guard_field(world: &Bound<'_, PyAny>, row: &EventRow, field: GuardField) -> PyResult<Actual> {
+/// The value a leaf reads, or the text `_evaluate_guard_node` raises for a target it can't find.
+fn guard_field(world: &Bound<'_, PyAny>, row: &EventRow, field: GuardField) -> PyResult<Judged<Actual>> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
     let target = guard_target(world, row)?;
     let target_text = target.as_deref().unwrap_or("");
     let store = entities_of(world)?;
     match field {
-        GuardField::Minute => Ok(Actual::Int(exact_int(&attribute(world, intern!(py, "minute_index"))?)?)),
+        GuardField::Minute => Ok(Ok(Actual::Int(exact_int(&attribute(world, intern!(py, "minute_index"))?)?))),
         GuardField::Capacity | GuardField::WorkingUnits | GuardField::QueueLength => {
-            EntityStore::with_rows(&store, |rows| {
-                let Some(facility) = rows.facilities.get(target_text) else {
-                    return unsupported("a guard has no facility target");
-                };
-                Ok(Actual::Int(match field {
-                    GuardField::Capacity => facility.capacity,
-                    GuardField::WorkingUnits => facility.working_units,
-                    _ => (facility.queue_agent_ids.len() + facility.resource_queue_agent_ids.len()) as i64,
+            // `world.facilities.get(target_id or "")`.
+            let actual = EntityStore::with_rows(&store, |rows| {
+                Ok(rows.facilities.get(target_text).map(|facility| {
+                    Actual::Int(match field {
+                        GuardField::Capacity => facility.capacity,
+                        GuardField::WorkingUnits => facility.working_units,
+                        _ => (facility.queue_agent_ids.len() + facility.resource_queue_agent_ids.len()) as i64,
+                    })
                 }))
-            })
+            })?;
+            Ok(actual.ok_or_else(|| format!("guard field {} has no facility target", field.repr())))
         }
         GuardField::ZoneOccupancy => {
+            // `event.payload.get("zone_id") or (...)`: a falsy value of another type is refused.
             let own_zone = match payload.get("zone_id") {
                 None | Some(V::Null) => None,
                 Some(V::Str(zone)) if zone.is_empty() => None,
                 Some(V::Str(zone)) => Some(zone.clone()),
                 Some(_) => return unsupported("a zone ID is another value"),
             };
-            let (zone, count) = EntityStore::with_rows(&store, |rows| {
-                let zone = match own_zone {
-                    Some(zone) => zone,
-                    None => match rows.facilities.get(target_text) {
-                        Some(facility) => facility.zone_id.clone(),
-                        None => match &target {
-                            Some(target) => target.clone(),
-                            None => return unsupported("a guard has no zone target"),
-                        },
-                    },
-                };
-                let count = rows.agents.iter().filter(|(_, agent)| agent.zone_id == zone).count();
-                Ok((zone, count))
-            })?;
+            let zone = match own_zone {
+                Some(zone) => Some(zone),
+                None => {
+                    let of_facility = EntityStore::with_rows(&store, |rows| {
+                        Ok(rows.facilities.get(target_text).map(|facility| facility.zone_id.clone()))
+                    })?;
+                    // A target that is no facility is the zone itself; None is no zone.
+                    of_facility.or_else(|| target.clone())
+                }
+            };
+            let Some(zone) = zone else {
+                return Ok(Err("guard zone.occupancy has no known zone target".to_owned()));
+            };
             if !attribute(world, intern!(py, "zones"))?.contains(&*zone)? {
-                return unsupported("a guard has no known zone target");
+                return Ok(Err("guard zone.occupancy has no known zone target".to_owned()));
             }
-            Ok(Actual::Int(count as i64))
+            let count = EntityStore::with_rows(&store, |rows| {
+                Ok(rows.agents.iter().filter(|(_, agent)| agent.zone_id == zone).count())
+            })?;
+            Ok(Ok(Actual::Int(count as i64)))
         }
         GuardField::ResourceAvailable => {
-            let resource = str_of(payload, "resource_id")
-                .map_or_else(|| unsupported("a guard has no ledger target"), Ok)?;
-            let Some(index) = resource_index(resource) else {
-                return unsupported("a guard has no ledger target");
+            let no_target = || Ok(Err("guard resource.available_quantity has no ledger target".to_owned()));
+            // `not isinstance(ledger, dict)` comes first.
+            if namespace_is_absent(world, intern!(py, "resource_ledger_v1"))? {
+                return no_target();
+            }
+            // `resource_id not in ledger["accounts"]`: None is in no ledger; the row's accounts are
+            // exactly its two resources. A value of another type is Python's to judge.
+            let resource = match payload.get("resource_id") {
+                None | Some(V::Null) => None,
+                Some(V::Str(resource)) => Some(resource.clone()),
+                Some(_) => return unsupported("a resource ID is another value"),
             };
             let mirror = held_mirror(world)?;
-            NamespaceMirror::with_row::<LedgerRow, _>(&mirror, |ledger| {
+            let left = NamespaceMirror::with_row::<LedgerRow, _>(&mirror, |ledger| {
+                let Some(index) = resource.as_deref().and_then(resource_index) else {
+                    return Ok(None);
+                };
                 let account = ledger.accounts.of(index);
                 account
                     .remaining
                     .checked_sub(account.reserved)
-                    .map_or_else(|| unsupported("a quantity past 64 bits"), |left| Ok(Actual::Int(left)))
-            })
+                    .map_or_else(|| unsupported("a quantity past 64 bits"), |left| Ok(Some(left)))
+            })?;
+            match left {
+                Some(left) => Ok(Ok(Actual::Int(left))),
+                None => no_target(),
+            }
         }
         GuardField::StaffAvailable => {
+            // `event.payload.get("staff_id") or target_id`.
             let staff_id = match payload.get("staff_id") {
-                Some(V::Str(staff)) if !staff.is_empty() => staff.clone(),
-                None | Some(V::Null) | Some(V::Str(_)) => match &target {
-                    Some(target) => target.clone(),
-                    None => return unsupported("a guard has no staff target"),
-                },
+                Some(V::Str(staff)) if !staff.is_empty() => Some(staff.clone()),
+                None | Some(V::Null) | Some(V::Str(_)) => target.clone(),
                 Some(_) => return unsupported("a staff ID is another value"),
             };
-            let known = EntityStore::with_rows(&store, |rows| Ok(rows.staff.get(&staff_id).is_some()))?;
-            if !known {
-                return unsupported("a guard has no known staff target");
-            }
+            let known = match &staff_id {
+                Some(staff_id) => EntityStore::with_rows(&store, |rows| Ok(rows.staff.get(staff_id).is_some()))?,
+                None => false,
+            };
+            let (Some(staff_id), true) = (staff_id, known) else {
+                return Ok(Err("guard staff.available has no known staff target".to_owned()));
+            };
             let status = staff_status(world)?;
             let id = PyString::new(py, &staff_id);
-            Ok(Actual::Bool(is_available(status.as_ref(), &id)?))
+            Ok(Ok(Actual::Bool(is_available(status.as_ref(), &id)?)))
         }
     }
 }
 
-fn guard_of_row(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<bool> {
+/// `should_apply_effect_guard` of an event's row. A guard the contract turns down is worded by the
+/// contract itself, from the event's own guard: `event` gives the event object, read only then, and
+/// None leaves that to the Python rule.
+fn guard_decides<'py>(
+    world: &Bound<'py, PyAny>,
+    row: &EventRow,
+    event: Option<&dyn Fn() -> PyResult<Bound<'py, PyAny>>>,
+) -> PyResult<Judged<bool>> {
     let marker = match map_of(&row.provenance)?.get(MARKER) {
         Some(V::Map(marker)) => marker,
-        _ => return Ok(true),
+        _ => return Ok(Ok(true)),
     };
     let guard = match marker.get("guard") {
-        None | Some(V::Null) => return Ok(true),
+        None | Some(V::Null) => return Ok(Ok(true)),
         Some(guard) => guard,
     };
     let mut nodes = 0;
-    let Some(parsed) = parse_guard(guard, 1, &mut nodes) else {
+    if let Some(parsed) = parse_guard(guard, 1, &mut nodes) {
+        return evaluate_guard(world, row, &parsed);
+    }
+    let Some(event) = event else {
         return unsupported("the guard isn't one the contract surely takes");
     };
-    evaluate_guard(world, row, &parsed)
+    invalid_guard(&event()?)
 }
 
-/// `effect_event_guard_or_suppress` of a rule: false is a suppressed effect, the Python rule's.
-fn guard_passes(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<()> {
-    if guard_of_row(world, row)? {
-        Ok(())
-    } else {
-        unsupported("the guard is false, so the effect is suppressed")
+/// `GuardExpression.model_validate(guard)` of a guard this kernel doesn't read: the text of its
+/// `ValueError`, as `should_apply_effect_guard` words it. One the contract takes is Python's to
+/// evaluate (an int past 64 bits).
+fn invalid_guard(event: &Bound<'_, PyAny>) -> PyResult<Judged<bool>> {
+    let py = event.py();
+    let marker = attribute(event, intern!(py, "provenance"))?.call_method1(intern!(py, "get"), (intern!(py, MARKER),))?;
+    let guard = marker.call_method1(intern!(py, "get"), (intern!(py, "guard"),))?;
+    let contract = py.import(intern!(py, "sheltersim.events.effects"))?.getattr(intern!(py, "GuardExpression"))?;
+    match contract.call_method1(intern!(py, "model_validate"), (guard,)) {
+        Ok(_) => unsupported("a guard the contract takes and this kernel does not read"),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyValueError>(py) => {
+            Ok(Err(format!("EffectProgram guard is invalid: {}", error.value(py).str()?.to_str()?)))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `effect_event_guard_or_suppress` of a handler, where its Python rule asks it (after the same
+/// checks): false suppresses, a guard that fails raises its own text. Through the dispatch loop the
+/// guard was asked before the handler (`guard_or_suppress`), so there it is true.
+fn guard_passes(world: &Bound<'_, PyAny>, row: &EventRow, event: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let event_object = || Ok(event.clone());
+    match guard_decides(world, row, Some(&event_object))? {
+        Ok(true) => Ok(()),
+        Ok(false) => errors::suppressed(py, "EffectProgram guard evaluated false"),
+        Err(text) => errors::failed(py, text),
     }
 }
 
@@ -568,9 +731,39 @@ fn should_apply_guard(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyR
         if provenance.call_method1(intern!(py, "get"), (intern!(py, MARKER),))?.is_none() {
             return Ok(true);
         }
-        guard_of_row(world, &event_row(event)?)
+        let object = || Ok(event.clone());
+        match guard_decides(world, &event_row(event)?, Some(&object))? {
+            Ok(answer) => Ok(answer),
+            Err(text) => errors::failed(py, text),
+        }
     })();
     counted(py, "guard", refused_by_python(py, result))
+}
+
+/// `effect_event_guard_or_suppress`, as `EventDispatcher.dispatch_one` asks it before the handler of
+/// an event with an EffectProgram's marker: Ok when the effect goes on, else the outcome
+/// (`EventSuppressed` for a false guard, `EventApplicationError` for one that can't be read). Read
+/// only; Unsupported or a Python call's exception leaves the event to the Python dispatcher.
+pub(crate) fn guard_or_suppress<'py>(
+    world: &Bound<'py, PyAny>,
+    event: EventRef<'_, 'py>,
+    object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+) -> PyResult<()> {
+    let py = world.py();
+    let made;
+    let row = match event {
+        EventRef::Row(row) => row,
+        EventRef::Object(event) => {
+            made = event_row(event)?;
+            &made
+        }
+    };
+    let result = match guard_decides(world, row, Some(object))? {
+        Ok(true) => Ok(()),
+        Ok(false) => errors::suppressed(py, "EffectProgram guard evaluated false"),
+        Err(text) => errors::failed(py, text),
+    };
+    counted(py, "dispatch_guard", result)
 }
 
 // ---- What other modules ask ----------------------------------------------------------------------
@@ -816,102 +1009,127 @@ fn sorted_unique<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> 
     items
 }
 
+const ENVIRONMENT_OPERATORS: [&str; 6] =
+    ["set_ambient_noise", "modify_demand_rate", "set_ventilation", "set_lighting", "set_privacy", "set_temperature"];
+
+/// `except (EventApplicationError, EventSuppressed): raise` before an `except ValueError`.
+fn is_outcome(py: Python<'_>, error: &PyErr) -> PyResult<bool> {
+    let models = py.import(intern!(py, "sheltersim.events.models"))?;
+    let value = error.value(py);
+    Ok(value.is_instance(&models.getattr(intern!(py, "EventApplicationError"))?)?
+        || value.is_instance(&models.getattr(intern!(py, "EventSuppressed"))?)?)
+}
+
+/// The handler's `except ValueError as exc`, around its rule and the check of the copy.
+fn environment_invalid<T>(py: Python<'_>, result: PyResult<T>) -> PyResult<T> {
+    match result {
+        Err(error) if !is_outcome(py, &error)? => {
+            let text = caught(py, error, Catch::Value)?;
+            errors::failed(py, format!("zone environment modifier is invalid: {text}"))
+        }
+        other => other,
+    }
+}
+
+/// `validate` and `swap`, with the handler's wrap of a ValueError of the check.
+fn environment_commit(world: &Bound<'_, PyAny>, candidate: &Bound<'_, PyAny>) -> PyResult<()> {
+    environment_invalid(world.py(), validate(candidate))?;
+    swap(world, candidate)
+}
+
 fn environment_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: bool) -> PyResult<()> {
     let py = world.py();
     let row = event_row(event)?;
     let payload = map_of(&row.payload)?;
     let fields: &[&str] = if expire { &ZONE_EXPIRE_FIELDS } else { &ENVIRONMENT_APPLY_FIELDS };
     if !has_exactly(payload, fields) {
-        return unsupported("the payload has other fields");
+        return errors::failed(py, "zone environment event payload fields do not match");
     }
-    let program_id = required_str(payload, "program_id")?;
-    let effect_id = required_str(payload, "effect_id")?;
-    let modifier = required_str(payload, "modifier_id")?;
-    let zone_id = required_str(payload, "zone_id")?;
-    let marker = match map_of(&row.provenance)?.get(MARKER) {
-        Some(V::Map(marker)) => marker,
-        _ => return unsupported("no marker"),
+    let (Some(program_id), Some(effect_id), Some(modifier), Some(zone_id)) =
+        (str_of(payload, "program_id"), str_of(payload, "effect_id"), str_of(payload, "modifier_id"), str_of(payload, "zone_id"))
+    else {
+        return errors::failed(py, "zone environment event IDs must be strings");
     };
-    if !str_list(marker, "policy_dependencies")?.iter().any(|item| &***item == ENVIRONMENT_POLICY) {
-        return unsupported("no installed policy");
-    }
+    // The approved operator of a program that lists the effect; None when it doesn't.
     let approved_op = program_state(world, |state| {
-        let program = state.and_then(|state| state.programs.get(&**program_id));
-        match program {
-            Some(program) if effect_is_scheduled(program, effect_id) => Ok(program.operators.get(&**effect_id).cloned()),
-            _ => unsupported("the event's effect is not scheduled"),
-        }
+        Ok(state
+            .and_then(|state| state.programs.get(&**program_id))
+            .filter(|program| effect_is_scheduled(program, effect_id))
+            .map(|program| program.operators.get(&**effect_id).cloned()))
     })?;
     let table = model_state(world)?;
-    let Some(environment) = get_or_none(&table, ENVIRONMENT_STATE)? else {
-        return unsupported("no zone_environment_v1");
+    let environment = get_or_none(&table, ENVIRONMENT_STATE)?.filter(is_dict);
+    let marker = match map_of(&row.provenance)?.get(MARKER) {
+        Some(V::Map(marker)) => Some(marker),
+        _ => None,
     };
-    if !is_dict(&environment) {
-        return unsupported("zone_environment_v1 is another value");
-    }
+    let installed = match (&approved_op, marker) {
+        (Some(_), Some(marker)) => holds(marker.get("policy_dependencies"), ENVIRONMENT_POLICY)? && environment.is_some(),
+        _ => false,
+    };
+    let (Some(approved_op), Some(marker), Some(environment), true) = (approved_op, marker, environment, installed) else {
+        return errors::failed(py, "zone environment event has no installed program policy");
+    };
     if *modifier.as_ref() != *modifier_id(program_id, effect_id) {
-        return unsupported("the modifier ID does not match its effect");
+        return errors::failed(py, "zone environment modifier ID does not match its effect");
     }
     let modifiers = environment.get_item(intern!(py, "modifiers"))?;
     if expire {
         let Some(record) = get_or_none(&modifiers, modifier)? else {
-            return unsupported("the modifier is not active");
+            return errors::suppressed(py, "zone environment modifier is not active");
         };
-        let same = |key: &Bound<'_, PyString>, wanted: Option<&str>| -> PyResult<bool> {
-            let value = record.get_item(key)?;
-            Ok(match wanted {
-                Some(wanted) => value.eq(wanted)?,
-                None => value.is_none(),
-            })
-        };
-        if !same(intern!(py, "program_id"), Some(program_id))?
-            || !same(intern!(py, "effect_id"), Some(effect_id))?
-            || !same(intern!(py, "zone_id"), Some(zone_id))?
-            || !same(intern!(py, "end_event_id"), Some(&row.event_id))?
-            || !same(intern!(py, "start_event_id"), row.causation_id.as_deref())?
+        let differs = |key: &Bound<'_, PyString>, wanted: &str| -> PyResult<bool> { record.get_item(key)?.ne(wanted) };
+        let cause = attribute(event, intern!(py, "causation_id"))?;
+        if differs(intern!(py, "program_id"), program_id)?
+            || differs(intern!(py, "effect_id"), effect_id)?
+            || differs(intern!(py, "zone_id"), zone_id)?
+            || differs(intern!(py, "end_event_id"), &row.event_id)?
+            || cause.ne(record.get_item(intern!(py, "start_event_id"))?)?
         {
-            return unsupported("the expiry does not match its start");
+            return errors::failed(py, "zone environment expiry does not match its start");
         }
         let candidate = copy_of(world)?;
         model_state(&candidate)?
             .get_item(ENVIRONMENT_STATE)?
             .get_item(intern!(py, "modifiers"))?
             .call_method1(intern!(py, "pop"), (&**modifier,))?;
-        return commit(world, &candidate);
+        return environment_commit(world, &candidate);
     }
 
-    let op = required_str(payload, "op")?;
-    if !matches!(
-        &**op,
-        "set_ambient_noise" | "modify_demand_rate" | "set_ventilation" | "set_lighting" | "set_privacy" | "set_temperature"
-    ) {
-        return unsupported("an unsupported operator");
-    }
+    let op = match payload.get("op") {
+        Some(V::Str(op)) if ENVIRONMENT_OPERATORS.contains(&&**op) => op,
+        Some(value) if !hashable(value) => return unsupported("an operator Python can't hash"),
+        _ => return errors::failed(py, "zone environment operator is unsupported"),
+    };
     if approved_op.as_deref() != Some(&**op) {
-        return unsupported("the operator differs from its program");
+        return errors::failed(py, "zone environment operator does not match its program");
     }
     if !attribute(world, intern!(py, "zones"))?.contains(&**zone_id)? {
-        return unsupported("the zone does not exist");
+        return errors::failed(py, "zone environment target does not exist");
     }
     if modifiers.contains(&**modifier)? {
-        return unsupported("the modifier is already active");
+        return errors::suppressed(py, "zone environment modifier is already active");
     }
-    let parsed = parameters(py, op, &payload_item(event, "parameters")?)?;
+    let parsed = match parameters(py, op, &payload_item(event, "parameters")?) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let text = caught(py, error, Catch::Value)?;
+            return errors::failed(py, format!("zone environment parameters are invalid: {text}"));
+        }
+    };
     if &**op == "modify_demand_rate" {
         let action = attribute(&parsed, intern!(py, "action"))?;
         let action = exact_str(&action)?;
         if matches!(action, "fetch_water" | "collect_meal") && !table.contains("resource_service_v1")? {
-            return unsupported("the action requires the resource-service policy");
+            return errors::failed(py, "zone demand action requires resource-service policy");
         }
     }
-    let end_minute = match payload.get("end_minute") {
-        Some(V::Int(minute)) => *minute,
-        _ => return unsupported("the end minute is not an int"),
-    };
     let duration = exact_int(&attribute(world, intern!(py, "duration_minutes"))?)?;
-    if end_minute <= row.due_minute || end_minute >= duration {
-        return unsupported("the end minute is outside the Run");
-    }
+    // An int past 64 bits is outside the Run either way; any other type is not an int.
+    let end_minute = match payload.get("end_minute") {
+        Some(V::Int(minute)) if *minute > row.due_minute && *minute < duration => *minute,
+        _ => return errors::failed(py, "zone environment modifier expiry minute is invalid"),
+    };
     let mut expiries = Vec::new();
     for pending in pending_of(world)?.try_iter()? {
         let pending = pending?;
@@ -920,32 +1138,35 @@ fn environment_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: 
             continue;
         }
         let payload = attribute(&pending, intern!(py, "payload"))?;
-        if get_or_none(&payload, "modifier_id")?.is_some_and(|value| value.eq(&**modifier).unwrap_or(false)) {
+        if payload.call_method1(intern!(py, "get"), ("modifier_id",))?.eq(&**modifier)? {
             expiries.push(pending);
         }
     }
-    let [expiry] = expiries.as_slice() else {
-        return unsupported("no unique expiry event");
+    let unique = match expiries.as_slice() {
+        [expiry] => ints_equal(&attribute(expiry, intern!(py, "due_minute"))?, end_minute)?,
+        _ => false,
     };
-    if !ints_equal(&attribute(expiry, intern!(py, "due_minute"))?, end_minute)? {
-        return unsupported("the expiry event is at another minute");
+    if !unique {
+        return errors::failed(py, "zone environment modifier has no unique expiry event");
     }
-    let end_event_id = attribute(expiry, intern!(py, "event_id"))?;
+    let end_event_id = attribute(&expiries[0], intern!(py, "event_id"))?;
     let config_data = attribute(world, intern!(py, "model_configs"))?.get_item("zone_environment")?;
+    // The Python rule wraps a ValueError of this too, but a world whose config fails it fails the
+    // copy the Python rule makes first (`from_dict` checks the configs): the Python rule decides.
     let config = py
         .import(intern!(py, "sheltersim.domain.environment"))?
         .getattr(intern!(py, "ScenarioZoneEnvironmentConfig"))?
         .call_method1(intern!(py, "model_validate"), (config_data,))?;
     let policy_version = attribute(&config, intern!(py, "policy_version"))?;
     if matches!(&**op, "set_ventilation" | "set_lighting" | "set_privacy" | "set_temperature")
-        && !policy_version.eq("zone-environment-v2")?
+        && policy_version.ne("zone-environment-v2")?
     {
-        return unsupported("the operator requires zone-environment-v2");
+        return errors::failed(py, "condition modifier requires zone-environment-v2");
     }
-    let Some(V::List(_)) = marker.get("assumption_ids") else {
-        return unsupported("the assumption provenance is invalid");
+    let assumptions = match marker.get("assumption_ids") {
+        Some(V::List(items)) if items.iter().all(|item| matches!(item, V::Str(_))) => str_list(marker, "assumption_ids")?,
+        _ => return errors::failed(py, "zone environment assumption provenance is invalid"),
     };
-    let assumptions = str_list(marker, "assumption_ids")?;
     let assumptions = sorted_unique(assumptions.iter().map(|item| &***item));
 
     let record = PyDict::new(py);
@@ -972,7 +1193,7 @@ fn environment_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: 
         .get_item(ENVIRONMENT_STATE)?
         .get_item(intern!(py, "modifiers"))?
         .set_item(&**modifier, record)?;
-    commit(world, &candidate)
+    environment_commit(world, &candidate)
 }
 
 /// `EffectProgramEnvironmentHandler.apply`.
@@ -992,76 +1213,93 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
     let row = event_row(event)?;
     let payload = map_of(&row.payload)?;
     let table = model_state(world)?;
-    let Some(state) = get_or_none(&table, TEMPORARY_SPACES)? else {
-        return unsupported("no temporary_spaces_v1");
+    let state = get_or_none(&table, TEMPORARY_SPACES)?.filter(is_dict);
+    let marker = match map_of(&row.provenance)?.get(MARKER) {
+        Some(V::Map(marker)) => Some(marker),
+        _ => None,
     };
-    if !is_dict(&state) {
-        return unsupported("temporary_spaces_v1 is another value");
-    }
+    let (program_id, effect_id) = (payload.get("program_id"), payload.get("effect_id"));
+    // `programs.get(program_id) if isinstance(program_id, str) else None`, then whether it lists
+    // the effect with this operator.
+    let approved = match (program_id, effect_id) {
+        (Some(V::Str(program_id)), effect_id) => program_state(world, |state| {
+            Ok(state.and_then(|state| state.programs.get(&**program_id)).is_some_and(|program| match effect_id {
+                Some(V::Str(effect_id)) => {
+                    effect_is_scheduled(program, effect_id)
+                        && program.operators.get(&**effect_id).is_some_and(|op| &**op == "add_temporary_space")
+                }
+                _ => false,
+            }))
+        })?,
+        _ => false,
+    };
+    let references = (|| -> PyResult<bool> {
+        let (Some(_), true, Some(V::Str(program_id)), Some(V::Str(effect_id))) = (&state, approved, program_id, effect_id) else {
+            return Ok(false);
+        };
+        if !is_text(payload.get("modifier_id"), &modifier_id(program_id, effect_id)) {
+            return Ok(false);
+        }
+        let Some(marker) = marker else {
+            return Ok(false);
+        };
+        if !holds(marker.get("policy_dependencies"), TEMPORARY_SPACES)? {
+            return Ok(false);
+        }
+        key_in(&attribute(world, intern!(py, "zones"))?, payload.get("zone_id"))
+    })()?;
+    let (Some(state), Some(marker), true) = (state, marker, references) else {
+        return errors::failed(py, "temporary-space event does not reference an approved installed effect");
+    };
     let program_id = required_str(payload, "program_id")?;
     let effect_id = required_str(payload, "effect_id")?;
     let modifier = required_str(payload, "modifier_id")?;
     let zone_id = required_str(payload, "zone_id")?;
-    let marker = match map_of(&row.provenance)?.get(MARKER) {
-        Some(V::Map(marker)) => marker,
-        _ => return unsupported("no marker"),
-    };
-    let approved = program_state(world, |state| {
-        Ok(state.and_then(|state| state.programs.get(&**program_id)).is_some_and(|program| {
-            effect_is_scheduled(program, effect_id)
-                && program.operators.get(&**effect_id).is_some_and(|op| &**op == "add_temporary_space")
-        }))
-    })?;
-    if !approved
-        || **modifier != *modifier_id(program_id, effect_id)
-        || !str_list(marker, "policy_dependencies")?.iter().any(|item| &***item == TEMPORARY_SPACES)
-        || !attribute(world, intern!(py, "zones"))?.contains(&**zone_id)?
-    {
-        return unsupported("the event does not reference an approved installed effect");
-    }
     if expire {
         if !has_exactly(payload, &ZONE_EXPIRE_FIELDS) {
-            return unsupported("the payload has other fields");
+            return errors::failed(py, "temporary-space expiry payload fields do not match");
         }
         let spaces = state.get_item(intern!(py, "spaces"))?;
-        let Some(space) = get_or_none(&spaces, modifier)? else {
-            return unsupported("the space did not start");
+        let matches = match get_or_none(&spaces, modifier)?.filter(is_dict) {
+            None => false,
+            Some(space) => {
+                space.get_item(intern!(py, "active"))?.is_truthy()?
+                    && !space.get_item(intern!(py, "zone_id"))?.ne(&**zone_id)?
+                    && !space.get_item(intern!(py, "program_id"))?.ne(&**program_id)?
+                    && !space.get_item(intern!(py, "effect_id"))?.ne(&**effect_id)?
+                    && !attribute(event, intern!(py, "causation_id"))?.ne(space.get_item(intern!(py, "start_event_id"))?)?
+                    && !attribute(event, intern!(py, "due_minute"))?.ne(space.get_item(intern!(py, "end_minute"))?)?
+            }
         };
-        if !is_dict(&space) || !space.get_item(intern!(py, "active"))?.is_truthy()? {
-            return unsupported("the space is not active");
-        }
-        let start_event = space.get_item(intern!(py, "start_event_id"))?;
-        let starts_this = match &row.causation_id {
-            Some(cause) => start_event.eq(&**cause)?,
-            None => start_event.is_none(),
-        };
-        if !space.get_item(intern!(py, "zone_id"))?.eq(&**zone_id)?
-            || !space.get_item(intern!(py, "program_id"))?.eq(&**program_id)?
-            || !space.get_item(intern!(py, "effect_id"))?.eq(&**effect_id)?
-            || !starts_this
-            || !space.get_item(intern!(py, "end_minute"))?.eq(row.due_minute)?
-        {
-            return unsupported("the space does not match its expiry");
+        if !matches {
+            return errors::suppressed(py, "temporary-space effect did not start or does not match its expiry");
         }
         let candidate = copy_of(world)?;
+        // False only for a space that is gone or not active, which the checks above saw it is not.
         if !overlay::expire_space(&candidate, modifier, &row.event_id, row.causation_id.as_deref())? {
-            return unsupported("the space is already expired");
+            return errors::suppressed(py, "temporary-space effect is already expired");
         }
         return commit(world, &candidate);
     }
-    if !has_exactly(payload, &ENVIRONMENT_APPLY_FIELDS) || str_of(payload, "op").is_none_or(|op| &**op != "add_temporary_space") {
-        return unsupported("the payload has other fields");
+    if !has_exactly(payload, &ENVIRONMENT_APPLY_FIELDS) || !is_text(payload.get("op"), "add_temporary_space") {
+        return errors::failed(py, "temporary-space event payload fields do not match");
     }
-    guard_passes(world, &row)?;
-    let parsed = parameters(py, "add_temporary_space", &payload_item(event, "parameters")?)?;
-    let end_minute = match payload.get("end_minute") {
-        Some(V::Int(minute)) => *minute,
-        _ => return unsupported("the end minute is not an int"),
+    // "temporary-space operator differs from its approved program" can't follow: the program's
+    // operator for the effect and the payload's op were both just seen to be add_temporary_space.
+    guard_passes(world, &row, event)?;
+    let parsed = match parameters(py, "add_temporary_space", &payload_item(event, "parameters")?) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let text = caught(py, error, Catch::Value)?;
+            return errors::failed(py, format!("temporary-space parameters are invalid: {text}"));
+        }
     };
     let duration = exact_int(&attribute(world, intern!(py, "duration_minutes"))?)?;
-    if row.due_minute >= end_minute || end_minute >= duration {
-        return unsupported("the end minute is outside its interval");
-    }
+    // An int past 64 bits is outside the interval either way; any other type is not an int.
+    let end_minute = match payload.get("end_minute") {
+        Some(V::Int(minute)) if row.due_minute < *minute && *minute < duration => *minute,
+        _ => return errors::failed(py, "temporary-space end minute is outside its approved interval"),
+    };
     // sorted(set([event.source_id, *assumption_ids])); None doesn't sort with a str.
     let Some(source) = row.source_id.as_deref() else {
         return unsupported("no source");
@@ -1083,7 +1321,13 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
     record.set_item("source_ids", PyList::new(py, sources)?)?;
     record.set_item("geometry_status", "zone_only_capacity")?;
     let candidate = copy_of(world)?;
-    overlay::register_space(&candidate, record.as_any(), &row.event_id)?;
+    // By name, as the Python rule calls it (its kernel first), for the text of its ValueError.
+    let keywords = PyDict::new(py);
+    keywords.set_item("event_id", &*row.event_id)?;
+    let registered = call_rule(py, "sheltersim.domain.temporary_spaces", "register_temporary_space", (&candidate, &record), Some(&keywords));
+    if let Err(error) = registered {
+        return errors::failed(py, caught(py, error, Catch::Value)?);
+    }
     commit(world, &candidate)
 }
 
@@ -1102,83 +1346,79 @@ const GEOMETRY_OPERATORS: [&str; 5] =
     ["move_facility", "transfer_equipment", "set_partition", "set_route_access", "temporary_room_geometry"];
 
 fn geometry_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: bool) -> PyResult<()> {
+    let py = world.py();
     let row = event_row(event)?;
     let payload = map_of(&row.payload)?;
     if !has_exactly(payload, &GEOMETRY_FIELDS) {
-        return unsupported("the payload has other fields");
+        return errors::failed(py, "geometry effect has invalid fields or operator");
     }
-    let op = required_str(payload, "op")?;
-    if !GEOMETRY_OPERATORS.contains(&&**op) {
-        return unsupported("not an operator of the floor plan");
+    let op = match payload.get("op") {
+        Some(V::Str(op)) if GEOMETRY_OPERATORS.contains(&&**op) => op,
+        Some(value) if !hashable(value) => return unsupported("an operator Python can't hash"),
+        _ => return errors::failed(py, "geometry effect has invalid fields or operator"),
+    };
+    let (program_id, effect_id) = (payload.get("program_id"), payload.get("effect_id"));
+    // `.get(payload["program_id"], {})` and `.get(payload["effect_id"])` raise on a key Python
+    // can't hash, whatever the dicts hold.
+    if program_id.is_some_and(|id| !hashable(id)) || effect_id.is_some_and(|id| !hashable(id)) {
+        return unsupported("an ID Python can't hash");
     }
-    let program_id = required_str(payload, "program_id")?;
-    let effect_id = required_str(payload, "effect_id")?;
-    let modifier = required_str(payload, "modifier_id")?;
-    let approved = program_state(world, |state| {
-        Ok(state
-            .and_then(|state| state.programs.get(&**program_id))
-            .and_then(|program| program.operators.get(&**effect_id))
-            .is_some_and(|approved| approved == op))
-    })?;
-    if !approved || **modifier != *modifier_id(program_id, effect_id) {
-        return unsupported("the effect does not reference its approved program");
+    let approved = match (program_id, effect_id) {
+        (Some(V::Str(program_id)), Some(V::Str(effect_id))) => {
+            program_state(world, |state| {
+                Ok(state
+                    .and_then(|state| state.programs.get(&**program_id))
+                    .and_then(|program| program.operators.get(&**effect_id))
+                    .is_some_and(|approved| approved == op))
+            })? && is_text(payload.get("modifier_id"), &modifier_id(program_id, effect_id))
+        }
+        _ => false,
+    };
+    if !approved {
+        return errors::failed(py, "geometry effect does not reference its approved program");
     }
-    guard_passes(world, &row)?;
+    guard_passes(world, &row, event)?;
     if expire {
-        let table = model_state(world)?;
-        let Some(overlay) = get_or_none(&table, "geometry_overlay_v1")? else {
-            return unsupported("no modifier to expire");
-        };
+        // The Python rule's reads, on the Python values: `.get(key, {})` all the way down.
+        let overlay = get_or_empty(&model_state(world)?, "geometry_overlay_v1")?;
+        let raw = attribute(event, intern!(py, "payload"))?;
+        let modifier = raw.get_item(intern!(py, "modifier_id"))?;
         let active = match &**op {
-            "set_partition" => match get_or_none(&overlay, "partitions")? {
-                Some(partitions) => partitions.contains(&**modifier)?,
-                None => false,
-            },
+            "set_partition" => get_or_empty(&overlay, "partitions")?.contains(&modifier)?,
             "temporary_room_geometry" => {
-                let parameters = map_of(payload.get("parameters").unwrap_or(&V::Null))?;
-                let room_id = required_str(parameters, "room_id")?;
-                let room = match get_or_none(&overlay, "temporary_rooms")? {
-                    Some(rooms) => get_or_none(&rooms, room_id)?,
-                    None => None,
-                };
-                match room {
-                    Some(room) if is_dict(&room) => {
-                        let started = get_or_none(&room, "start_event_id")?;
-                        let cause_matches = match (&started, &row.causation_id) {
-                            (Some(started), Some(cause)) => started.eq(&**cause)?,
-                            (None, None) => true,
-                            _ => false,
-                        };
-                        let ends = get_or_none(&room, "end_minute")?;
-                        get_or_none(&room, "active")?.is_some_and(|active| active.downcast_exact::<pyo3::types::PyBool>().is_ok_and(|flag| flag.is_true()))
-                            && cause_matches
-                            && ends.is_some_and(|ends| ends.eq(row.due_minute).unwrap_or(false))
-                    }
-                    _ => false,
-                }
+                let room_id = get_or_empty(&raw, "parameters")?.call_method1(intern!(py, "get"), ("room_id",))?;
+                let room = get_or_empty(&overlay, "temporary_rooms")?.call_method1(intern!(py, "get"), (room_id,))?;
+                is_dict(&room)
+                    && room.call_method1(intern!(py, "get"), ("active",))?.is(PyBool::new(py, true).as_any())
+                    && !room
+                        .call_method1(intern!(py, "get"), ("start_event_id",))?
+                        .ne(attribute(event, intern!(py, "causation_id"))?)?
+                    && !room
+                        .call_method1(intern!(py, "get"), ("end_minute",))?
+                        .ne(attribute(event, intern!(py, "due_minute"))?)?
             }
             _ => {
-                let target = required_str(payload, "target_id")?;
-                let modifiers = match get_or_none(&overlay, "route_modifiers")? {
-                    Some(routes) => match get_or_none(&routes, target)? {
-                        Some(route) => get_or_none(&route, "modifiers")?,
-                        None => None,
-                    },
-                    None => None,
-                };
-                match modifiers {
-                    Some(modifiers) => modifiers.contains(&**modifier)?,
-                    None => false,
-                }
+                let routes = get_or_empty(&overlay, "route_modifiers")?;
+                let route = get_or_empty(&routes, raw.get_item(intern!(py, "target_id"))?)?;
+                get_or_empty(&route, "modifiers")?.contains(&modifier)?
             }
         };
         if !active {
-            return unsupported("the modifier was not applied or has expired");
+            return errors::suppressed(py, "geometry modifier was not applied or already expired");
         }
     }
     let candidate = copy_of(world)?;
-    overlay::apply_change(&candidate, event, expire)?;
-    commit(world, &candidate)
+    // By name, as the Python rule calls it (its kernel first), for the text of what it raises.
+    let applied = (|| {
+        let keywords = PyDict::new(py);
+        keywords.set_item("expire", expire)?;
+        call_rule(py, "sheltersim.domain.geometry_overlay", "apply_geometry_change", (&candidate, event), Some(&keywords))?;
+        validate(&candidate)
+    })();
+    if let Err(error) = applied {
+        return errors::failed(py, caught(py, error, Catch::ValueKeyOrType)?);
+    }
+    swap(world, &candidate)
 }
 
 /// `EffectProgramGeometryHandler.apply`.
@@ -1191,64 +1431,42 @@ fn geometry(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<
 
 // ---- EffectProgramStructureHandler ---------------------------------------------------------------
 
-const STAFF_MODULE: &str = "sheltersim.domain.staff_operations";
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
-
-/// What the operators of a marker with an approved program have in common.
-fn approved_marked_effect(
-    world: &Bound<'_, PyAny>,
-    row: &EventRow,
-    payload: &Doc,
-    op: &str,
-    target: &str,
-) -> PyResult<()> {
-    let marker = match map_of(&row.provenance)?.get(MARKER) {
-        Some(V::Map(marker)) => marker,
-        _ => return unsupported("no marker"),
-    };
-    let program_id = required_str(payload, "program_id")?;
-    let effect_id = required_str(payload, "effect_id")?;
-    let matches_marker = str_of(marker, "program_id") == Some(program_id)
-        && str_of(marker, "effect_id") == Some(effect_id)
-        && str_of(marker, "op").is_some_and(|item| &**item == op)
-        && str_of(marker, "phase").is_some_and(|item| &**item == "start");
-    let approved = program_state(world, |state| {
-        Ok(state.and_then(|state| state.programs.get(&**program_id)).is_some_and(|program| {
-            effect_is_scheduled(program, effect_id)
-                && program.operators.get(&**effect_id).is_some_and(|item| &**item == op)
-                && program.scheduled_event_ids.iter().any(|item| *item == row.event_id)
-        }))
-    })?;
-    if !matches_marker
-        || !approved
-        || str_of(payload, "op").is_none_or(|item| &**item != op)
-        || str_of(payload, "modifier_id").is_none_or(|item| **item != *modifier_id(program_id, effect_id))
-        || str_of(payload, target).is_none()
-    {
-        return unsupported("the effect does not reference its approved program");
-    }
-    Ok(())
-}
 
 fn staff_task_order(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<()> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
-    approved_marked_effect(world, row, payload, "staff_task_order", "staff_id")?;
-    if !ints_equal(&attribute(world, intern!(py, "minute_index"))?, row.due_minute)? {
-        return unsupported("the order is not for this minute");
+    // The approval chain of `staff_handoff`, and then `event.due_minute != world.minute_index`.
+    if !references_program(world, row, payload, "staff_task_order", "staff_id")?
+        || !ints_equal(&attribute(world, intern!(py, "minute_index"))?, row.due_minute)?
+    {
+        return errors::failed(py, "staff task order does not reference a current approved program");
     }
-    let order = parameters(py, "staff_task_order", &payload_item(event, "parameters")?)?;
-    guard_passes(world, row)?;
+    let order = match parameters(py, "staff_task_order", &payload_item(event, "parameters")?) {
+        Ok(order) => order,
+        Err(error) => {
+            let text = caught(py, error, Catch::ValueOrType)?;
+            return errors::failed(py, format!("staff task order parameters are invalid: {text}"));
+        }
+    };
+    guard_passes(world, row, event)?;
+    let task_kind = attribute(&order, intern!(py, "task_kind"))?;
+    let target_zone_id = attribute(&order, intern!(py, "target_zone_id"))?;
+    let target_id = attribute(&order, intern!(py, "target_id"))?;
+    let reason = attribute(&order, intern!(py, "reason"))?;
+    let target_id = if target_id.is_none() { None } else { Some(exact_str(&target_id)?) };
+    let order = Order {
+        staff_id: required_str(payload, "staff_id")?,
+        task_kind: exact_str(&task_kind)?,
+        target_zone_id: exact_str(&target_zone_id)?,
+        target_id,
+        reason: exact_str(&reason)?,
+        causation_event_id: &row.event_id,
+        source_id: row.source_id.as_deref(),
+    };
     let candidate = copy_of(world)?;
-    let keywords = PyDict::new(py);
-    keywords.set_item("staff_id", &**required_str(payload, "staff_id")?)?;
-    keywords.set_item("task_kind", attribute(&order, intern!(py, "task_kind"))?)?;
-    keywords.set_item("target_zone_id", attribute(&order, intern!(py, "target_zone_id"))?)?;
-    keywords.set_item("target_id", attribute(&order, intern!(py, "target_id"))?)?;
-    keywords.set_item("reason", attribute(&order, intern!(py, "reason"))?)?;
-    keywords.set_item("causation_event_id", &*row.event_id)?;
-    keywords.set_item("source_id", row.source_id.as_deref())?;
-    call_rule(py, STAFF_MODULE, "order_staff_operation", (&candidate,), Some(&keywords))?;
+    // Its checks raise the rule's text before any change, on the copy; the world stays as it was.
+    order_operation(&candidate, &order)?;
     commit(world, &candidate)
 }
 
@@ -1261,6 +1479,8 @@ fn has_task_skill(skills: &Bound<'_, PyAny>, task_kind: &Bound<'_, PyAny>) -> Py
         Ok(Ok("intake")) => ["support", "intake"],
         Ok(Ok("patrol")) => ["support", "patrol"],
         Ok(Ok(_)) => return Ok(false),
+        // `isinstance(task_kind, str) and ...`: not a str at all is no skill.
+        Err(_) if !task_kind.is_instance_of::<PyString>() => return Ok(false),
         _ => return unsupported("a task kind is not a plain str"),
     };
     for skill in skills.try_iter()? {
@@ -1296,6 +1516,48 @@ fn idle_record(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(record)
 }
 
+/// The first check of `staff_handoff` and `facility_repair`, in the Python rule's order: the marker
+/// and the payload reference an effect of `op` that a current approved program scheduled as this
+/// event, and `target` is a str.
+fn references_program(world: &Bound<'_, PyAny>, row: &EventRow, payload: &Doc, op: &str, target: &str) -> PyResult<bool> {
+    let (program_id, effect_id) = (payload.get("program_id"), payload.get("effect_id"));
+    // `state.get("programs", {}).get(program_id) if isinstance(state, dict) else None`, before the
+    // checks: whether it lists the effect, with this operator, and this event.
+    let program = program_state(world, |state| {
+        let Some(state) = state else {
+            return Ok(None);
+        };
+        match program_id {
+            Some(V::Str(program_id)) => Ok(state.programs.get(&**program_id).map(|program| match effect_id {
+                Some(V::Str(effect_id)) => (
+                    effect_is_scheduled(program, effect_id),
+                    program.operators.get(&**effect_id).is_some_and(|item| &**item == op),
+                    program.scheduled_event_ids.iter().any(|item| *item == row.event_id),
+                ),
+                _ => (false, false, false),
+            })),
+            Some(value) if !hashable(value) => unsupported("a program ID Python can't hash"),
+            _ => Ok(None),
+        }
+    })?;
+    let Some(V::Map(marker)) = map_of(&row.provenance)?.get(MARKER) else {
+        return Ok(false);
+    };
+    if differ(marker.get("program_id"), program_id)?
+        || differ(marker.get("effect_id"), effect_id)?
+        || !is_text(marker.get("op"), op)
+        || !is_text(marker.get("phase"), "start")
+    {
+        return Ok(false);
+    }
+    let (Some((true, true, true)), Some(V::Str(program_id)), Some(V::Str(effect_id))) = (program, program_id, effect_id) else {
+        return Ok(false);
+    };
+    Ok(is_text(payload.get("modifier_id"), &modifier_id(program_id, effect_id))
+        && is_text(payload.get("op"), op)
+        && matches!(payload.get(target), Some(V::Str(_))))
+}
+
 /// The checks and the copy of `staff_handoff`: everything but the receipt, which is after the swap.
 fn staff_handoff_on_copy<'py>(
     world: &Bound<'py, PyAny>,
@@ -1304,88 +1566,97 @@ fn staff_handoff_on_copy<'py>(
 ) -> PyResult<(Bound<'py, PyAny>, String, String, String, String)> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
-    approved_marked_effect(world, row, payload, "staff_handoff", "staff_id")?;
-    let staff_id = required_str(payload, "staff_id")?;
-    let handoff = parameters(py, "staff_handoff", &payload_item(event, "parameters")?)?;
-    let task_id: String = attribute(&handoff, intern!(py, "task_id"))?.extract()?;
-    let reason_code: String = attribute(&handoff, intern!(py, "reason_code"))?.extract()?;
-    let replacement_id = attribute(&handoff, intern!(py, "replacement_staff_id"))?;
-    if replacement_id.is_none() {
-        return unsupported("no replacement");
+    if !references_program(world, row, payload, "staff_handoff", "staff_id")? {
+        return errors::failed(py, "staff handoff does not reference an approved program");
     }
-    let replacement_id: String = replacement_id.extract()?;
+    let staff_id = required_str(payload, "staff_id")?;
+    let handoff = match parameters(py, "staff_handoff", &payload_item(event, "parameters")?) {
+        Ok(handoff) => handoff,
+        Err(error) => {
+            let text = caught(py, error, Catch::ValueOrType)?;
+            return errors::failed(py, format!("staff handoff parameters are invalid: {text}"));
+        }
+    };
+    let replacement_id = attribute(&handoff, intern!(py, "replacement_staff_id"))?;
+    let task_id = attribute(&handoff, intern!(py, "task_id"))?;
     let known = attribute(world, intern!(py, "staff"))?;
-    if !attribute(&handoff, intern!(py, "staff_id"))?.eq(&**staff_id)?
+    if attribute(&handoff, intern!(py, "staff_id"))?.ne(&**staff_id)?
+        || replacement_id.is_none()
         || !known.contains(&**staff_id)?
-        || !known.contains(&*replacement_id)?
-        || !attribute(world, intern!(py, "active_tasks"))?.contains(&*task_id)?
+        || !known.contains(&replacement_id)?
+        || !attribute(world, intern!(py, "active_tasks"))?.contains(&task_id)?
         || !model_state(world)?.contains(SHARED_OPERATIONS)?
     {
-        return unsupported("the participants or the task are invalid");
+        return errors::failed(py, "staff handoff participants or task are invalid");
     }
-    guard_passes(world, row)?;
+    let task_id: String = task_id.extract()?;
+    let reason_code: String = attribute(&handoff, intern!(py, "reason_code"))?.extract()?;
+    let replacement_id: String = replacement_id.extract()?;
+    guard_passes(world, row, event)?;
 
     let candidate = copy_of(world)?;
     let minute = exact_int(&attribute(&candidate, intern!(py, "minute_index"))?)?;
     let table = model_state(&candidate)?;
-    let Some(operations) = get_or_none(&table, "staff_operations_v1")? else {
-        return unsupported("no staff_operations_v1");
-    };
-    if !is_dict(&operations) {
-        return unsupported("staff_operations_v1 is another value");
-    }
-    let records = operations.get_item(intern!(py, "staff"))?;
-    let (Some(old_record), Some(replacement_record)) =
-        (get_or_none(&records, staff_id)?, get_or_none(&records, &replacement_id)?)
-    else {
-        return unsupported("no operation record");
-    };
+    let operations = get_or_none(&table, "staff_operations_v1")?.filter(is_dict);
     let task = attribute(&candidate, intern!(py, "active_tasks"))?.get_item(&*task_id)?;
+    // `operations.get("staff", {}).get(id) if isinstance(operations, dict) else None`.
+    let record_of = |id: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
+        match &operations {
+            Some(operations) => get_or_none(&get_or_empty(operations, "staff")?, id),
+            None => Ok(None),
+        }
+    };
+    let old_record = record_of(staff_id)?.filter(is_dict);
+    let replacement_record = record_of(&replacement_id)?.filter(is_dict);
     let staff_map = attribute(&candidate, intern!(py, "staff"))?;
     let old_staff = staff_map.get_item(&**staff_id)?;
     let replacement = staff_map.get_item(&*replacement_id)?;
+    let get = |record: &Bound<'py, PyAny>, key: &str| record.call_method1(intern!(py, "get"), (key,));
+    let qualified = (|| -> PyResult<bool> {
+        if attribute(&task, intern!(py, "kind"))?.ne("staff_operation")?
+            || attribute(&task, intern!(py, "staff_id"))?.ne(&**staff_id)?
+            || attribute(&task, intern!(py, "due_minute"))?.le(minute)?
+        {
+            return Ok(false);
+        }
+        let Some(old_record) = &old_record else {
+            return Ok(false);
+        };
+        if get(old_record, "phase")?.ne("working")? || get(old_record, "task_id")?.ne(attribute(&task, intern!(py, "id"))?)? {
+            return Ok(false);
+        }
+        let Some(replacement_record) = &replacement_record else {
+            return Ok(false);
+        };
+        let target_zone = get(old_record, "target_zone_id")?;
+        if get(replacement_record, "phase")?.ne("idle")?
+            || !attribute(&replacement, intern!(py, "active_task_id"))?.is_none()
+            || attribute(&old_staff, intern!(py, "zone_id"))?.ne(&target_zone)?
+            || attribute(&replacement, intern!(py, "zone_id"))?.ne(&target_zone)?
+        {
+            return Ok(false);
+        }
+        has_task_skill(&attribute(&replacement, intern!(py, "skills"))?, &get(old_record, "task_kind")?)
+    })()?;
+    let Some(old_record) = old_record.filter(|_| qualified) else {
+        return errors::failed(py, "staff handoff requires a qualified idle replacement already at active work");
+    };
     let task_due = exact_int(&attribute(&task, intern!(py, "due_minute"))?)?;
-    let target_zone = get_or_none(&old_record, "target_zone_id")?;
-    let in_target_zone = |person: &Bound<'_, PyAny>| -> PyResult<bool> {
-        let zone = attribute(person, intern!(py, "zone_id"))?;
-        Ok(match &target_zone {
-            Some(target) => zone.eq(target)?,
-            None => zone.is_none(),
-        })
-    };
-    let task_kind = old_record.call_method1(intern!(py, "get"), ("task_kind",))?;
-    let phase_is = |record: &Bound<'_, PyAny>, phase: &str| -> PyResult<bool> {
-        Ok(get_or_none(record, "phase")?.is_some_and(|value| value.eq(phase).unwrap_or(false)))
-    };
-    if !attribute(&task, intern!(py, "kind"))?.eq("staff_operation")?
-        || !attribute(&task, intern!(py, "staff_id"))?.eq(&**staff_id)?
-        || task_due <= minute
-        || !is_dict(&old_record)
-        || !phase_is(&old_record, "working")?
-        || !get_or_none(&old_record, "task_id")?.is_some_and(|id| id.eq(&*task_id).unwrap_or(false))
-        || !is_dict(&replacement_record)
-        || !phase_is(&replacement_record, "idle")?
-        || !attribute(&replacement, intern!(py, "active_task_id"))?.is_none()
-        || !in_target_zone(&old_staff)?
-        || !in_target_zone(&replacement)?
-        || !has_task_skill(&attribute(&replacement, intern!(py, "skills"))?, &task_kind)?
-    {
-        return unsupported("the replacement isn't a qualified idle one at the active work");
-    }
     let replacement_text = PyString::new(py, &replacement_id);
-    if !is_available(staff_status(&candidate)?.as_ref(), &replacement_text)? {
-        return unsupported("the replacement is unavailable");
+    let available = is_available(staff_status(&candidate)?.as_ref(), &replacement_text)?
+        && call_rule(
+            py,
+            "sheltersim.domain.staff_dynamics",
+            "staff_dynamics_is_available",
+            (&candidate, &replacement_text, minute),
+            None,
+        )?
+        .is_truthy()?;
+    if !available {
+        return errors::failed(py, "staff handoff replacement is unavailable");
     }
-    let on_duty = call_rule(
-        py,
-        "sheltersim.domain.staff_dynamics",
-        "staff_dynamics_is_available",
-        (&candidate, &replacement_text, minute),
-        None,
-    )?;
-    if !on_duty.is_truthy()? {
-        return unsupported("the replacement is unavailable");
-    }
+    let task_key = attribute(&task, intern!(py, "id"))?;
+    let task_due_object = attribute(&task, intern!(py, "due_minute"))?;
     let mut completions = Vec::new();
     for pending in pending_of(&candidate)?.try_iter()? {
         let pending = pending?;
@@ -1393,16 +1664,21 @@ fn staff_handoff_on_copy<'py>(
             continue;
         }
         let payload = attribute(&pending, intern!(py, "payload"))?;
-        if get_or_none(&payload, "task_id")?.is_some_and(|id| id.eq(&*task_id).unwrap_or(false))
-            && get_or_none(&payload, "staff_id")?.is_some_and(|id| id.eq(&**staff_id).unwrap_or(false))
-            && ints_equal(&attribute(&pending, intern!(py, "due_minute"))?, task_due)?
+        if get(&payload, "task_id")?.eq(&task_key)?
+            && get(&payload, "staff_id")?.eq(&**staff_id)?
+            && attribute(&pending, intern!(py, "due_minute"))?.eq(&task_due_object)?
         {
             completions.push(pending);
         }
     }
     let [completion] = completions.as_slice() else {
-        return unsupported("no one matching pending completion");
+        return errors::failed(py, "staff handoff requires one matching pending completion");
     };
+    // The records were found in `operations["staff"]`, a dict.
+    let Some(operations) = &operations else {
+        return unsupported("no staff_operations_v1");
+    };
+    let records = operations.get_item(intern!(py, "staff"))?;
     let document = completion.call_method0(intern!(py, "to_dict"))?;
     let new_payload = PyDict::new(py);
     new_payload.call_method1(intern!(py, "update"), (document.get_item(intern!(py, "payload"))?,))?;
@@ -1460,16 +1736,15 @@ fn staff_handoff<'py>(
     row: &EventRow,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = world.py();
-    let marker = match map_of(&row.provenance)?.get(MARKER) {
-        Some(V::Map(marker)) => marker,
-        _ => return unsupported("no marker"),
-    };
-    let sources = str_list(marker, "assumption_ids")?;
-    let sources: Vec<String> = sources.iter().map(|item| item.to_string()).collect();
-    let (candidate, staff_id, replacement_id, task_id, reason_code) = refused_by_python(py, (|| {
-        let done = staff_handoff_on_copy(world, event, row)?;
-        validate(&done.0)?;
-        Ok(done)
+    let (candidate, staff_id, replacement_id, task_id, reason_code, sources) = refused_by_python(py, (|| {
+        let (candidate, staff_id, replacement_id, task_id, reason_code) = staff_handoff_on_copy(world, event, row)?;
+        validate(&candidate)?;
+        // The checks saw the marker is a mapping.
+        let Some(V::Map(marker)) = map_of(&row.provenance)?.get(MARKER) else {
+            return unsupported("no marker");
+        };
+        let sources: Vec<String> = str_list(marker, "assumption_ids")?.iter().map(|item| item.to_string()).collect();
+        Ok((candidate, staff_id, replacement_id, task_id, reason_code, sources))
     })())?;
     // Past here the world has changed, and what is raised goes on as the Python rule's does.
     swap(world, &candidate)?;
@@ -1485,29 +1760,39 @@ fn facility_repair<'py>(
     let py = world.py();
     let payload = map_of(&row.payload)?;
     let plan = (|| {
-        approved_marked_effect(world, row, payload, "facility_repair", "facility_id")?;
+        if !references_program(world, row, payload, "facility_repair", "facility_id")? {
+            return errors::failed(py, "facility repair does not reference an approved program");
+        }
         let facility_id = required_str(payload, "facility_id")?;
-        let repair = parameters(py, "facility_repair", &payload_item(event, "parameters")?)?;
+        let repair = match parameters(py, "facility_repair", &payload_item(event, "parameters")?) {
+            Ok(repair) => repair,
+            Err(error) => {
+                let text = caught(py, error, Catch::ValueOrType)?;
+                return errors::failed(py, format!("facility repair parameters are invalid: {text}"));
+            }
+        };
         let facility_map = attribute(world, intern!(py, "facilities"))?;
-        if !attribute(&repair, intern!(py, "facility_id"))?.eq(&**facility_id)? || !facility_map.contains(&**facility_id)? {
-            return unsupported("the target is not a known facility");
+        if attribute(&repair, intern!(py, "facility_id"))?.ne(&**facility_id)? || !facility_map.contains(&**facility_id)? {
+            return errors::failed(py, "facility repair target does not match a known facility");
         }
         if !model_state(world)?.contains(SHARED_OPERATIONS)? {
-            return unsupported("no shared receipt state");
+            return errors::failed(py, "facility repair requires shared receipt state");
         }
-        guard_passes(world, row)?;
+        guard_passes(world, row, event)?;
         let facility = facility_map.get_item(&**facility_id)?;
         let working = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
         let capacity = exact_int(&attribute(&facility, intern!(py, "capacity"))?)?;
         let expected = exact_int(&attribute(&repair, intern!(py, "expected_working_units"))?)?;
         let restored = exact_int(&attribute(&repair, intern!(py, "restored_working_units"))?)?;
-        let modified = program_state(world, |state| {
-            Ok(state
-                .and_then(|state| state.active_facility_modifiers.get(&**facility_id))
-                .is_some_and(|record| !record.modifiers.is_empty()))
-        })?;
-        if working != expected || working >= restored || restored > capacity || active_outage(world, facility_id)? || modified {
-            return unsupported("the repair's preconditions no longer match");
+        let modified = || {
+            program_state(world, |state| {
+                Ok(state
+                    .and_then(|state| state.active_facility_modifiers.get(&**facility_id))
+                    .is_some_and(|record| !record.modifiers.is_empty()))
+            })
+        };
+        if working != expected || working >= restored || restored > capacity || active_outage(world, facility_id)? || modified()? {
+            return errors::failed(py, "facility repair preconditions no longer match the live facility state");
         }
         let mut sources: Vec<String> = Vec::new();
         for source in attribute(&repair, intern!(py, "source_ids"))?.try_iter()? {
@@ -1533,40 +1818,57 @@ fn facility_repair<'py>(
     receipt_tuple(py, record)
 }
 
-fn program_lists_effect(world: &Bound<'_, PyAny>, payload: &Doc) -> PyResult<bool> {
-    let program_id = required_str(payload, "program_id")?;
-    let effect_id = required_str(payload, "effect_id")?;
+/// `state.get("programs", {}).get(payload.get("program_id")) if isinstance(state, dict) else None`
+/// of `set_staff_role` and the additions, and whether it lists the payload's effect: None when there
+/// is no program. A program ID Python can't hash raises, before the checks.
+fn program_lists_effect(world: &Bound<'_, PyAny>, payload: &Doc) -> PyResult<Option<bool>> {
+    let (program_id, effect_id) = (payload.get("program_id"), payload.get("effect_id"));
     program_state(world, |state| {
-        Ok(state
-            .and_then(|state| state.programs.get(&**program_id))
-            .is_some_and(|program| effect_is_scheduled(program, effect_id)))
+        let Some(state) = state else {
+            return Ok(None);
+        };
+        match program_id {
+            Some(V::Str(program_id)) => Ok(state.programs.get(&**program_id).map(|program| match effect_id {
+                Some(V::Str(effect_id)) => effect_is_scheduled(program, effect_id),
+                _ => false,
+            })),
+            Some(value) if !hashable(value) => unsupported("a program ID Python can't hash"),
+            _ => Ok(None),
+        }
     })
 }
 
 fn set_staff_role(world: &Bound<'_, PyAny>, row: &EventRow, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
-    let staff_id = required_str(payload, "staff_id")?;
-    if !program_lists_effect(world, payload)?
-        || str_of(payload, "op").is_none_or(|op| &**op != "set_staff_role")
-        || !attribute(world, intern!(py, "staff"))?.contains(&**staff_id)?
-    {
-        return unsupported("the event does not reference an approved staff target");
+    let approved = program_lists_effect(world, payload)? == Some(true)
+        && is_text(payload.get("op"), "set_staff_role")
+        && match payload.get("staff_id") {
+            Some(V::Str(staff_id)) => attribute(world, intern!(py, "staff"))?.contains(&**staff_id)?,
+            _ => false,
+        };
+    if !approved {
+        return errors::failed(py, "staff-role event does not reference an approved staff target");
     }
+    let staff_id = required_str(payload, "staff_id")?;
     let raw = PyDict::new(py);
     raw.set_item("skills", payload_item(event, "skills")?)?;
-    let role = parameters(py, "set_staff_role", raw.as_any())?;
+    let role = match parameters(py, "set_staff_role", raw.as_any()) {
+        Ok(role) => role,
+        Err(error) => {
+            let text = caught(py, error, Catch::Value)?;
+            return errors::failed(py, format!("staff-role event skills are invalid: {text}"));
+        }
+    };
     let candidate = copy_of(world)?;
     let staff = attribute(&candidate, intern!(py, "staff"))?.get_item(&**staff_id)?;
-    if !attribute(&staff, intern!(py, "active_task_id"))?.is_none() {
-        return unsupported("the worker has an active task");
-    }
-    if let Some(operations) = get_or_none(&model_state(&candidate)?, "staff_operations_v1")? {
-        if let Some(record) = get_or_none(&operations.get_item(intern!(py, "staff"))?, staff_id)? {
-            if is_dict(&record) && !get_or_none(&record, "phase")?.is_some_and(|phase| phase.eq("idle").unwrap_or(false)) {
-                return unsupported("the worker has active work");
-            }
-        }
+    // `candidate.model_state.get("staff_operations_v1", {}).get("staff", {}).get(staff_id)`.
+    let operations = get_or_empty(&get_or_empty(&model_state(&candidate)?, "staff_operations_v1")?, "staff")?
+        .call_method1(intern!(py, "get"), (&**staff_id,))?;
+    if !attribute(&staff, intern!(py, "active_task_id"))?.is_none()
+        || (is_dict(&operations) && operations.call_method1(intern!(py, "get"), ("phase",))?.ne("idle")?)
+    {
+        return errors::failed(py, "staff role cannot change while work is active");
     }
     let mut skills: Vec<String> = Vec::new();
     for skill in attribute(&role, intern!(py, "skills"))?.try_iter()? {
@@ -1620,9 +1922,18 @@ fn add_one_toilet(py: Python<'_>, candidate: &Bound<'_, PyAny>, facility_id: &st
     let toilet = py.import(intern!(py, "sheltersim.domain.models"))?.getattr(intern!(py, "FacilityState"))?.call((), Some(&keywords))?;
     attribute(candidate, intern!(py, "facilities"))?.set_item(facility_id, toilet)?;
     if overlay::placement_enabled(candidate)? {
-        let source = row.source_id.as_deref().filter(|source| !source.is_empty());
-        let sources: Vec<&str> = source.into_iter().collect();
-        overlay::place_facility(candidate, facility_id, &row.event_id, &sources)?;
+        // By name, as the Python rule calls it (its kernel first), for the text of its ValueError.
+        let sources = match row.source_id.as_deref().filter(|source| !source.is_empty()) {
+            Some(source) => PyTuple::new(py, [source])?,
+            None => PyTuple::empty(py),
+        };
+        let keywords = PyDict::new(py);
+        keywords.set_item("event_id", &*row.event_id)?;
+        keywords.set_item("source_ids", sources)?;
+        let placed = call_rule(py, "sheltersim.domain.geometry_overlay", "place_installed_facility", (candidate, facility_id), Some(&keywords));
+        if let Err(error) = placed {
+            return errors::failed(py, caught(py, error, Catch::Value)?);
+        }
     }
     call_rule(py, "sheltersim.domain.agent_dynamics", "announce_installed_facility", (candidate, facility_id), None)?;
     Ok(())
@@ -1632,32 +1943,45 @@ fn add_structure(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<&'static 
     let py = world.py();
     let payload = map_of(&row.payload)?;
     if !has_exactly(payload, &["program_id", "effect_id", "modifier_id", "op", "zone_id", "count"]) {
-        return unsupported("the payload has other fields");
+        return errors::failed(py, "structural primitive payload fields do not match");
     }
+    let listed = program_lists_effect(world, payload)? == Some(true);
+    // The count, or None for an int past 64 bits that is positive: past any bound.
+    let valid = (|| -> PyResult<Option<Option<i64>>> {
+        if !listed {
+            return Ok(None);
+        }
+        match payload.get("op") {
+            Some(V::Str(op)) if matches!(&**op, "add_staff" | "add_toilet") => {}
+            Some(value) if !hashable(value) => return unsupported("an operator Python can't hash"),
+            _ => return Ok(None),
+        }
+        let count = match payload.get("count") {
+            Some(V::Int(count)) if *count > 0 => Some(*count),
+            Some(V::Big(count)) if !count.starts_with('-') => None,
+            _ => return Ok(None),
+        };
+        Ok(key_in(&attribute(world, intern!(py, "zones"))?, payload.get("zone_id"))?.then_some(count))
+    })()?;
+    let Some(count) = valid else {
+        return errors::failed(py, "structural primitive target or operation is invalid");
+    };
     let op = required_str(payload, "op")?;
     let zone_id = required_str(payload, "zone_id")?;
-    let count = match payload.get("count") {
-        Some(V::Int(count)) if *count > 0 => *count,
-        _ => return unsupported("the count is not a positive int"),
-    };
-    if !program_lists_effect(world, payload)?
-        || !matches!(&**op, "add_staff" | "add_toilet")
-        || !attribute(world, intern!(py, "zones"))?.contains(&**zone_id)?
-    {
-        return unsupported("the target or the operation is invalid");
-    }
+    // `.removeprefix` of a value that is not a str raises, for the Python rule to raise.
     let modifier = required_str(payload, "modifier_id")?;
     let suffix = modifier.strip_prefix("modifier-").unwrap_or(modifier);
     let candidate = copy_of(world)?;
     if &**op == "add_staff" {
         let staff = attribute(&candidate, intern!(py, "staff"))?;
-        if staff.len()? as i64 + count > 100 {
-            return unsupported("the 100-staff bound");
-        }
+        let room = 100 - staff.len()? as i64;
+        let Some(count) = count.filter(|count| *count <= room) else {
+            return errors::failed(py, "adding staff would exceed the 100-staff runtime bound");
+        };
         for index in 1..=count {
             let staff_id = format!("effect-staff-{suffix}-{index}");
             if staff.contains(&*staff_id)? {
-                return unsupported("the generated staff ID exists");
+                return errors::failed(py, "generated staff ID already exists");
             }
             add_one_staff(py, &candidate, &staff_id, zone_id)?;
         }
@@ -1666,13 +1990,14 @@ fn add_structure(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<&'static 
         }
     } else {
         let facilities = attribute(&candidate, intern!(py, "facilities"))?;
-        if facilities.len()? as i64 + count > 200 {
-            return unsupported("the 200-facility bound");
-        }
+        let room = 200 - facilities.len()? as i64;
+        let Some(count) = count.filter(|count| *count <= room) else {
+            return errors::failed(py, "adding toilets would exceed the 200-facility bound");
+        };
         for index in 1..=count {
             let facility_id = format!("effect-toilet-{suffix}-{index}");
             if facilities.contains(&*facility_id)? {
-                return unsupported("the generated toilet ID exists");
+                return errors::failed(py, "generated toilet ID already exists");
             }
             add_one_toilet(py, &candidate, &facility_id, zone_id, row)?;
         }

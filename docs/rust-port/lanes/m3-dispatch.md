@@ -56,14 +56,14 @@ M3 の最後のレーンです。`_run_dispatch_phase` を Rust（`native/src/ru
 
 - テストの差し替え（`handlers[...] = 偽物`、`monkeypatch.setattr(Handler, "apply", ...)`）は、イベントごとに見るのでそのまま届きます。
 - `Unsupported` は最初の変更より前だけです。関数が断ったイベントは Python が初めから処理し、その文で失敗します。
-- `provenance` に `effect_program_v1` があるイベントは、ガードを Python が読みます。
+- `provenance` に `effect_program_v1` があるイベントは、ガード（`effect_event_guard_or_suppress`）を `rules/effects.rs` の `guard_or_suppress` が読みます（L8c）。偽なら抑止、読めないガードや対象のないガードは失敗で、どちらも Python の規則の文です。真なら `others` のハンドラーとして続けます（EffectProgram の5つのハンドラーも `others` にあります）。表の6種類、ハンドラーのない種類、Rust が決められないガード（64 bit を超える int など）は、今までどおり Python の dispatcher に渡します。
 - `dispatcher` のクラスが違う、キューやログが Rust のものでない、`id_counters` が素の dict でないときは、段階全体を Python が動かします。
 - コールバックをまたいで借用を持ちません。Python を呼んだあとは `EventWriter::of` を呼び直し、断られたら記録は `EventDispatcher.settle` に任せます。
 - `@pytest.mark.python_rules` は段階の kernel を外します。`tests/support/python_rules.py` に名前を足しました（`record_social_event`、`observe_event`、`learn_facility`、段階の手順など）。
 
 ## 抑止の文を Rust に移した判断
 
-移しました。ゲートで社会イベントの約 12%、7日分で約 5% です。Python に任せると kernel が断ってから Python の規則が例外を投げるので二度手間で、3つの文は定数です。Python の手順でその文より前にある確認がすべて通ったあとにだけ返すので、文が変わることはありません。`rule_shadow` がゲートで 12,354 件、7日分で 2,736 件の文を Python の規則と比べ、違いは0件です。`failed` の文と、ほかの種類の `interaction` は Python のままです。
+移しました。ゲートで社会イベントの約 12%、7日分で約 5% です。Python に任せると kernel が断ってから Python の規則が例外を投げるので二度手間で、3つの文は定数です。Python の手順でその文より前にある確認がすべて通ったあとにだけ返すので、文が変わることはありません。`rule_shadow` がゲートで 12,354 件、7日分で 2,736 件の文を Python の規則と比べ、違いは0件です。`failed` の文と、ほかの種類の `interaction` も L8c で Rust に移りました（`l8-texts-saved.md`）。
 
 ## `EventWriter::settle` を実際に使って分かったこと
 
