@@ -246,14 +246,6 @@ class _OtherPolicy(ExpressivenessChannelOpennessPolicy):
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        (
-            lambda w, c, v, d, r: {
-                "controller": SimpleNamespace(
-                    **{**vars(c), "artifacts": SimpleNamespace(trace_level=TraceLevel.SUMMARY)}
-                )
-            },
-            "trace",
-        ),
         (lambda w, c, v, d, r: {"rng": _OtherRNG(1)}, "RNG"),
         (
             lambda w, c, v, d, r: {
@@ -435,7 +427,8 @@ def test_a_run_with_a_trace_is_the_same_world_as_one_without(
     traced = run_scenario(scenario, tmp_path / "traced", trace_level=TraceLevel.SUMMARY)
     plain = run_scenario(scenario, tmp_path / "plain", trace_level=TraceLevel.OFF)
     assert traced.canonical_json() == plain.canonical_json()
-    assert _mirror(traced).stats()["whole_writes"] == 30
+    # The kernel runs with a trace too, and rules/trace.rs writes its document.
+    assert _mirror(traced).stats()["whole_writes"] == 1
     assert _mirror(plain).stats()["whole_writes"] == 1
 
 

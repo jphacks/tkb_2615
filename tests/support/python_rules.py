@@ -232,6 +232,11 @@ def segment_steps() -> frozenset[str]:
 def _python_rules(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     if request.node.get_closest_marker("python_rules") is None:
         return
+    without_kernels(monkeypatch)
+
+
+def without_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mark's change, for a test that compares both within one test."""
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.core import world as world_module

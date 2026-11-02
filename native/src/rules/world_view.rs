@@ -1351,7 +1351,7 @@ fn mobility_text(mobility: Mobility) -> &'static str {
     }
 }
 
-fn status_text(status: RequestStatus) -> &'static str {
+pub(crate) fn status_text(status: RequestStatus) -> &'static str {
     match status {
         RequestStatus::Pending => "pending",
         RequestStatus::Assigned => "assigned",

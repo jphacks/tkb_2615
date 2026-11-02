@@ -36,6 +36,7 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
     from sheltersim.experiments.phases.update import UpdatePhase
     from sheltersim.experiments.runner import OfflineSimulationController
     from sheltersim.policies.social import SOCIAL_RUNTIME_STATE_KEY
+    from shadow_kit import captured, values_in
 
     rules = native.rules("social_propagation")
     kernel = rules.update_social_propagation
@@ -63,7 +64,8 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
             return base_deltas
         python = None
         keeping = None
-        if self.artifacts.trace_level is TraceLevel.OFF and type(rng) is CounterRNG:
+        traced = self.artifacts.trace_level is not TraceLevel.OFF
+        if type(rng) is CounterRNG:
             keeping = KeepingRNG(rng.seed)
             plain = json.loads(json.dumps(world.model_state.get(SOCIAL_RUNTIME_STATE_KEY)))
             try:
@@ -97,12 +99,21 @@ def install(seen: Counter[str], reasons: Counter[str], differences: list[str]) -
             )
         rules.start_draw_log()
         try:
-            final = kernel(self, world, view, base_deltas, minute, rng)
+            with captured(self.artifacts, "record_social_contact_trace") as documents:
+                final = kernel(self, world, view, base_deltas, minute, rng)
         except native.Unsupported as reason:
             rules.take_draw_log()
             reasons[f"social: {reason}"] += 1
             return python_step(self, world, view, base_deltas, minute, rng)
         rust_draws = rules.take_draw_log()
+        if traced and python is not None:
+            seen["social_trace_documents"] += len(documents)
+            expected = json.dumps([[python.trace_document(minute)], {}], ensure_ascii=False)
+            if documents != [expected]:
+                differences.append(f"minute {minute}: the contact trace: {documents!r:.1500}")
+            else:
+                seen["social_trace_values_compared"] += values_in(json.loads(expected))
+                seen["social_trace_bytes_compared"] += len(expected)
         seen["social_kernel_ran"] += 1
         seen[f"social_ran_{policy.policy_version}"] += 1
         if python is None:

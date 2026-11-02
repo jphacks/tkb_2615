@@ -267,20 +267,25 @@ class RunArtifactWriter:
         observed_state: Mapping[str, Any] | None = None,
     ) -> None:
         """Collect an immutable policy decision for summary/full output."""
+        document = (
+            _decision_document(proposal, full=self.trace_level is TraceLevel.FULL)
+            if self.trace_level is not TraceLevel.OFF
+            else {}
+        )
+        self.record_decision_document(document, observed_state)
+
+    def record_decision_document(
+        self, document: dict[str, Any], observed_state: Mapping[str, Any] | None
+    ) -> None:
+        """Keep a decision's document, which rules/decisions.rs writes in a Run with its kernels."""
         self._require_started()
         if self._finalized:
             raise ValueError("run artifacts have already been finalized")
         if self.trace_level is not TraceLevel.OFF:
-            snapshot = _sanitize(dict(observed_state)) if observed_state is not None else None
+            if observed_state is not None:
+                document["observed_state"] = _sanitize(dict(observed_state))
             assert self._spool is not None
-            self._spool.append(
-                "decisions",
-                _sanitize(
-                    _decision_document(
-                        proposal, full=self.trace_level is TraceLevel.FULL, observed_state=snapshot
-                    )
-                ),
-            )
+            self._spool.append("decisions", _sanitize(document))
 
     def record_llm_call(self, record: Any) -> None:
         """Persist a sanitized call record immediately, including failures and budget stops."""
@@ -642,12 +647,7 @@ class RunArtifactWriter:
             raise ValueError("write_initial must be called before recording run artifacts")
 
 
-def _decision_document(
-    proposal: ActionProposal,
-    *,
-    full: bool,
-    observed_state: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def _decision_document(proposal: ActionProposal, *, full: bool) -> dict[str, Any]:
     document: dict[str, Any] = {
         "minute_index": proposal.minute_index,
         "agent_id": proposal.agent_id,
@@ -684,8 +684,6 @@ def _decision_document(
             }
             for candidate in proposal.candidates
         ]
-    if observed_state is not None:
-        document["observed_state"] = observed_state
     return document
 
 

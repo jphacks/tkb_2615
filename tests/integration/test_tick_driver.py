@@ -26,15 +26,18 @@ from sheltersim.core.engine import (
 )
 from sheltersim.core.rng import CounterRNG
 from sheltersim.core.world import WorldState
+from sheltersim.experiments.performance import PhaseProfiler
 from sheltersim.experiments.phases.driver import DRIVEN_RULES, DRIVEN_STEPS
 from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.inspection.traces import RunArtifactWriter
+from sheltersim.llm.cache import ResponseTape
 from sheltersim.llm.provider import LLMMode, LLMRouter, LLMSettings
-from sheltersim.llm.runtime import EventTriggeredSocialPolicy
+from sheltersim.llm.runtime import EventTriggeredSocialPolicy, SocialRuntimeLimits
 
 sys.path.insert(0, str(BENCHMARKS))
 
 import tick_probe  # noqa: E402
+from gate_scenarios import ScriptedProvider, _llm_settings, generated, with_rumors  # noqa: E402
 
 ROOT = BENCHMARKS.parent
 needs_rust = pytest.mark.skipif(not native.available(), reason="needs the Rust kernels")
@@ -239,50 +242,143 @@ def test_a_step_patched_on_the_controller_itself_sends_the_tick_to_the_phases(
 
 @needs_rust
 @pytest.mark.parametrize("level", [TraceLevel.SUMMARY, TraceLevel.FULL])
-def test_a_trace_sends_each_tick_to_the_phases(
+def test_a_trace_runs_on_the_driver_and_keeps_its_files(
     level: TraceLevel, generated_scenario: Any, tmp_path: Path
 ) -> None:
     before = _ticks()
-    _run(generated_scenario, tmp_path, 3, trace=level)
-    assert _ticks() == before
-    assert _stats()[1]["a trace is recorded"] >= 3
+    driven = _run(generated_scenario, tmp_path / "driven", 3, trace=level)
+    assert _ticks() - before == 3
+    with _on_the_phases():
+        phases = _run(generated_scenario, tmp_path / "phases", 3, trace=level)
+    assert driven == phases
+    assert (tmp_path / "driven/psychology_contributions.jsonl").read_bytes() == (
+        tmp_path / "phases/psychology_contributions.jsonl"
+    ).read_bytes()
 
 
 @needs_rust
-def test_a_trace_of_the_engine_s_phases_sends_each_tick_to_the_phases(
+def test_a_trace_of_the_engine_s_phases_runs_on_the_driver(
     generated_scenario: Any, tmp_path: Path
 ) -> None:
     world = WorldState.from_scenario(generated_scenario)
     artifacts = RunArtifactWriter(generated_scenario, tmp_path, trace_level=TraceLevel.OFF)
     artifacts.write_initial(world, execution_mode="offline")
     seen: list[Any] = []
+    watched: list[Any] = []
     engine = TickEngine(
         world,
         phase_handler=OfflineSimulationController(world, artifacts),
         trace_level=TraceLevel.FULL,
         trace_sink=seen.append,
     )
+    engine.phase_observer = lambda phase, before: watched.append((phase, before))
     before = _ticks()
     engine.run(2)
-    assert _ticks() == before
+    assert _ticks() - before == 2
     assert [item.phase for item in seen] == list(TICK_PHASE_ORDER) * 2
+    assert [item.minute_index for item in seen] == [0] * 7 + [1] * 7
+    assert watched == [(phase, stage) for phase in TICK_PHASE_ORDER for stage in (True, False)] * 2
+
+
+class _KeepingProvider(ScriptedProvider):
+    """Keeps what each call asks, and never leaves this process."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def complete(self, *, model_id: str, task: Any, **options: Any) -> Any:
+        self.asked.append(task.input_text)
+        return super().complete(model_id=model_id, task=task, **options)
+
+
+def _stressed(controller: OfflineSimulationController, world: WorldState) -> None:
+    """Each person under stress and the daily caps open, as the gate's `_stressed_run` does."""
+    for agent in world.agents.values():
+        agent.stress = 0.9
+    controller.social_policy.limits = SocialRuntimeLimits(
+        cooldown_minutes=5, per_agent_per_day=40, global_per_day=120, complaint_wait_minutes=5
+    )
 
 
 @needs_rust
-def test_a_router_that_can_call_a_provider_sends_each_tick_to_the_phases(
-    generated_scenario: Any, tmp_path: Path
+def test_a_router_that_can_call_a_provider_runs_on_the_driver_as_through_the_phases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = LLMSettings(
-        mode=LLMMode.REPLAY,
-        max_api_calls=1,
-        max_input_tokens=1024,
-        max_output_tokens=64,
-        budget_usd=0.0,
-    )
+    minutes = 240
+    scenario = with_rumors(generated(evacuees=24, minutes=minutes, staff_count=1))
+    calls: list[tuple[str, int, tuple[Any, ...]]] = []
+    for name in ("consider_support_request", "consider_complaint_response"):
+        original = getattr(EventTriggeredSocialPolicy, name)
+
+        def recorded(self: Any, world: Any, *, _name: str = name, _rule: Any = original, **o: Any):
+            calls.append((_name, world.minute_index, tuple(sorted(o.items()))))
+            return _rule(self, world, **o)
+
+        monkeypatch.setattr(EventTriggeredSocialPolicy, name, recorded)
+
+    def run(directory: Path, router: LLMRouter) -> tuple[dict[str, Any], list[Any]]:
+        calls.clear()
+        world, controller, engine = _build(scenario, directory, router=router)
+        _stressed(controller, world)
+        engine.run(minutes)
+        return _saved(world, controller), list(calls)
+
     before = _ticks()
-    _run(generated_scenario, tmp_path, 2, router=LLMRouter(settings))
-    assert _ticks() == before
-    assert _stats()[1]["a Provider can be called"] >= 2
+    provider = _KeepingProvider()
+    record = LLMRouter(_llm_settings(LLMMode.RECORD), provider=provider, tape=ResponseTape())
+    driven, driven_calls = run(tmp_path / "driven", record)
+    assert _ticks() - before == minutes
+    assert provider.asked, "no Provider call was reached"
+
+    phase_provider = _KeepingProvider()
+    with _on_the_phases():
+        phases, phases_calls = run(
+            tmp_path / "phases",
+            LLMRouter(_llm_settings(LLMMode.RECORD), provider=phase_provider, tape=ResponseTape()),
+        )
+    assert driven == phases
+    assert driven_calls == phases_calls
+    assert provider.asked == phase_provider.asked
+
+    # The same recorded responses, from the tape alone: no Provider is given.
+    before = _ticks()
+    replay = LLMRouter(
+        _llm_settings(LLMMode.REPLAY), tape=ResponseTape.from_dict(record.tape.to_dict())
+    )
+    replayed, replayed_calls = run(tmp_path / "replay", replay)
+    assert _ticks() - before == minutes
+    assert replayed == driven
+    assert replayed_calls == driven_calls
+
+
+@needs_rust
+def test_an_answer_the_schema_refuses_falls_back_on_the_driver_as_through_the_phases(
+    tmp_path: Path,
+) -> None:
+    """LLM output stays untrusted on either path: the router checks it, before any rule reads it."""
+    minutes = 240
+    scenario = with_rumors(generated(evacuees=24, minutes=minutes, staff_count=1))
+
+    class Refused(_KeepingProvider):
+        @staticmethod
+        def _answer(task: Any) -> str:
+            return '{"priority":"run this code","rationale":"no"}'
+
+    def run(directory: Path) -> tuple[dict[str, Any], list[str]]:
+        provider = Refused()
+        router = LLMRouter(_llm_settings(LLMMode.RECORD), provider=provider, tape=ResponseTape())
+        world, controller, engine = _build(scenario, directory, router=router)
+        _stressed(controller, world)
+        engine.run(minutes)
+        return _saved(world, controller), provider.asked
+
+    driven, asked = run(tmp_path / "driven")
+    assert asked
+    assert "run this code" not in driven["world"]
+    with _on_the_phases():
+        phases, phases_asked = run(tmp_path / "phases")
+    assert driven == phases
+    assert asked == phases_asked
 
 
 @needs_rust
@@ -322,40 +418,61 @@ def test_the_hooks_of_an_offline_router_run_where_they_run_through_the_phases(
     assert any(call[0] == "consider_support_request" for call in driven_calls)
 
 
+class _Seen:
+    def __init__(self) -> None:
+        self.phases: list[tuple[int, str, bool]] = []
+
+    def engine_started(self, engine: int, world: WorldState) -> None:
+        pass
+
+    def before_phase(self, engine: int, world: Any, minute: int, phase: TickPhase) -> None:
+        self.phases.append((minute, phase.value, True))
+
+    def after_phase(self, engine: int, world: Any, minute: int, phase: TickPhase) -> None:
+        self.phases.append((minute, phase.value, False))
+
+
 @needs_rust
-def test_a_tick_probe_sends_each_tick_to_the_phases_unless_it_watches_the_driver(
-    generated_scenario: Any, tmp_path: Path
+def test_a_tick_probe_watches_the_driver_and_a_patch_s_phases_alike(
+    generated_scenario: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class Seen:
-        def __init__(self) -> None:
-            self.phases: list[tuple[int, str, bool]] = []
-
-        def engine_started(self, engine: int, world: WorldState) -> None:
-            pass
-
-        def before_phase(self, engine: int, world: Any, minute: int, phase: TickPhase) -> None:
-            self.phases.append((minute, phase.value, True))
-
-        def after_phase(self, engine: int, world: Any, minute: int, phase: TickPhase) -> None:
-            self.phases.append((minute, phase.value, False))
-
+    expected = [
+        (minute, phase.value, stage)
+        for minute in range(2)
+        for phase in TICK_PHASE_ORDER
+        for stage in (True, False)
+    ]
     results = {}
-    for on_driver, ticks in ((False, 0), (True, 2)):
-        seen = Seen()
-        undo = tick_probe.install([seen], on_driver=on_driver)
+    for patched, ticks in ((False, 2), (True, 0)):
+        seen = _Seen()
+        undo = tick_probe.install([seen])
         before = _ticks()
         try:
-            results[on_driver] = _run(generated_scenario, tmp_path / str(on_driver), 2)
+            if patched:
+                with _on_the_phases():
+                    results[patched] = _run(generated_scenario, tmp_path / str(patched), 2)
+            else:
+                results[patched] = _run(generated_scenario, tmp_path / str(patched), 2)
         finally:
             undo()
         assert _ticks() - before == ticks
-        assert seen.phases == [
-            (minute, phase.value, stage)
-            for minute in range(2)
-            for phase in TICK_PHASE_ORDER
-            for stage in (True, False)
-        ]
+        assert seen.phases == expected
     assert results[False] == results[True]
+
+
+@needs_rust
+def test_the_phase_profiler_leaves_the_driver_running(
+    generated_scenario: Any, tmp_path: Path
+) -> None:
+    profiler = PhaseProfiler()
+    _world, _controller, engine = _build(generated_scenario, tmp_path)
+    engine.phase_observer = profiler.observe
+    before = _ticks()
+    engine.run(2)
+    assert _ticks() - before == 2
+    report = profiler.report()
+    assert {row["phase"] for row in report["phases"]} == {str(phase) for phase in TICK_PHASE_ORDER}
+    assert all(row["calls"] == 2 for row in report["phases"])
 
 
 @needs_rust
@@ -409,6 +526,7 @@ _PHASE_STEPS = {
         "_view_after_movement": "world_view::view_after_movement(",
         "_psychology_update": "psychology::update_psychology(",
         "_social_propagation": "social_propagation::update_social_propagation(",
+        "_record_psychology_trace": "trace::record_psychology_trace(",
         "_update_long_term_psychology": "psychology::update_long_term(",
         "_apply_state_deltas": "psychology::apply_deltas(",
     },

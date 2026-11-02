@@ -110,13 +110,9 @@ class TickEngine:
 
         minute = self.clock.minute_index
         # A handler with `run_tick` may run the phases in Rust (experiments/phases/driver.py), and
-        # says false for a tick left to the phases below. A trace of each phase needs those.
+        # says false for a tick left to the phases below.
         run_tick = getattr(self.phase_handler, "run_tick", None)
-        if (
-            run_tick is None
-            or self.trace_level is TraceLevel.FULL
-            or not run_tick(self.world, minute, self.rng, self.phase_observer)
-        ):
+        if run_tick is None or not run_tick(self.world, minute, self.rng, self._observer(minute)):
             self._run_phases(minute)
 
         self.clock.advance()
@@ -126,8 +122,22 @@ class TickEngine:
             self._emit(TickTrace(minute_index=minute, phase=None))
         return self.world
 
-    def _run_phases(self, minute: int) -> None:
+    def _observer(self, minute: int) -> PhaseObserver | None:
+        """The phase observer of a tick: also the record of each phase in a full trace."""
         observer = self.phase_observer
+        if self.trace_level is not TraceLevel.FULL:
+            return observer
+
+        def observe(phase: TickPhase, before: bool) -> None:
+            if observer is not None:
+                observer(phase, before)
+            if not before:
+                self._emit(TickTrace(minute_index=minute, phase=phase))
+
+        return observe
+
+    def _run_phases(self, minute: int) -> None:
+        observer = self._observer(minute)
         for phase in TICK_PHASE_ORDER:
             if observer is not None:
                 observer(phase, True)
@@ -136,8 +146,6 @@ class TickEngine:
                 raise TickExecutionError("tick phase attempted to change the engine-owned clock")
             if observer is not None:
                 observer(phase, False)
-            if self.trace_level is TraceLevel.FULL:
-                self._emit(TickTrace(minute_index=minute, phase=phase))
 
     def run(self, steps: int | None = None) -> WorldState:
         """Run up to ``steps`` minutes, or continue until duration is reached."""

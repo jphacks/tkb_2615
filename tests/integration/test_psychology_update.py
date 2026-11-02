@@ -246,8 +246,8 @@ def test_what_the_python_checks_may_refuse_goes_to_them(
 @pytest.mark.parametrize(
     ("policy", "trace", "minute", "reason"),
     [
-        (SimplePsychologyPolicy(), TraceLevel.SUMMARY, 0, "trace"),
-        (SimplePsychologyPolicy(), TraceLevel.FULL, 0, "trace"),
+        (SimplePsychologyPolicy(), TraceLevel.SUMMARY, 0, "a view Python made"),
+        (SimplePsychologyPolicy(), TraceLevel.FULL, 0, "a view Python made"),
         (_OwnRules(), TraceLevel.OFF, 0, "not one this kernel knows"),
         (object(), TraceLevel.OFF, 0, "not one this kernel knows"),
         (SimplePsychologyPolicy(), TraceLevel.OFF, 1, "not the view's"),
