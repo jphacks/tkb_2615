@@ -56,7 +56,7 @@ M3 の最後のレーンです。`_run_dispatch_phase` を Rust（`native/src/ru
 
 - テストの差し替え（`handlers[...] = 偽物`、`monkeypatch.setattr(Handler, "apply", ...)`）は、イベントごとに見るのでそのまま届きます。
 - `Unsupported` は最初の変更より前だけです。関数が断ったイベントは Python が初めから処理し、その文で失敗します。
-- `provenance` に `effect_program_v1` があるイベントは、ガードを Python が読みます。
+- `provenance` に `effect_program_v1` があるイベントは、ガード（`effect_event_guard_or_suppress`）を `rules/effects.rs` の `guard_or_suppress` が読みます（L8c）。偽なら抑止、読めないガードや対象のないガードは失敗で、どちらも Python の規則の文です。真なら `others` のハンドラーとして続けます（EffectProgram の5つのハンドラーも `others` にあります）。表の6種類、ハンドラーのない種類、Rust が決められないガード（64 bit を超える int など）は、今までどおり Python の dispatcher に渡します。
 - `dispatcher` のクラスが違う、キューやログが Rust のものでない、`id_counters` が素の dict でないときは、段階全体を Python が動かします。
 - コールバックをまたいで借用を持ちません。Python を呼んだあとは `EventWriter::of` を呼び直し、断られたら記録は `EventDispatcher.settle` に任せます。
 - `@pytest.mark.python_rules` は段階の kernel を外します。`tests/support/python_rules.py` に名前を足しました（`record_social_event`、`observe_event`、`learn_facility`、段階の手順など）。
