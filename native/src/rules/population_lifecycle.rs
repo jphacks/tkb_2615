@@ -13,12 +13,13 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 
+use crate::core::errors;
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, unsupported};
 use crate::core::value::V;
 use crate::rules::movement::{mobility_text, start_movement};
 use crate::rules::movement_geometry::{Geo, Pt};
 use crate::rules::population::{
-    schedule_population_retry, suppressed, cancel_agent_events, check_admission_paths, check_information, check_queue_rows, check_relationship_keys, drop_support_requests, event_row,
+    schedule_population_retry, cancel_agent_events, check_admission_paths, check_information, check_queue_rows, check_relationship_keys, drop_support_requests, event_row,
     filter_support_requests, get, get_map, has_namespace, identifier, is_dict, namespace, optional_identifier, optional_text, pair_of,
     payload, person_in, place_in_room, planning, presence_is_plain, presence_state, profile_object, record_hash, release_room, reset_position,
     sha_hex, sorted_keys, sorted_set, strings, text, v_map, write_presence, write_room_admission, writing, Person, Places, Transition, AGENT_DYNAMICS,
@@ -1082,10 +1083,10 @@ fn apply_presence_action<'py>(
         Ok((row, command, state, ids_of_event, plan))
     })())?;
     match plan {
-        Plan::Suppress(text) => suppressed(candidate.py(), text.to_owned()),
+        Plan::Suppress(text) => errors::suppressed(candidate.py(), text),
         Plan::Defer(reason) => {
             schedule_population_retry(world, event, "presence-retry", "population exit")?;
-            suppressed(candidate.py(), format!("population exit waits until the person is free: {reason}"))
+            errors::suppressed(candidate.py(), format!("population exit waits until the person is free: {reason}"))
         }
         plan => writing(write_action(candidate, &row, &ids_of_event, &command, &state, plan)),
     }
@@ -1122,7 +1123,7 @@ pub(crate) fn apply_presence_command<'py>(world: &Bound<'py, PyAny>, event: &Bou
         Ok((typed, ids, candidate, dropped))
     })())?;
     if dropped {
-        return suppressed(py, "temporary exit dropped: the person was not free before the expected return".to_owned());
+        return errors::suppressed(py, "temporary exit dropped: the person was not free before the expected return".to_owned());
     }
     let receipt = apply_presence_action(world, &candidate, event, &typed, &ids)?;
     let checked = (|| -> PyResult<()> {
@@ -1139,8 +1140,7 @@ pub(crate) fn apply_presence_command<'py>(world: &Bound<'py, PyAny>, event: &Bou
     })();
     if let Err(error) = checked {
         if error.is_instance_of::<PyTypeError>(py) || error.is_instance_of::<PyKeyError>(py) || error.is_instance_of::<PyValueError>(py) {
-            let failed = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventApplicationError"))?;
-            return Err(PyErr::from_value(failed.call1((format!("population command failed validation: {}", error.value(py).str()?),))?));
+            return errors::failed(py, format!("population command failed validation: {}", error.value(py).str()?));
         }
         return Err(error);
     }

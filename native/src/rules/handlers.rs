@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyList, PyMapping, PyString, PyTuple};
 
 use crate::core::mathx::{hypot, py_is_close};
+use crate::core::errors;
 use crate::core::row::{attribute, exact_int, exact_str, str_value, unsupported};
 use crate::rules::care_receipts::{continuity_record, facility_recovery_record};
 use crate::rules::effects::{active_outage, copy_of, has_active_modifier, refused_by_python, swap};
@@ -203,15 +204,15 @@ pub(crate) fn ensure_identity_free(world: &Bound<'_, PyAny>, event_id: &str, seq
     let py = world.py();
     for current in attribute(world, intern!(py, "event_queue"))?.call_method0(intern!(py, "pending"))?.try_iter()? {
         let current = current?;
-        if text_is(&attribute(&current, intern!(py, "event_id"))?, event_id) || exact_int(&attribute(&current, intern!(py, "sequence"))?)? == sequence {
-            return unsupported("a generated event's identity is taken");
+        if attribute(&current, intern!(py, "event_id"))?.eq(event_id)? || attribute(&current, intern!(py, "sequence"))?.eq(sequence)? {
+            return errors::failed(py, format!("generated event identity {} is not unique", errors::repr_str(py, event_id)?));
         }
     }
     let log = attribute(world, intern!(py, "event_log"))?;
     if log.call_method1(intern!(py, "contains_id"), (event_id,))?.is_truthy()?
         || log.call_method1(intern!(py, "contains_sequence"), (sequence,))?.is_truthy()?
     {
-        return unsupported("a generated event's identity is taken");
+        return errors::failed(py, format!("generated event identity {} is not unique", errors::repr_str(py, event_id)?));
     }
     Ok(())
 }
@@ -234,14 +235,6 @@ fn duration_of(world: &Bound<'_, PyAny>) -> PyResult<i64> {
 
 fn table_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     attribute(world, intern!(world.py(), "model_state"))
-}
-
-/// `event.source_id is None` is a failed event in every operational rule.
-fn require_source(event: &Bound<'_, PyAny>) -> PyResult<()> {
-    if attribute(event, intern!(event.py(), "source_id"))?.is_none() {
-        return unsupported("an event without a source");
-    }
-    Ok(())
 }
 
 /// `set_event(metric, get + 1.0)`, of `world.metric_state`.
@@ -311,86 +304,95 @@ fn proximity_on(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<
         .import("sheltersim.domain.social_network")?
         .getattr("canonical_proximity_contact_config")?
         .call1((get(&configs, "social_proximity")?,))?;
-    if config.is_none() {
-        return unsupported("no proximity model");
-    }
     let provenance = attribute(event, intern!(py, "provenance"))?;
-    let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
-    if !kind_is(event, "ENDOGENOUS")?
-        || due != minute_of(world)?
-        || !text_is(&attribute(event, intern!(py, "source_id"))?, PROXIMITY_SOURCE)
+    let due_value = attribute(event, intern!(py, "due_minute"))?;
+    if config.is_none()
+        || !kind_is(event, "ENDOGENOUS")?
+        || due_value.ne(attribute(world, intern!(py, "minute_index"))?)?
+        || attribute(event, intern!(py, "source_id"))?.ne(PROXIMITY_SOURCE)?
         || !fields_are(&provenance, &["source_type", "source_id", "policy_version", "observed_minute"])?
-        || !get_is(&provenance, "source_type", "assumption")?
-        || !get_is(&provenance, "source_id", PROXIMITY_SOURCE)?
-        || !get(&provenance, "policy_version")?.eq(config.get_item("policy_version")?)?
+        || get(&provenance, "source_type")?.ne("assumption")?
+        || get(&provenance, "source_id")?.ne(PROXIMITY_SOURCE)?
+        || get(&provenance, "policy_version")?.ne(config.get_item("policy_version")?)?
     {
-        return unsupported("the provenance or time is for the Python rule to judge");
+        return errors::failed(py, "proximity contact provenance or time is invalid");
     }
+    let due = exact_int(&due_value)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     if !fields_are(
         &payload,
         &["first_agent_id", "second_agent_id", "zone_id", "observed_minute", "contact_minutes", "distance_m", "first_point", "second_point"],
     )? {
-        return unsupported("the payload has other fields");
+        return errors::failed(py, "proximity contact payload fields do not match");
     }
     let first_value = payload.get_item("first_agent_id")?;
     let second_value = payload.get_item("second_agent_id")?;
     let zone_value = payload.get_item("zone_id")?;
-    let first_id = exact_str(&first_value)?;
-    let second_id = exact_str(&second_value)?;
+    let distance_value = payload.get_item("distance_m")?;
     let agents = attribute(world, intern!(py, "agents"))?;
     let zones = attribute(world, intern!(py, "zones"))?;
-    exact_str(&zone_value)?;
-    let distance = number(&payload.get_item("distance_m")?)?;
-    if first_id.is_empty()
-        || second_id.is_empty()
-        || first_id == second_id
-        || !agents.contains(first_id)?
-        || !agents.contains(second_id)?
-        || !zones.contains(&zone_value)?
-        || exact_int(&payload.get_item("observed_minute")?)? != due
-        || exact_int(&get(&provenance, "observed_minute")?)? != due
-        || exact_int(&payload.get_item("contact_minutes")?)? != 0
-        || !distance.is_finite()
-        || distance < 0.0
-        || distance > number(&config.get_item("max_distance_m")?)?
-    {
-        return unsupported("the participants or measurement are for the Python rule to judge");
-    }
+    // `or` in the Python rule's order: each test is reached only if those before it passed.
+    let invalid = (|| -> PyResult<Option<(&str, &str, f64)>> {
+        let (Some(first_id), Some(second_id)) = (errors::nonempty_str(&first_value)?, errors::nonempty_str(&second_value)?) else {
+            return Ok(None);
+        };
+        if first_id == second_id || !agents.contains(first_id)? || !agents.contains(second_id)? {
+            return Ok(None);
+        }
+        if errors::str_of(&zone_value)?.is_none() || !zones.contains(&zone_value)? {
+            return Ok(None);
+        }
+        if errors::exactly_int(&payload.get_item("observed_minute")?)? != Some(due)
+            || errors::exactly_int(&get(&provenance, "observed_minute")?)? != Some(due)
+            || errors::exactly_int(&payload.get_item("contact_minutes")?)? != Some(0)
+        {
+            return Ok(None);
+        }
+        let Some(distance) = errors::real_number(&distance_value)? else {
+            return Ok(None);
+        };
+        if !distance.is_finite() || distance < 0.0 || distance > number(&config.get_item("max_distance_m")?)? {
+            return Ok(None);
+        }
+        Ok(Some((first_id, second_id, distance)))
+    })()?;
+    let Some((first_id, second_id, distance)) = invalid else {
+        return errors::failed(py, "proximity contact participants or measurement are invalid");
+    };
     let first_point = payload.get_item("first_point")?;
     let second_point = payload.get_item("second_point")?;
     let mut coordinates = [0.0_f64; 4];
     for (index, point) in [&first_point, &second_point].into_iter().enumerate() {
         if !is_mapping(point) || !fields_are(point, &["x", "y"])? {
-            return unsupported("the coordinates are for the Python rule to judge");
+            return errors::failed(py, "proximity contact coordinates are invalid");
         }
-        let (x, y) = (number(&point.get_item("x")?)?, number(&point.get_item("y")?)?);
+        let (Some(x), Some(y)) = (errors::real_number(&point.get_item("x")?)?, errors::real_number(&point.get_item("y")?)?) else {
+            return errors::failed(py, "proximity contact coordinates are invalid");
+        };
         if !x.is_finite() || !y.is_finite() {
-            return unsupported("the coordinates are for the Python rule to judge");
+            return errors::failed(py, "proximity contact coordinates are invalid");
         }
         coordinates[index * 2] = x;
         coordinates[index * 2 + 1] = y;
     }
     let measured = hypot(&[coordinates[2] - coordinates[0], coordinates[3] - coordinates[1]]);
     if !py_is_close(distance, measured) && (measured - distance).abs() > 1e-9 {
-        return unsupported("the distance is for the Python rule to judge");
+        return errors::failed(py, "proximity contact distance does not match coordinates");
     }
     let movement = get(&table_of(world)?, MOVEMENT)?;
-    if !movement.is_instance_of::<PyDict>() {
-        return unsupported("the sample is stale");
-    }
-    let positions = movement.call_method1(intern!(py, "get"), ("positions", PyDict::new(py)))?;
-    if !positions.is_instance_of::<PyDict>() {
-        return unsupported("the sample is stale");
-    }
+    let positions = if movement.is_instance_of::<PyDict>() {
+        movement.call_method1(intern!(py, "get"), ("positions", PyDict::new(py)))?
+    } else {
+        PyDict::new(py).into_any()
+    };
     for (id, point) in [(first_id, &first_point), (second_id, &second_point)] {
-        let position = get(&positions, id)?;
+        let position = if positions.is_instance_of::<PyDict>() { get(&positions, id)? } else { py.None().into_bound(py) };
         if !position.is_instance_of::<PyDict>()
-            || !get_is(&position, "position_kind", "physical")?
-            || !get(&position, "zone_id")?.eq(&zone_value)?
+            || get(&position, "position_kind")?.ne("physical")?
+            || get(&position, "zone_id")?.ne(&zone_value)?
             || get(&position, "point")?.ne(point)?
         {
-            return unsupported("the sample is stale");
+            return errors::suppressed(py, "proximity contact sample is stale");
         }
     }
     Ok(())
@@ -412,18 +414,19 @@ fn ledger_event_of<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, op
     let mut ledger_event = event.clone();
     if operation == "delivery" && payload.contains("shipment_id")? {
         let operational = get(&table, OPERATIONAL)?;
-        if !operational.is_truthy()? {
-            return unsupported("the shipment has no operational state");
-        }
-        let shipments = operational.call_method1(intern!(py, "get"), ("shipments", PyDict::new(py)))?;
-        let shipment = shipments.call_method1(intern!(py, "get"), (payload.get_item("shipment_id")?,))?;
+        let shipment = if operational.is_truthy()? {
+            let shipments = operational.call_method1(intern!(py, "get"), ("shipments", PyDict::new(py)))?;
+            shipments.call_method1(intern!(py, "get"), (payload.get_item("shipment_id")?,))?
+        } else {
+            py.None().into_bound(py)
+        };
         if !fields_are(&payload, &["warehouse_id", "resource_id", "quantity", "shipment_id"])?
             || !shipment.is_instance_of::<PyDict>()
             || !get(&shipment, "event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
             || !get(&shipment, "resource_id")?.eq(payload.get_item("resource_id")?)?
             || !get(&shipment, "due_minute")?.eq(attribute(event, intern!(py, "due_minute"))?)?
         {
-            return unsupported("the delivery does not match its shipment");
+            return errors::failed(py, "shipment delivery does not match operational state");
         }
         let without = PyDict::new(py);
         for name in ["warehouse_id", "resource_id", "quantity"] {
@@ -452,7 +455,10 @@ fn ledger_event_of<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, op
             && str_value(&reservation).is_some()
             && service.get_item("active_reservation_ids")?.contains(&reservation)?
         {
-            return unsupported("the reservation is the service's");
+            return errors::failed(
+                py,
+                "service-owned resource reservations must be completed or cancelled by ResourceServiceManager",
+            );
         }
         if operation == "reserve" {
             for task in attribute(world, intern!(py, "active_tasks"))?.call_method0(intern!(py, "values"))?.try_iter()? {
@@ -460,7 +466,7 @@ fn ledger_event_of<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, op
                 if attribute(&task, intern!(py, "id"))?.eq(&reservation)?
                     && text_is(&attribute(&task, intern!(py, "kind"))?, "resource_service_queue")
                 {
-                    return unsupported("the reservation ID is a queued task's");
+                    return errors::failed(py, "resource reservation ID conflicts with a queued resource service task");
                 }
             }
         }
@@ -482,32 +488,50 @@ fn resource_ledger(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: 
 
 // ---- Facility outages and recoveries ---------------------------------------------------------------
 
-/// `FacilityOutageHandler.apply` and `FacilityRecoveryHandler.apply`: `units` of a sign.
+/// `FacilityOutageHandler.apply` and `FacilityRecoveryHandler.apply`: `units` of a sign. The checks and
+/// their texts are the Python rule's, in its order.
 fn facility_units<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>, field: &str, restores: bool) -> PyResult<Option<Bound<'py, PyTuple>>> {
     let py = world.py();
+    let what = if restores { "facility recovery" } else { "facility outage" };
     let plan = (|| -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>, i64, i64)> {
         let payload = attribute(event, intern!(py, "payload"))?;
         if !fields_are(&payload, &["facility_id", field])? {
-            return unsupported("the payload has other fields");
+            return errors::failed(py, format!("{what} payload fields do not match"));
         }
         let facility_id = payload.get_item("facility_id")?;
-        let id = exact_str(&facility_id)?;
-        let units = exact_int(&payload.get_item(field)?)?;
-        if id.is_empty() || units <= 0 {
-            return unsupported("the units are for the Python rule to judge");
+        let Some(id) = errors::nonempty_str(&facility_id)? else {
+            return errors::failed(py, format!("{what} requires a facility_id"));
+        };
+        let units = errors::int_not_bool(&payload.get_item(field)?)?;
+        let Some(units) = units else {
+            return errors::failed(py, format!("{what} {field} must be an integer"));
+        };
+        if units < 0 {
+            return errors::failed(py, format!("{what} {field} cannot be negative"));
         }
         let facility = get(&attribute(world, intern!(py, "facilities"))?, id)?;
-        if facility.is_none() || active_outage(world, id)? || has_active_modifier(world, &facility_id)? {
-            return unsupported("the facility is for the Python rule to judge");
+        if facility.is_none() {
+            return errors::failed(py, format!("facility {} does not exist", errors::repr(&facility_id)?));
+        }
+        if active_outage(world, id)? {
+            return errors::failed(py, format!("{what} conflicts with an active infrastructure outage"));
+        }
+        if has_active_modifier(world, &facility_id)? {
+            return errors::failed(py, format!("{what} conflicts with an active EffectProgram availability modifier"));
+        }
+        if units == 0 {
+            return errors::suppressed(py, format!("zero-unit {what} has no effect"));
         }
         let previous = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
         let next = if restores { previous.checked_add(units) } else { previous.checked_sub(units) };
         let Some(next) = next else {
             return unsupported("the units are past 64 bits");
         };
-        let capacity = exact_int(&attribute(&facility, intern!(py, "capacity"))?)?;
-        if next < 0 || next > capacity {
-            return unsupported("the units are for the Python rule to judge");
+        if !restores && next < 0 {
+            return errors::failed(py, "facility outage exceeds currently working capacity");
+        }
+        if restores && next > exact_int(&attribute(&facility, intern!(py, "capacity"))?)? {
+            return errors::failed(py, "facility recovery exceeds installed capacity");
         }
         Ok((facility_id, facility, previous, next))
     })();
@@ -558,18 +582,17 @@ fn delivery_delay_on(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyRe
     let py = world.py();
     transaction(world, event, |candidate| {
         let payload = attribute(event, intern!(py, "payload"))?;
-        require_source(event)?;
-        if !fields_are(&payload, &["shipment_id", "to_minute"])? {
-            return unsupported("the payload has other fields");
+        if !fields_are(&payload, &["shipment_id", "to_minute"])? || attribute(event, intern!(py, "source_id"))?.is_none() {
+            return errors::failed(py, "delivery delay payload fields or source are invalid");
         }
         let operational = get(&table_of(candidate)?, OPERATIONAL)?;
         if operational.is_none() {
-            return unsupported("no operational state");
+            return errors::failed(py, "delivery delay requires operational_events_v1 state");
         }
         let shipment_id = payload.get_item("shipment_id")?;
         let record = operational.get_item("shipments")?.call_method1(intern!(py, "get"), (&shipment_id,))?;
         if record.is_none() {
-            return unsupported("an unknown shipment");
+            return errors::failed(py, "delivery delay references an unknown shipment");
         }
         let wanted = record.get_item("event_id")?;
         let mut target = None;
@@ -580,21 +603,22 @@ fn delivery_delay_on(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyRe
             }
         }
         let Some(target) = target else {
-            return unsupported("the shipment is no longer pending");
+            return errors::failed(py, "shipment is no longer pending for delay");
         };
         let target_payload = attribute(&target, intern!(py, "payload"))?;
-        let target_due = exact_int(&attribute(&target, intern!(py, "due_minute"))?)?;
-        if !text_is(&attribute(&target, intern!(py, "event_type"))?, "resource_delivery")
-            || !get(&target_payload, "shipment_id")?.eq(&shipment_id)?
-            || !record.get_item("due_minute")?.eq(target_due)?
+        let target_due_value = attribute(&target, intern!(py, "due_minute"))?;
+        if attribute(&target, intern!(py, "event_type"))?.ne("resource_delivery")?
+            || get(&target_payload, "shipment_id")?.ne(&shipment_id)?
+            || target_due_value.ne(record.get_item("due_minute")?)?
         {
-            return unsupported("the shipment is no longer pending");
+            return errors::failed(py, "shipment is no longer pending for delay");
         }
-        let to_minute = exact_int(&payload.get_item("to_minute")?)?;
+        let target_due = exact_int(&target_due_value)?;
         let now = minute_of(candidate)?;
-        if target_due <= now || to_minute <= target_due || to_minute <= now || to_minute >= duration_of(candidate)? {
-            return unsupported("the delay does not move a not-yet-due delivery forward");
-        }
+        let to_minute = match errors::int_not_bool(&payload.get_item("to_minute")?)? {
+            Some(to_minute) if !(target_due <= now || to_minute <= target_due || to_minute <= now || to_minute >= duration_of(candidate)?) => to_minute,
+            _ => return errors::failed(py, "shipment delay must move a not-yet-due delivery forward"),
+        };
         let target_document = target.call_method0(intern!(py, "to_dict"))?;
         let provenance = target_document.get_item("provenance")?;
         provenance.set_item("last_delay_event_id", attribute(event, intern!(py, "event_id"))?)?;
@@ -634,29 +658,29 @@ fn water_outage(_handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &B
     let py = world.py();
     let result = transaction(world, event, |candidate| {
         let payload = attribute(event, intern!(py, "payload"))?;
-        require_source(event)?;
         let is_zone = fields_are(&payload, &["outage_id", "zone_id"])?;
-        if !is_zone && !fields_are(&payload, &["outage_id", "facility_id"])? {
-            return unsupported("the payload has other fields");
+        if attribute(event, intern!(py, "source_id"))?.is_none() || (!is_zone && !fields_are(&payload, &["outage_id", "facility_id"])?) {
+            return errors::failed(py, "water outage payload fields or source are invalid");
         }
         let operational = get(&table_of(candidate)?, OPERATIONAL)?;
-        if !operational.is_truthy()? {
-            return unsupported("no operational state");
-        }
-        let record = operational.get_item("water_outages")?.call_method1(intern!(py, "get"), (payload.get_item("outage_id")?,))?;
-        if record.is_none() || !record.get_item("outage_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)? {
-            return unsupported("the outage does not match its state");
+        let record = if operational.is_truthy()? {
+            operational.get_item("water_outages")?.call_method1(intern!(py, "get"), (payload.get_item("outage_id")?,))?
+        } else {
+            py.None().into_bound(py)
+        };
+        if record.is_none() || record.get_item("outage_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)? {
+            return errors::failed(py, "water outage does not match operational state");
         }
         let target_id = payload.get_item(if is_zone { "zone_id" } else { "facility_id" })?;
-        if !text_is(&record.get_item("target_kind")?, if is_zone { "zone" } else { "facility" }) || !record.get_item("target_id")?.eq(&target_id)? {
-            return unsupported("the outage's target does not match its state");
+        if record.get_item("target_kind")?.ne(if is_zone { "zone" } else { "facility" })? || record.get_item("target_id")?.ne(&target_id)? {
+            return errors::failed(py, "water outage target does not match operational state");
         }
         let facilities = attribute(candidate, intern!(py, "facilities"))?;
         if is_zone {
             let mut found = false;
             for facility in facilities.call_method0(intern!(py, "values"))?.try_iter()? {
                 let facility = facility?;
-                if text_is(&attribute(&facility, intern!(py, "kind"))?, "water_station")
+                if attribute(&facility, intern!(py, "kind"))?.eq("water_station")?
                     && attribute(&facility, intern!(py, "zone_id"))?.eq(&target_id)?
                 {
                     found = true;
@@ -664,16 +688,16 @@ fn water_outage(_handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &B
                 }
             }
             if !found {
-                return unsupported("the zone has no water station");
+                return errors::failed(py, "water outage zone has no water_station");
             }
         } else {
             let facility = facilities.call_method1(intern!(py, "get"), (&target_id,))?;
-            if facility.is_none() || !text_is(&attribute(&facility, intern!(py, "kind"))?, "water_station") {
-                return unsupported("the target is not a water station");
+            if facility.is_none() || attribute(&facility, intern!(py, "kind"))?.ne("water_station")? {
+                return errors::failed(py, "water outage must target a water_station");
             }
         }
         if record.get_item("active")?.is_truthy()? {
-            return unsupported("the outage is already active");
+            return errors::suppressed(py, "water outage is already active");
         }
         record.set_item("active", true)?;
         Ok(Vec::new())
@@ -686,20 +710,20 @@ fn water_restoration(_handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, even
     let py = world.py();
     let result = transaction(world, event, |candidate| {
         let payload = attribute(event, intern!(py, "payload"))?;
-        require_source(event)?;
-        if !fields_are(&payload, &["outage_id"])? {
-            return unsupported("the payload has other fields");
+        if attribute(event, intern!(py, "source_id"))?.is_none() || !fields_are(&payload, &["outage_id"])? {
+            return errors::failed(py, "water restoration payload fields or source are invalid");
         }
         let operational = get(&table_of(candidate)?, OPERATIONAL)?;
-        if !operational.is_truthy()? {
-            return unsupported("no operational state");
+        let record = if operational.is_truthy()? {
+            operational.get_item("water_outages")?.call_method1(intern!(py, "get"), (payload.get_item("outage_id")?,))?
+        } else {
+            py.None().into_bound(py)
+        };
+        if record.is_none() || record.get_item("restore_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)? {
+            return errors::failed(py, "water restoration does not match its outage");
         }
-        let record = operational.get_item("water_outages")?.call_method1(intern!(py, "get"), (payload.get_item("outage_id")?,))?;
-        if record.is_none()
-            || !record.get_item("restore_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
-            || !record.get_item("active")?.is_truthy()?
-        {
-            return unsupported("the restoration does not match an active outage");
+        if !record.get_item("active")?.is_truthy()? {
+            return errors::suppressed(py, "water outage is not active");
         }
         record.set_item("active", false)?;
         Ok(Vec::new())
@@ -733,30 +757,29 @@ fn staff_unavailable_on<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny
     transaction(world, event, |candidate| {
         let mut records = Vec::new();
         let payload = attribute(event, intern!(py, "payload"))?;
-        require_source(event)?;
-        if !fields_are(&payload, &["staff_id", "until_minute"])? {
-            return unsupported("the payload has other fields");
+        if attribute(event, intern!(py, "source_id"))?.is_none() || !fields_are(&payload, &["staff_id", "until_minute"])? {
+            return errors::failed(py, "staff unavailability payload fields or source are invalid");
         }
         let table = table_of(candidate)?;
         let operational = get(&table, OPERATIONAL)?;
         if operational.is_none() {
-            return unsupported("no operational state");
+            return errors::failed(py, "staff unavailability requires operational event state");
         }
         let staff_value = payload.get_item("staff_id")?;
         let staff_id = exact_str(&staff_value)?;
         let staff_member = get(&attribute(candidate, intern!(py, "staff"))?, staff_id)?;
         if staff_member.is_none() {
-            return unsupported("an unknown staff member");
+            return errors::failed(py, "staff unavailability references unknown staff");
         }
-        let until = exact_int(&payload.get_item("until_minute")?)?;
         let duration = duration_of(candidate)?;
-        if until <= minute_of(candidate)? || until > duration {
-            return unsupported("the end of the absence is invalid");
-        }
+        let until = match errors::int_not_bool(&payload.get_item("until_minute")?)? {
+            Some(until) if until > minute_of(candidate)? && until <= duration => until,
+            _ => return errors::failed(py, "staff unavailable until_minute is invalid"),
+        };
         let status = operational.get_item("staff_status")?.get_item(staff_id)?;
         let event_id = attribute(event, intern!(py, "event_id"))?;
         if status.get_item("unavailability_event_id")?.eq(&event_id)? {
-            return unsupported("the absence was already applied");
+            return errors::suppressed(py, "staff unavailability was already applied");
         }
         let mut restore_event_id: Option<String> = None;
         if until < duration {
@@ -785,8 +808,8 @@ fn staff_unavailable_on<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny
                 },
             )?;
             ensure_identity_free(candidate, &id, sequence)?;
-            if exact_int(&candidate.call_method0(intern!(py, "allocate_event_sequence"))?)? != sequence {
-                return unsupported("the event sequence changed");
+            if candidate.call_method0(intern!(py, "allocate_event_sequence"))?.ne(sequence)? {
+                return errors::failed(py, "event sequence changed during staff preflight");
             }
             candidate.call_method1(intern!(py, "schedule_event"), (restore,))?;
             restore_event_id = Some(id);
@@ -809,7 +832,7 @@ fn staff_unavailable_on<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny
         };
         let autonomous = !record.is_none() && !get_is(&record, "phase", "idle")?;
         if support_tasks.len() + resource_tasks + usize::from(autonomous) > 1 {
-            return unsupported("the staff member owns several tasks");
+            return errors::failed(py, "staff owns multiple active service tasks");
         }
         if resource_tasks > 0 {
             counted(py, "interrupt_for_staff", service::interrupt_service_of_world(candidate, PyString::new(py, staff_id).as_any(), event))?;
@@ -839,21 +862,26 @@ fn staff_restoration(_handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, even
     let py = world.py();
     let result = transaction(world, event, |candidate| {
         let payload = attribute(event, intern!(py, "payload"))?;
-        require_source(event)?;
-        if !fields_are(&payload, &["staff_id", "unavailability_event_id"])? {
-            return unsupported("the payload has other fields");
+        if attribute(event, intern!(py, "source_id"))?.is_none() || !fields_are(&payload, &["staff_id", "unavailability_event_id"])? {
+            return errors::failed(py, "staff restoration payload fields or source are invalid");
         }
         let operational = get(&table_of(candidate)?, OPERATIONAL)?;
-        if !operational.is_truthy()? {
-            return unsupported("no operational state");
+        let record = if operational.is_truthy()? {
+            operational.get_item("staff_status")?.call_method1(intern!(py, "get"), (payload.get_item("staff_id")?,))?
+        } else {
+            py.None().into_bound(py)
+        };
+        if record.is_none() {
+            return errors::failed(py, "staff restoration references unknown staff");
         }
-        let record = operational.get_item("staff_status")?.call_method1(intern!(py, "get"), (payload.get_item("staff_id")?,))?;
-        if record.is_none()
-            || !record.get_item("unavailability_event_id")?.eq(payload.get_item("unavailability_event_id")?)?
-            || !record.get_item("restore_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
-            || record.get_item("available")?.is_truthy()?
-        {
-            return unsupported("the restoration is for the Python rule to judge");
+        if record.get_item("unavailability_event_id")?.ne(payload.get_item("unavailability_event_id")?)? {
+            return errors::suppressed(py, "staff restoration belongs to an older unavailability");
+        }
+        if record.get_item("restore_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)? {
+            return errors::failed(py, "staff restoration event ID does not match its token");
+        }
+        if record.get_item("available")?.is_truthy()? {
+            return errors::suppressed(py, "staff is already available");
         }
         record.set_item("available", true)?;
         Ok(Vec::new())
@@ -882,13 +910,13 @@ fn interrupt_support_task<'py>(
         }
     }
     let Some(request) = request else {
-        return unsupported("the task has no request");
+        return errors::failed(py, "interrupted support task has inconsistent ownership");
     };
     let task_agent = attribute(task, intern!(py, "agent_id"))?;
     let agents = attribute(world, intern!(py, "agents"))?;
     let agent = agents.call_method1(intern!(py, "get"), (if task_agent.is_none() { PyString::new(py, "").into_any() } else { task_agent },))?;
     if agent.is_none() {
-        return unsupported("the task has no person");
+        return errors::failed(py, "interrupted support task has inconsistent ownership");
     }
     let pending = pending_of(world)?;
     let mut completions = Vec::new();
@@ -905,7 +933,7 @@ fn interrupt_support_task<'py>(
         || completions.len() != 1
         || !attribute(completions[0], intern!(py, "due_minute"))?.eq(&due)?
     {
-        return unsupported("the task's ownership is inconsistent");
+        return errors::failed(py, "interrupted support task has inconsistent ownership");
     }
     let request_id = attribute(&request, intern!(py, "id"))?;
     let request_agent = attribute(&request, intern!(py, "agent_id"))?;
@@ -920,7 +948,7 @@ fn interrupt_support_task<'py>(
         }
     }
     if timeouts.len() > 1 || timeouts.first().is_some_and(|item| !attribute(item, intern!(py, "due_minute")).is_ok_and(|minute| minute.eq(&timeout_minute).unwrap_or(false))) {
-        return unsupported("the timeout is inconsistent");
+        return errors::failed(py, "support timeout state is inconsistent");
     }
     let now = minute_of(world)?;
     let causation_id = attribute(causation, intern!(py, "event_id"))?;
@@ -949,8 +977,8 @@ fn interrupt_support_task<'py>(
             },
         )?;
         ensure_identity_free(world, &id, sequence)?;
-        if exact_int(&world.call_method0(intern!(py, "allocate_event_sequence"))?)? != sequence {
-            return unsupported("the event sequence changed");
+        if world.call_method0(intern!(py, "allocate_event_sequence"))?.ne(sequence)? {
+            return errors::failed(py, "event sequence changed during support preflight");
         }
         world.call_method1(intern!(py, "schedule_event"), (timeout,))?;
     }
@@ -965,7 +993,7 @@ fn interrupt_support_task<'py>(
         }
     }
     if trips.len() > 1 {
-        return unsupported("the person has two trips to support");
+        return errors::failed(py, "resident has duplicate trips to assigned support");
     }
     if let Some(trip) = trips.first() {
         let trip_id = attribute(trip, intern!(py, "id"))?;
@@ -981,7 +1009,7 @@ fn interrupt_support_task<'py>(
             }
         }
         if walks.len() != 1 || !attribute(&walks[0], intern!(py, "due_minute"))?.eq(attribute(trip, intern!(py, "due_minute"))?)? {
-            return unsupported("the person's trip is inconsistent");
+            return errors::failed(py, "resident support trip has inconsistent travel ownership");
         }
         let walk = attribute(world, intern!(py, "event_queue"))?.call_method1(intern!(py, "remove"), (attribute(&walks[0], intern!(py, "event_id"))?,))?;
         attribute(world, intern!(py, "event_log"))?.call_method1(
@@ -1068,8 +1096,8 @@ fn cancel<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResu
 #[pyfunction]
 fn service_cancellation<'py>(handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
-    if exact_int(&attribute(world, intern!(py, "schema_version"))?)? != 6 {
-        return unsupported("resource service cancellation requires WorldState v6");
+    if attribute(world, intern!(py, "schema_version"))?.ne(6)? {
+        return errors::failed(py, "resource service cancellation requires WorldState v6");
     }
     attribute(handler, intern!(py, "service"))?.call_method1(intern!(py, "cancel"), (event,))?;
     Ok(())
@@ -1126,18 +1154,22 @@ fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
     let checked = (|| -> PyResult<_> {
         let payload = attribute(event, intern!(py, "payload"))?;
         let op_value = get(&payload, "op")?;
-        let op = exact_str(&op_value)?.to_owned();
-        if !matches!(op.as_str(), "add_evacuees" | "depart_evacuees" | "population_presence") || !population_fields_fit(&payload, &op)? {
-            return unsupported("the primitive is for the Python rule to judge");
+        let op = match errors::str_of(&op_value)? {
+            Some(op @ ("add_evacuees" | "depart_evacuees" | "population_presence")) => op.to_owned(),
+            _ => return errors::failed(py, "population primitive operation is invalid"),
+        };
+        if !population_fields_fit(&payload, &op)? {
+            return errors::failed(py, "population primitive payload fields do not match");
         }
+        let not_approved = || errors::failed(py, "population primitive is not in the approved program");
         let state = get(&table_of(world)?, "effect_program_v1")?;
         if !state.is_instance_of::<PyDict>() {
-            return unsupported("the primitive is not in a program");
+            return not_approved();
         }
         let programs = state.call_method1(intern!(py, "get"), ("programs", PyDict::new(py)))?;
         let program = programs.call_method1(intern!(py, "get"), (get(&payload, "program_id")?,))?;
         if !program.is_instance_of::<PyDict>() {
-            return unsupported("the primitive is not in a program");
+            return not_approved();
         }
         let effect_id = get(&payload, "effect_id")?;
         let operators = program.call_method1(intern!(py, "get"), ("operators", PyDict::new(py)))?;
@@ -1146,7 +1178,7 @@ fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
             || !program.call_method1(intern!(py, "get"), ("scheduled_event_ids", PyList::empty(py)))?.contains(attribute(event, intern!(py, "event_id"))?)?
             || (op != "population_presence" && !attribute(world, intern!(py, "zones"))?.contains(get(&payload, "zone_id")?)?)
         {
-            return unsupported("the primitive is not in the approved program");
+            return not_approved();
         }
         Ok((payload, op))
     })();
@@ -1206,10 +1238,13 @@ fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
 
 // ---- InfrastructureEventHandler --------------------------------------------------------------------
 
-fn infrastructure_state<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+/// `_infrastructure_state`.
+fn infrastructure_state<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = world.py();
     let state = get(&table_of(world)?, INFRASTRUCTURE)?;
     if !state.is_instance_of::<PyDict>() {
-        return unsupported("no infrastructure model");
+        let event_type = attribute(event, intern!(py, "event_type"))?;
+        return errors::failed(py, format!("{} requires the opted-in infrastructure model", event_type.str()?));
     }
     Ok(state)
 }
@@ -1289,7 +1324,7 @@ fn capacities_of(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, config: &Bo
         let base = exact_int(&item.get_item(1)?)?;
         let units = lost.get(id).copied().unwrap_or(0);
         if units > base {
-            return unsupported("the failures exceed the installed units");
+            return errors::failed(py, "combined infrastructure failures exceed installed units");
         }
         capacity.push((id.to_owned(), base - units));
     }
@@ -1307,11 +1342,11 @@ fn capacities_of(world: &Bound<'_, PyAny>, state: &Bound<'_, PyAny>, config: &Bo
 /// `_recalculate_infrastructure_capacity`.
 fn recalculate_capacity(world: &Bound<'_, PyAny>, cause: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, cause)?;
     let outage_id = get(&attribute(cause, intern!(py, "payload"))?, "outage_id")?;
     let changed = state.get_item("outages")?.call_method1(intern!(py, "get"), (outage_id,))?;
     if changed.is_none() {
-        return unsupported("an unknown outage");
+        return errors::failed(py, "infrastructure capacity update references an unknown outage");
     }
     let mut ids = BTreeSet::new();
     for id in changed.get_item("affected_facility_ids")?.try_iter()? {
@@ -1363,46 +1398,56 @@ fn schedule_completion<'py>(
     Ok(Some(id))
 }
 
-fn until_of(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<i64> {
+/// The payload's `until_minute` if it is an int (not a bool) after the event's minute and within the
+/// Run; None where the Python rule's check says it is invalid.
+fn until_of(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<Option<i64>> {
     let py = world.py();
-    let until = exact_int(&get(&attribute(event, intern!(py, "payload"))?, "until_minute")?)?;
-    if until <= exact_int(&attribute(event, intern!(py, "due_minute"))?)? || until > duration_of(world)? {
-        return unsupported("the duration is invalid");
+    let Some(until) = errors::int_not_bool(&get(&attribute(event, intern!(py, "payload"))?, "until_minute")?)? else {
+        return Ok(None);
+    };
+    if attribute(event, intern!(py, "due_minute"))?.ge(until)? || until > duration_of(world)? {
+        return Ok(None);
     }
-    Ok(until)
+    Ok(Some(until))
+}
+
+fn no_source(event: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(attribute(event, intern!(event.py(), "source_id"))?.is_none())
 }
 
 fn start_outage(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let event_id = attribute(event, intern!(py, "event_id"))?;
     let event_type = attribute(event, intern!(py, "event_type"))?;
     let outage_id = get(&payload, "outage_id")?;
     let record = state.get_item("outages")?.call_method1(intern!(py, "get"), (&outage_id,))?;
-    if record.is_none() || !record.get_item("start_event_id")?.eq(&event_id)? || !record.get_item("event_type")?.eq(&event_type)? {
-        return unsupported("the outage does not match its state");
+    if record.is_none() || record.get_item("start_event_id")?.ne(&event_id)? {
+        return errors::failed(py, "infrastructure outage does not match scenario state");
     }
-    require_source(event)?;
-    if record.get_item("active")?.is_truthy()? {
-        return unsupported("the outage is already active");
+    if record.get_item("event_type")?.ne(&event_type)? {
+        return errors::failed(py, "infrastructure outage event type does not match scenario state");
     }
-    let power = text_is(&event_type, "power_outage");
+    if record.get_item("active")?.is_truthy()? || no_source(event)? {
+        return errors::failed(py, "infrastructure outage is already active or lacks source");
+    }
+    let power = event_type.eq("power_outage")?;
     let target = get(&payload, if power { "component_id" } else { "facility_id" })?;
     let right_fields =
         if power { fields_are(&payload, &["outage_id", "component_id", "until_minute"])? } else { fields_are(&payload, &["outage_id", "facility_id", "units_out", "until_minute"])? };
-    if !right_fields {
-        return unsupported("the payload has other fields");
-    }
-    let until = until_of(world, event)?;
+    let until = if right_fields { until_of(world, event)? } else { None };
+    let Some(until) = until else {
+        return errors::failed(py, "infrastructure outage payload or duration is invalid");
+    };
     let config = infrastructure_config(world)?;
     let affected = dependents_of(&config, exact_str(&target)?, &facility_ids(world)?)?;
-    if affected.is_empty() || !record.get_item("affected_facility_ids")?.eq(PyList::new(py, &affected)?)? {
-        return unsupported("the outage has no valid affected facilities");
+    if affected.is_empty() || record.get_item("affected_facility_ids")?.ne(PyList::new(py, &affected)?)? {
+        return errors::failed(py, "infrastructure outage has no valid affected facilities");
     }
     for id in &affected {
         if has_active_modifier(world, PyString::new(py, id).as_any())? {
-            return unsupported("the outage conflicts with a modifier");
+            return errors::failed(py, "infrastructure outage conflicts with an active facility modifier");
         }
     }
     record.set_item("active", true)?;
@@ -1417,21 +1462,21 @@ fn start_outage(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<
 
 fn restore_outage(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let record = state.get_item("outages")?.call_method1(intern!(py, "get"), (get(&payload, "outage_id")?,))?;
     if !fields_are(&payload, &["outage_id"])?
         || record.is_none()
         || !record.get_item("active")?.is_truthy()?
-        || !record.get_item("restore_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
-        || !record.get_item("start_event_id")?.eq(attribute(event, intern!(py, "causation_id"))?)?
+        || record.get_item("restore_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)?
+        || record.get_item("start_event_id")?.ne(attribute(event, intern!(py, "causation_id"))?)?
+        || no_source(event)?
     {
-        return unsupported("the restoration does not match an active outage");
+        return errors::failed(py, "infrastructure restoration does not match an active outage");
     }
-    require_source(event)?;
-    let expected = if text_is(&record.get_item("event_type")?, "power_outage") { "power_restored" } else { "equipment_repaired" };
-    if !text_is(&attribute(event, intern!(py, "event_type"))?, expected) {
-        return unsupported("the restoration's type does not match its cause");
+    let expected = if record.get_item("event_type")?.eq("power_outage")? { "power_restored" } else { "equipment_repaired" };
+    if attribute(event, intern!(py, "event_type"))?.ne(expected)? {
+        return errors::failed(py, "infrastructure restoration type does not match its cause");
     }
     record.set_item("active", false)?;
     recalculate_capacity(world, event)
@@ -1439,21 +1484,25 @@ fn restore_outage(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResul
 
 fn start_stressor(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let stressor_id = get(&payload, "stressor_id")?;
     let stressors = state.get_item("environmental_stressors")?;
     let record = stressors.call_method1(intern!(py, "get"), (&stressor_id,))?;
-    if !fields_are(&payload, &["stressor_id", "zone_id", "until_minute"])?
+    let until = if !fields_are(&payload, &["stressor_id", "zone_id", "until_minute"])?
         || record.is_none()
-        || !record.get_item("start_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
+        || record.get_item("start_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)?
         || record.get_item("active")?.is_truthy()?
         || !attribute(world, intern!(py, "zones"))?.contains(get(&payload, "zone_id")?)?
+        || no_source(event)?
     {
-        return unsupported("the stressor is for the Python rule to judge");
-    }
-    require_source(event)?;
-    let until = until_of(world, event)?;
+        None
+    } else {
+        until_of(world, event)?
+    };
+    let Some(until) = until else {
+        return errors::failed(py, "environmental stressor payload or duration is invalid");
+    };
     let zone = record.get_item("zone_id")?;
     let mut active = 0;
     for other in stressors.call_method0(intern!(py, "values"))?.try_iter()? {
@@ -1463,7 +1512,7 @@ fn start_stressor(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResul
         }
     }
     if active >= 16 {
-        return unsupported("the zone's stressor limit was reached");
+        return errors::failed(py, "zone environmental stressor limit was reached");
     }
     record.set_item("active", true)?;
     let completion = PyDict::new(py);
@@ -1477,19 +1526,19 @@ fn start_stressor(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResul
 
 fn end_stressor(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let record = state.get_item("environmental_stressors")?.call_method1(intern!(py, "get"), (get(&payload, "stressor_id")?,))?;
     if !fields_are(&payload, &["stressor_id", "zone_id"])?
         || record.is_none()
         || !record.get_item("active")?.is_truthy()?
-        || !record.get_item("end_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
-        || !record.get_item("start_event_id")?.eq(attribute(event, intern!(py, "causation_id"))?)?
-        || !record.get_item("zone_id")?.eq(get(&payload, "zone_id")?)?
+        || record.get_item("end_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)?
+        || record.get_item("start_event_id")?.ne(attribute(event, intern!(py, "causation_id"))?)?
+        || record.get_item("zone_id")?.ne(get(&payload, "zone_id")?)?
+        || no_source(event)?
     {
-        return unsupported("the end does not match an active stressor");
+        return errors::failed(py, "environmental end event does not match an active stressor");
     }
-    require_source(event)?;
     record.set_item("active", false)?;
     Ok(())
 }
@@ -1497,30 +1546,35 @@ fn end_stressor(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<
 /// `_interrupt_route`: the records of the deliveries it delays.
 fn interrupt_route<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<Vec<Bound<'py, PyAny>>> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let outage_id = get(&payload, "outage_id")?;
     let interruptions = state.get_item("route_interruptions")?;
     let record = interruptions.call_method1(intern!(py, "get"), (&outage_id,))?;
-    if !fields_are(&payload, &["outage_id", "route_id", "shipment_ids", "until_minute"])?
+    let until = if !fields_are(&payload, &["outage_id", "route_id", "shipment_ids", "until_minute"])?
         || record.is_none()
-        || !record.get_item("start_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
+        || record.get_item("start_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)?
         || record.get_item("active")?.is_truthy()?
     {
-        return unsupported("the interruption is for the Python rule to judge");
-    }
-    let until = until_of(world, event)?;
-    require_source(event)?;
+        None
+    } else if no_source(event)? {
+        None
+    } else {
+        until_of(world, event)?
+    };
+    let Some(until) = until else {
+        return errors::failed(py, "supply route interruption payload or duration is invalid");
+    };
     let route_id = record.get_item("route_id")?;
     for other in interruptions.call_method0(intern!(py, "values"))?.try_iter()? {
         let other = other?;
         if other.get_item("active")?.is_truthy()? && other.get_item("route_id")?.eq(&route_id)? {
-            return unsupported("the route already has an interruption");
+            return errors::failed(py, "supply route already has an active interruption");
         }
     }
     let operational = get(&table_of(world)?, OPERATIONAL)?;
     if operational.is_none() {
-        return unsupported("no shipment records");
+        return errors::failed(py, "supply route interruption requires shipment records");
     }
     let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
     let delay = until - due;
@@ -1529,8 +1583,9 @@ fn interrupt_route<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) ->
     for shipment_id in record.get_item("shipment_ids")?.try_iter()? {
         let shipment_id = shipment_id?;
         let shipment = operational.get_item("shipments")?.call_method1(intern!(py, "get"), (&shipment_id,))?;
+        let cannot = || errors::failed(py, format!("shipment {} cannot be safely delayed by this route event", errors::repr(&shipment_id)?));
         if shipment.is_none() {
-            return unsupported("the shipment cannot be delayed");
+            return cannot();
         }
         let wanted = shipment.get_item("event_id")?;
         let mut delivery = None;
@@ -1541,15 +1596,15 @@ fn interrupt_route<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) ->
             }
         }
         let Some(delivery) = delivery else {
-            return unsupported("the shipment cannot be delayed");
+            return cannot();
         };
         let delivery_due = exact_int(&attribute(&delivery, intern!(py, "due_minute"))?)?;
-        if !text_is(&attribute(&delivery, intern!(py, "event_type"))?, "resource_delivery")
+        if attribute(&delivery, intern!(py, "event_type"))?.ne("resource_delivery")?
             || delivery_due <= due
-            || !shipment.get_item("due_minute")?.eq(delivery_due)?
+            || shipment.get_item("due_minute")?.ne(delivery_due)?
             || delivery_due + delay >= duration
         {
-            return unsupported("the shipment cannot be delayed");
+            return cannot();
         }
         delays.push((shipment_id, delivery_due + delay));
     }
@@ -1598,19 +1653,19 @@ fn interrupt_route<'py>(world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) ->
 
 fn restore_route(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let state = infrastructure_state(world)?;
+    let state = infrastructure_state(world, event)?;
     let payload = attribute(event, intern!(py, "payload"))?;
     let record = state.get_item("route_interruptions")?.call_method1(intern!(py, "get"), (get(&payload, "outage_id")?,))?;
     if !fields_are(&payload, &["outage_id", "route_id"])?
         || record.is_none()
         || !record.get_item("active")?.is_truthy()?
-        || !record.get_item("restore_event_id")?.eq(attribute(event, intern!(py, "event_id"))?)?
-        || !record.get_item("start_event_id")?.eq(attribute(event, intern!(py, "causation_id"))?)?
-        || !record.get_item("route_id")?.eq(get(&payload, "route_id")?)?
+        || record.get_item("restore_event_id")?.ne(attribute(event, intern!(py, "event_id"))?)?
+        || record.get_item("start_event_id")?.ne(attribute(event, intern!(py, "causation_id"))?)?
+        || record.get_item("route_id")?.ne(get(&payload, "route_id")?)?
+        || no_source(event)?
     {
-        return unsupported("the restoration does not match an active interruption");
+        return errors::failed(py, "route restoration does not match an active interruption");
     }
-    require_source(event)?;
     record.set_item("active", false)?;
     Ok(())
 }
@@ -1643,7 +1698,10 @@ fn infrastructure<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, 
         "environmental_stressor_end" => ("infrastructure.end_stressor", 3),
         "supply_route_interruption" => ("infrastructure.interrupt_route", 4),
         "supply_route_restored" => ("infrastructure.restore_route", 5),
-        _ => return counted(py, "infrastructure", unsupported("an unknown event type")),
+        _ => {
+            let text = format!("unsupported infrastructure event type {}", errors::repr(&event_type)?);
+            return counted(py, "infrastructure", errors::failed(py, text));
+        }
     };
     let swapped = (|| -> PyResult<(Vec<(String, i64)>, Vec<Bound<'py, PyAny>>, String, Vec<String>)> {
         let mut previous = Vec::new();

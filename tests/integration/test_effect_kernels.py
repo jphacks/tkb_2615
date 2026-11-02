@@ -36,7 +36,7 @@ from sheltersim.events.effects import (
     should_apply_effect_guard,
     validate_effect_program_state,
 )
-from sheltersim.events.models import EventApplicationError, ScheduledEvent
+from sheltersim.events.models import EventApplicationError, EventSuppressed, ScheduledEvent
 from sheltersim.experiments.scenario import ScenarioSpec
 
 pytestmark = pytest.mark.skipif(not native.available(), reason="needs the Rust kernels")
@@ -135,6 +135,19 @@ def _refused(kernel: Any, handler: Any, world: WorldState, event: ScheduledEvent
     assert _text(world) == before
 
 
+def _python_s_outcome(kernel: Any, handler: Any, world: WorldState, event: ScheduledEvent) -> str:
+    """The kernel raises the Python rule's outcome itself, same class and text, changing nothing."""
+    before = _text(world)
+    python_world = _copy(world)
+    with pytest.raises((EventSuppressed, EventApplicationError)) as made:
+        kernel(handler, world, event)
+    assert _text(world) == before
+    with pytest.raises((EventSuppressed, EventApplicationError)) as said:
+        type(handler).apply.__wrapped__(handler, python_world, event)
+    assert (type(made.value), str(made.value)) == (type(said.value), str(said.value))
+    return str(made.value)
+
+
 def _a_facility(world: WorldState, kind: str = "toilet") -> str:
     return sorted(id for id, item in world.facilities.items() if item.kind == kind)[0]
 
@@ -186,12 +199,12 @@ def test_a_facility_modifier_starts_stacks_and_expires(world: WorldState, rules:
     starts = [e for e in world.event_queue.pending() if e.event_type == "effect_program_apply"]
     expiries = [e for e in world.event_queue.pending() if e.event_type == "effect_program_expire"]
     apply, expire = EffectProgramFacilityHandler(), EffectProgramFacilityHandler(expire=True)
-    # Expiring what did not start is suppressed, by the Python rule.
-    _refused(rules.facility, expire, world, expiries[0])
+    # Expiring what did not start is suppressed, with the Python rule's text.
+    _python_s_outcome(rules.facility, expire, world, expiries[0])
     state = _same_in_both(rules.facility, apply, world, starts[0])
     state = _same_in_both(rules.facility, apply, state, starts[1])
-    # A modifier already active is suppressed, by the Python rule.
-    _refused(rules.facility, apply, state, starts[1])
+    # A modifier already active is suppressed, with the Python rule's text.
+    _python_s_outcome(rules.facility, apply, state, starts[1])
     assert len(state.model_state[KEY]["active_facility_modifiers"][facility]["modifiers"]) == 2
     assert has_active_facility_modifier(state, facility)
     state = _same_in_both(rules.facility, expire, state, expiries[0])
@@ -202,24 +215,33 @@ def test_a_facility_modifier_starts_stacks_and_expires(world: WorldState, rules:
 
 
 @pytest.mark.parametrize(
-    ("change", "value"),
+    ("change", "value", "text"),
     [
-        ("working_units", True),
-        ("working_units", 1.0),
-        ("working_units", "0"),
-        ("working_units", 10_000),
-        ("working_units", -1),
-        ("facility_id", "no-such-facility"),
-        ("facility_id", 1),
-        ("program_id", "no-such-program"),
-        ("effect_id", "no-such-effect"),
-        ("modifier_id", 1),
-        ("unknown_field", 1),
+        ("working_units", True, "working_units must be an integer"),
+        ("working_units", 1.0, "working_units must be an integer"),
+        ("working_units", "0", "working_units must be an integer"),
+        ("working_units", 10_000, "facility availability modifier violates capacity or occupancy"),
+        ("working_units", -1, "facility availability modifier violates capacity or occupancy"),
+        ("facility_id", "no-such-facility", "effect program references an unknown facility"),
+        ("facility_id", 1, None),
+        (
+            "program_id",
+            "no-such-program",
+            "effect program event does not reference a scheduled effect",
+        ),
+        (
+            "effect_id",
+            "no-such-effect",
+            "effect program event does not reference a scheduled effect",
+        ),
+        ("modifier_id", 1, None),
+        ("unknown_field", 1, "effect program apply payload fields do not match"),
     ],
 )
-def test_a_facility_event_the_rule_is_unsure_of_goes_to_python(
-    world: WorldState, rules: Any, change: str, value: Any
+def test_a_facility_event_that_fails_says_python_s_text_or_goes_to_python(
+    world: WorldState, rules: Any, change: str, value: Any, text: str | None
 ) -> None:
+    """A value the rule turns down is its text; one the kernel is unsure of is the Python rule's."""
     facility = _a_facility(world)
     schedule_effect_program(
         world,
@@ -228,7 +250,14 @@ def test_a_facility_event_the_rule_is_unsure_of_goes_to_python(
     event = _event(world, "effect_program_apply")
     document = event.to_dict()
     document["payload"][change] = value
-    _refused(rules.facility, EffectProgramFacilityHandler(), world, ScheduledEvent(**document))
+    changed = ScheduledEvent(**document)
+    if text is None:
+        _refused(rules.facility, EffectProgramFacilityHandler(), world, changed)
+    else:
+        assert (
+            _python_s_outcome(rules.facility, EffectProgramFacilityHandler(), world, changed)
+            == text
+        )
 
 
 ZONE_OPERATORS = {

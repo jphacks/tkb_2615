@@ -17,8 +17,9 @@ use std::sync::Arc;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyFloat, PyString, PyType};
+use pyo3::types::{PyFloat, PyString};
 
+use crate::core::errors::{self, Outcome};
 use crate::core::mathx::{py_max, py_min};
 use crate::core::row::{attribute, exact_float, exact_int, exact_str, unsupported};
 use crate::core::tracked::as_readable_dict;
@@ -87,8 +88,6 @@ const NOT_COLOCATED: &str = "social action participants are no longer co-located
 const NOT_SAME_HOUSEHOLD: &str = "family support target is no longer in the same household";
 const NOT_HIGHER_NEED: &str = "the selected person no longer has a higher immediate need";
 
-static SUPPRESSED: GILOnceCell<Py<PyType>> = GILOnceCell::new();
-
 /// `SocialInteractionHandler.apply`, for a social action. Raises what the Python rule raises for a
 /// suppressed one; the dispatch loop calls `apply_event`, which has no exception to pay for.
 #[pyfunction]
@@ -100,14 +99,7 @@ fn apply<'py>(
     let py = world.py();
     match apply_event(world, event)? {
         None => Ok(()),
-        Some(text) => {
-            let class = SUPPRESSED.get_or_try_init(py, || {
-                Ok::<_, PyErr>(
-                    py.import("sheltersim.events.models")?.getattr("EventSuppressed")?.downcast_into::<PyType>()?.unbind(),
-                )
-            })?;
-            Err(PyErr::from_type(class.bind(py).clone(), text))
-        }
+        Some(text) => errors::suppressed(py, text),
     }
 }
 
@@ -138,12 +130,12 @@ pub(crate) fn apply_event<'py>(
         Ok::<_, PyErr>(py.import("sheltersim.events.models")?.getattr("EventKind")?.getattr("ENDOGENOUS")?.unbind())
     })?;
     if !attribute(event, intern!(py, "kind"))?.is(endogenous.bind(py)) {
-        return unsupported("the event is not endogenous");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
     let due_object = attribute(event, intern!(py, "due_minute"))?;
     let due_minute = exact_int(&due_object)?;
     if due_minute != exact_int(&attribute(world, intern!(py, "minute_index"))?)? {
-        return unsupported("the event is not due now");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
     let provenance = attribute(event, intern!(py, "provenance"))?;
     let source = field(&provenance, intern!(py, "source_id"))?;
@@ -154,7 +146,7 @@ pub(crate) fn apply_event<'py>(
         || exact_str(&source_type)? != "assumption"
         || exact_str(&event_source)? != exact_str(&version)?
     {
-        return unsupported("the event's provenance is for the Python rule to judge");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
 
     // The payload's fields.
@@ -227,13 +219,13 @@ pub(crate) fn apply_event<'py>(
         Ok(Some((actor.profile.group_id.clone(), participant.profile.group_id.clone())))
     })?;
     let Some(household_groups) = household_groups else {
-        return Ok(Some(NOT_COLOCATED));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NOT_COLOCATED)));
     };
     if interaction == "family_care" {
         let actor_home = current_household(presence.as_ref(), actor_key, &household_groups.0)?;
         let participant_home = current_household(presence.as_ref(), participant_key, &household_groups.1)?;
         if actor_home.is_none() || actor_home != participant_home {
-            return Ok(Some(NOT_SAME_HOUSEHOLD));
+            return Ok(Some(errors::noted(Outcome::Suppressed, NOT_SAME_HOUSEHOLD)));
         }
     }
     let values = EntityStore::with_rows(&store, |rows| {
@@ -260,7 +252,7 @@ pub(crate) fn apply_event<'py>(
         Ok(Some((stress, trust, fatigue, actor_trust)))
     })?;
     let Some(values) = values else {
-        return Ok(Some(NOT_HIGHER_NEED));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NOT_HIGHER_NEED)));
     };
 
     // The objects of the rows.
@@ -373,23 +365,30 @@ fn contact_matches(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, trigger: 
 fn other_typed_event(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, payload: &Bound<'_, PyAny>, interaction: &str) -> PyResult<()> {
     let py = world.py();
     let provenance = attribute(event, intern!(py, "provenance"))?;
-    let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
+    let due_value = attribute(event, intern!(py, "due_minute"))?;
     if !kind_is(event, "ENDOGENOUS")?
-        || due != exact_int(&attribute(world, intern!(py, "minute_index"))?)?
-        || !get_is(&provenance, "source_id", SOURCE_ID)?
-        || !get_is(&provenance, "source_type", "assumption")?
-        || !attribute(event, intern!(py, "source_id"))?.eq(get(&provenance, "policy_version")?)?
+        || due_value.ne(attribute(world, intern!(py, "minute_index"))?)?
+        || get(&provenance, "source_id")?.ne(SOURCE_ID)?
+        || get(&provenance, "source_type")?.ne("assumption")?
+        || attribute(event, intern!(py, "source_id"))?.ne(get(&provenance, "policy_version")?)?
     {
-        return unsupported("the provenance or time is for the Python rule to judge");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
+    let due = exact_int(&due_value)?;
     let reason = get(payload, "reason_short")?;
-    let agent_id = get(payload, "agent_id")?;
-    let agent_text = exact_str(&agent_id)?;
-    let agents = attribute(world, intern!(py, "agents"))?;
-    let agent = get(&agents, agent_text)?;
-    if reason.is_none() || agent.is_none() {
-        return unsupported("the event is for the Python rule to judge");
+    if reason.is_none() {
+        return errors::failed(py, "typed social interaction requires a reason code");
     }
+    let agent_id = get(payload, "agent_id")?;
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let agent = match errors::str_of(&agent_id)? {
+        Some(agent_text) => get(&agents, agent_text)?,
+        None => py.None().into_bound(py),
+    };
+    if agent.is_none() {
+        return errors::failed(py, "typed social interaction references an unknown Agent");
+    }
+    let agent_text = exact_str(&agent_id)?;
     let context = mapping_get(payload, intern!(py, "conversation_state_context"))?;
     let participant_id = get(payload, "participant_agent_id")?;
     if let Some(context) = &context {

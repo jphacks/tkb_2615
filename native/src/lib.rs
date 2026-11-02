@@ -295,6 +295,9 @@ fn sheltersim_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(core::census::census_switch, module)?)?;
     module.add_function(wrap_pyfunction!(core::census::census_caught, module)?)?;
     module.add_function(wrap_pyfunction!(core::census::census_take, module)?)?;
+    module.add_function(wrap_pyfunction!(core::errors::texts_switch, module)?)?;
+    module.add_function(wrap_pyfunction!(core::errors::texts_last, module)?)?;
+    module.add_function(wrap_pyfunction!(core::errors::texts_take, module)?)?;
     module.add_function(wrap_pyfunction!(core::tracked::install_tracked_types, module)?)?;
     module.add_function(wrap_pyfunction!(core::tracked::install_id_map_type, module)?)?;
     module.add_class::<core::world_core::WorldCore>()?;

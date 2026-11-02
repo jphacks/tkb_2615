@@ -15,6 +15,13 @@ from sheltersim import native
 
 Rule = TypeVar("Rule", bound=Callable[..., Any])
 
+# benchmarks/rule_shadow/text_check.py sets this to compare a kernel's expected outcome
+# (EventSuppressed, EventApplicationError: saved texts) with what the Python rule raises for the
+# same input. It has before(python_rule, arguments, options) -> token, called before the kernel,
+# and after(python_rule, arguments, options, error, token) on a ValueError of the kernel. None:
+# nothing is called.
+_outcome_check: Any = None
+
 
 def kernel_first(module: str, name: str) -> Callable[[Rule], Rule]:
     """Try native/src/rules/<module>.rs's kernel, and on Unsupported run the decorated Python rule.
@@ -34,10 +41,20 @@ def kernel_first(module: str, name: str) -> Callable[[Rule], Rule]:
 
         @wraps(python_rule)
         def run(*arguments: Any, **options: Any) -> Any:
+            check = _outcome_check
+            if check is None:
+                try:
+                    return kernel(*arguments, **options)
+                except unsupported:
+                    return python_rule(*arguments, **options)
+            token = check.before(python_rule, arguments, options)
             try:
                 return kernel(*arguments, **options)
             except unsupported:
                 return python_rule(*arguments, **options)
+            except ValueError as error:
+                check.after(python_rule, arguments, options, error, token)
+                raise
 
         return run  # type: ignore[return-value]
 
