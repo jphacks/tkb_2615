@@ -153,6 +153,9 @@ def prepare(output: str) -> None:
     report_stats(recorder, native.rules("handlers"))
     if not _comparing():
         return
+    # The driver calls its kernels directly, past these stand-ins: alone, this shadow would see no
+    # tick and report nothing while every hash passes.
+    native.rules("tick").python_path_only(True)
 
     def handlers() -> Any:
         from sheltersim.events import handlers as loaded
