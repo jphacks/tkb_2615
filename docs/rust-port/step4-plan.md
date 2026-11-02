@@ -987,10 +987,10 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 | 塊 | もの | 行 | 備考 |
 |---|---|--:|---|
 | 道の変更 | `UpdatePhase._replan_journeys`、`_replan_staff_support_trip` | 275 | ゲートで1回、7日分で0回。**テストが薄い** |
-| 区域の環境 | `zone_environment_view`（`domain/environment.py`）、`ZoneEnvironmentFormula` の8つの式（`policies/registry.py`）、`_zone_environment` | 約 200 | **規則です。** kernel がこれを呼びます（`world_view.rs:406`）。式の意味を変えないので、移すだけです |
-| 人の文脈 | `_person_entry`、`PersonContext`、`_misinformation_applies` | 少 | pydantic を通る解析 |
-| 近接の抽選 | `DistanceSampledProximityPolicy.sample`、`_sample_proximity_contacts` | 111 | H2 はハンドラーだけ移す。抽選は Python |
-| 情報の接触の予定 | `SamplePhase._schedule_information_contact` | 44 | |
+| 区域の環境 | `zone_environment_view`（`domain/environment.py`）、`ZoneEnvironmentFormula` の8つの式（`policies/registry.py`）、`_zone_environment` | 約 200 | **L5 で移しました**（`rules/zone_environment.rs`、[l5-read-rules.md](lanes/l5-read-rules.md)）。Python は比べる基準です |
+| 人の文脈 | `_person_entry`、`PersonContext`、`_misinformation_applies` | 少 | **L5 で移しました**（`rules/person_context.rs`）。`selected_models` は契約として残ります |
+| 近接の抽選 | `DistanceSampledProximityPolicy.sample`、`_sample_proximity_contacts` | 111 | **L5 で移しました**（`rules/proximity.rs`） |
+| 情報の接触の予定 | `SamplePhase._schedule_information_contact` | 44 | **L5 で kernel からの呼び出しをなくしました** |
 | trace | `AgentPsychologyTrace.to_dict`（187）、`AgentPsychologyTrace` ほか | 約 300 | 決定 D1 |
 | tick の検証 | `TickValidationMemo`、`validate_after_tick` | 316 + `core/world.py` の一部 | #346 の前は driver の一番大きい入口（571 µs/tick）。**今は変わらない tick を `after_tick.rs` が受け、Python の `begin`、`commit`、`requests_to_check`、`_steady_plan`、`validate` は Plan を作るときと断ったときに動きます** |
 | dispatch の部品 | `_dispatch_one_event`、`_sync_movement_after_events`、`_finish_stopped_journey`、`_interrupt_trips_of_event`、`_refresh_space_after_geometry_change`、`_record_applied_outcomes` | 約 100 | `sleep_bed` の枝を含む |
@@ -1041,13 +1041,13 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 
 **規則のコールバック（2レーン込み。grep の結果を読んで分類）：**
 
-- `rules/tick.rs`：`_replan_journeys`、`_record_assigned_support`、`_consider_due_complaints`、`_sample_proximity_contacts`、`_finalize_actions_at_end`、`assign_pending`、`arbitrate`（独立の列）。**`__wrapped__` 経由の Python の規則すべて**（`or_rule!`。約 30 か所）。
+- `rules/tick.rs`：`_replan_journeys`、`_record_assigned_support`、`_consider_due_complaints`、`_finalize_actions_at_end`、`assign_pending`、`arbitrate`（独立の列）。**`__wrapped__` 経由の Python の規則すべて**（`or_rule!`。約 30 か所）。
 - `rules/dispatch.rs`：`_dispatch_one_event`（表にないイベント）、`_sync_movement_after_events`、`_finish_stopped_journey`、`_interrupt_trips_of_event`、`_admit_pending_returns`、`admit_pending_arrivals`、`learn_facility`、`record_applied_action_completion`、`record_applied_population_exit`、`ingest_applied_shared_operation_records`、`_record_request_interrupted`、`_record_staff_support_started`。
 - `rules/handlers.rs`（H2）：`ResourceServiceManager` の `cancel`、`interrupt_for_staff`、`record_request_outcome`、`_audit_event`、`_record_internal_event` など11個。`apply_resource_operation`、`apply_arrival_approach_completion`、`queue_arrivals`、`queue_departures`、`apply_population_presence_command`、`admit_pending_returns`、`finish_movement`、`record_shared_operation`、`record_queue_transition`。**多くは kernel_first の Python の入口を呼び、その先で kernel が動く形です。Rust から Rust を直接呼べば消えます。**
 - `rules/staff_operation_events.rs`（H2）：`staff_position_snapshots`、`staff_dynamics_is_available`、`staff_dynamics_on_shift`、`create_staff_operations_formula`、`admit_pending_arrivals`。
 - `rules/staff.rs`：`interrupt_staff_operation`。`rules/support.rs`：`append_applied_care_transition`、`care_source_ids_for_agent`、`create_care_outcome_formula`、`assign_pending`。
 - `rules/travel_completion.rs`：`agent_is_at_queue_slot`、`agent_is_at_queue_trip_destination`、`agent_is_at_facility_service_point`、`complete_presence_relocation`、`_after_arrival`。
-- `rules/world_view.rs`：`_person_entry`、`_zone_environment`、`_misinformation_applies`、`applied_facility_event_ids`。
+- `rules/world_view.rs`：`applied_facility_event_ids`、`selected_models`（`_person_entry`、`_zone_environment`、`_misinformation_applies` は L5 でなくなりました）。
 - `rules/social_propagation.rs`：`record_observed_contacts`。
 - `rules/population.rs`、`population_lifecycle.rs`：**書いたあとの `__wrapped__` の呼び戻し2か所。** kernel が途中で断ったら Python の規則を呼びます（`m6-population-rules.md`）。**この2か所は Python を消すと壊れます。** 実測の回数は0です（2節）。L1 で、通すテストを書いて、Rust の中で閉じます。
 

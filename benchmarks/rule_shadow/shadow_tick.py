@@ -44,7 +44,6 @@ def count_ticks(output: str) -> None:
     for part in (
         "_replan_journeys",
         "_record_assigned_support",
-        "_sample_proximity_contacts",
         "_finalize_actions_at_end",
         "_consider_due_complaints",
     ):

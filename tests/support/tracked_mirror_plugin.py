@@ -37,6 +37,7 @@ def pytest_ignore_collect(collection_path: Path) -> bool | None:
         "test_overlay_rules.py",
         "test_psychology_update.py",
         "test_information_row.py",
+        "test_read_rules.py",
         "test_capture_rows.py",
         "test_event_rows.py",
         "test_dispatch_rows.py",

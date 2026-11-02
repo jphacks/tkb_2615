@@ -282,7 +282,7 @@ def test_what_a_typed_field_cannot_hold_is_left_to_python(
 def test_a_context_that_does_not_parse_raises_python_error(generated_scenario: Any) -> None:
     world, controller = _world_with_views(generated_scenario)
     world.model_configs["population_context"] = {"people": {"A001": {"pet_count": -1}}}
-    with pytest.raises(native.Unsupported, match="Python rule"):
+    with pytest.raises(native.Unsupported, match="does not parse"):
         _rules().view_after_movement(controller, world)
     with pytest.raises(ValueError, match="pet_count"):
         UpdatePhase._view_after_movement(controller, world)

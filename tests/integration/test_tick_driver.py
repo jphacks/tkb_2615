@@ -427,7 +427,7 @@ _PHASE_STEPS = {
     },
     ("sample", "SamplePhase", "_run_sample_phase", "fn sample(&self)"): {
         "_sample_information_contacts": "information::sample_contacts(",
-        "_sample_proximity_contacts": '"_sample_proximity_contacts"',
+        "_sample_proximity_contacts": "proximity::sample_contacts(",
     },
 }
 

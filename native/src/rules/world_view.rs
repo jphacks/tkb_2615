@@ -9,10 +9,10 @@
 //! text. A value of another type than the Python view would hold is left to Python, too: a typed
 //! field here could not keep it, and `1` and `1.0` would hash differently.
 //!
-//! What stays in Python, called only when its input changes: parsing a person's context
-//! (`PersonContext`), and a zone's conditions (`zone_environment_view` and the formulas it selects),
-//! each kept here until the Python caches of the phases replace it. The one coefficient here is in
-//! `misinformation_of`, with `from_world`'s weight, threshold and cap; stressors sum their rates.
+//! A person's context is parsed by `rules/person_context.rs`, and a zone's conditions come from
+//! `rules/zone_environment.rs`; what they make is kept here while their inputs stay the same. The
+//! one coefficient in this file is in `misinformation_of`, with `from_world`'s weight, threshold and
+//! cap; stressors sum their rates. `selected_models` stays Python's: it is the contract of the configs.
 //!
 //! The rows are not read through `AgentView.__dict__` any more: the psychology and social kernels
 //! take `view_of`. Rules at a later phase than the view (the information kernel) take `group_of`,
@@ -31,6 +31,8 @@ use sha2::{Digest, Sha256};
 use crate::core::mathx::{py_fsum, py_min};
 use crate::core::tracked::as_readable_dict;
 use crate::core::world_core::{mirror_of, raw_dict_get, raw_dict_set, NamespaceMirror};
+use crate::rules::person_context::{self, plain_copy};
+use crate::rules::zone_environment::{ZoneConditions, ZoneInputs};
 use crate::state::entities::{entities_of, raw_setattr, Activity, Entities, EntityStore, Mobility, NeedRow, RequestStatus};
 use crate::state::information::{InformationRow, NAME as INFORMATION};
 use crate::state::psychological_distress::{DistressRow, NAME as DISTRESS};
@@ -64,26 +66,6 @@ pub(crate) struct DemandModifier {
     pub(crate) duration_multiplier: f64,
     pub(crate) modifier_event_ids: Vec<Arc<str>>,
     pub(crate) assumption_ids: Vec<Arc<str>>,
-}
-
-/// `ZoneEnvironmentView`, kept while the Python cache keeps the object.
-struct ZoneConditions {
-    ambient_noise_level: f64,
-    rest_efficiency_multiplier: f64,
-    noise_modifier_event_ids: Vec<Arc<str>>,
-    noise_assumption_ids: Vec<Arc<str>>,
-    demand_modifiers: Vec<DemandModifier>,
-    min_rest_decision_minutes: i64,
-    max_rest_decision_minutes: i64,
-    ventilation_effectiveness: f64,
-    lighting_level: f64,
-    privacy_level: f64,
-    temperature_c: f64,
-    ventilation_hygiene_growth_per_minute: f64,
-    privacy_discontent_per_minute: f64,
-    temperature_stress_per_minute: f64,
-    condition_modifier_event_ids: Vec<Arc<str>>,
-    condition_assumption_ids: Vec<Arc<str>>,
 }
 
 /// What everyone in a zone shares of an `AgentView`.
@@ -291,13 +273,6 @@ fn optional_i64(value: &Bound<'_, PyAny>) -> PyResult<Option<i64>> {
     }
 }
 
-fn text_tuple(value: &Bound<'_, PyAny>) -> PyResult<Vec<Arc<str>>> {
-    let Ok(items) = value.downcast_exact::<PyTuple>() else {
-        return unsupported("a view value is not a tuple");
-    };
-    items.iter().map(|item| exact_text(&item)).collect()
-}
-
 /// A value as `isinstance(_, dict)` sees it: a plain or tracked dict, or None for no dict. Another
 /// class of dict may read differently, and is left to Python.
 fn dict_or_nothing<'a, 'py>(value: &'a Bound<'py, PyAny>) -> PyResult<Option<&'a Bound<'py, PyDict>>> {
@@ -359,33 +334,42 @@ pub(crate) fn group_of(
     }
 }
 
-/// What this module keeps from one view to the next, for one controller. Each entry holds the
-/// Python object it was read from, and is good while the Python cache holds that same object. The
-/// Python caches decide when something has changed, for both paths.
+/// What this module keeps from one view to the next, for one controller. An entry is good while the
+/// document it was read from is equal to a copy kept with it. A zone's conditions are also good only
+/// while `_zone_environments` of the controller holds the same `views` object: the runner replaces
+/// that dict when `model_configs` changes, and Python's `_zone_environment` when it makes new views.
 #[pyclass(module = "sheltersim_native")]
 #[derive(Default)]
 pub struct ViewCache {
     keys: FxHashMap<Arc<str>, Py<PyString>>,
     people: FxHashMap<Arc<str>, (Py<PyAny>, Arc<PersonFields>)>,
-    zones: FxHashMap<Arc<str>, (Py<PyAny>, Arc<ZoneConditions>)>,
+    environment: Option<KeptEnvironment>,
     no_person: Arc<PersonFields>,
+}
+
+struct KeptEnvironment {
+    views: Py<PyAny>,
+    inputs: ZoneInputs,
+    zones: FxHashMap<Arc<str>, Arc<ZoneConditions>>,
+}
+
+fn key_of<'py>(keys: &mut FxHashMap<Arc<str>, Py<PyString>>, py: Python<'py>, id: &Arc<str>) -> Bound<'py, PyString> {
+    if let Some(key) = keys.get(id) {
+        return key.bind(py).clone();
+    }
+    let key = PyString::new(py, id);
+    keys.insert(id.clone(), key.clone().unbind());
+    key
 }
 
 impl ViewCache {
     fn key<'py>(&mut self, py: Python<'py>, id: &Arc<str>) -> Bound<'py, PyString> {
-        if let Some(key) = self.keys.get(id) {
-            return key.bind(py).clone();
-        }
-        let key = PyString::new(py, id);
-        self.keys.insert(id.clone(), key.clone().unbind());
-        key
+        key_of(&mut self.keys, py, id)
     }
 }
 
 struct PythonHelpers {
-    person_entry: Py<PyAny>,
-    zone_environment: Py<PyAny>,
-    misinformation_applies: Py<PyAny>,
+    selected_models: Py<PyAny>,
     world_view: Py<PyType>,
     need_view: Py<PyType>,
     agent_view: Py<PyType>,
@@ -403,9 +387,7 @@ fn helpers(py: Python<'_>) -> PyResult<&PythonHelpers> {
             Ok(module.getattr(name)?.downcast_into::<PyType>()?.unbind())
         };
         Ok(PythonHelpers {
-            person_entry: module.getattr("_person_entry")?.unbind(),
-            zone_environment: module.getattr("_zone_environment")?.unbind(),
-            misinformation_applies: module.getattr("_misinformation_applies")?.unbind(),
+            selected_models: py.import("sheltersim.contracts.policies")?.getattr("selected_models")?.unbind(),
             world_view: kind("WorldView")?,
             need_view: kind("NeedView")?,
             agent_view: kind("AgentView")?,
@@ -425,24 +407,6 @@ fn call_failed(_error: PyErr) -> PyErr {
     Unsupported::new_err("the Python rule raises")
 }
 
-fn read_person(entry: &Bound<'_, PyAny>) -> PyResult<Arc<PersonFields>> {
-    let py = entry.py();
-    let fields = entry.get_item(2)?;
-    let Some(fields) = as_readable_dict(&fields) else {
-        return unsupported("a person's fields are not a dict");
-    };
-    Ok(Arc::new(PersonFields {
-        caregiver_ids: text_tuple(&field(fields, intern!(py, "caregiver_ids"))?)?,
-        care_for_ids: text_tuple(&field(fields, intern!(py, "care_for_ids"))?)?,
-        parent_ids: text_tuple(&field(fields, intern!(py, "parent_ids"))?)?,
-        roles: text_tuple(&field(fields, intern!(py, "roles"))?)?,
-        usual_wake_minute: optional_i64(&field(fields, intern!(py, "usual_wake_minute"))?)?,
-        usual_sleep_minute: optional_i64(&field(fields, intern!(py, "usual_sleep_minute"))?)?,
-        required_sleep_minutes: optional_i64(&field(fields, intern!(py, "required_sleep_minutes"))?)?,
-        personal_context_present: true,
-    }))
-}
-
 /// `state.get(name, {})` if both are dicts: one of the dicts `population_context_people` merges.
 fn people_of<'py>(
     state: Option<Bound<'py, PyAny>>,
@@ -460,13 +424,9 @@ fn person_contexts(
     world: &Bound<'_, PyAny>,
     configs: &Bound<'_, PyDict>,
     model_state: &Bound<'_, PyAny>,
-    person_cache: &Bound<'_, PyAny>,
     cache: &mut ViewCache,
 ) -> PyResult<(FxHashMap<Arc<str>, Arc<PersonFields>>, bool)> {
     let py = world.py();
-    let Some(person_cache) = as_readable_dict(person_cache) else {
-        return unsupported("the cache of persons is not a dict");
-    };
     let sources = [
         people_of(configs.get_item(intern!(py, "population_context"))?, intern!(py, "people"))?,
         people_of(Some(state_get(model_state, intern!(py, "population_context_v1"))?), intern!(py, "people"))?,
@@ -496,28 +456,12 @@ fn person_contexts(
                 continue;
             }
             let id_text = exact_text(&id)?;
-            let mut entry = person_cache.get_item(&id)?;
-            let current = match &entry {
-                // `entry[0] != raw`, as a NaN in a record parses it again.
-                Some(kept) if kept.len()? == 3 => !kept.get_item(0)?.ne(&raw)?,
-                _ => false,
-            };
-            if !current {
-                let made = helpers(py)?
-                    .person_entry
-                    .bind(py)
-                    .call1((&id, &raw, person_cache))
-                    .map_err(call_failed)?;
-                entry = Some(made);
-            }
-            let Some(entry) = entry else {
-                return unsupported("no entry for a person");
-            };
             let fields = match cache.people.get(&id_text) {
-                Some((kept, fields)) if kept.bind(py).is(&entry) => fields.clone(),
+                // `entry[0] != raw`, as a NaN in a record parses it again.
+                Some((kept, fields)) if !kept.bind(py).ne(&raw)? => fields.clone(),
                 _ => {
-                    let fields = read_person(&entry)?;
-                    cache.people.insert(id_text.clone(), (entry.unbind(), fields.clone()));
+                    let fields = Arc::new(person_context::parse(&raw)?);
+                    cache.people.insert(id_text.clone(), (plain_copy(&raw)?.unbind(), fields.clone()));
                     fields
                 }
             };
@@ -526,45 +470,6 @@ fn person_contexts(
     }
     let any = !found.is_empty();
     Ok((found, any))
-}
-
-fn read_zone_conditions(view: &Bound<'_, PyAny>) -> PyResult<Arc<ZoneConditions>> {
-    let py = view.py();
-    let float = |name: &Bound<'_, PyString>| exact_float(&view.getattr(name)?);
-    let int = |name: &Bound<'_, PyString>| exact_i64(&view.getattr(name)?);
-    let texts = |name: &Bound<'_, PyString>| text_tuple(&view.getattr(name)?);
-    let demand = view.getattr(intern!(py, "demand_modifiers"))?;
-    let Ok(demand) = demand.downcast_exact::<PyTuple>() else {
-        return unsupported("the demand modifiers are not a tuple");
-    };
-    let mut demand_modifiers = Vec::with_capacity(demand.len());
-    for modifier in demand.iter() {
-        demand_modifiers.push(DemandModifier {
-            action: exact_text(&modifier.getattr(intern!(py, "action"))?)?,
-            probability_multiplier: exact_float(&modifier.getattr(intern!(py, "probability_multiplier"))?)?,
-            duration_multiplier: exact_float(&modifier.getattr(intern!(py, "duration_multiplier"))?)?,
-            modifier_event_ids: text_tuple(&modifier.getattr(intern!(py, "modifier_event_ids"))?)?,
-            assumption_ids: text_tuple(&modifier.getattr(intern!(py, "assumption_ids"))?)?,
-        });
-    }
-    Ok(Arc::new(ZoneConditions {
-        ambient_noise_level: float(intern!(py, "ambient_noise_level"))?,
-        rest_efficiency_multiplier: float(intern!(py, "rest_efficiency_multiplier"))?,
-        noise_modifier_event_ids: texts(intern!(py, "noise_modifier_event_ids"))?,
-        noise_assumption_ids: texts(intern!(py, "noise_assumption_ids"))?,
-        demand_modifiers,
-        min_rest_decision_minutes: int(intern!(py, "min_rest_decision_minutes"))?,
-        max_rest_decision_minutes: int(intern!(py, "max_rest_decision_minutes"))?,
-        ventilation_effectiveness: float(intern!(py, "ventilation_effectiveness"))?,
-        lighting_level: float(intern!(py, "lighting_level"))?,
-        privacy_level: float(intern!(py, "privacy_level"))?,
-        temperature_c: float(intern!(py, "temperature_c"))?,
-        ventilation_hygiene_growth_per_minute: float(intern!(py, "ventilation_hygiene_growth_per_minute"))?,
-        privacy_discontent_per_minute: float(intern!(py, "privacy_discontent_per_minute"))?,
-        temperature_stress_per_minute: float(intern!(py, "temperature_stress_per_minute"))?,
-        condition_modifier_event_ids: texts(intern!(py, "condition_modifier_event_ids"))?,
-        condition_assumption_ids: texts(intern!(py, "condition_assumption_ids"))?,
-    }))
 }
 
 /// An active stressor of a zone: `active_environmental_stress`.
@@ -617,26 +522,15 @@ fn sorted_unique(mut items: Vec<Arc<str>>) -> Vec<Arc<str>> {
     items
 }
 
-/// The zones of a view: the head of `from_world`.
-fn read_zones(
+/// What `_zone_environment` keeps, in the same dict and with its checks: the inputs of the zones'
+/// conditions, read again when the configs are another object or the modifiers have changed.
+fn kept_environment<'c>(
     controller: &Bound<'_, PyAny>,
-    world: &Bound<'_, PyAny>,
     configs: &Bound<'_, PyDict>,
     model_state: &Bound<'_, PyAny>,
-    cache: &mut ViewCache,
-) -> PyResult<Vec<Arc<ViewZone>>> {
-    let py = world.py();
-    let zones = world.getattr(intern!(py, "zones"))?;
-    let Some(zones) = as_readable_dict(&zones) else {
-        return unsupported("the zones are not a plain dict");
-    };
-    let mut zone_ids = Vec::with_capacity(zones.len());
-    for id in zones.keys() {
-        zone_ids.push(exact_text(&id)?);
-    }
-    zone_ids.sort_unstable();
-
-    // What _zone_environment checks of its cache.
+    cache: &'c mut Option<KeptEnvironment>,
+) -> PyResult<&'c mut KeptEnvironment> {
+    let py = configs.py();
     let environment_cache = controller.getattr(intern!(py, "_zone_environments"))?;
     let Some(environments) = as_readable_dict(&environment_cache) else {
         return unsupported("the cache of zones is not a dict");
@@ -657,7 +551,51 @@ fn read_zones(
             None => false,
         };
     let views = if usable { environments.get_item(intern!(py, "views"))? } else { None };
+    let current = match (&views, cache.as_ref()) {
+        (Some(views), Some(kept)) => kept.views.bind(py).is(views),
+        _ => false,
+    };
+    if !current {
+        let inputs = ZoneInputs::read(configs, &state)?;
+        let views = match views {
+            Some(views) => views,
+            None => {
+                let copy = plain_copy(&modifiers)?;
+                let views = PyDict::new(py).into_any();
+                environments.clear();
+                environments.set_item(intern!(py, "configs"), configs)?;
+                environments.set_item(intern!(py, "has_state"), has_state)?;
+                environments.set_item(intern!(py, "modifiers"), copy)?;
+                environments.set_item(intern!(py, "views"), &views)?;
+                views
+            }
+        };
+        *cache = Some(KeptEnvironment { views: views.unbind(), inputs, zones: FxHashMap::default() });
+    }
+    cache.as_mut().ok_or_else(|| Unsupported::new_err("no zone environment"))
+}
 
+/// The zones of a view: the head of `from_world`.
+fn read_zones(
+    controller: &Bound<'_, PyAny>,
+    world: &Bound<'_, PyAny>,
+    configs: &Bound<'_, PyDict>,
+    model_state: &Bound<'_, PyAny>,
+    cache: &mut ViewCache,
+) -> PyResult<Vec<Arc<ViewZone>>> {
+    let py = world.py();
+    let zones = world.getattr(intern!(py, "zones"))?;
+    let Some(zones) = as_readable_dict(&zones) else {
+        return unsupported("the zones are not a plain dict");
+    };
+    let mut zone_ids = Vec::with_capacity(zones.len());
+    for id in zones.keys() {
+        zone_ids.push(exact_text(&id)?);
+    }
+    zone_ids.sort_unstable();
+
+    let ViewCache { environment, keys, .. } = cache;
+    let environment = kept_environment(controller, configs, model_state, environment)?;
     let stressors = active_stressors(model_state, &zone_ids)?;
     let staff_operations = state_get(model_state, intern!(py, "staff_operations_v1"))?;
     let sanitation_records = match dict_or_nothing(&staff_operations)? {
@@ -666,24 +604,12 @@ fn read_zones(
     };
     let mut result = Vec::with_capacity(zone_ids.len());
     for id in zone_ids {
-        let key = cache.key(py, &id);
-        let view = match &views {
-            Some(views) => raw_dict_get(required_dict(views)?.as_any(), key.as_any())?,
-            None => None,
-        };
-        let view = match view {
-            Some(view) => view,
-            None => helpers(py)?
-                .zone_environment
-                .bind(py)
-                .call1((world, &key, &environment_cache))
-                .map_err(call_failed)?,
-        };
-        let conditions = match cache.zones.get(&id) {
-            Some((kept, conditions)) if kept.bind(py).is(&view) => conditions.clone(),
-            _ => {
-                let conditions = read_zone_conditions(&view)?;
-                cache.zones.insert(id.clone(), (view.unbind(), conditions.clone()));
+        let key = key_of(keys, py, &id);
+        let conditions = match environment.zones.get(&id) {
+            Some(conditions) => conditions.clone(),
+            None => {
+                let conditions = Arc::new(environment.inputs.conditions(&id)?);
+                environment.zones.insert(id.clone(), conditions.clone());
                 conditions
             }
         };
@@ -1023,6 +949,22 @@ fn read_facility_contexts(
     Ok(())
 }
 
+/// `_misinformation_applies`: whether the selected psychology reads beliefs in false claims. These
+/// are `LIFE_STATE_PSYCHOLOGY_POLICIES` of `domain/psychological_state.py`.
+fn misinformation_applies(configs: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = configs.py();
+    let selection = helpers(py)?.selected_models.bind(py).call1((configs,)).map_err(call_failed)?;
+    let selected = selection.get_item(intern!(py, "psychology"))?;
+    let selected = selected.downcast_exact::<PyString>().map_err(|_| Unsupported::new_err("a model ID is not a str"))?;
+    Ok(matches!(selected.to_str()?, "life-state-feedback-v1" | "mean-reverting-life-state-v1"))
+}
+
+/// `misinformation_applies` of a world, for the shadow.
+#[pyfunction]
+fn misinformation_applies_of(world: &Bound<'_, PyAny>) -> PyResult<bool> {
+    misinformation_applies(&configs_of(world)?)
+}
+
 fn configs_of<'py>(world: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let configs = world.getattr(intern!(world.py(), "model_configs"))?;
     if as_readable_dict(&configs).is_none() {
@@ -1053,12 +995,7 @@ fn build(controller: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>) -> PyResult<(V
     let Some(configs_dict) = as_readable_dict(&configs) else {
         return unsupported("the configs are not a plain dict");
     };
-    let applies = helpers(py)?
-        .misinformation_applies
-        .bind(py)
-        .call1((world,))
-        .map_err(call_failed)?
-        .is_truthy()?;
+    let applies = misinformation_applies(&configs)?;
     let information = state_get(&model_state, intern!(py, "information_spread_v1"))?;
     let information_applies = applies && information.is_instance_of::<PyDict>();
     if !information.is_none() && !information.is_instance_of::<PyDict>() {
@@ -1066,9 +1003,7 @@ fn build(controller: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>) -> PyResult<(V
     }
     let cache = cache_of(controller)?;
     let mut cache = cache.try_borrow_mut()?;
-    let person_cache = controller.getattr(intern!(py, "_person_contexts"))?;
-    let (persons, has_population_context) =
-        person_contexts(world, configs_dict, &model_state, &person_cache, &mut cache)?;
+    let (persons, has_population_context) = person_contexts(world, configs_dict, &model_state, &mut cache)?;
     let zones = read_zones(controller, world, configs_dict, &model_state, &mut cache)?;
     let store = entities_of(world)?;
     let no_person = cache.no_person.clone();
@@ -1839,6 +1774,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ViewCache>()?;
     m.add_function(wrap_pyfunction!(view_after_movement, m)?)?;
     m.add_function(wrap_pyfunction!(view_for_proposals, m)?)?;
+    m.add_function(wrap_pyfunction!(misinformation_applies_of, m)?)?;
     Ok(())
 }
 
