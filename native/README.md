@@ -35,6 +35,9 @@ Checkpoint document) and times them.
   exports `pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()>`, and Python reaches it with
   `native.rules("movement")` or `native.state("movement")`, which are `None` without the
   extension. Catch `native.Unsupported` around a call; the Python code then decides.
+  `Unsupported` is a type of its own in `lib.rs`: building one notes its line for
+  `benchmarks/rule_shadow/refusal_census.py` (`src/core/census.rs`), off unless that tool turns it
+  on. New refusals are counted without doing anything.
   `rules/parity.rs` is the example and exposes `core` to the tests. `rules/social_propagation.rs`
   and `rules/information.rs` hold the contact kernels; what they share is in `contacts.rs`.
 - `src/core/world_core.rs`: `WorldCore`, one per world, in `world.__dict__["_core"]`, and a
