@@ -709,14 +709,16 @@ fn invalid_guard(event: &Bound<'_, PyAny>) -> PyResult<Judged<bool>> {
     }
 }
 
-/// `effect_event_guard_or_suppress` of a rule: true goes on. Anything else is the Python rule's to
-/// say: the checks a handler makes before its guard are not all this kernel's yet. Through the
-/// dispatch loop the guard was asked before the handler (`guard_or_suppress`), so here it is true.
-fn guard_passes(world: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<()> {
-    match guard_decides(world, row, None)? {
+/// `effect_event_guard_or_suppress` of a handler, where its Python rule asks it (after the same
+/// checks): false suppresses, a guard that fails raises its own text. Through the dispatch loop the
+/// guard was asked before the handler (`guard_or_suppress`), so there it is true.
+fn guard_passes(world: &Bound<'_, PyAny>, row: &EventRow, event: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let event_object = || Ok(event.clone());
+    match guard_decides(world, row, Some(&event_object))? {
         Ok(true) => Ok(()),
-        Ok(false) => unsupported("the guard is false, so the effect is suppressed"),
-        Err(_) => unsupported("the guard fails, which the Python rule says"),
+        Ok(false) => errors::suppressed(py, "EffectProgram guard evaluated false"),
+        Err(text) => errors::failed(py, text),
     }
 }
 
@@ -1284,13 +1286,7 @@ fn temporary_space_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expi
     }
     // "temporary-space operator differs from its approved program" can't follow: the program's
     // operator for the effect and the payload's op were both just seen to be add_temporary_space.
-    // `effect_event_guard_or_suppress`: false suppresses; a guard that fails raises its own text.
-    let event_object = || Ok(event.clone());
-    match guard_decides(world, &row, Some(&event_object))? {
-        Ok(true) => {}
-        Ok(false) => return errors::suppressed(py, "EffectProgram guard evaluated false"),
-        Err(text) => return errors::failed(py, text),
-    }
+    guard_passes(world, &row, event)?;
     let parsed = match parameters(py, "add_temporary_space", &payload_item(event, "parameters")?) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -1381,7 +1377,7 @@ fn geometry_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
     if !approved {
         return errors::failed(py, "geometry effect does not reference its approved program");
     }
-    guard_passes(world, &row)?;
+    guard_passes(world, &row, event)?;
     if expire {
         // The Python rule's reads, on the Python values: `.get(key, {})` all the way down.
         let overlay = get_or_empty(&model_state(world)?, "geometry_overlay_v1")?;
@@ -1437,51 +1433,23 @@ fn geometry(handler: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>, event: &Bound<
 
 const SHARED_OPERATIONS: &str = "shared_operations_v1";
 
-/// What the operators of a marker with an approved program have in common.
-fn approved_marked_effect(
-    world: &Bound<'_, PyAny>,
-    row: &EventRow,
-    payload: &Doc,
-    op: &str,
-    target: &str,
-) -> PyResult<()> {
-    let marker = match map_of(&row.provenance)?.get(MARKER) {
-        Some(V::Map(marker)) => marker,
-        _ => return unsupported("no marker"),
-    };
-    let program_id = required_str(payload, "program_id")?;
-    let effect_id = required_str(payload, "effect_id")?;
-    let matches_marker = str_of(marker, "program_id") == Some(program_id)
-        && str_of(marker, "effect_id") == Some(effect_id)
-        && str_of(marker, "op").is_some_and(|item| &**item == op)
-        && str_of(marker, "phase").is_some_and(|item| &**item == "start");
-    let approved = program_state(world, |state| {
-        Ok(state.and_then(|state| state.programs.get(&**program_id)).is_some_and(|program| {
-            effect_is_scheduled(program, effect_id)
-                && program.operators.get(&**effect_id).is_some_and(|item| &**item == op)
-                && program.scheduled_event_ids.iter().any(|item| *item == row.event_id)
-        }))
-    })?;
-    if !matches_marker
-        || !approved
-        || str_of(payload, "op").is_none_or(|item| &**item != op)
-        || str_of(payload, "modifier_id").is_none_or(|item| **item != *modifier_id(program_id, effect_id))
-        || str_of(payload, target).is_none()
-    {
-        return unsupported("the effect does not reference its approved program");
-    }
-    Ok(())
-}
-
 fn staff_task_order(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, row: &EventRow) -> PyResult<()> {
     let py = world.py();
     let payload = map_of(&row.payload)?;
-    approved_marked_effect(world, row, payload, "staff_task_order", "staff_id")?;
-    if !ints_equal(&attribute(world, intern!(py, "minute_index"))?, row.due_minute)? {
-        return unsupported("the order is not for this minute");
+    // The approval chain of `staff_handoff`, and then `event.due_minute != world.minute_index`.
+    if !references_program(world, row, payload, "staff_task_order", "staff_id")?
+        || !ints_equal(&attribute(world, intern!(py, "minute_index"))?, row.due_minute)?
+    {
+        return errors::failed(py, "staff task order does not reference a current approved program");
     }
-    let order = parameters(py, "staff_task_order", &payload_item(event, "parameters")?)?;
-    guard_passes(world, row)?;
+    let order = match parameters(py, "staff_task_order", &payload_item(event, "parameters")?) {
+        Ok(order) => order,
+        Err(error) => {
+            let text = caught(py, error, Catch::ValueOrType)?;
+            return errors::failed(py, format!("staff task order parameters are invalid: {text}"));
+        }
+    };
+    guard_passes(world, row, event)?;
     let task_kind = attribute(&order, intern!(py, "task_kind"))?;
     let target_zone_id = attribute(&order, intern!(py, "target_zone_id"))?;
     let target_id = attribute(&order, intern!(py, "target_id"))?;
@@ -1624,7 +1592,7 @@ fn staff_handoff_on_copy<'py>(
     let task_id: String = task_id.extract()?;
     let reason_code: String = attribute(&handoff, intern!(py, "reason_code"))?.extract()?;
     let replacement_id: String = replacement_id.extract()?;
-    guard_passes(world, row)?;
+    guard_passes(world, row, event)?;
 
     let candidate = copy_of(world)?;
     let minute = exact_int(&attribute(&candidate, intern!(py, "minute_index"))?)?;
@@ -1810,7 +1778,7 @@ fn facility_repair<'py>(
         if !model_state(world)?.contains(SHARED_OPERATIONS)? {
             return errors::failed(py, "facility repair requires shared receipt state");
         }
-        guard_passes(world, row)?;
+        guard_passes(world, row, event)?;
         let facility = facility_map.get_item(&**facility_id)?;
         let working = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
         let capacity = exact_int(&attribute(&facility, intern!(py, "capacity"))?)?;

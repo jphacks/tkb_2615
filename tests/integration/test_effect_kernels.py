@@ -477,9 +477,10 @@ def test_an_order_is_the_same_and_only_for_its_minute(world: WorldState, rules: 
     assert state.staff[staff_id].active_task_id is not None
     document = event.to_dict()
     document["due_minute"] = world.minute_index + 1
-    _refused(rules.structure, handler, world, ScheduledEvent(**document))
-    with pytest.raises(EventApplicationError):
-        type(handler).apply.__wrapped__(handler, _copy(world), ScheduledEvent(**document))
+    assert (
+        _python_s_outcome(rules.structure, handler, world, ScheduledEvent(**document))
+        == "staff task order does not reference a current approved program"
+    )
 
 
 def test_a_handoff_without_its_program_is_the_rule_s_text(world: WorldState, rules: Any) -> None:

@@ -323,6 +323,79 @@ def test_an_order_that_went_stale_fails_in_the_handler_with_python_s_text(
     )
 
 
+def _changed(event: Any, **changes: Any) -> Any:
+    from sheltersim.events.models import ScheduledEvent
+
+    document = event.to_dict()
+    payload = {**document["payload"], **changes.pop("payload", {})}
+    marker = {**document["provenance"]["effect_program_v1"], **changes.pop("marker", {})}
+    provenance = {**document["provenance"], "effect_program_v1": marker}
+    return ScheduledEvent(**{**document, **changes, "payload": payload, "provenance": provenance})
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        (
+            {"payload": {"modifier_id": "another"}},
+            (
+                "EventApplicationError",
+                "staff task order does not reference a current approved program",
+            ),
+        ),
+        (
+            {"marker": {"phase": "end"}},
+            (
+                "EventApplicationError",
+                "staff task order does not reference a current approved program",
+            ),
+        ),
+        (
+            {"payload": {"staff_id": 7}},
+            (
+                "EventApplicationError",
+                "staff task order does not reference a current approved program",
+            ),
+        ),
+        (
+            {"due_minute": 1},
+            (
+                "EventApplicationError",
+                "staff task order does not reference a current approved program",
+            ),
+        ),
+        (
+            {"marker": {"guard": {"operator": "lt", "field": "simulation.minute", "value": 0}}},
+            ("EventSuppressed", "EffectProgram guard evaluated false"),
+        ),
+        (
+            {"marker": {"guard": {"operator": "eq", "field": "target.capacity", "value": 1}}},
+            ("EventApplicationError", "guard field 'target.capacity' has no facility target"),
+        ),
+    ],
+)
+def test_an_order_the_handler_turns_down_is_python_s_text(
+    world: WorldState, changes: dict[str, Any], expected: tuple[str, str]
+) -> None:
+    """`EffectProgramStructureHandler`'s own checks of an order, and its guard, before the order."""
+    event = _changed(_ordered_program(world), **changes)
+    if "due_minute" in changes:
+        event = _changed(event, due_minute=world.minute_index + changes["due_minute"])
+    assert kernel_says_python_s_text(EffectProgramStructureHandler(), world, event) == expected
+
+
+def test_an_order_whose_parameters_the_contract_turns_down_is_python_s_text(
+    world: WorldState,
+) -> None:
+    event = _ordered_program(world)
+    parameters = {**event.payload["parameters"], "task_kind": "juggling"}
+    kind, text = kernel_says_python_s_text(
+        EffectProgramStructureHandler(), world, _changed(event, payload={"parameters": parameters})
+    )
+    assert kind == "EventApplicationError"
+    assert text.startswith("staff task order parameters are invalid: ")
+
+
 def test_an_order_through_the_handler_is_the_same_in_both(world: WorldState) -> None:
     event = _ordered_program(world)
     by_python, by_rust = _copy(world), _copy(world)
