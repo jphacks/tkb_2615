@@ -20,6 +20,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple, PyType};
 
+use crate::core::errors;
 use crate::core::row::{attribute, exact_int};
 use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
 use crate::rules::action_lifecycle::{complete_for_event, ends_any_action};
@@ -390,6 +391,12 @@ impl<'py> Phase<'_, 'py> {
                 refused(py, TOILET_COMPLETE, &COUNTS.toilet_refused, &error);
                 return Ok(None);
             }
+            // Its checks raise before any change.
+            Err(error) if errors::made_here(py, &error) => {
+                count(&COUNTS.toilet_ran);
+                let done = self.expected_outcome(error)?;
+                return Ok(Some(self.checked(handler, object, done)?));
+            }
             Err(error) => return Err(error),
         }
         if goes_home {
@@ -464,22 +471,39 @@ impl<'py> Phase<'_, 'py> {
                 refused(py, SUPPORT_TIMEOUT, &COUNTS.timeout_refused, &error);
                 Ok(None)
             }
+            Err(error) if errors::made_here(py, &error) => {
+                count(&COUNTS.timeout_ran);
+                let done = self.expected_outcome(error)?;
+                Ok(Some(self.checked(handler, object, done)?))
+            }
             Err(error) => Err(error),
         }
     }
 
     /// `staff_support_complete`. The receipt's record follows the event's own, once that is settled.
-    fn support(&self, handler: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<Option<Option<PlannedTransition>>> {
+    /// A suppressed or failed completion, with its text, is `Err`: it raised before any change.
+    #[allow(clippy::type_complexity)]
+    fn support(
+        &self,
+        handler: &Bound<'py, PyAny>,
+        event: EventRef<'_, 'py>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Result<Option<PlannedTransition>, (EventStatus, Option<String>)>>> {
         let py = self.py();
         let writer = EventWriter::of(self.world)?;
         match support::complete_support_event(handler, self.world, &writer, event) {
             Ok(planned) => {
                 count(&COUNTS.support_ran);
-                Ok(Some(planned))
+                Ok(Some(Ok(planned)))
             }
             Err(error) if error.is_instance_of::<Unsupported>(py) => {
                 refused(py, SUPPORT_COMPLETE, &COUNTS.support_refused, &error);
                 Ok(None)
+            }
+            Err(error) if errors::made_here(py, &error) => {
+                count(&COUNTS.support_ran);
+                let done = self.expected_outcome(error)?;
+                Ok(Some(Err(self.checked(handler, object, done)?)))
             }
             Err(error) => Err(error),
         }
@@ -709,11 +733,12 @@ impl<'py> Phase<'_, 'py> {
         };
         let mut receipt = None;
         let done = match &*event_type {
-            SUPPORT_COMPLETE => match self.support(&handler, reference)? {
-                Some(planned) => {
+            SUPPORT_COMPLETE => match self.support(&handler, reference, &object)? {
+                Some(Ok(planned)) => {
                     receipt = planned;
                     Some((EventStatus::Applied, None))
                 }
+                Some(Err(done)) => Some(done),
                 None => None,
             },
             SOCIAL_INTERACTION => self.social(&handler, &object()?)?,

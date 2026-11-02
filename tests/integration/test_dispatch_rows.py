@@ -6,6 +6,7 @@ the Python step, and compares everything saved. See docs/rust-port/lanes/m3-disp
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -526,9 +527,19 @@ def test_a_walk_that_does_not_fit_changes_nothing_and_python_says_why(
     world.minute_index = event.due_minute
     spoil(world, event)
     handler = controller.event_dispatcher.handlers["agent_travel_complete"]
+    twin = copy.deepcopy(world)
     before = _document(world)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError, match=text) as said:
+        AgentTravelCompletionHandler.apply.__wrapped__(handler, twin, event)
+    # The kernel says the Python rule's text itself, or leaves the walk to the Python rule.
+    try:
         native.rules("travel_completion").apply(handler, world, event)
+    except native.Unsupported:
+        pass
+    except EventApplicationError as made:
+        assert str(made) == str(said.value)
+    else:
+        pytest.fail("the walk was applied")
     assert _document(world) == before
     with pytest.raises(EventApplicationError, match=text):
         AgentTravelCompletionHandler.apply(handler, world, event)

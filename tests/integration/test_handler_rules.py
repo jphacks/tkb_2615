@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from support.world import kernel_says_python_s_text
+
 from sheltersim import native
 from sheltersim.core.engine import TickEngine
 from sheltersim.core.rng import CounterRNG
@@ -624,11 +626,9 @@ def test_the_end_of_support_that_does_not_fit_is_python_s(generated_scenario: An
     world, _ = _run(generated_scenario, 5)
     event, agent_id = _assigned(world, "emotional_support")
     world.agents[agent_id].activity = Activity.IDLE
-    before = _bytes(world)
     handler = StaffSupportCompletionHandler(cooldown_minutes=30, require_colocated=True)
-    with pytest.raises(native.Unsupported, match="does not match"):
-        native.rules("support").complete_support(handler, world, event)
-    assert _bytes(world) == before
+    _, said = kernel_says_python_s_text(handler, world, event)
+    assert said == "support completion does not match its assigned task"
 
 
 # ---- what follows in the dispatch phase ----------------------------------------------------------

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import ast
 import atexit
+import copy
 import json
 import linecache
 import os
@@ -125,7 +126,7 @@ class _Check:
             return None
         index, world = found
         if getattr(python_rule, "__qualname__", "") in self.AFTER_CHANGE:
-            return index, self._fingerprint(world), self.world_type.from_dict(world.to_dict())
+            return index, self._fingerprint(world), copy.deepcopy(world)
         return index, self._fingerprint(world), None
 
     def after(

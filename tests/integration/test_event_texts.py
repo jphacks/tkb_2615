@@ -32,7 +32,11 @@ from sheltersim.events.handlers import (
     InfrastructureEventHandler,
     ProximityContactHandler,
     ResourceLedgerHandler,
+    StaffOperationArrivalHandler,
+    StaffOperationCompletionHandler,
+    StaffOperationReliefHandler,
     StaffRestorationHandler,
+    StaffSupportCompletionHandler,
     StaffUnavailabilityHandler,
     WaterOutageHandler,
     WaterRestorationHandler,
@@ -682,3 +686,223 @@ def test_contact_texts_are_python_s(rumor_world: WorldState) -> None:
     if heard is not None:
         event = _contact(world, sender, heard, message_id)
         _says(handler, world, event, "recipient already has an equally strong belief")
+
+
+# ---- Staff operations, staff support and EffectProgram facility modifiers -----------------------
+
+
+def test_staff_operation_texts_are_python_s(small_world: WorldState) -> None:
+    from sheltersim.domain.staff_operations import (
+        STAFF_RELIEF_POLICY_VERSION,
+        STAFF_RELIEF_SOURCE_ID,
+    )
+
+    world = small_world
+    payload = {"staff_id": "staff_001", "task_id": "nothing", "target_zone_id": "sleeping"}
+    arrival = StaffOperationArrivalHandler()
+    _says(
+        arrival,
+        world,
+        _event(world, "staff_operation_complete", payload),
+        "staff operation arrival handler received another event",
+    )
+    _says(
+        arrival,
+        world,
+        _event(world, "staff_operation_arrive", payload),
+        "staff travel arrival does not match an active operation",
+    )
+    _says(
+        arrival,
+        world,
+        _event(world, "staff_operation_arrive", {**payload, "staff_id": 4}),
+        "staff travel arrival does not match an active operation",
+    )
+    completion = StaffOperationCompletionHandler()
+    payload = {**payload, "task_kind": "cleaning", "target_id": None}
+    _says(
+        completion,
+        world,
+        _event(world, "staff_operation_arrive", payload),
+        "staff operation completion handler received another event",
+    )
+    _says(
+        completion,
+        world,
+        _event(world, "staff_operation_complete", payload),
+        "staff operation completion does not match active work",
+    )
+    relief = StaffOperationReliefHandler()
+    payload = {
+        "task_id": "nothing",
+        "previous_staff_id": "staff_001",
+        "replacement_staff_id": "staff_002",
+        "reason_code": "x",
+    }
+    _says(
+        relief,
+        world,
+        _event(world, "staff_operation_relief", payload),
+        "staff operation relief provenance or payload is invalid",
+    )
+    provenance = {
+        "source_type": "assumption",
+        "source_id": STAFF_RELIEF_SOURCE_ID,
+        "policy_version": STAFF_RELIEF_POLICY_VERSION,
+    }
+    event = _event(
+        world,
+        "staff_operation_relief",
+        payload,
+        kind=EventKind.ENDOGENOUS,
+        source_id=STAFF_RELIEF_POLICY_VERSION,
+        provenance=provenance,
+    )
+    _says(relief, world, event, "staff relief is stale or its replacement is no longer available")
+
+
+def test_a_staff_support_completion_s_texts_are_python_s(small_world: WorldState) -> None:
+    handler = StaffSupportCompletionHandler()
+    ids = {"request_id": "r", "agent_id": "A001", "staff_id": "staff_001", "task_id": "nothing"}
+    for change, text in (
+        ({"task_id": ""}, "staff completion requires request, Agent, staff, and task IDs"),
+        ({"agent_id": 3}, "staff completion requires request, Agent, staff, and task IDs"),
+        ({}, "staff completion does not match an active due task"),
+    ):
+        _says(
+            handler,
+            small_world,
+            _event(small_world, "staff_support_complete", {**ids, **change}),
+            text,
+        )
+
+
+def test_an_effect_s_facility_modifier_texts_are_python_s(small_world: WorldState) -> None:
+    from sheltersim.events.effects import EffectProgramFacilityHandler
+
+    facility_id = sorted(small_world.facilities)[0]
+    base = {"program_id": "p", "effect_id": "e", "modifier_id": "m", "facility_id": facility_id}
+    for handler, payload, text in (
+        (EffectProgramFacilityHandler(), base, "effect program apply payload fields do not match"),
+        (
+            EffectProgramFacilityHandler(expire=True),
+            {**base, "working_units": 1},
+            "effect program expire payload fields do not match",
+        ),
+        (
+            EffectProgramFacilityHandler(),
+            {**base, "working_units": 1},
+            "effect program event does not reference a scheduled effect",
+        ),
+        (
+            EffectProgramFacilityHandler(expire=True),
+            base,
+            "effect program event does not reference a scheduled effect",
+        ),
+    ):
+        _says(handler, small_world, _event(small_world, "facility_availability", payload), text)
+
+
+# ---- The dispatch loop's own handlers: a walk, a toilet visit, a support timeout ----------------
+
+
+@pytest.fixture(scope="module")
+def controlled_world() -> tuple[WorldState, OfflineSimulationController]:
+    world = WorldState.from_scenario(_gate().generated(evacuees=20, minutes=120))
+    controller = OfflineSimulationController(world, _MetricSink(MetricsRecorder()))
+    engine = TickEngine(world, phase_handler=controller)
+    for _ in range(5):
+        engine.step()
+    return world, controller
+
+
+def test_the_loop_s_handlers_texts_are_python_s(
+    controlled_world: tuple[WorldState, OfflineSimulationController],
+) -> None:
+    world, controller = controlled_world
+    handlers = controller.event_dispatcher.handlers
+    walk = {
+        "agent_id": "A001",
+        "task_id": "nothing",
+        "destination_zone_id": "sleeping",
+        "purpose": "return",
+    }
+    travel = handlers["agent_travel_complete"]
+    for change, text in (
+        ({"purpose": ""}, "travel completion requires Agent, task, destination, and purpose"),
+        ({"agent_id": None}, "travel completion requires Agent, task, destination, and purpose"),
+        ({}, "travel completion does not match an active task"),
+    ):
+        _says(travel, world, _event(world, "agent_travel_complete", {**walk, **change}), text)
+    toilet = handlers["toilet_service_complete"]
+    visit = {"facility_id": "toilet_01", "agent_id": "A001", "task_id": "nothing"}
+    for change, text in (
+        ({"task_id": ""}, "toilet completion requires facility_id, agent_id, and task_id"),
+        ({}, "toilet completion does not match an active due task"),
+    ):
+        _says(toilet, world, _event(world, "toilet_service_complete", {**visit, **change}), text)
+    timeout = handlers["support_request_timeout"]
+    for payload, text in (
+        ({"request_id": 3, "agent_id": "A001"}, "support timeout requires request_id and agent_id"),
+        (
+            {"request_id": "nothing", "agent_id": "A001"},
+            "support request 'nothing' does not match its Agent",
+        ),
+    ):
+        _says(timeout, world, _event(world, "support_request_timeout", payload), text)
+
+
+# ---- Typed social interactions --------------------------------------------------------------------
+
+
+def test_a_typed_social_event_s_first_texts_are_python_s(small_world: WorldState) -> None:
+    from sheltersim.events.handlers import SocialInteractionHandler
+
+    handler = SocialInteractionHandler()
+    provenance = {
+        "source_id": "ASM-EVENT-TRIGGERED-SOCIAL-INTERACTIONS-V1",
+        "source_type": "assumption",
+        "policy_version": "social-v1",
+    }
+
+    def typed(payload: dict[str, Any], **fields: Any) -> ScheduledEvent:
+        fields = {
+            "kind": EventKind.ENDOGENOUS,
+            "source_id": "social-v1",
+            "provenance": provenance,
+            **fields,
+        }
+        return _event(small_world, "social_interaction", payload, **fields)
+
+    for interaction in (
+        "reassurance_exchange",
+        "complaint_response",
+        "cooperation",
+        "information_reaction",
+    ):
+        payload = {
+            "interaction_type": interaction,
+            "agent_id": "A001",
+            "participant_agent_id": "A002",
+        }
+        for fields in (
+            {"kind": EventKind.EXOGENOUS},
+            {"due_minute": small_world.minute_index + 1},
+            {"source_id": "other"},
+        ):
+            _says(
+                handler,
+                small_world,
+                typed(payload, **fields),
+                "typed social interaction provenance or time is invalid",
+            )
+    payload = {"interaction_type": "cooperation", "agent_id": "A001"}
+    _says(handler, small_world, typed(payload), "typed social interaction requires a reason code")
+    for agent in ("nobody", 7):
+        payload = {"interaction_type": "cooperation", "agent_id": agent, "reason_short": "x"}
+        _says(
+            handler,
+            small_world,
+            typed(payload),
+            "typed social interaction references an unknown Agent",
+        )

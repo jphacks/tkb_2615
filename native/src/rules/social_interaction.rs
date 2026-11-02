@@ -130,12 +130,12 @@ pub(crate) fn apply_event<'py>(
         Ok::<_, PyErr>(py.import("sheltersim.events.models")?.getattr("EventKind")?.getattr("ENDOGENOUS")?.unbind())
     })?;
     if !attribute(event, intern!(py, "kind"))?.is(endogenous.bind(py)) {
-        return unsupported("the event is not endogenous");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
     let due_object = attribute(event, intern!(py, "due_minute"))?;
     let due_minute = exact_int(&due_object)?;
     if due_minute != exact_int(&attribute(world, intern!(py, "minute_index"))?)? {
-        return unsupported("the event is not due now");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
     let provenance = attribute(event, intern!(py, "provenance"))?;
     let source = field(&provenance, intern!(py, "source_id"))?;
@@ -146,7 +146,7 @@ pub(crate) fn apply_event<'py>(
         || exact_str(&source_type)? != "assumption"
         || exact_str(&event_source)? != exact_str(&version)?
     {
-        return unsupported("the event's provenance is for the Python rule to judge");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
 
     // The payload's fields.
@@ -365,23 +365,30 @@ fn contact_matches(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, trigger: 
 fn other_typed_event(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, payload: &Bound<'_, PyAny>, interaction: &str) -> PyResult<()> {
     let py = world.py();
     let provenance = attribute(event, intern!(py, "provenance"))?;
-    let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
+    let due_value = attribute(event, intern!(py, "due_minute"))?;
     if !kind_is(event, "ENDOGENOUS")?
-        || due != exact_int(&attribute(world, intern!(py, "minute_index"))?)?
-        || !get_is(&provenance, "source_id", SOURCE_ID)?
-        || !get_is(&provenance, "source_type", "assumption")?
-        || !attribute(event, intern!(py, "source_id"))?.eq(get(&provenance, "policy_version")?)?
+        || due_value.ne(attribute(world, intern!(py, "minute_index"))?)?
+        || get(&provenance, "source_id")?.ne(SOURCE_ID)?
+        || get(&provenance, "source_type")?.ne("assumption")?
+        || attribute(event, intern!(py, "source_id"))?.ne(get(&provenance, "policy_version")?)?
     {
-        return unsupported("the provenance or time is for the Python rule to judge");
+        return errors::failed(py, "typed social interaction provenance or time is invalid");
     }
+    let due = exact_int(&due_value)?;
     let reason = get(payload, "reason_short")?;
-    let agent_id = get(payload, "agent_id")?;
-    let agent_text = exact_str(&agent_id)?;
-    let agents = attribute(world, intern!(py, "agents"))?;
-    let agent = get(&agents, agent_text)?;
-    if reason.is_none() || agent.is_none() {
-        return unsupported("the event is for the Python rule to judge");
+    if reason.is_none() {
+        return errors::failed(py, "typed social interaction requires a reason code");
     }
+    let agent_id = get(payload, "agent_id")?;
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let agent = match errors::str_of(&agent_id)? {
+        Some(agent_text) => get(&agents, agent_text)?,
+        None => py.None().into_bound(py),
+    };
+    if agent.is_none() {
+        return errors::failed(py, "typed social interaction references an unknown Agent");
+    }
+    let agent_text = exact_str(&agent_id)?;
     let context = mapping_get(payload, intern!(py, "conversation_state_context"))?;
     let participant_id = get(payload, "participant_agent_id")?;
     if let Some(context) = &context {

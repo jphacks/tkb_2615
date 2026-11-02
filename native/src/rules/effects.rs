@@ -27,7 +27,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
-use crate::core::errors;
+use crate::core::errors::{self, Outcome};
 use crate::core::row::{attribute, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
@@ -684,56 +684,61 @@ fn facility_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
     let payload = map_of(&row.payload)?;
     let fields: &[&str] = if expire { &FACILITY_EXPIRE_FIELDS } else { &FACILITY_APPLY_FIELDS };
     if !has_exactly(payload, fields) {
-        return unsupported("the payload has other fields");
+        let action = if expire { "expire" } else { "apply" };
+        return errors::failed(py, format!("effect program {action} payload fields do not match"));
     }
     let program_id = required_str(payload, "program_id")?;
     let effect_id = required_str(payload, "effect_id")?;
     let modifier = required_str(payload, "modifier_id")?;
     let facility_id = required_str(payload, "facility_id")?;
+    let scheduled = program_state(world, |state| {
+        Ok(state.is_some_and(|state| state.programs.get(&**program_id).is_some_and(|program| effect_is_scheduled(program, effect_id))))
+    })?;
+    if !scheduled {
+        return errors::failed(py, "effect program event does not reference a scheduled effect");
+    }
     let known = attribute(world, intern!(py, "facilities"))?;
     let Some(facility) = get_or_none(&known, facility_id)? else {
-        return unsupported("an unknown facility");
+        return errors::failed(py, "effect program references an unknown facility");
     };
     if active_outage(world, facility_id)? {
-        return unsupported("an active infrastructure outage");
+        return errors::failed(py, "facility availability modifier conflicts with an active infrastructure outage");
     }
     let working = exact_int(&attribute(&facility, intern!(py, "working_units"))?)?;
     let capacity = exact_int(&attribute(&facility, intern!(py, "capacity"))?)?;
     let occupied = occupancy(world, &facility)?;
     // Whether the facility has a stack; the modifier's units, or how many others stay; and what
     // the facility's units become.
-    let (has_stack, units_or_others, target) = program_state(world, |state| {
+    // The rule's outcome, if it has one, as a text to raise once the row is let go.
+    let planned = program_state(world, |state| {
         let Some(state) = state else {
             return unsupported("no effect_program_v1");
         };
-        let scheduled = state.programs.get(&**program_id).is_some_and(|program| effect_is_scheduled(program, effect_id));
-        if !scheduled {
-            return unsupported("the event's effect is not scheduled");
-        }
         let current = state.active_facility_modifiers.get(&**facility_id);
         if !expire {
             let units = match payload.get("working_units") {
                 Some(V::Int(units)) => *units,
-                _ => return unsupported("working_units is not an int"),
+                Some(V::Big(_)) => return unsupported("working_units is past 64 bits"),
+                _ => return Ok(Err((Outcome::Failed, "working_units must be an integer"))),
             };
             if units < occupied || units < 0 || units > working || units > capacity {
-                return unsupported("the modifier violates capacity or occupancy");
+                return Ok(Err((Outcome::Failed, "facility availability modifier violates capacity or occupancy")));
             }
             let baseline = current.map_or(working, |record| record.baseline_working_units);
             if current.is_some_and(|record| record.modifiers.iter().any(|item| item.modifier_id == *modifier)) {
-                return unsupported("the modifier is already active");
+                return Ok(Err((Outcome::Suppressed, "facility availability modifier is already active")));
             }
             let mut target = baseline.min(units);
             for item in current.iter().flat_map(|record| record.modifiers.iter()) {
                 target = target.min(item.working_units);
             }
-            return Ok((current.is_some(), units, target));
+            return Ok(Ok((current.is_some(), units, target)));
         }
         let Some(current) = current else {
-            return unsupported("the modifier is not active");
+            return Ok(Err((Outcome::Suppressed, "facility availability modifier is not active")));
         };
         if !current.modifiers.iter().any(|item| item.modifier_id == *modifier) {
-            return unsupported("the modifier has expired or never started");
+            return Ok(Err((Outcome::Suppressed, "facility availability modifier already expired or never started")));
         }
         let mut target = current.baseline_working_units;
         let mut others = 0;
@@ -742,10 +747,14 @@ fn facility_rule(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, expire: boo
             others += 1;
         }
         if target < occupied {
-            return unsupported("the expiry would reduce capacity below occupancy");
+            return Ok(Err((Outcome::Failed, "modifier expiry would reduce capacity below active occupancy")));
         }
-        Ok((true, others, target))
+        Ok(Ok((true, others, target)))
     })?;
+    let (has_stack, units_or_others, target) = match planned {
+        Ok(planned) => planned,
+        Err((outcome, text)) => return Err(errors::error(py, outcome, text)),
+    };
 
     let candidate = copy_of(world)?;
     let records = model_state(&candidate)?

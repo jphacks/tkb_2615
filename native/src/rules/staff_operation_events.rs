@@ -14,6 +14,7 @@ use pyo3::types::{PyDict, PyList, PySlice, PyString, PyTuple};
 use crate::core::mathx::{py_max, py_min};
 use crate::core::row::{attribute, exact_float, exact_int, exact_str, unsupported};
 use crate::rules::care_receipts::{facility_recovery_record, handoff_record, staff_operation_record, OperationOutcome};
+use crate::core::errors;
 use crate::rules::effects::{active_outage, has_active_modifier, refused_by_python};
 use crate::rules::handlers::{
     assumption, counted, fields_are, get, get_is, kind_is, log_record, new_event, number, pending_of, text_is, NewEvent,
@@ -212,32 +213,37 @@ fn interrupt<'py>(world: &Bound<'py, PyAny>, staff_id: &Bound<'py, PyAny>, event
 fn arrive<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
     let plan = (|| -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        if !text_is(&attribute(event, intern!(py, "event_type"))?, "staff_operation_arrive") {
-            return unsupported("another event");
+        if attribute(event, intern!(py, "event_type"))?.ne("staff_operation_arrive")? {
+            return errors::failed(py, "staff operation arrival handler received another event");
         }
         let payload = attribute(event, intern!(py, "payload"))?;
         let state = get(&table_of(world)?, NAME)?;
         let staff_id = get(&payload, "staff_id")?;
         let task_id = get(&payload, "task_id")?;
-        let id = exact_str(&staff_id)?;
-        exact_str(&task_id)?;
+        let not_active = || errors::failed(py, "staff travel arrival does not match an active operation");
+        let (Some(id), Some(_)) = (errors::str_of(&staff_id)?, errors::str_of(&task_id)?) else {
+            return not_active();
+        };
         if !state.is_instance_of::<PyDict>() {
-            return unsupported("no staff operations");
+            return not_active();
         }
         let record = state.get_item("staff")?.call_method1(intern!(py, "get"), (id,))?;
         let staff = staff_of(world, &staff_id)?;
         let task = task_of(world, &task_id)?;
         let due = attribute(event, intern!(py, "due_minute"))?;
         if record.is_none()
-            || !text_is(&record.get_item("phase")?, "travel")
-            || !record.get_item("task_id")?.eq(&task_id)?
+            || record.get_item("phase")?.ne("travel")?
+            || record.get_item("task_id")?.ne(&task_id)?
             || staff.is_none()
             || task.is_none()
-            || !attribute(&staff, intern!(py, "active_task_id"))?.eq(&task_id)?
-            || !due.eq(record.get_item("travel_due_minute")?)?
-            || !get(&payload, "target_zone_id")?.eq(record.get_item("target_zone_id")?)?
-            || !available(world, id)?
+            || attribute(&staff, intern!(py, "active_task_id"))?.ne(&task_id)?
+            || due.ne(record.get_item("travel_due_minute")?)?
+            || get(&payload, "target_zone_id")?.ne(record.get_item("target_zone_id")?)?
         {
+            return not_active();
+        }
+        if !available(world, id)? {
+            // The Python rule interrupts the operation, then suppresses.
             return unsupported("the arrival is for the Python rule to judge");
         }
         Ok((record.clone(), staff, record.get_item("target_zone_id")?, due))
@@ -291,50 +297,60 @@ fn relief<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
         let provenance = attribute(event, intern!(py, "provenance"))?;
         let payload = attribute(event, intern!(py, "payload"))?;
         let now = exact_int(&attribute(world, intern!(py, "minute_index"))?)?;
-        if !text_is(&attribute(event, intern!(py, "event_type"))?, "staff_operation_relief")
+        if attribute(event, intern!(py, "event_type"))?.ne("staff_operation_relief")?
             || !kind_is(event, "ENDOGENOUS")?
-            || exact_int(&attribute(event, intern!(py, "due_minute"))?)? != now
-            || !text_is(&attribute(event, intern!(py, "source_id"))?, RELIEF_POLICY)
-            || !get_is(&provenance, "source_type", "assumption")?
-            || !get_is(&provenance, "source_id", RELIEF_SOURCE)?
-            || !get_is(&provenance, "policy_version", RELIEF_POLICY)?
+            || attribute(event, intern!(py, "due_minute"))?.ne(now)?
+            || attribute(event, intern!(py, "source_id"))?.ne(RELIEF_POLICY)?
+            || get(&provenance, "source_type")?.ne("assumption")?
+            || get(&provenance, "source_id")?.ne(RELIEF_SOURCE)?
+            || get(&provenance, "policy_version")?.ne(RELIEF_POLICY)?
             || !fields_are(&payload, &["task_id", "previous_staff_id", "replacement_staff_id", "reason_code"])?
         {
-            return unsupported("the relief's provenance or payload is for the Python rule to judge");
+            return errors::failed(py, "staff operation relief provenance or payload is invalid");
         }
         let task_id = payload.get_item("task_id")?;
         let previous_id = payload.get_item("previous_staff_id")?;
         let replacement_id = payload.get_item("replacement_staff_id")?;
         let previous_text = exact_str(&previous_id)?.to_owned();
         let replacement_text = exact_str(&replacement_id)?.to_owned();
+        let stale = || errors::suppressed(py, "staff relief is stale or its replacement is no longer available");
         let state = get(&table_of(world)?, NAME)?;
         if !state.is_instance_of::<PyDict>() {
-            return unsupported("no staff operations");
+            return stale();
         }
         let staff_records = state.get_item("staff")?;
         let operation = staff_records.call_method1(intern!(py, "get"), (&previous_id,))?;
+        if !operation.is_instance_of::<PyDict>() {
+            return stale();
+        }
         let task = task_of(world, &task_id)?;
         let previous = staff_of(world, &previous_id)?;
         let replacement = staff_of(world, &replacement_id)?;
-        if !operation.is_instance_of::<PyDict>() || task.is_none() || previous.is_none() || replacement.is_none() {
-            return unsupported("the relief is stale");
-        }
-        let due = exact_int(&operation.get_item("due_minute").and_then(|value| if value.is_none() { unsupported("an idle record") } else { Ok(value) })?)?;
-        let dynamics = py.import("sheltersim.domain.staff_dynamics")?;
-        let replacement_record = staff_records.call_method1(intern!(py, "get"), (&replacement_id, PyDict::new(py)))?;
-        if text_is(&operation.get_item("phase")?, "idle")
-            || !operation.get_item("task_id")?.eq(&task_id)?
-            || !operation.get_item("target_zone_id")?.eq(attribute(&replacement, intern!(py, "zone_id"))?)?
-            || !attribute(&task, intern!(py, "staff_id"))?.eq(&previous_id)?
-            || !attribute(&previous, intern!(py, "active_task_id"))?.eq(&task_id)?
-            || !attribute(&replacement, intern!(py, "active_task_id"))?.is_none()
-            || !get_is(&replacement_record, "phase", "idle")?
-            || !available(world, &replacement_text)?
-            || !dynamics.getattr("staff_dynamics_is_available")?.call1((world, &replacement_id, now))?.is_truthy()?
-            || (dynamics.getattr("staff_dynamics_on_shift")?.call1((world, &previous_id, now))?.is_truthy()? && available(world, &previous_text)?)
-            || due <= now
-        {
-            return unsupported("the relief is stale");
+        let replacement_zone = if replacement.is_none() { py.None().into_bound(py) } else { attribute(&replacement, intern!(py, "zone_id"))? };
+        // `or` in the Python rule's order: each test is reached only if those before it passed.
+        let is_stale = (|| -> PyResult<bool> {
+            if operation.get_item("phase")?.eq("idle")?
+                || operation.get_item("task_id")?.ne(&task_id)?
+                || operation.get_item("target_zone_id")?.ne(&replacement_zone)?
+                || task.is_none()
+                || attribute(&task, intern!(py, "staff_id"))?.ne(&previous_id)?
+                || previous.is_none()
+                || attribute(&previous, intern!(py, "active_task_id"))?.ne(&task_id)?
+                || replacement.is_none()
+                || !attribute(&replacement, intern!(py, "active_task_id"))?.is_none()
+            {
+                return Ok(true);
+            }
+            let dynamics = py.import("sheltersim.domain.staff_dynamics")?;
+            let replacement_record = staff_records.call_method1(intern!(py, "get"), (&replacement_id, PyDict::new(py)))?;
+            Ok(get(&replacement_record, "phase")?.ne("idle")?
+                || !available(world, &replacement_text)?
+                || !dynamics.getattr("staff_dynamics_is_available")?.call1((world, &replacement_id, now))?.is_truthy()?
+                || (dynamics.getattr("staff_dynamics_on_shift")?.call1((world, &previous_id, now))?.is_truthy()? && available(world, &previous_text)?)
+                || operation.get_item("due_minute")?.le(now)?)
+        })()?;
+        if is_stale {
+            return stale();
         }
         let kind = operation.get_item("task_kind")?;
         let Some(required) = relief_skills(exact_str(&kind)?) else {
@@ -346,7 +362,7 @@ fn relief<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
             skilled |= required.iter().any(|name| text_is(&skill, name));
         }
         if !skilled {
-            return unsupported("the replacement lacks the skill");
+            return errors::suppressed(py, "replacement staff lacks the task skill");
         }
         let formula = py.import("sheltersim.policies.registry")?.getattr("create_staff_operations_formula")?.call1((attribute(world, intern!(py, "model_configs"))?,))?;
         let selected = attribute(world, intern!(py, "model_configs"))?
@@ -370,7 +386,7 @@ fn relief<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
             }
         }
         if !has_completion {
-            return unsupported("the relieved operation lacks a pending completion");
+            return errors::failed(py, "relieved staff operation lacks a pending completion");
         }
         let work_minutes = exact_int(&state.get_item("config")?.get_item("task_duration_minutes")?.get_item(&kind)?)?;
         let causation = causation_with(&operation, &[exact_str(&attribute(event, intern!(py, "event_id"))?)?.to_owned()])?;
@@ -596,9 +612,6 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
         payload_task: Bound<'py, PyAny>,
     }
     let plan = (|| -> PyResult<Plan<'py>> {
-        if !text_is(&attribute(event, intern!(py, "event_type"))?, "staff_operation_complete") {
-            return unsupported("another event");
-        }
         let payload = attribute(event, intern!(py, "payload"))?;
         let payload_kind = get(&payload, "task_kind")?;
         let payload_target = get(&payload, "target_id")?;
@@ -615,29 +628,37 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
             None
         };
         let before = measurements(world, kind_text, &payload_target, &payload_zone)?;
+        if attribute(event, intern!(py, "event_type"))?.ne("staff_operation_complete")? {
+            return errors::failed(py, "staff operation completion handler received another event");
+        }
 
         let state = get(&table_of(world)?, NAME)?;
         let staff_id = get(&payload, "staff_id")?;
         let task_id = get(&payload, "task_id")?;
-        let id = exact_str(&staff_id)?;
-        exact_str(&task_id)?;
+        let not_active = || errors::failed(py, "staff operation completion does not match active work");
+        let (Some(id), Some(_)) = (errors::str_of(&staff_id)?, errors::str_of(&task_id)?) else {
+            return not_active();
+        };
         if !state.is_instance_of::<PyDict>() {
-            return unsupported("no staff operations");
+            return not_active();
         }
         let record = state.get_item("staff")?.call_method1(intern!(py, "get"), (id,))?;
         let staff = staff_of(world, &staff_id)?;
         let task = task_of(world, &task_id)?;
         if record.is_none()
-            || !text_is(&record.get_item("phase")?, "working")
-            || !record.get_item("task_id")?.eq(&task_id)?
+            || record.get_item("phase")?.ne("working")?
+            || record.get_item("task_id")?.ne(&task_id)?
             || staff.is_none()
             || task.is_none()
-            || !attribute(&staff, intern!(py, "active_task_id"))?.eq(&task_id)?
-            || !attribute(event, intern!(py, "due_minute"))?.eq(record.get_item("due_minute")?)?
-            || !payload_kind.eq(record.get_item("task_kind")?)?
-            || !payload_zone.eq(record.get_item("target_zone_id")?)?
-            || !available(world, id)?
+            || attribute(&staff, intern!(py, "active_task_id"))?.ne(&task_id)?
+            || attribute(event, intern!(py, "due_minute"))?.ne(record.get_item("due_minute")?)?
+            || payload_kind.ne(record.get_item("task_kind")?)?
+            || payload_zone.ne(record.get_item("target_zone_id")?)?
         {
+            return not_active();
+        }
+        if !available(world, id)? {
+            // The Python rule interrupts the operation, then suppresses.
             return unsupported("the completion is for the Python rule to judge");
         }
         let kind = record.get_item("task_kind")?;
