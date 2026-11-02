@@ -1160,8 +1160,18 @@ def test_a_v5_world_needs_no_ledger(v5_documents, old_form_documents) -> None:
 
 
 def test_the_resource_config_of_a_v6_world_is_needed(documents) -> None:
-    """Without it the plan has no resource config, and the entity rules turn the world down."""
-    world, memo = _primed(documents[0])
+    """Without it the plan has no resource config, and the entity rules turn the world down. In
+    a world where no one is being served water or a meal, no other rule reads the config."""
+    world, memo = _primed(
+        next(
+            document
+            for document in documents
+            if not any(
+                task["kind"] in ("resource_service_water", "resource_service_food")
+                for task in document["active_tasks"]
+            )
+        )
+    )
     del world.model_configs["resource_service"]
     assert not _takes(world, memo)
     assert _python_error(world) is not None

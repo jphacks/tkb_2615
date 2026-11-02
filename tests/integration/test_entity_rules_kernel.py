@@ -479,8 +479,21 @@ def test_a_v5_world_is_not_taken_with_a_resource_config(v5_documents) -> None:
         )
 
 
+def _no_service_under_way(documents: list[dict]) -> dict:
+    """A world where no one is being served water or a meal, so no rule reads the config."""
+    return next(
+        document
+        for document in documents
+        if not any(
+            task["kind"] in ("resource_service_water", "resource_service_food")
+            for task in document["active_tasks"]
+        )
+    )
+
+
 def test_a_v6_world_is_not_taken_without_its_resource_config(documents) -> None:
-    world = _world(documents[0])
+    world = _world(_no_service_under_way(documents))
+    assert _accepts(world)
     with pytest.raises(native.Unsupported):
         entity_kernel(
             world, list(world.support_requests.values()), None, InitialNeedProfile, NeedState
