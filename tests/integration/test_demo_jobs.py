@@ -189,3 +189,34 @@ def test_restart_marks_active_job_interrupted_and_restores_last_checkpoint(
         assert recovered_demo.state()["execution_mode"] == "live_compute"
     finally:
         recovered_manager.close()
+
+
+def test_restart_keeps_a_job_saved_by_another_model_version_as_failed(
+    tmp_path: Path, failure_day3_demo, wait_for_job, newer_engine, monkeypatch
+) -> None:
+    """Its branch is not restored to be continued; its saved file is kept as it is."""
+    from sheltersim.core import model_version
+
+    with monkeypatch.context() as older:
+        older.setattr(model_version, "ENGINE_VERSION", "1")
+        demo = failure_day3_demo()
+        manager = DemoJobManager(demo, tmp_path, chunk_minutes=2)
+        try:
+            job = manager.submit("baseline", 4)
+            wait_for_job(manager, job["job_id"], {"completed"})
+        finally:
+            manager.close()
+    record_path = next(tmp_path.glob("*.json"))
+    saved = json.loads(record_path.read_text(encoding="utf-8"))["checkpoint"]
+
+    recovered_demo = failure_day3_demo(start=False)
+    recovered_manager = DemoJobManager(recovered_demo, tmp_path, chunk_minutes=2)
+    try:
+        failed = recovered_manager.get(job["job_id"])
+        assert failed["status"] == "failed"
+        assert "run_model_view_only" in failed["error"] and "閲覧のみ" in failed["error"]
+        assert recovered_demo.state()["branches"] == []
+    finally:
+        recovered_manager.close()
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["checkpoint"] == saved and record["job"]["status"] == "failed"

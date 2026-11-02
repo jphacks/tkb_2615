@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from sheltersim.core.clock import ClockExhaustedError, SimulationClock
+from sheltersim.core.model_version import require_tickable
 from sheltersim.core.rng import CounterRNG, KeyedRandom
 from sheltersim.core.world import WorldState
 
@@ -91,6 +92,8 @@ class TickEngine:
         level = TraceLevel(trace_level)
         if level is not TraceLevel.OFF and trace_sink is None:
             raise ValueError("a trace sink is required when tracing is enabled")
+        # A world restored for viewing is never ticked (core/model_version.py).
+        require_tickable(world, "ticked")
         self.world = world
         self.clock = SimulationClock(world.duration_minutes, world.minute_index)
         self.phase_handler = phase_handler
@@ -107,6 +110,7 @@ class TickEngine:
             raise ClockExhaustedError("cannot step a completed simulation")
         if self.world.minute_index != self.clock.minute_index:
             raise TickExecutionError("WorldState clock was changed outside the TickEngine")
+        require_tickable(self.world, "ticked")
 
         minute = self.clock.minute_index
         # A handler with `run_tick` may run the phases in Rust (experiments/phases/driver.py), and

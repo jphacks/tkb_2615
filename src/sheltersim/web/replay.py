@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from sheltersim.core.checkpoint_cache import CheckpointHistoryCache
+from sheltersim.core.model_version import saved_point_view
 from sheltersim.experiments.timeline import TimelineStore
 from sheltersim.inspection.frames import world_frame
 from sheltersim.storage.projects import ProjectStore, StorageError
@@ -48,17 +49,20 @@ def _branch_frames(
     for world in timeline.iter_worlds(ref.branch_id, start, end, history_cache=history):
         world.validate()
         document, _, encoder = history.documents(world, None)
-        frames.append(
-            deepcopy(
-                world_frame(
-                    world,
-                    run_id=run_id,
-                    branch_id=ref.branch_id,
-                    computed_until=ref.computed_until,
-                    state_hash=encoder.world_tree_digest(document),
-                )
+        frame = deepcopy(
+            world_frame(
+                world,
+                run_id=run_id,
+                branch_id=ref.branch_id,
+                computed_until=ref.computed_until,
+                state_hash=encoder.world_tree_digest(document),
             )
         )
+        # A Run of another model version shows its saved points (D2) and says so.
+        view = saved_point_view(world)
+        if view is not None:
+            frame.update(view.describe())
+        frames.append(frame)
     return frames
 
 

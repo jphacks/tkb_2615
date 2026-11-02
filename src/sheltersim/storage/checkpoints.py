@@ -435,12 +435,18 @@ class CheckpointArchive:
         return self.decode_restored(record)[0]
 
     def decode_restored(
-        self, record: dict[str, Any]
+        self, record: dict[str, Any], *, view: bool = False
     ) -> tuple[Checkpoint, tuple[WorldState, MetricsRecorder]]:
-        """decode(), and the world and metrics its restore check built."""
+        """decode(), and the world and metrics its restore check built.
+
+        With view, a save of another model version is restored for reading only
+        (Checkpoint.restore_view()).
+        """
         self._validate_manifest(record)
         # Each chunk is parsed anew, so the unpacked document is not shared.
-        checkpoint, restored = Checkpoint._load(self._unpack(record["document"], saved=True))
+        checkpoint, restored = Checkpoint._load(
+            self._unpack(record["document"], saved=True), view=view
+        )
         if checkpoint.checkpoint_hash != record["checkpoint_hash"]:
             raise CheckpointError("checkpoint archive pointer hash mismatch")
         return checkpoint, restored

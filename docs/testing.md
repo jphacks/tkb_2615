@@ -91,7 +91,7 @@ python -m coverage report --sort=cover
 | `support/generated.py` | UIで作る生成ScenarioとProject画面のAPI | `generated_scenario`、`generated_scenario_with`、`generated_previews`、`ui_project_api`、`generated_request`、`place_three_at_facility`、`add_toilets_program` |
 | `support/fixture_scenarios.py` | `fixtures/`のScenarioを基に、1つの仕組みを確かめるために組み立てたScenario | `small_replay_scenario`、`small_benchmark_scenario`、`resource_service_scenario`、`information_spread_scenario`、`research_psychology_scenario` |
 | `support/demo.py` | 旧UIのdemo（`web/demo.py`）と、その計画・HTTP | `small_replay_demo`、`failure_day3_demo`、`day3_demo`、`day4_plan`、`multi_plan_draft`、`wait_for_job`、`demo_world_hash` |
-| `support/storage.py` | Projectの保存、保存済みRunとCheckpoint、ほかのOSでの保存 | `project_store_at`、`saved_timeline`、`no_checkpoint_decode`、`windows_like` |
+| `support/storage.py` | Projectの保存、保存済みRunとCheckpoint、ほかのOSでの保存 | `project_store_at`、`saved_timeline`、`engine_v1_run`、`newer_engine`、`no_checkpoint_decode`、`windows_like` |
 | `support/web.py` | 保存したRunのinspectorと、socketのないrequest handler | `demo_timeline_inspector`、`audit_inspector`、`full_trace_inspector`、`bare_request_handler` |
 | `support/llm.py` | 偽のLLM Providerと、有料APIのライブの確認 | `counting_provider`、`recording_router`、`live_model_check`、`live_source_search_check` |
 | `support/reports.py` | PDFレポートの保存済みRun、根拠つきの文章、偽のOpus | `report_saved_run`、`prose_document`、`report_router`、`install_report_router` |

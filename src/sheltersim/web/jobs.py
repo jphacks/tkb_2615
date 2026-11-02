@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sheltersim.core.checkpoint import Checkpoint
+from sheltersim.core.model_version import ViewOnlyRunError
 from sheltersim.web.demo import DemoError, DemoService
 
 _ACTIVE = frozenset({"queued", "running", "cancelling"})
@@ -219,11 +220,22 @@ class DemoJobManager:
             ):
                 raise DemoJobError(f"invalid persisted job record: {path.name}")
             job = document["job"]
-            checkpoint = Checkpoint.from_dict(document["checkpoint"])
             if not isinstance(job, dict) or not _JOB_ID.fullmatch(str(job.get("job_id", ""))):
                 raise DemoJobError(f"invalid persisted job metadata: {path.name}")
             if job["job_id"] != path.stem:
                 raise DemoJobError(f"persisted job id does not match filename: {path.name}")
+            try:
+                checkpoint = Checkpoint.from_dict(document["checkpoint"])
+            except ViewOnlyRunError as exc:
+                # Saved by another model version: the job is kept as failed, its file as
+                # it is, and its branch is not restored (core/model_version.py).
+                if job.get("status") != "failed":
+                    job["status"] = "failed"
+                    job["error"] = str(exc)[:300]
+                    job["updated_at"] = _now()
+                    self._persist_saved(job, document["checkpoint"])
+                self._jobs[job["job_id"]] = job
+                continue
             loaded.append((job, checkpoint))
         loaded.sort(
             key=lambda pair: (
@@ -264,11 +276,19 @@ class DemoJobManager:
             path = self._job_path(job["job_id"])
             if path.exists():
                 existing = json.loads(path.read_text(encoding="utf-8"))
-                checkpoint = Checkpoint.from_dict(existing["checkpoint"])
+                try:
+                    checkpoint = Checkpoint.from_dict(existing["checkpoint"])
+                except ViewOnlyRunError:
+                    self._persist_saved(job, existing["checkpoint"])
+                    return
             else:
                 checkpoint = self.demo.checkpoint_for_job(job["branch_id"])
+        self._persist_saved(job, checkpoint.to_dict())
+
+    def _persist_saved(self, job: dict[str, Any], checkpoint: dict[str, Any]) -> None:
+        """Write a job with a Checkpoint document validated when it was read."""
         document = json.dumps(
-            {"schema_version": 1, "job": job, "checkpoint": checkpoint.to_dict()},
+            {"schema_version": 1, "job": job, "checkpoint": checkpoint},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

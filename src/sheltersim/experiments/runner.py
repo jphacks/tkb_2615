@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from sheltersim.contracts.policies import selected_models, selected_models_scope
 from sheltersim.core.engine import TickEngine, TickPhase, TraceLevel
+from sheltersim.core.model_version import require_tickable
 from sheltersim.core.rng import KeyedRandom
 from sheltersim.core.state_mirror import field_stamp, same_stamp
 from sheltersim.core.world import WorldState
@@ -114,6 +115,8 @@ class OfflineSimulationController(
         *,
         llm_router: LLMRouter | None = None,
     ) -> None:
+        # Initialization may install state; a world restored for viewing gets none.
+        require_tickable(world, "simulated")
         self.world = world
         self._person_contexts: dict[str, Any] = {}
         self._closed_edges: dict[str, tuple[Any, set[str]]] = {}
