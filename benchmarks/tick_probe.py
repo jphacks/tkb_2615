@@ -53,13 +53,12 @@ class Observer(Protocol):
     ) -> None: ...
 
 
-def install(observers: Iterable[Observer], *, on_driver: bool = False) -> Callable[[], None]:
+def install(observers: Iterable[Observer]) -> Callable[[], None]:
     """Make every TickEngine built from now on call the observers; returns the undo.
 
-    Engines are numbered in the order they are built, which a run repeats. A handler in place of
-    the engine's sends each tick through phase_handler, as without the Rust driver. ``on_driver``
-    leaves the handler and watches between the phases of whichever path a tick takes, which leaves
-    the driver of rules/tick.rs running.
+    Engines are numbered in the order they are built, which a run repeats. They watch through
+    `TickEngine.phase_observer`, between the phases of whichever path a tick takes, so the driver of
+    rules/tick.rs keeps running. An observer already there is called first.
     """
     chosen = tuple(observers)
     built = TickEngine.__init__
@@ -69,9 +68,11 @@ def install(observers: Iterable[Observer], *, on_driver: bool = False) -> Callab
         built(self, *args, **kwargs)
         engine = count[0]
         count[0] += 1
-        inner = self.phase_handler
+        existing = self.phase_observer
 
         def watch(phase: TickPhase, before: bool) -> None:
+            if existing is not None:
+                existing(phase, before)
             minute = self.clock.minute_index
             for observer in chosen:
                 if before:
@@ -79,17 +80,7 @@ def install(observers: Iterable[Observer], *, on_driver: bool = False) -> Callab
                 else:
                     observer.after_phase(engine, self.world, minute, phase)
 
-        def handler(phase: TickPhase, world: WorldState, minute: int, rng: Any) -> None:
-            for observer in chosen:
-                observer.before_phase(engine, world, minute, phase)
-            inner(phase, world, minute, rng)
-            for observer in chosen:
-                observer.after_phase(engine, world, minute, phase)
-
-        if on_driver:
-            self.phase_observer = watch
-        else:
-            self.phase_handler = handler
+        self.phase_observer = watch
         for observer in chosen:
             observer.engine_started(engine, self.world)
 

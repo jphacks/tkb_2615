@@ -24,6 +24,8 @@ from typing import Any
 
 
 def install(output: str) -> None:
+    from shadow_kit import captured, values_in
+
     from sheltersim import native
     from sheltersim.core import state_mirror
     from sheltersim.core.engine import TraceLevel
@@ -70,8 +72,8 @@ def install(output: str) -> None:
             seen["no_model"] += 1
             rules.sample_contacts(self, minute, rng)
             return
-        if self.artifacts.trace_level is not TraceLevel.OFF or type(rng) is not CounterRNG:
-            seen["left_to_python_trace_or_rng"] += 1
+        if type(rng) is not CounterRNG:
+            seen["left_to_python_rng"] += 1
             python_step(self, minute, rng)
             return
         world = self.world
@@ -146,8 +148,29 @@ def install(output: str) -> None:
 
         queued_before = {event.event_id for event in world.event_queue.pending()}
         first_sequence = world.id_counters.get("event", 0)
-        rules.sample_contacts(self, minute, rng)
+        with captured(self.artifacts, "record_information_spread_trace") as documents:
+            rules.sample_contacts(self, minute, rng)
         seen["kernel_ran"] += 1
+        if self.artifacts.trace_level is not TraceLevel.OFF:
+            full = self.artifacts.trace_level is TraceLevel.FULL
+            expected = json.dumps(
+                [
+                    [
+                        python_result.trace_document(
+                            minute,
+                            maximum_contacts=len(python_result.contacts) if full else 20,
+                        )
+                    ],
+                    {},
+                ],
+                ensure_ascii=False,
+            )
+            seen["trace_documents"] += len(documents)
+            if documents != [expected]:
+                note(minute, f"the contact trace: {documents!r:.1500}")
+            else:
+                seen["trace_values_compared"] += values_in(json.loads(expected))
+                seen["trace_bytes_compared"] += len(expected)
         state = world.model_state[KEY]
         if json.dumps(state, sort_keys=True) != json.dumps(
             python_result.runtime_state, sort_keys=True

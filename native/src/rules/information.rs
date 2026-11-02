@@ -27,6 +27,7 @@ use crate::core::rng::{start_draw_log, take_draw_log, Key, KeyedDraws};
 use crate::core::row::{map_set, Field};
 use crate::core::value::V;
 use crate::core::world_core::{mirror_of, NamespaceMirror};
+use crate::rules::trace::TraceSink;
 use crate::rules::world_view::{group_of, presence_people_of};
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::events::{is_stable_id, EventKind, EventRow, EventWriter};
@@ -185,10 +186,6 @@ fn inputs<'py>(
     if !rng.get_type().is(&known.counter_rng) {
         return unsupported("the random source is not a CounterRNG");
     }
-    let trace_level = controller.getattr(intern!(py, "artifacts"))?.getattr(intern!(py, "trace_level"))?;
-    if trace_level.downcast::<PyString>()?.to_str()? != "off" {
-        return unsupported("a trace records the contacts");
-    }
     let Ok(minute) = minute.downcast_exact::<PyInt>() else {
         return unsupported("the minute is not an int");
     };
@@ -252,7 +249,7 @@ struct Proposal {
     causation: Arc<str>,
 }
 
-/// One contact of `InformationContactTrace`, for the bit comparison only.
+/// One contact of `InformationContactTrace`, for its trace document and the bit comparison.
 struct ContactTrace {
     sender: usize,
     recipient: usize,
@@ -661,7 +658,8 @@ pub(crate) fn sample_contacts<'py>(
     let mirror = mirror_of(&inputs.world, NAME)?;
     let writer = EventWriter::of(&inputs.world)?;
     let draws = KeyedDraws::new(&inputs.seed);
-    let plan = with_plan(&inputs, &mirror, &draws, false)?;
+    let sink = TraceSink::of(controller)?;
+    let plan = with_plan(&inputs, &mirror, &draws, sink.is_some())?;
     write(&mirror, &plan)?;
     for proposal in &plan.proposals {
         // `_schedule_information_contact`.
@@ -683,7 +681,52 @@ pub(crate) fn sample_contacts<'py>(
             }
         }
     }
+    if let Some(sink) = sink {
+        sink.information(&trace_document(controller.py(), minute, &sink, &inputs, &plan)?)?;
+    }
     Ok(())
+}
+
+/// `InformationSpreadResult.trace_document`.
+fn trace_document<'py>(
+    py: Python<'py>,
+    minute: &Bound<'py, PyAny>,
+    sink: &TraceSink<'py>,
+    inputs: &Inputs<'py>,
+    plan: &Plan,
+) -> PyResult<Bound<'py, PyDict>> {
+    let kept = plan.traces.len().min(sink.information_items(plan.traces.len()));
+    // The sort of `InformationSpreadPolicy.update`, which is stable.
+    let mut traces: Vec<&ContactTrace> = plan.traces.iter().collect();
+    traces.sort_by(|first, second| {
+        let key = |trace: &ContactTrace| {
+            (plan.ids[trace.recipient].clone(), plan.ids[trace.sender].clone(), trace.message.clone().unwrap_or_else(|| Arc::from("")))
+        };
+        key(first).cmp(&key(second))
+    });
+    let contacts = PyList::empty(py);
+    for trace in &traces[..kept] {
+        let item = PyDict::new(py);
+        item.set_item("sender_agent_id", &*plan.ids[trace.sender])?;
+        item.set_item("recipient_agent_id", &*plan.ids[trace.recipient])?;
+        item.set_item("contact_basis", trace.basis)?;
+        item.set_item("contact_minutes", trace.minutes)?;
+        item.set_item("message_id", optional(py, &trace.message))?;
+        item.set_item("belief", optional(py, &trace.belief))?;
+        item.set_item("transmission_probability", trace.probability)?;
+        item.set_item("transmission_selected", trace.selected)?;
+        item.set_item("message_source_id", optional(py, &trace.source))?;
+        item.set_item("causation_id", optional(py, &trace.causation))?;
+        contacts.append(item)?;
+    }
+    let document = PyDict::new(py);
+    document.set_item("minute_index", minute)?;
+    document.set_item("policy_version", inputs.model.version())?;
+    document.set_item("selected_contact_count", plan.traces.len())?;
+    document.set_item("truncated_contact_count", plan.traces.len() - kept)?;
+    document.set_item("contacts", contacts)?;
+    document.set_item("proposed_transfer_count", plan.proposals.len())?;
+    Ok(document)
 }
 
 /// What `ScheduledEvent._check` raises for a contact whose row `contact_event` refuses, in its order.

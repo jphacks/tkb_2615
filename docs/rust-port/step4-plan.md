@@ -23,7 +23,7 @@
 
 | 変更 | 状態 | この計画への影響 |
 |---|---|---|
-| driver（#344、`rules/tick.rs`） | マージ済み | tick の段階の順序は Rust です。**`rule_shadow` と `--reversed-order` は driver を通りません**（`m6-driver.md`）。Provider を呼べる router と trace は tick ごと Python の経路です。L0 は driver の `or_rule!` も数えます |
+| driver（#344、`rules/tick.rs`） | マージ済み | tick の段階の順序は Rust です。**`rule_shadow` と `--reversed-order` は driver を通りません**（`m6-driver.md`）。L6 で Provider を呼べる router と trace も driver に載りました（[l6-trace.md](lanes/l6-trace.md)）。L0 は driver の `or_rule!` も数えます |
 | overlay（#345、`rules/overlay.rs` ほか） | マージ済み | `an independent FIFO*`、`a temporary room may have a bed`、`a surveyed service point` の断りはなくなりました。`rules/population.rs` の読みを `overlay.rs` に寄せる宿題が残ります（L1） |
 | validate（#346、`rules/after_tick.rs`、`rules/metrics.rs` の `capture`） | マージ済み | **L7 が小さくなりました。** 7日分では Plan のない最初の1 tick を除く全 tick を kernel が受けます。実測の断りは下の L7 |
 | `rust/m6-handlers-rest`（`wt-m6-handlers2`、`df84748`） | **未マージ。** 込みの木で計測済み | 7日分で Python に渡るイベントが 10,495 件から 8 件に。文書 `m6-handlers.md` は同じブランチにあります。マージのときの衝突は `sitecustomize.py` と `docs/architecture.md` だけでした（試しマージ） |
@@ -41,7 +41,7 @@
 
 | # | 決定 | 変えられる人 |
 |---|---|---|
-| **D1** | **trace の文書は形を変えずに Rust に移します。** `AgentPsychologyTrace.to_dict` 187行、`explain_update` 計 約 500 行、接触の trace。provenance に効くので減らしません。L6 の最初に見積もります | 利用者、担当の方 |
+| **D1** | **trace の文書は形を変えずに Rust に移します。** `AgentPsychologyTrace.to_dict` 187行、`explain_update` 計 約 500 行、接触の trace。provenance に効くので減らしません。**L6 で移しました。** 書き出し（`RunArtifactWriter`、`_sanitize`）は Python のままです（[l6-trace.md](lanes/l6-trace.md)） | 利用者、担当の方 |
 | **D2** | **旧 Run は保存の時点だけを見せます。** 保存の間の分は保存の時点に丸め、丸めたことを画面に出します | 利用者 |
 | **D3** | **tick の外の `validate_*`（約 4,400 行）は Python に残します。** tick の中の分だけ L7 で移します | 利用者 |
 | **D4** | **デモの replay（`fixtures/demo_replay/`、48 MB）は作り直します**（`scripts/build_demo_replay.py`）。旧版は `submission` タグに残ります。Git の増え方は確かめます | 利用者 |
@@ -991,7 +991,7 @@ L0 の前に文を読んで付けた分類です。到達は**推測で、上の
 | 人の文脈 | `_person_entry`、`PersonContext`、`_misinformation_applies` | 少 | **L5 で移しました**（`rules/person_context.rs`）。`selected_models` は契約として残ります |
 | 近接の抽選 | `DistanceSampledProximityPolicy.sample`、`_sample_proximity_contacts` | 111 | **L5 で移しました**（`rules/proximity.rs`） |
 | 情報の接触の予定 | `SamplePhase._schedule_information_contact` | 44 | **L5 で kernel からの呼び出しをなくしました** |
-| trace | `AgentPsychologyTrace.to_dict`（187）、`AgentPsychologyTrace` ほか | 約 300 | 決定 D1 |
+| trace | `AgentPsychologyTrace.to_dict`（187）、`AgentPsychologyTrace` ほか | 約 300 | 決定 D1。**L6 で移しました。** Python は比べる基準です |
 | tick の検証 | `TickValidationMemo`、`validate_after_tick` | 316 + `core/world.py` の一部 | #346 の前は driver の一番大きい入口（571 µs/tick）。**今は変わらない tick を `after_tick.rs` が受け、Python の `begin`、`commit`、`requests_to_check`、`_steady_plan`、`validate` は Plan を作るときと断ったときに動きます** |
 | dispatch の部品 | `_dispatch_one_event`、`_sync_movement_after_events`、`_finish_stopped_journey`、`_interrupt_trips_of_event`、`_refresh_space_after_geometry_change`、`_record_applied_outcomes` | 約 100 | `sleep_bed` の枝を含む |
 | 提案の部品 | `_select_toilet`、`_select_resource_facility`、`_facility_queue_has_capacity`、`_physically_closed_edges`、`_facility_approach`、`_active_route_edge_loads`、`_record_route_capacity_wait`、`_agent_view_snapshot` | 約 230 | Rust に同じ計算の版があるものを含む（推測） |

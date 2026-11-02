@@ -8,7 +8,8 @@ kind of twins as those shadows. Then the kernel runs on the real world. They mus
 - the same row in `sink.observations`, compared bit by bit with the keys in their order, and the
   same row the index reads;
 - the same receipts, event counter and open actions;
-- the same record of the person in `agent_dynamics_v1`.
+- the same record of the person in `agent_dynamics_v1`;
+- with a trace, the same document for the writer as `_decision_document`, keys in order.
 
 The calls of those two shadows' `record_action_proposal` and `record_proposal` count how often the
 kernel left a rule to Python after its own record.
@@ -24,7 +25,7 @@ from typing import Any
 
 from behavior_shadow import exact
 from shadow_action_lifecycle import _CollectingLog, _python_json, _Stub
-from shadow_kit import Recorder, text, values_in
+from shadow_kit import Recorder, captured, text, values_in
 
 KEY = "agent_dynamics_v1"
 
@@ -101,11 +102,27 @@ def prepare(output: str) -> None:
             )
 
         count = len(getattr(sink, "observations", ()))
+        expected_document = None
+        if vars(type(sink)).get("decision_sink") == "artifacts" and sink.trace_level != "off":
+            from sheltersim.inspection.traces import _decision_document
+
+            expected_document = text(_decision_document(recorded, full=sink.trace_level == "full"))
         try:
-            kernel(controller, proposal, **options)
+            with captured(sink, "record_decision_document") as documents:
+                kernel(controller, proposal, **options)
         except unsupported as reason:
             recorder.reasons[f"record_outcome: {reason}"] += 1
             raise
+        if expected_document is not None:
+            recorder.seen["trace_documents"] += len(documents)
+            mine = text(json.loads(documents[0])[0][0]) if len(documents) == 1 else None
+            if mine != expected_document:
+                recorder.differ(
+                    f"{proposal.agent_id}: {mine!r:.800} is not {expected_document:.800}"
+                )
+            else:
+                recorder.seen["trace_bytes_compared"] += len(mine)
+                recorder.seen["trace_values_compared"] += values_in(json.loads(mine))
         recorder.seen["kernel_ran"] += 1
         recorder.seen[f"action_{recorded.action.value}"] += 1
         recorder.seen["committed"] += committed

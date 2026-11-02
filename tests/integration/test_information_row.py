@@ -629,11 +629,8 @@ def test_what_the_kernel_does_not_handle_changes_nothing(generated_scenario: Any
     class OtherRNG(CounterRNG):
         pass
 
-    traced = _controller(world, policy, neighbors)
-    traced.artifacts.trace_level = TraceLevel.SUMMARY
     disabled = InformationSpreadPolicy(InformationSpreadConfig(enabled=False))
     for controller, rng, reason in (
-        (traced, CounterRNG(1), "trace"),
         (_controller(world, Installed(policy.config), neighbors), CounterRNG(1), "model"),
         (_controller(world, policy, neighbors), OtherRNG(1), "CounterRNG"),
         (_controller(world, disabled, neighbors), CounterRNG(1), "enabled"),

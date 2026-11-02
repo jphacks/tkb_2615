@@ -3,10 +3,10 @@
 //!
 //! `TickEngine.step` asks `controller.run_tick` and, on false, runs the phases through `phase_handler`
 //! as without the kernels. This refuses, with Unsupported and before anything has changed, a tick that
-//! a hook watches or changes: a trace, a Provider that can be called, a benchmark's shadow, a patch of
-//! any step or rule it would skip. `install` gives what those are as defined, and they are compared at
-//! each tick, so a patch shows there. A tick_probe installs its own `phase_handler`, which has no
-//! `run_tick`.
+//! a hook changes: a benchmark's shadow, a patch of any step or rule it would skip. `install` gives
+//! what those are as defined, and they are compared at each tick, so a patch shows there. A trace and
+//! a Provider run here: the kernels write the trace's documents, and the Provider's hooks are Python
+//! that the kernels call where the phases call them.
 //!
 //! After that, a step goes as its `segments.py` wrapper or `kernel_first` does: the kernel, and on its
 //! Unsupported (nothing changed) the Python rule. No borrow is held across a call into Python.
@@ -24,7 +24,7 @@ use pyo3::types::{PyBool, PyDict, PyString, PyTuple, PyType};
 use crate::core::census;
 use crate::core::row::{attribute, exact_int, unsupported};
 use crate::core::world_core::raw_dict_get;
-use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, world_view};
+use crate::rules::{decisions, dispatch, information, metrics, movement, proposals, proximity, psychology, queues, service, social_propagation, staff, staff_dynamics, toilet, trace, world_view};
 use crate::Unsupported;
 
 const MOVEMENT: &str = "movement_v1";
@@ -149,6 +149,9 @@ impl<'py> Tick<'_, 'py> {
         let base = result.getattr(intern!(py, "deltas"))?;
         let deltas = or_rule!(py, social_propagation::update_social_propagation(controller, world, &view, &base, minute, self.rng), {
             self.python_step(intern!(py, "_social_propagation"))?.call1((world, &view, &base, minute, self.rng))
+        })?;
+        or_rule!(py, trace::record_psychology_trace(controller, &result, &deltas, minute), {
+            self.python_step(intern!(py, "_record_psychology_trace"))?.call1((&result, &deltas, minute)).map(|_| ())
         })?;
         or_rule!(py, psychology::update_long_term(controller, world, &view, &deltas, minute), {
             self.python_step(intern!(py, "_update_long_term_psychology"))?.call1((world, &view, &deltas, minute)).map(|_| ())
@@ -435,15 +438,6 @@ fn accept(table: &Table, controller: &Bound<'_, PyAny>, world: &Bound<'_, PyAny>
     }
     if !attribute(controller, intern!(py, "world"))?.is(world) {
         return refuse("the controller is bound to another world");
-    }
-    let artifacts = attribute(controller, intern!(py, "artifacts"))?;
-    let trace = attribute(&artifacts, intern!(py, "trace_level"))?;
-    if !trace.eq(intern!(py, "off"))? {
-        return refuse("a trace is recorded");
-    }
-    let router = attribute(controller, intern!(py, "llm_router"))?;
-    if !router.is_none() && !attribute(&attribute(&router, intern!(py, "mode"))?, intern!(py, "value"))?.eq(intern!(py, "offline"))? {
-        return refuse("a Provider can be called");
     }
     let own = controller.getattr(intern!(py, "__dict__"))?;
     for (name, defined) in &table.steps {

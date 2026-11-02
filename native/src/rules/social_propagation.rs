@@ -5,8 +5,8 @@
 //!
 //! The kernel changes nothing until it knows the Python rule would pass: `plan` computes everything,
 //! and any value the Python rule turns down, or that this kernel does not handle, gives Unsupported,
-//! so the Python step runs and raises its own text. A trace, an RNG other than `CounterRNG` and a
-//! subclass of a policy go to Python as well. Then the plan goes to the row and the tree, whose
+//! so the Python step runs and raises its own text. An RNG other than `CounterRNG` and a
+//! subclass of a policy go to Python as well. A trace has its document from rules/trace.rs. Then the plan goes to the row and the tree, whose
 //! dicts have the keys in the order Python's new dicts have them, without replacing the namespace.
 //! Every float operation keeps the order of the Python expression.
 //!
@@ -34,6 +34,7 @@ use crate::core::rng::{start_draw_log, take_draw_log, KeyedDraws};
 use crate::core::tracked::{as_readable_dict, as_readable_list};
 use crate::core::world_core::{mirror_of, NamespaceMirror};
 use crate::rules::social_network::record_observed_contacts;
+use crate::rules::trace::{social_document, SocialContact, TraceSink};
 use crate::rules::world_view::view_of;
 use crate::state::entities::{entities_of, EntityStore};
 use crate::state::social_propagation::{ContactRecord, SocialRow, NAME, SCHEMA_VERSION};
@@ -87,6 +88,34 @@ struct Plan {
     cooldowns: Option<IdMap<i64>>,
     /// (recipient, source) of what the step records in `social_network_v1`, in its order.
     observed: Vec<(usize, usize)>,
+    /// What `SocialPropagationResult` holds for its trace, if the Run keeps one.
+    trace: Option<PlanTrace>,
+}
+
+#[derive(Default)]
+struct PlanTrace {
+    /// By recipient, source and basis, as `update` sorts them.
+    contacts: Vec<SocialContact>,
+    contributing: i64,
+    total_added: f64,
+}
+
+/// What `ExpressivenessChannelOpennessPolicy.update` finds of each eligible contact.
+#[derive(Default)]
+struct ChannelDetails {
+    weights: Vec<f64>,
+    rate: f64,
+    raw: Vec<f64>,
+    capped: Vec<f64>,
+    scale: f64,
+}
+
+/// What `DeGrootContactPolicy.update` finds of each neighbor.
+#[derive(Default)]
+struct DeGrootDetails {
+    contributions: Vec<f64>,
+    scale: f64,
+    applied: f64,
 }
 
 fn checked<T>(value: Option<T>) -> PyResult<T> {
@@ -101,6 +130,7 @@ fn plan(
     neighbors: &HashMap<String, Vec<String>>,
     previous: &IdMap<ContactRecord>,
     cooldowns_before: &IdMap<i64>,
+    traced: bool,
 ) -> PyResult<Plan> {
     if previous.values().any(|record| record.last_seen_minute < 0 || record.consecutive_minutes < 0) {
         return unsupported("a contact field is negative");
@@ -143,6 +173,8 @@ fn plan(
     let mut selected = Vec::new();
     let mut buckets = Vec::new();
     let mut lasting: Vec<(usize, Basis)> = Vec::new();
+    let mut trace = traced.then(PlanTrace::default);
+    let mut minutes_of: Vec<(usize, i64)> = Vec::new();
     for (me, person) in people.iter().enumerate() {
         buckets.clear();
         if let Some(group) = person.group {
@@ -162,6 +194,8 @@ fn plan(
         select_contacts(&draws, &mut head, me, &buckets, settings.maximum, true, &mut selected);
 
         lasting.clear();
+        minutes_of.clear();
+        let contacts_before = trace.as_ref().map_or(0, |trace| trace.contacts.len());
         let mut additions = 0.0;
         for &(source, basis) in &selected {
             let key = pair_key(&quoted[me], &quoted[source])?;
@@ -175,8 +209,12 @@ fn plan(
                 Arc::from(key),
                 ContactRecord { last_seen_minute: minute, consecutive_minutes: duration },
             );
+            let mut sparse_contribution = 0.0;
             if duration >= settings.minimum_contact_minutes {
                 lasting.push((source, basis));
+                if trace.is_some() {
+                    minutes_of.push((source, duration));
+                }
                 if settings.policy == Policy::Sparse
                     && minute >= cooldowns.get(person.id).copied().unwrap_or(0)
                 {
@@ -191,12 +229,37 @@ fn plan(
                         ),
                     );
                     let contribution = py_min(contribution, remaining);
+                    sparse_contribution = contribution;
                     if contribution > 0.0 {
                         cooldowns.insert(person.id, cooldown_after);
                         additions += contribution;
+                        if let Some(trace) = &mut trace {
+                            trace.total_added += contribution;
+                            trace.contributing += 1;
+                        }
                     }
                 }
             }
+            if let Some(trace) = trace.as_mut().filter(|_| settings.policy == Policy::Sparse) {
+                trace.contacts.push(SocialContact {
+                    recipient: me,
+                    source,
+                    basis,
+                    minutes: duration,
+                    cooldown_remaining: (cooldowns.get(person.id).copied().unwrap_or(0) - minute).max(0),
+                    difference: py_max(0.0, people[source].stress - person.stress),
+                    contribution: sparse_contribution,
+                    weight: 0.0,
+                    aggregate_rate: 0.0,
+                    pre_pair_cap: 0.0,
+                    pair_cap: 0.0,
+                    aggregate_scale: 1.0,
+                });
+            }
+        }
+        // Selected sources differ, and people are indexed in ID order: `contacts.sort`.
+        if let Some(trace) = trace.as_mut().filter(|_| settings.policy == Policy::Sparse) {
+            trace.contacts[contacts_before..].sort_by_key(|contact| contact.source);
         }
 
         let stress = match settings.policy {
@@ -211,21 +274,70 @@ fn plan(
                 lasting.sort_unstable_by_key(|contact| contact.0);
                 observed.extend(lasting.iter().map(|&(source, _)| (me, source)));
                 let can_contribute = minute >= cooldowns_before.get(person.id).copied().unwrap_or(0);
+                let mut details = trace.as_ref().map(|_| ChannelDetails::default());
                 let (stress, shift) = channel_stress(
                     settings,
                     people,
                     person,
                     if can_contribute { &lasting } else { &[] },
+                    details.as_mut(),
                 )?;
                 if shift != 0.0 {
                     cooldowns.insert(person.id, cooldown_after);
+                }
+                if let (Some(trace), Some(details)) = (&mut trace, &details) {
+                    trace.total_added += shift;
+                    trace.contributing += i64::from(shift != 0.0);
+                    let cooldown_remaining = (cooldowns.get(person.id).copied().unwrap_or(0) - minute).max(0);
+                    for (place, &(source, basis)) in lasting.iter().enumerate() {
+                        let eligible = can_contribute && !details.weights.is_empty();
+                        let raw = if eligible { details.raw[place] } else { 0.0 };
+                        let capped = if eligible { details.capped[place] } else { 0.0 };
+                        trace.contacts.push(SocialContact {
+                            recipient: me,
+                            source,
+                            basis,
+                            minutes: minutes_of.iter().find(|item| item.0 == source).map_or(0, |item| item.1),
+                            cooldown_remaining,
+                            difference: people[source].stress - person.stress,
+                            contribution: if eligible { capped * details.scale } else { 0.0 },
+                            weight: if eligible { details.weights[place] } else { 0.0 },
+                            aggregate_rate: if eligible { details.rate } else { 0.0 },
+                            pre_pair_cap: raw,
+                            pair_cap: capped,
+                            aggregate_scale: if eligible { details.scale } else { 1.0 },
+                        });
+                    }
                 }
                 stress
             }
             Policy::DeGroot => {
                 lasting.sort_unstable_by_key(|contact| contact.0);
                 observed.extend(lasting.iter().map(|&(source, _)| (me, source)));
-                degroot_stress(settings, people, person, &lasting)
+                let mut details = trace.as_ref().map(|_| DeGrootDetails::default());
+                let stress = degroot_stress(settings, people, person, &lasting, details.as_mut());
+                if let (Some(trace), Some(details)) = (&mut trace, &details) {
+                    trace.total_added += details.applied;
+                    for (place, &(source, basis)) in lasting.iter().enumerate() {
+                        let contribution = details.contributions[place] * details.scale;
+                        trace.contributing += i64::from(contribution != 0.0);
+                        trace.contacts.push(SocialContact {
+                            recipient: me,
+                            source,
+                            basis,
+                            minutes: minutes_of.iter().find(|item| item.0 == source).map_or(0, |item| item.1),
+                            cooldown_remaining: 0,
+                            difference: people[source].stress - person.stress,
+                            contribution,
+                            weight: 0.0,
+                            aggregate_rate: 0.0,
+                            pre_pair_cap: 0.0,
+                            pair_cap: 0.0,
+                            aggregate_scale: 1.0,
+                        });
+                    }
+                }
+                stress
             }
         };
         // `replace` of the Python rule checks the value it stores.
@@ -245,7 +357,7 @@ fn plan(
     let cooldowns = (!unchanged).then(|| {
         new_cooldowns.into_iter().map(|(id, due)| (Arc::from(id), due)).collect::<IdMap<i64>>()
     });
-    Ok(Plan { stresses, contacts, cooldowns, observed })
+    Ok(Plan { stresses, contacts, cooldowns, observed, trace })
 }
 
 /// The new stress and the shift of `ExpressivenessChannelOpennessPolicy.update`. `eligible` are by
@@ -255,6 +367,7 @@ fn channel_stress(
     people: &[Person<'_>],
     person: &Person<'_>,
     eligible: &[(usize, Basis)],
+    details: Option<&mut ChannelDetails>,
 ) -> PyResult<(f64, f64)> {
     let weights: Vec<f64> = eligible
         .iter()
@@ -276,18 +389,24 @@ fn channel_stress(
     let mut shift = 0.0;
     if weight_total > 0.0 {
         let gamma = py_min(1.0, settings.spread * weight_total);
-        let pair_shifts: Vec<f64> = eligible
+        let raw: Vec<f64> = eligible
             .iter()
             .zip(&weights)
-            .map(|(&(source, _), &weight)| {
-                let value = gamma * weight / weight_total * (people[source].stress - person.stress);
-                py_max(-settings.pair_cap, py_min(settings.pair_cap, value))
-            })
+            .map(|(&(source, _), &weight)| gamma * weight / weight_total * (people[source].stress - person.stress))
             .collect();
+        let pair_shifts: Vec<f64> =
+            raw.iter().map(|&value| py_max(-settings.pair_cap, py_min(settings.pair_cap, value))).collect();
         let raw_shift =
             py_fsum(&pair_shifts).ok_or_else(|| Unsupported::new_err("shifts are not finite"))?;
         shift = py_max(-settings.agent_cap, py_min(settings.agent_cap, raw_shift));
         shift = py_max(-person.base, py_min(1.0 - person.base, shift));
+        if let Some(details) = details {
+            details.scale = if raw_shift != 0.0 { shift / raw_shift } else { 0.0 };
+            details.rate = gamma;
+            details.weights = weights;
+            details.raw = raw;
+            details.capped = pair_shifts;
+        }
     }
     Ok((py_min(1.0, py_max(0.0, person.base + shift)), shift))
 }
@@ -298,6 +417,7 @@ fn degroot_stress(
     people: &[Person<'_>],
     person: &Person<'_>,
     neighbors: &[(usize, Basis)],
+    details: Option<&mut DeGrootDetails>,
 ) -> f64 {
     let alpha = py_min(1.0, settings.spread);
     let count = neighbors.len().max(1) as f64;
@@ -313,6 +433,11 @@ fn degroot_stress(
     let shift = py_max(-settings.agent_cap, py_min(settings.agent_cap, raw_shift));
     let recovered = py_max(0.0, person.base - settings.recovery);
     let applied = py_min(1.0, py_max(0.0, recovered + shift)) - recovered;
+    if let Some(details) = details {
+        details.scale = if raw_shift != 0.0 { applied / raw_shift } else { 1.0 };
+        details.applied = applied;
+        details.contributions = contributions;
+    }
     recovered + applied
 }
 
@@ -444,10 +569,7 @@ pub(crate) fn update_social_propagation<'py>(
     if !parameters.getattr(intern!(py, "enabled"))?.is_truthy()? {
         return Ok(base_deltas.clone());
     }
-    let trace = controller.getattr(intern!(py, "artifacts"))?.getattr(intern!(py, "trace_level"))?;
-    if !trace.getattr(intern!(py, "value"))?.eq(intern!(py, "off"))? {
-        return unsupported("a trace needs the Python contact records");
-    }
+    let sink = TraceSink::of(controller)?;
     let known = classes(py)?;
     if !rng.get_type().is(&known.counter_rng) {
         return unsupported("the RNG is not a CounterRNG");
@@ -559,7 +681,7 @@ pub(crate) fn update_social_propagation<'py>(
     }
     let seed = seed.str()?;
     let mirror = mirror_of(world, NAME)?;
-    let Plan { stresses, contacts, cooldowns, observed } =
+    let Plan { stresses, contacts, cooldowns, observed, trace } =
         NamespaceMirror::with_row::<SocialRow, _>(&mirror, |row| {
             if row.schema_version != SCHEMA_VERSION {
                 return unsupported("another schema version");
@@ -572,6 +694,7 @@ pub(crate) fn update_social_propagation<'py>(
                 &neighbors,
                 &row.contacts,
                 &row.agent_cooldown_until,
+                sink.is_some(),
             )
         })?;
 
@@ -643,6 +766,11 @@ pub(crate) fn update_social_propagation<'py>(
             other => other?,
         }
     }
+    if let (Some(sink), Some(trace)) = (sink, trace) {
+        let ids: Vec<&str> = people.iter().map(|person| person.id).collect();
+        let version = policy.getattr(intern!(py, "policy_version"))?;
+        sink.social(&social_document(py, minute, &version, &ids, &trace.contacts, trace.contributing, trace.total_added)?)?;
+    }
     Ok(final_deltas.into_any())
 }
 
@@ -700,7 +828,7 @@ fn plan_of_values(
             base: *base,
         })
         .collect();
-    let plan = plan(seed, minute, &settings, &people, &neighbors, &previous, &cooldowns)?;
+    let plan = plan(seed, minute, &settings, &people, &neighbors, &previous, &cooldowns, false)?;
     let new_cooldowns = plan.cooldowns.as_ref().unwrap_or(&cooldowns);
     Ok((
         plan.stresses,

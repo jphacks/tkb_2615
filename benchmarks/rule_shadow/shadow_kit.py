@@ -11,7 +11,8 @@ import atexit
 import json
 import os
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,32 @@ from typing import Any
 def text(value: Any) -> str:
     """Float bits, 1 against 1.0 and the key order all show."""
     return json.dumps(value, ensure_ascii=False)
+
+
+@contextmanager
+def captured(sink: Any, method: str, *, forward: bool = True) -> Iterator[list[str]]:
+    """Each call of the sink's method, as text with its key order, while the block runs.
+
+    A kernel looks the method up on the sink, so an attribute of this instance takes the call.
+    With ``forward`` the sink's own method then runs, so a Run's files stay what they are.
+    """
+    calls: list[str] = []
+    own = getattr(sink, method, None)
+    if own is None:
+        yield calls
+        return
+
+    def record(*arguments: Any, **options: Any) -> None:
+        options = {key: list(value) for key, value in options.items()}
+        calls.append(json.dumps([arguments, options], ensure_ascii=False))
+        if forward:
+            own(*arguments, **options)
+
+    setattr(sink, method, record)
+    try:
+        yield calls
+    finally:
+        delattr(sink, method)
 
 
 def values_in(value: Any) -> int:
