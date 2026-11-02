@@ -471,7 +471,11 @@ def test_the_reference_fifo_keeps_the_order_of_starts_and_nobody_gives_up(
         {"persistence_urgency_threshold": 2},
         {"abandon_after_minutes_by_service": []},
         {"retry_delay_minutes": 3.0},
-        {"schema_version": 1, "abandon_after_minutes_by_service": {"meal": 0}, "retry_delay_minutes": 0},
+        {
+            "schema_version": 1,
+            "abandon_after_minutes_by_service": {"meal": 0},
+            "retry_delay_minutes": 0,
+        },
         [],
     ],
 )
