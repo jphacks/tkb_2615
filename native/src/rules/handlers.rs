@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyList, PyMapping, PyString, PyTuple};
@@ -1144,6 +1145,18 @@ fn population_fields_fit(payload: &Bound<'_, PyAny>, op: &str) -> PyResult<bool>
     Ok(false)
 }
 
+/// `except (TypeError, ValueError) as exc: raise EventApplicationError(str(exc))` of the rule, for an
+/// exception of a Python call made where the rule makes it. Any other error goes on as it is.
+fn wrapped(py: Python<'_>, error: PyErr) -> PyErr {
+    if error.is_instance_of::<Unsupported>(py) || errors::made_here(py, &error) || !(error.is_instance_of::<PyTypeError>(py) || error.is_instance_of::<PyValueError>(py)) {
+        return error;
+    }
+    match error.value(py).str() {
+        Ok(text) => errors::error(py, errors::Outcome::Failed, text.to_string_lossy().into_owned()),
+        Err(failure) => failure,
+    }
+}
+
 /// `EffectProgramPopulationHandler.apply`.
 #[pyfunction]
 fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
@@ -1195,28 +1208,23 @@ fn population<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, even
         let done = if op == "add_evacuees" {
             let tuple = py.import("builtins")?.getattr("tuple")?;
             let empty = PyTuple::empty(py);
-            let (size, mobility, language) = (payload.get_item("household_size")?, payload.get_item("mobility")?, payload.get_item("language")?);
-            let zones = tuple.call1((payload.call_method1(intern!(py, "get"), ("admission_zone_ids", &empty))?,))?;
-            let route = get(&payload, "approach_route_id")?;
-            let overrides = tuple.call1((payload.call_method1(intern!(py, "get"), ("person_context_overrides", &empty))?,))?;
-            // As a call by name gives these: None is no value.
-            let given = |value: &'_ Bound<'py, PyAny>| -> bool { !value.is_none() };
-            population_rules::queue_arrivals(
-                &candidate,
-                event,
-                &zone,
-                &count,
-                given(&size).then_some(&size),
-                given(&mobility).then_some(&mobility),
-                given(&language).then_some(&language),
-                Some(&zones),
-                given(&route).then_some(&route),
-                Some(&overrides),
-            )
-            .map(|_| ())
+            // The call's arguments, in the order the rule's call evaluates them, in its `try`: what
+            // `tuple()` raises there is the rule's `EventApplicationError(str(exc))`.
+            let as_tuple = |key: &str| -> PyResult<Bound<'py, PyAny>> {
+                tuple.call1((payload.call_method1(intern!(py, "get"), (key, &empty))?,)).map_err(|error| wrapped(py, error))
+            };
+            let options = population_rules::ArrivalOptions {
+                household_size: Some(payload.get_item("household_size")?),
+                mobility: Some(payload.get_item("mobility")?),
+                language: Some(payload.get_item("language")?),
+                admission_zone_ids: Some(as_tuple("admission_zone_ids")?),
+                approach_route_id: Some(get(&payload, "approach_route_id")?),
+                person_context_overrides: Some(as_tuple("person_context_overrides")?),
+            };
+            population_rules::arrivals(&candidate, event, &zone, &count, &options).map(|_| ())
         } else {
             let include = payload.call_method1(intern!(py, "get"), ("include_initial", false))?;
-            population_rules::queue_departures(&candidate, event, &zone, &count, Some(&include)).and_then(|_| {
+            population_rules::departures(&candidate, event, &zone, &count, Some(&include)).and_then(|_| {
                 population_lifecycle::admit_pending_returns(&candidate, &attribute(event, intern!(py, "due_minute"))?).map(|_| ())
             })
         };
