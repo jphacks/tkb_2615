@@ -1,8 +1,8 @@
 """The staff's assignment in Rust: a task, a relief, a route's wait and a preemption.
 
 native/src/rules/staff.rs and travel.rs against their Python rules on twin worlds, on what the gate
-reaches rarely or never (docs/rust-port/lanes/l2-staff.md). No Run reaches `_preempt_background_staff`,
-so a Run here does, through the driver and through the phases.
+reaches rarely or never (docs/rust-port/lanes/l2-staff.md). No Run reaches
+`_preempt_background_staff`, so a Run here does, through the driver and through the phases.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sheltersim import native
 from sheltersim.core.engine import TickEngine, TraceLevel
 from sheltersim.core.world import WorldState
 from sheltersim.domain.models import SupportRequestState, SupportRequestStatus
+from sheltersim.domain.movement import shared_passage_edge_loads
 from sheltersim.domain.simulator_state import initialize_simulator_extensions
 from sheltersim.domain.staff import StaffService
 from sheltersim.domain.staff_operations import (
@@ -26,13 +27,12 @@ from sheltersim.domain.staff_operations import (
     assign_staff_operations,
     schedule_staff_operation_relief,
 )
-from sheltersim.domain.movement import shared_passage_edge_loads
 from sheltersim.domain.zones import ZoneGraph
 from sheltersim.experiments import metrics
-from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.experiments.phases.propose import ProposePhase
 from sheltersim.experiments.runner import OfflineSimulationController
 from sheltersim.experiments.scenario import ScenarioSpec
+from sheltersim.inspection.traces import RunArtifactWriter
 from sheltersim.policies.space import SpaceRouter
 
 pytestmark = pytest.mark.skipif(not native.available(), reason="needs the Rust kernels")
@@ -399,11 +399,14 @@ def test_a_relief_goes_to_the_replacement_with_the_least_work() -> None:
     answer = native.rules("staff").relief(first, 1)
     assert answer == schedule_staff_operation_relief.__wrapped__(second, 1)
     assert json.dumps(_state(first)) == json.dumps(_state(second))
-    assert next(
-        event.payload["replacement_staff_id"]
-        for event in first.event_queue.pending()
-        if event.event_type == "staff_operation_relief"
-    ) == "S03"
+    assert (
+        next(
+            event.payload["replacement_staff_id"]
+            for event in first.event_queue.pending()
+            if event.event_type == "staff_operation_relief"
+        )
+        == "S03"
+    )
 
 
 def test_no_relief_for_a_worker_still_on_shift_or_too_near_the_end() -> None:
@@ -612,7 +615,9 @@ def test_a_wrong_minute_is_the_python_rule_s_error() -> None:
 # ---- _route with edge capacities ----
 
 
-def _capacity_controller(tmp_path: Path, name: str, capacity: int = 1) -> OfflineSimulationController:
+def _capacity_controller(
+    tmp_path: Path, name: str, capacity: int = 1
+) -> OfflineSimulationController:
     document = _document(staff=[_member("S01", "toilet", "support")])
     edges = [edge["id"] for edge in document["zone_edges"]]
     document["model_configs"]["layout_routing"] = _routing({edge: capacity for edge in edges})

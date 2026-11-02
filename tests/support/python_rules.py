@@ -92,8 +92,8 @@ PORTED_NAMES = frozenset(
         "_support_assignment_order",
         "_route_candidates",
         "_support_route_wait_reasons",
-        # domain/staff.py, domain/staff_operations.py, experiments/phases/*: rules/staff.rs, travel.rs,
-        # support.rs. A kernel of `kernel_first` reaches its Python rule through `__wrapped__`.
+        # domain/staff.py, domain/staff_operations.py, experiments/phases/*: rules/staff.rs,
+        # travel.rs, support.rs. A test reaches a `kernel_first` rule through `__wrapped__`.
         "_preempt_background_staff",
         "_maintenance_blocked",
         "shared_passage_edge_loads",
