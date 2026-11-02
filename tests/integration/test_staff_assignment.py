@@ -266,16 +266,37 @@ def test_the_travel_first_formula_takes_the_nearer_task() -> None:
     assert urgent[0].model_state[KEY]["staff"]["S01"]["target_zone_id"] != "toilet"
 
 
-def test_equal_ranks_go_by_the_kind_zone_and_target_as_python_compares_them() -> None:
+def test_equal_ranks_go_by_the_kind_as_python_compares_them() -> None:
     def make() -> WorldState:
-        world = _world(staff=[_member("S01", "toilet", "cleaning")])
-        for record in world.model_state[KEY]["zones"].values():
-            record["sanitation"] = 0.5
-        world.zone_edges[next(iter(world.zone_edges))].closed = False
+        world = _world(staff=[_member("S01", "toilet", "cleaning", "patrol")])
+        _spread(world, "toilet", 0.8)
+        for zone, record in world.model_state[KEY]["zones"].items():
+            record["sanitation"] = 0.6 if zone == "toilet" else 1.0
+        return world
+
+    assert 1.0 - 0.6 == 0.8 * 0.5
+    first, second = make(), make()
+    assert _both_assign(first, second, 0)
+    assert first.model_state[KEY]["staff"]["S01"]["task_kind"] == "patrol"
+
+
+def test_a_small_threshold_names_the_reason_with_an_exponent() -> None:
+    def make() -> WorldState:
+        world = _world(
+            staff=[_member("S01", "toilet", "cleaning")],
+            configs={
+                "staff_operations": {
+                    "thresholds_by_zone": {"toilet": {"cleaning_sanitation_below": 0.00001}}
+                }
+            },
+        )
+        for zone, record in world.model_state[KEY]["zones"].items():
+            record["sanitation"] = 0.0 if zone == "toilet" else 1.0
         return world
 
     first, second = make(), make()
     assert _both_assign(first, second, 0)
+    assert first.model_state[KEY]["staff"]["S01"]["reason"] == "sanitation_index_below_1e-05"
 
 
 def test_a_full_passage_keeps_a_worker_from_a_task() -> None:
@@ -332,6 +353,48 @@ def test_the_passage_loads_are_the_python_rule_s() -> None:
         each.minute_index = 1
     # The zones stay reserved, so a later minute starts nothing new on them and reads the loads.
     _both_assign(first, second, 1)
+
+
+def test_a_trip_under_way_loads_the_edge_its_share_of_the_time_has_reached() -> None:
+    """At 496 of 1000 minutes the walker is on the first edge; a 1% scale would say the second."""
+
+    def make() -> tuple[WorldState, SpaceRouter]:
+        world = _world(
+            duration=3000,
+            staff=[_member("S01", "corridor", "patrol"), _member("S09", "sleeping", "cleaning")],
+        )
+        _spread(world, "toilet", 0.9)
+        for edge in ("sleeping_corridor", "corridor_toilet"):
+            world.zone_edges[edge].travel_minutes = 500
+        world.minute_index = 496
+        world.staff["S09"].active_task_id = "walking"
+        state = world.model_state[KEY]["staff"]
+        state["S09"] = {
+            **state["S09"],
+            "phase": "travel",
+            "task_id": "walking",
+            "task_kind": "cleaning",
+            "target_zone_id": "toilet",
+            "reason": "r",
+            "started_minute": 0,
+            "travel_due_minute": 1000,
+            "due_minute": 1010,
+            "route_zone_ids": ["sleeping", "corridor", "toilet"],
+            "route_edge_ids": ["sleeping_corridor", "corridor_toilet"],
+            "travel_minutes": 1000,
+        }
+        graph = ZoneGraph.from_states(
+            world.zones, world.zone_edges, edge_capacities={"corridor_toilet": 1}
+        )
+        return world, SpaceRouter(graph)
+
+    first, first_router = make()
+    second, second_router = make()
+    assert shared_passage_edge_loads(first, 496) == {"sleeping_corridor": 1}
+    answer = native.rules("staff").assign_operations(first, 496, first_router)
+    assert answer == assign_staff_operations.__wrapped__(second, 496, second_router)
+    assert answer
+    assert json.dumps(_state(first)) == json.dumps(_state(second))
 
 
 # ---- schedule_staff_operation_relief ----
@@ -689,6 +752,35 @@ def test_a_full_edge_in_a_request_records_the_wait_before_the_trip_s_sequence(
     phases = run("phases", on_the_phases=True)
     assert json.dumps(driven) == json.dumps(phases)
     assert any("zone_edge_capacity_wait" in record for record in driven["records"])
+
+
+def test_a_trip_chosen_past_a_full_edge_takes_its_sequence_after_the_wait(tmp_path: Path) -> None:
+    """One toilet behind the full edge, the others open: both happen in one proposal's plan."""
+
+    def run(name: str, *, on_the_phases: bool) -> dict[str, Any]:
+        document = _document(staff=[_member("S01", "toilet", "support")])
+        for facility in document["facilities"][1:]:
+            facility["zone_id"] = "information_desk"
+        document["model_configs"]["layout_routing"] = _routing({"corridor_toilet": 1})
+        scenario = ScenarioSpec.model_validate(document)
+        world = WorldState.from_scenario(scenario)
+        artifacts = RunArtifactWriter(scenario, tmp_path / name, trace_level=TraceLevel.OFF)
+        artifacts.write_initial(world, execution_mode="offline")
+        controller = OfflineSimulationController(world, artifacts)
+        for agent in world.agents.values():
+            agent.zone_id = "sleeping"
+        world.schedule_event(_trip(world, "corridor_toilet"))
+        native.rules("tick").python_path_only(on_the_phases)
+        try:
+            TickEngine(world, phase_handler=controller).run(40)
+        finally:
+            native.rules("tick").python_path_only(False)
+        return _state(world)
+
+    driven = run("driven", on_the_phases=False)
+    assert json.dumps(driven) == json.dumps(run("phases", on_the_phases=True))
+    assert any("zone_edge_capacity_wait" in record for record in driven["records"])
+    assert any("agent_travel_complete" in str(event) for event in driven["pending"][1:])
 
 
 # ---- A Run with a preemption ----
