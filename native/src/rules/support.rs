@@ -14,6 +14,7 @@ use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors::{self, Outcome};
 use crate::core::row::{attribute, exact_dict, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
@@ -96,7 +97,7 @@ pub(crate) fn timeout_event<'py>(
         Ok(request.status)
     })?;
     if status != RequestStatus::Pending {
-        return Ok(Some(NO_LONGER_PENDING));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NO_LONGER_PENDING)));
     }
     let Some(until) = minute.checked_add(cooldown_minutes) else {
         return unsupported("a minute out of range");
@@ -137,8 +138,7 @@ fn timeout<'py>(handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
     let py = handler.py();
     let cooldown = exact_int(&attribute(handler, intern!(py, "cooldown_minutes"))?)?;
     if let Some(text) = timeout_event(world, EventRef::Object(event), cooldown)? {
-        let suppressed = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventSuppressed"))?;
-        return Err(PyErr::from_value(suppressed.call1((text,))?));
+        return errors::suppressed(py, text);
     }
     Ok(())
 }

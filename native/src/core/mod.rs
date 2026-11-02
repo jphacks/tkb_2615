@@ -2,6 +2,7 @@
 //! and interned singletons (docs/rust-port/lanes/p3-skeleton.md).
 
 pub(crate) mod census;
+pub(crate) mod errors;
 pub(crate) mod interner;
 pub(crate) mod mathx;
 pub(crate) mod rng;

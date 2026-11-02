@@ -17,8 +17,9 @@ use std::sync::Arc;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyFloat, PyString, PyType};
+use pyo3::types::{PyFloat, PyString};
 
+use crate::core::errors::{self, Outcome};
 use crate::core::mathx::{py_max, py_min};
 use crate::core::row::{attribute, exact_float, exact_int, exact_str, unsupported};
 use crate::core::tracked::as_readable_dict;
@@ -87,8 +88,6 @@ const NOT_COLOCATED: &str = "social action participants are no longer co-located
 const NOT_SAME_HOUSEHOLD: &str = "family support target is no longer in the same household";
 const NOT_HIGHER_NEED: &str = "the selected person no longer has a higher immediate need";
 
-static SUPPRESSED: GILOnceCell<Py<PyType>> = GILOnceCell::new();
-
 /// `SocialInteractionHandler.apply`, for a social action. Raises what the Python rule raises for a
 /// suppressed one; the dispatch loop calls `apply_event`, which has no exception to pay for.
 #[pyfunction]
@@ -100,14 +99,7 @@ fn apply<'py>(
     let py = world.py();
     match apply_event(world, event)? {
         None => Ok(()),
-        Some(text) => {
-            let class = SUPPRESSED.get_or_try_init(py, || {
-                Ok::<_, PyErr>(
-                    py.import("sheltersim.events.models")?.getattr("EventSuppressed")?.downcast_into::<PyType>()?.unbind(),
-                )
-            })?;
-            Err(PyErr::from_type(class.bind(py).clone(), text))
-        }
+        Some(text) => errors::suppressed(py, text),
     }
 }
 
@@ -227,13 +219,13 @@ pub(crate) fn apply_event<'py>(
         Ok(Some((actor.profile.group_id.clone(), participant.profile.group_id.clone())))
     })?;
     let Some(household_groups) = household_groups else {
-        return Ok(Some(NOT_COLOCATED));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NOT_COLOCATED)));
     };
     if interaction == "family_care" {
         let actor_home = current_household(presence.as_ref(), actor_key, &household_groups.0)?;
         let participant_home = current_household(presence.as_ref(), participant_key, &household_groups.1)?;
         if actor_home.is_none() || actor_home != participant_home {
-            return Ok(Some(NOT_SAME_HOUSEHOLD));
+            return Ok(Some(errors::noted(Outcome::Suppressed, NOT_SAME_HOUSEHOLD)));
         }
     }
     let values = EntityStore::with_rows(&store, |rows| {
@@ -260,7 +252,7 @@ pub(crate) fn apply_event<'py>(
         Ok(Some((stress, trust, fatigue, actor_trust)))
     })?;
     let Some(values) = values else {
-        return Ok(Some(NOT_HIGHER_NEED));
+        return Ok(Some(errors::noted(Outcome::Suppressed, NOT_HIGHER_NEED)));
     };
 
     // The objects of the rows.

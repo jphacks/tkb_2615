@@ -27,6 +27,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors;
 use crate::core::row::{attribute, exact_int, exact_str, namespace_is_absent, unsupported};
 use crate::core::tracked::as_readable_dict;
 use crate::core::value::V;
@@ -65,10 +66,11 @@ fn counted<T>(py: Python<'_>, label: &'static str, result: PyResult<T>) -> PyRes
     result
 }
 
-/// An exception of the stage before any change: the Python rule decides, and raises its own.
+/// An exception of the stage before any change: the Python rule decides, and raises its own. An
+/// outcome a kernel made with the rule's text (`core/errors.rs`) goes on as it is.
 pub(crate) fn refused_by_python<T>(py: Python<'_>, result: PyResult<T>) -> PyResult<T> {
     result.map_err(|error| {
-        if error.is_instance_of::<Unsupported>(py) {
+        if error.is_instance_of::<Unsupported>(py) || errors::made_here(py, &error) {
             error
         } else {
             let kind = error.get_type(py).name().map_or_else(|_| "?".to_owned(), |name| name.to_string());

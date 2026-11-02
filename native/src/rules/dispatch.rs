@@ -75,6 +75,10 @@ static RETURN_RULE: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
 /// those. Then the same kernels run, and a shadow sees each call.
 static PYTHON_ENTRIES: AtomicBool = AtomicBool::new(false);
 
+/// benchmarks/rule_shadow/text_check.py: called with `(handler, world, event, status, text)` for each
+/// outcome text a direct call made in Rust, to compare it with the Python rule's. None, no call.
+static TEXT_CHECKER: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+
 // ---- What ran, for benchmarks/rule_shadow and its report ------------------------------------------
 
 macro_rules! counters {
@@ -215,6 +219,24 @@ impl<'py> Phase<'_, 'py> {
         Ok((status, Some(error.value(py).str()?.to_str()?.to_owned())))
     }
 
+    /// A suppressed or failed outcome of a direct call, shown to text_check.py if it is installed.
+    fn checked(
+        &self,
+        handler: &Bound<'py, PyAny>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+        done: (EventStatus, Option<String>),
+    ) -> PyResult<(EventStatus, Option<String>)> {
+        let py = self.py();
+        let checker = match TEXT_CHECKER.lock() {
+            Ok(checker) => checker.as_ref().map(|checker| checker.clone_ref(py)),
+            Err(_) => None,
+        };
+        if let (Some(checker), Some(text)) = (checker, done.1.as_deref()) {
+            checker.call1(py, (handler, self.world, object()?, done.0.as_str(), text))?;
+        }
+        Ok(done)
+    }
+
     /// The handler this event's table entry stands for, or None for any other.
     fn table_handler(&self, name: &str, entry: &(Py<PyType>, Py<PyAny>)) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = self.py();
@@ -236,10 +258,14 @@ impl<'py> Phase<'_, 'py> {
             match apply_event(world, event) {
                 Ok(text) => {
                     count(&COUNTS.social_ran);
-                    text.map(|text| {
-                        count(&COUNTS.social_suppressed);
-                        (EventStatus::Suppressed, Some(text.to_owned()))
-                    })
+                    match text {
+                        Some(text) => {
+                            count(&COUNTS.social_suppressed);
+                            let object = || Ok(event.clone());
+                            Some(self.checked(handler, &object, (EventStatus::Suppressed, Some(text.to_owned())))?)
+                        }
+                        None => None,
+                    }
                 }
                 Err(error) if error.is_instance_of::<Unsupported>(py) => {
                     refused(py, "social_interaction", &COUNTS.social_refused, &error);
@@ -331,6 +357,7 @@ impl<'py> Phase<'_, 'py> {
                 // From what the walk leads to, past the rule's own checks.
                 let done = self.expected_outcome(error)?;
                 count(&COUNTS.travel_failed);
+                // Not shown to text_check.py: the walk may have changed the world before this.
                 Ok(Some(done))
             }
         }
@@ -431,7 +458,7 @@ impl<'py> Phase<'_, 'py> {
             Ok(Some(text)) => {
                 count(&COUNTS.timeout_ran);
                 count(&COUNTS.timeout_suppressed);
-                Ok(Some((EventStatus::Suppressed, Some(text.to_owned()))))
+                Ok(Some(self.checked(handler, object, (EventStatus::Suppressed, Some(text.to_owned())))?))
             }
             Err(error) if error.is_instance_of::<Unsupported>(py) => {
                 refused(py, SUPPORT_TIMEOUT, &COUNTS.timeout_refused, &error);
@@ -1168,6 +1195,15 @@ fn use_python_entries(value: bool) {
     PYTHON_ENTRIES.store(value, Ordering::Relaxed);
 }
 
+/// Install text_check.py's checker of direct outcomes, or None to remove it.
+#[pyfunction]
+#[pyo3(signature = (checker=None))]
+fn texts_checker(checker: Option<Py<PyAny>>) {
+    if let Ok(mut installed) = TEXT_CHECKER.lock() {
+        *installed = checker;
+    }
+}
+
 /// What has run in this process: `(counts, refusals by reason)`.
 #[pyfunction]
 fn stats<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
@@ -1192,6 +1228,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(install_table, m)?)?;
     m.add_function(wrap_pyfunction!(install_return_rule, m)?)?;
     m.add_function(wrap_pyfunction!(use_python_entries, m)?)?;
+    m.add_function(wrap_pyfunction!(texts_checker, m)?)?;
     m.add_function(wrap_pyfunction!(stats, m)?)?;
     Ok(())
 }

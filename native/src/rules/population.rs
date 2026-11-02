@@ -20,6 +20,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PySlice, PyString, PyTuple};
 use sha2::{Digest, Sha256};
 
+use crate::core::errors;
 use crate::core::mathx::py_min;
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, unsupported};
 use crate::core::value::V;
@@ -69,12 +70,6 @@ pub(crate) fn planning<T>(result: PyResult<T>) -> PyResult<T> {
 /// to see. Every other error is what the same operation raises in the Python rule.
 pub(crate) fn writing<T>(result: PyResult<T>) -> PyResult<T> {
     result.map_err(|error| Python::with_gil(|py| if error.is_instance_of::<Unsupported>(py) { PyRuntimeError::new_err(format!("a kernel refused after it began writing: {error}")) } else { error }))
-}
-
-/// `raise EventSuppressed(text)`.
-pub(crate) fn suppressed<T>(py: Python<'_>, text: String) -> PyResult<T> {
-    let class = py.import(intern!(py, "sheltersim.events.models"))?.getattr(intern!(py, "EventSuppressed"))?;
-    Err(PyErr::from_value(class.call1((text,))?))
 }
 
 // ---- Reads through the object protocol -----------------------------------------------------------
@@ -1918,7 +1913,7 @@ pub(crate) fn schedule_population_retry(world: &Bound<'_, PyAny>, event: &Bound<
     let py = world.py();
     let plan = match planning(plan_retry(world, event, id_prefix, subject))? {
         Ok(plan) => plan,
-        Err(text) => return suppressed(py, text),
+        Err(text) => return errors::suppressed(py, text),
     };
     writing((|| {
         let writer = EventWriter::of(world)?;
@@ -2324,9 +2319,9 @@ pub(crate) fn queue_departures<'py>(
         install_dynamics(world, state, is_new)?;
         match plan {
             Ok(_) => schedule_population_retry(world, event, "departure-retry", "departure")?,
-            Err(text) => return suppressed(py, text),
+            Err(text) => return errors::suppressed(py, text),
         }
-        return suppressed(py, "departure waits for the selected residents' active tasks".to_owned());
+        return errors::suppressed(py, "departure waits for the selected residents' active tasks".to_owned());
     }
     let state = writing(install_dynamics(world, state, is_new))?;
     writing((|| {
