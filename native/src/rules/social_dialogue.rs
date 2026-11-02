@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyDict, PyFloat, PyList, PyString, PyTuple, PyType};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use pyo3::IntoPyObjectExt;
 
 use crate::core::row::{attribute, exact_int, exact_str, unsupported};
@@ -33,7 +33,7 @@ const AFFECT: [&str; 6] = [
 static MAPPING_PROXY: GILOnceCell<Py<PyType>> = GILOnceCell::new();
 
 /// A dict or the frozen form of an event's payload: reading either runs no Python code.
-fn is_plain_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn is_plain_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
     if as_readable_dict(value).is_some() {
         return Ok(true);
     }
@@ -350,6 +350,145 @@ fn affect_of<'py>(py: Python<'py>, record: Option<&Bound<'py, PyAny>>) -> PyResu
         *slot = value.extract()?;
     }
     Ok(Some(affect))
+}
+
+// ---- The Python rule's verdict on any context (lane L8c, social) ---------------------------------------
+//
+// `SocialInteractionHandler` words a ValueError of `validate_social_state_context` as its own saved
+// text, so where `context_is_valid` has no answer this one decides as the Python rule does, in its order
+// of checks, for any value an event's payload holds.
+
+/// None, a bool, an int, a float, a str, a tuple or a list, each of its exact type: the JSON values of
+/// an event's payload that are not a mapping.
+pub(crate) fn is_other_json_value(value: &Bound<'_, PyAny>) -> bool {
+    value.is_none()
+        || value.is_exact_instance_of::<PyBool>()
+        || value.is_exact_instance_of::<PyInt>()
+        || value.is_exact_instance_of::<PyFloat>()
+        || value.is_exact_instance_of::<PyString>()
+        || value.is_exact_instance_of::<PyTuple>()
+        || value.is_exact_instance_of::<PyList>()
+}
+
+/// `isinstance(value, Mapping)`. Unsupported for a value of another type, whose answer is its own.
+fn is_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if is_plain_mapping(value)? {
+        return Ok(true);
+    }
+    if is_other_json_value(value) {
+        return Ok(false);
+    }
+    unsupported("a value of another type is for the Python rule to judge")
+}
+
+/// `set(mapping) == set(names)`, of a plain mapping and distinct names.
+fn keys_are(mapping: &Bound<'_, PyAny>, names: &[&str]) -> PyResult<bool> {
+    if mapping.len()? != names.len() {
+        return Ok(false);
+    }
+    for name in names {
+        if !mapping.contains(*name)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// `_validate_unit(value)` returns (true) or raises its ValueError (false). Unsupported for an int past
+/// 64 bits, which `math.isfinite` may refuse with another error, and for a subclass.
+fn unit_verdict(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if let Ok(number) = value.downcast_exact::<PyFloat>() {
+        let number = number.value();
+        return Ok(number.is_finite() && (0.0..=1.0).contains(&number));
+    }
+    if let Ok(number) = value.downcast_exact::<PyInt>() {
+        return match number.extract::<i64>() {
+            Ok(number) => Ok((0..=1).contains(&number)),
+            Err(_) => unsupported("an int past 64 bits is for the Python rule to judge"),
+        };
+    }
+    // A bool, and every value that is no int or float.
+    if is_other_json_value(value) || is_plain_mapping(value)? {
+        return Ok(false);
+    }
+    unsupported("a value of another type is for the Python rule to judge")
+}
+
+/// `context.get("schema_version") != 1` is false: 1, `True` or `1.0`.
+fn is_version_one(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if let Ok(flag) = value.downcast_exact::<PyBool>() {
+        return Ok(flag.is_true());
+    }
+    if let Ok(number) = value.downcast_exact::<PyInt>() {
+        return Ok(number.extract::<i64>().is_ok_and(|number| number == 1));
+    }
+    if let Ok(number) = value.downcast_exact::<PyFloat>() {
+        return Ok(number.value() == 1.0);
+    }
+    if is_other_json_value(value) || is_plain_mapping(value)? {
+        return Ok(false);
+    }
+    unsupported("a value of another type is for the Python rule to judge")
+}
+
+/// `validate_social_state_context(context, ids, due_minute)` returns (true) or raises its ValueError
+/// (false). `ids` have no repeats.
+pub(crate) fn context_verdict(context: &Bound<'_, PyAny>, ids: &[&Bound<'_, PyString>], due_minute: i64) -> PyResult<bool> {
+    let py = context.py();
+    if !is_mapping(context)? || !keys_are(context, &["schema_version", "captured_minute", "participants"])? {
+        return Ok(false);
+    }
+    if !is_version_one(&context.get_item(intern!(py, "schema_version"))?)? {
+        return Ok(false);
+    }
+    // `type(captured) is not int or not 0 <= captured <= due_minute`: an int past 64 bits is outside.
+    let captured = context.get_item(intern!(py, "captured_minute"))?;
+    let Ok(captured) = captured.downcast_exact::<PyInt>() else {
+        return Ok(false);
+    };
+    if !captured.extract::<i64>().is_ok_and(|minute| (0..=due_minute).contains(&minute)) {
+        return Ok(false);
+    }
+    let participants = context.get_item(intern!(py, "participants"))?;
+    if !is_mapping(&participants)? || participants.len()? != ids.len() {
+        return Ok(false);
+    }
+    for id in ids {
+        if !participants.contains(*id)? {
+            return Ok(false);
+        }
+    }
+    for state in participants.call_method0(intern!(py, "values"))?.try_iter()? {
+        let state = state?;
+        if !is_mapping(&state)? || !keys_are(&state, &["stress", "trust", "needs", "affect"])? {
+            return Ok(false);
+        }
+        if !unit_verdict(&state.get_item(intern!(py, "stress"))?)? || !unit_verdict(&state.get_item(intern!(py, "trust"))?)? {
+            return Ok(false);
+        }
+        let needs = state.get_item(intern!(py, "needs"))?;
+        if !is_mapping(&needs)? || !keys_are(&needs, &NEEDS)? {
+            return Ok(false);
+        }
+        for value in needs.call_method0(intern!(py, "values"))?.try_iter()? {
+            if !unit_verdict(&value?)? {
+                return Ok(false);
+            }
+        }
+        let affect = state.get_item(intern!(py, "affect"))?;
+        if affect.is_none() {
+            continue;
+        }
+        if !is_mapping(&affect)? || !keys_are(&affect, &AFFECT)? {
+            return Ok(false);
+        }
+        for value in affect.call_method0(intern!(py, "values"))?.try_iter()? {
+            if !unit_verdict(&value?)? {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

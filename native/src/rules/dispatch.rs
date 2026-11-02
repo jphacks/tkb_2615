@@ -260,10 +260,16 @@ impl<'py> Phase<'_, 'py> {
                 Ok(text) => {
                     count(&COUNTS.social_ran);
                     match text {
-                        Some(text) => {
-                            count(&COUNTS.social_suppressed);
+                        Some((outcome, text)) => {
+                            let status = match outcome {
+                                crate::core::errors::Outcome::Suppressed => {
+                                    count(&COUNTS.social_suppressed);
+                                    EventStatus::Suppressed
+                                }
+                                crate::core::errors::Outcome::Failed => EventStatus::Failed,
+                            };
                             let object = || Ok(event.clone());
-                            Some(self.checked(handler, &object, (EventStatus::Suppressed, Some(text.to_owned())))?)
+                            Some(self.checked(handler, &object, (status, Some(text.to_owned())))?)
                         }
                         None => None,
                     }

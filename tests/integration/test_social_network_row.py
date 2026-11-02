@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 from support.paths import BENCHMARKS
+from support.world import kernel_says_python_s_text
 
 from sheltersim import native
 from sheltersim.core.engine import TraceLevel
@@ -681,26 +682,26 @@ def test_a_different_household_is_suppressed(world: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    "more",
+    ("more", "text"),
     [
-        {"interaction_duration_minutes": 0},
-        {"interaction_duration_minutes": True},
-        {"reason_short": "other"},
-        {"action": "other"},
-        {"extra": 1},
-        {"conversation_state_context": {"schema_version": 2}},
+        ({"interaction_duration_minutes": 0}, "within 1..1440 minutes"),
+        ({"interaction_duration_minutes": True}, "within 1..1440 minutes"),
+        ({"reason_short": "other"}, "reason code is not allowed"),
+        ({"action": "other"}, "does not match its typed topic"),
+        ({"extra": 1}, "payload fields do not match"),
+        ({"conversation_state_context": {"schema_version": 2}}, "state context is invalid"),
     ],
 )
-def test_a_bad_payload_is_python_s_to_refuse(world: Any, more: dict) -> None:
+def test_a_bad_payload_is_failed_by_the_kernel_in_python_s_text(
+    world: Any, more: dict, text: str
+) -> None:
     ids = _people(world)
     _colocate(world, ids)
     event = _action(world, "reassurance_exchange", *ids, **more)
     before = _values(world, ids)
-    with pytest.raises(native.Unsupported):
-        _apply_kernel(world, event)
+    _, said = kernel_says_python_s_text(SocialInteractionHandler(), world, event)
+    assert text in said
     assert _values(world, ids) == before
-    with pytest.raises(Exception, match="social"):
-        SocialInteractionHandler().apply(world, event)
 
 
 def test_the_social_shadow_ignores_key_order_only_in_a_run_that_reverses_dicts(

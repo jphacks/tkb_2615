@@ -232,3 +232,16 @@ pub(crate) fn texts_take(py: Python<'_>) -> PyResult<Bound<'_, PyList>> {
     }
     Ok(rows)
 }
+
+// ---- social (lane L8c) -------------------------------------------------------------------------------
+
+/// The exception of an outcome a kernel already noted where it gave the text (`noted`), raised without
+/// noting it again: the record's last text, which a comparison counts, stays at that site.
+pub(crate) fn raise_noted<T>(py: Python<'_>, outcome: Outcome, text: &str) -> PyResult<T> {
+    let made = (|| -> PyResult<PyErr> {
+        let instance = class(py, outcome)?.call1((text,))?;
+        instance.setattr(intern!(py, MARK), true)?;
+        Ok(PyErr::from_value(instance))
+    })();
+    Err(made.unwrap_or_else(|error| error))
+}

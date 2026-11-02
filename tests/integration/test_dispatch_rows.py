@@ -313,24 +313,44 @@ def test_a_suppressed_social_action_has_python_s_detail_in_its_record() -> None:
     assert after["social_refused"] == before["social_refused"]
 
 
+def _social_action_with(controller: OfflineSimulationController, **change: Any) -> ScheduledEvent:
+    event = _social_action(controller)
+    return ScheduledEvent(
+        event_id=event.event_id,
+        kind=event.kind,
+        due_minute=0,
+        priority=0,
+        sequence=event.sequence,
+        event_type=event.event_type,
+        payload={**event.payload_dict(), **change},
+        source_id=event.source_id,
+        causation_id=None,
+        provenance=dict(event.provenance),
+    )
+
+
+def test_a_failed_social_action_has_python_s_detail_from_the_kernel() -> None:
+    def arrange(controller: OfflineSimulationController) -> None:
+        controller.world.schedule_event(_social_action_with(controller, reason_short="other"))
+
+    before = _counts()
+    by_kernel, _ = _both_ways(arrange)
+    after = _counts()
+    assert after["social_refused"] == before["social_refused"]
+    assert after["events_python"] == before["events_python"]
+    record = by_kernel.world.event_log.find("social-901")
+    assert record.status is EventStatus.FAILED
+    assert record.detail == "social action reason code is not allowed"
+
+
+class _Code(str):
+    """A str whose comparison the kernel leaves to Python."""
+
+
 def test_a_social_event_the_kernel_refuses_goes_to_python_and_fails_with_its_text() -> None:
     def arrange(controller: OfflineSimulationController) -> None:
-        event = _social_action(controller)
-        payload = {**event.payload_dict(), "reason_short": "other"}
-        controller.world.schedule_event(
-            ScheduledEvent(
-                event_id=event.event_id,
-                kind=event.kind,
-                due_minute=0,
-                priority=0,
-                sequence=event.sequence,
-                event_type=event.event_type,
-                payload=payload,
-                source_id=event.source_id,
-                causation_id=None,
-                provenance=dict(event.provenance),
-            )
-        )
+        event = _social_action_with(controller, reason_short=_Code("other"))
+        controller.world.schedule_event(event)
 
     before = _counts()
     by_kernel, _ = _both_ways(arrange)
