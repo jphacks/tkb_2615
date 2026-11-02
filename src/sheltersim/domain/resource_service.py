@@ -606,6 +606,7 @@ class ResourceServiceManager:
         agent.target_id = None
         self._increment_metric("resource_service_completed_count")
 
+    @kernel_first("handlers", "cancel")
     def cancel(self, event: ScheduledEvent) -> None:
         """Cancel queued or active service; active inventory reservations are released once."""
         task_id = event.payload.get("task_id")
@@ -698,6 +699,7 @@ class ResourceServiceManager:
         self._cancelled_task_ids().append(task_id)
         self._increment_metric("resource_service_cancelled_count")
 
+    @kernel_first("handlers", "interrupt_for_staff")
     def interrupt_for_staff(self, staff_id: str, *, causation_event: ScheduledEvent) -> None:
         """Cancel an interrupted service and put its Agent at the FIFO head."""
         tasks = [

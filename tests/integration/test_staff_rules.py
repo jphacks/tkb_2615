@@ -515,15 +515,15 @@ def test_the_wait_counts_staff_off_shift_away_and_busy_as_the_python_rule_does()
     assert world.metric_state["support_no_qualified_worker_request_minutes"] == 0.0
 
 
-def test_a_free_worker_changes_nothing_and_the_python_rule_runs() -> None:
+def test_a_free_worker_goes_past_the_plain_kernel() -> None:
     world = _world()
     _request(world, 1, sorted(world.agents)[0])
     service = StaffService(world)
     before = (_waiting_fields(world), _text(dict(world.metric_state)))
     with pytest.raises(native.Unsupported):
-        native.rules("staff").assign_pending(service, 0, validate_state=False)
+        native.rules("staff").assign_none(service, 0, validate_state=False)
     assert (_waiting_fields(world), _text(dict(world.metric_state))) == before
-    # No route is known here, so the Python rule assigns it where it stands.
+    # No route is known here, so it is assigned where it stands.
     assert service.assign_pending(0, validate_state=False) == ("support-1",)
 
 
@@ -533,7 +533,7 @@ def test_what_the_assignment_doesnt_decide_goes_to_the_python_rule() -> None:
         _busy(world, staff_id)
     request = _request(world, 1, sorted(world.agents)[0])
     service = StaffService(world)
-    kernel = native.rules("staff").assign_pending
+    kernel = native.rules("staff").assign_none
     with pytest.raises(native.Unsupported):
         kernel(service, 0)  # It validates the state.
     with pytest.raises(native.Unsupported):

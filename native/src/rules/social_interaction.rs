@@ -7,9 +7,10 @@
 //! A social action that no longer applies is suppressed here too, with the texts of the Python rule,
 //! which are the event's `detail`: each is given only after everything the Python rule asks before
 //! it has passed. Everything else says Unsupported before any change, and the Python rule runs and
-//! says what it says: a failed event, and the other types of interaction, which read the event log
-//! (lane E) or `TypedMessage` and are 0.2% of social events at the gate
-//! (docs/rust-port/lanes/m3-social-network.md, m3-dispatch.md).
+//! says what it says: a failed event. The other types of interaction (`complaint_response`,
+//! `cooperation`, `information_reaction`, an untyped event) are at the end, and say Unsupported for
+//! whatever isn't applied (docs/rust-port/lanes/m3-social-network.md, m3-dispatch.md,
+//! m6-handlers-rest.md).
 
 use std::sync::Arc;
 
@@ -19,11 +20,15 @@ use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyFloat, PyString, PyType};
 
 use crate::core::mathx::{py_max, py_min};
-use crate::core::row::{attribute, exact_int, exact_str, unsupported};
+use crate::core::row::{attribute, exact_float, exact_int, exact_str, unsupported};
 use crate::core::tracked::as_readable_dict;
-use crate::core::world_core::raw_dict_get;
+use crate::core::world_core::{raw_dict_get, NamespaceMirror};
+use crate::rules::handlers::{get, get_is, kind_is, number, status_member, text_is};
+use crate::rules::information_events::runtime_state;
 use crate::rules::social_dialogue::context_is_valid;
 use crate::rules::social_network::{action_relief, body_state_of, mapping_get};
+use crate::rules::support::household_of;
+use crate::state::information::InformationRow;
 use crate::state::entities::{entities_of, raw_setattr, AgentRow, EntityStore};
 use crate::Unsupported;
 
@@ -113,14 +118,18 @@ pub(crate) fn apply_event<'py>(
 ) -> PyResult<Option<&'static str>> {
     let py = world.py();
     let payload = attribute(event, intern!(py, "payload"))?;
-    let Some(interaction) = mapping_get(&payload, intern!(py, "interaction_type"))? else {
-        return unsupported("an event without a typed interaction");
+    let interaction = mapping_get(&payload, intern!(py, "interaction_type"))?.filter(|value| !value.is_none());
+    let Some(interaction) = interaction else {
+        return untyped_event(world, &payload).map(|()| None);
     };
     let interaction = exact_str(&interaction)?;
     let (expected_action, expected_topic) = match interaction {
         "reassurance_exchange" => ("offer_reassurance", "emotional_check_in"),
         "family_care" => ("provide_family_support", "family_care"),
         "voluntary_support" => ("offer_practical_help", "mutual_aid"),
+        "complaint_response" | "cooperation" | "information_reaction" => {
+            return other_typed_event(world, event, &payload, interaction).map(|()| None);
+        }
         _ => return unsupported("another type of interaction"),
     };
 
@@ -270,6 +279,236 @@ pub(crate) fn apply_event<'py>(
         raw_setattr(&actor, intern!(py, "trust"), PyFloat::new(py, values.3).as_ptr())?;
     }
     Ok(None)
+}
+
+// ---- The other social events -------------------------------------------------------------------------
+//
+// Each is rare, reads Python's containers and the event log, and says Unsupported for anything but an
+// applied event, so its suppressed and failed texts stay the Python rule's.
+
+const REASSURANCE_STRESS: f64 = 0.03;
+const REASSURANCE_TRUST: f64 = 0.01;
+const PRACTICAL_TRUST: f64 = 0.005;
+const COMPLAINT_ACKNOWLEDGE_STRESS: f64 = 0.02;
+const COMPLAINT_EXPLAIN_STRESS: f64 = 0.01;
+const COMPLAINT_TRUST: f64 = 0.01;
+const COOPERATION_STRESS: f64 = 0.02;
+const COOPERATION_TRUST: f64 = 0.01;
+
+fn text_field<'py>(payload: &Bound<'py, PyAny>, name: &Bound<'py, PyString>) -> PyResult<Bound<'py, PyAny>> {
+    let value = field(payload, name)?;
+    if !exact_str(&value)?.is_empty() {
+        return Ok(value);
+    }
+    unsupported("an empty ID")
+}
+
+fn stress_and_trust(agent: &Bound<'_, PyAny>) -> PyResult<(f64, f64)> {
+    let py = agent.py();
+    Ok((exact_float(&attribute(agent, intern!(py, "stress"))?)?, exact_float(&attribute(agent, intern!(py, "trust"))?)?))
+}
+
+/// `SocialInteractionHandler.apply` of an event without a typed interaction.
+fn untyped_event(world: &Bound<'_, PyAny>, payload: &Bound<'_, PyAny>) -> PyResult<()> {
+    let py = world.py();
+    let agent_id = text_field(payload, intern!(py, "agent_id"))?;
+    let request_id = text_field(payload, intern!(py, "request_id"))?;
+    let action = text_field(payload, intern!(py, "action"))?;
+    let request = get(&attribute(world, intern!(py, "support_requests"))?, exact_str(&request_id)?)?;
+    let agent = get(&attribute(world, intern!(py, "agents"))?, exact_str(&agent_id)?)?;
+    if request.is_none() || agent.is_none() || !attribute(&request, intern!(py, "agent_id"))?.eq(&agent_id)? {
+        return unsupported("the request or person is for the Python rule to judge");
+    }
+    let (stress, trust) = stress_and_trust(&agent)?;
+    match exact_str(&action)? {
+        "offer_reassurance" => {
+            agent.setattr(intern!(py, "stress"), py_max(0.0, stress - REASSURANCE_STRESS))?;
+            agent.setattr(intern!(py, "trust"), py_min(1.0, trust + REASSURANCE_TRUST))?;
+        }
+        "share_practical_information" => agent.setattr(intern!(py, "trust"), py_min(1.0, trust + PRACTICAL_TRUST))?,
+        _ => return unsupported("the action is for the Python rule to judge"),
+    }
+    Ok(())
+}
+
+/// `event.payload` holds exactly these fields, with or without `conversation_state_context`.
+fn typed_fields(payload: &Bound<'_, PyAny>, names: &[&str]) -> PyResult<bool> {
+    let extra = usize::from(payload.contains("conversation_state_context")?);
+    if payload.len()? != names.len() + extra {
+        return Ok(false);
+    }
+    for name in names {
+        if !payload.contains(*name)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn threshold_of(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    let threshold = number(value)?;
+    if !(0.0..=1.0).contains(&threshold) {
+        return unsupported("the threshold is invalid");
+    }
+    Ok(threshold)
+}
+
+/// The applied contact that an interaction answers, from the event log.
+fn contact_matches(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, trigger: &Bound<'_, PyAny>, sender: &Bound<'_, PyAny>, recipient: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = world.py();
+    exact_str(trigger)?;
+    let contact = attribute(world, intern!(py, "event_log"))?.call_method1(intern!(py, "find"), (trigger,))?;
+    if contact.is_none() || !attribute(&contact, intern!(py, "status"))?.is(&status_member(py, "APPLIED")?) {
+        return Ok(false);
+    }
+    let recorded = attribute(&contact, intern!(py, "event"))?;
+    let recorded_payload = attribute(&recorded, intern!(py, "payload"))?;
+    Ok(text_is(&attribute(&recorded, intern!(py, "event_type"))?, "information_contact_update")
+        && exact_int(&attribute(&contact, intern!(py, "realized_minute"))?)? == exact_int(&attribute(event, intern!(py, "due_minute"))?)? - 1
+        && get(&recorded_payload, "sender_agent_id")?.eq(sender)?
+        && get(&recorded_payload, "recipient_agent_id")?.eq(recipient)?)
+}
+
+/// `_apply_typed_interaction` of `complaint_response`, `cooperation` and `information_reaction`.
+fn other_typed_event(world: &Bound<'_, PyAny>, event: &Bound<'_, PyAny>, payload: &Bound<'_, PyAny>, interaction: &str) -> PyResult<()> {
+    let py = world.py();
+    let provenance = attribute(event, intern!(py, "provenance"))?;
+    let due = exact_int(&attribute(event, intern!(py, "due_minute"))?)?;
+    if !kind_is(event, "ENDOGENOUS")?
+        || due != exact_int(&attribute(world, intern!(py, "minute_index"))?)?
+        || !get_is(&provenance, "source_id", SOURCE_ID)?
+        || !get_is(&provenance, "source_type", "assumption")?
+        || !attribute(event, intern!(py, "source_id"))?.eq(get(&provenance, "policy_version")?)?
+    {
+        return unsupported("the provenance or time is for the Python rule to judge");
+    }
+    let reason = get(payload, "reason_short")?;
+    let agent_id = get(payload, "agent_id")?;
+    let agent_text = exact_str(&agent_id)?;
+    let agents = attribute(world, intern!(py, "agents"))?;
+    let agent = get(&agents, agent_text)?;
+    if reason.is_none() || agent.is_none() {
+        return unsupported("the event is for the Python rule to judge");
+    }
+    let context = mapping_get(payload, intern!(py, "conversation_state_context"))?;
+    let participant_id = get(payload, "participant_agent_id")?;
+    if let Some(context) = &context {
+        let actor_key = agent_id.downcast_exact::<PyString>()?;
+        let valid = match participant_id.downcast_exact::<PyString>() {
+            Ok(participant_key) => context_is_valid(context, &[actor_key, participant_key], due)?,
+            Err(_) if participant_id.is_instance_of::<PyString>() => return unsupported("a subclass of str"),
+            Err(_) => context_is_valid(context, &[actor_key], due)?,
+        };
+        if !valid {
+            return unsupported("the context is for the Python rule to judge");
+        }
+    }
+    let action = get(payload, "action")?;
+    let (stress, trust) = stress_and_trust(&agent)?;
+    let zone = attribute(&agent, intern!(py, "zone_id"))?;
+    match interaction {
+        "complaint_response" => {
+            if !typed_fields(payload, &["interaction_type", "agent_id", "request_id", "zone_id", "stress_threshold", "complaint_wait_minutes", "action", "reason_short"])? {
+                return unsupported("the payload has other fields");
+            }
+            let request_id = payload.get_item("request_id")?;
+            let threshold = threshold_of(&payload.get_item("stress_threshold")?)?;
+            let wait = exact_int(&payload.get_item("complaint_wait_minutes")?)?;
+            let request = attribute(world, intern!(py, "support_requests"))?.call_method1(intern!(py, "get"), (&request_id,))?;
+            if wait <= 0
+                || request.is_none()
+                || !attribute(&request, intern!(py, "agent_id"))?.eq(&agent_id)?
+                || !text_is(&attribute(&request, intern!(py, "status"))?.getattr(intern!(py, "value"))?, "pending")
+                || !payload.get_item("zone_id")?.eq(&zone)?
+                || !attribute(event, intern!(py, "causation_id"))?.eq(&request_id)?
+                || due - exact_int(&attribute(&request, intern!(py, "requested_minute"))?)? < wait
+                || stress < threshold
+                || !matches!(exact_str(&reason)?, "long_wait" | "high_stress" | "request_still_pending" | "rule_fallback")
+            {
+                return unsupported("the complaint is for the Python rule to judge");
+            }
+            match exact_str(&action)? {
+                "acknowledge_complaint" => {
+                    agent.setattr(intern!(py, "stress"), py_max(0.0, stress - COMPLAINT_ACKNOWLEDGE_STRESS))?;
+                    agent.setattr(intern!(py, "trust"), py_min(1.0, trust + COMPLAINT_TRUST))?;
+                }
+                "explain_staff_process" => {
+                    agent.setattr(intern!(py, "stress"), py_max(0.0, stress - COMPLAINT_EXPLAIN_STRESS))?;
+                    agent.setattr(intern!(py, "trust"), py_min(1.0, trust + COMPLAINT_TRUST))?;
+                }
+                "share_practical_information" => agent.setattr(intern!(py, "trust"), py_min(1.0, trust + PRACTICAL_TRUST))?,
+                _ => return unsupported("the action is for the Python rule to judge"),
+            }
+            Ok(())
+        }
+        "cooperation" => {
+            if !typed_fields(payload, &["interaction_type", "agent_id", "participant_agent_id", "zone_id", "stress_threshold", "relationship", "trigger_event_id", "action", "reason_short"])? {
+                return unsupported("the payload has other fields");
+            }
+            let threshold = threshold_of(&payload.get_item("stress_threshold")?)?;
+            let participant_text = exact_str(&participant_id)?;
+            let participant = get(&agents, participant_text)?;
+            if participant.is_none() || participant_text == agent_text {
+                return unsupported("cooperation requires two known people");
+            }
+            let (other_stress, other_trust) = stress_and_trust(&participant)?;
+            let home = household_of(world, agent_text)?;
+            let trigger = payload.get_item("trigger_event_id")?;
+            if home.is_none()
+                || home != household_of(world, participant_text)?
+                || !payload.get_item("zone_id")?.eq(&zone)?
+                || !zone.eq(attribute(&participant, intern!(py, "zone_id"))?)?
+                || !get_is(payload, "relationship", "same_group")?
+                || !attribute(event, intern!(py, "causation_id"))?.eq(&trigger)?
+                || !contact_matches(world, event, &trigger, &agent_id, &participant_id)?
+                || py_max(stress, other_stress) < threshold
+                || !matches!(exact_str(&reason)?, "shared_group_contact" | "elevated_stress" | "rule_fallback")
+                || !text_is(&action, "offer_mutual_support")
+            {
+                return unsupported("the cooperation is for the Python rule to judge");
+            }
+            agent.setattr(intern!(py, "stress"), py_max(0.0, stress - COOPERATION_STRESS))?;
+            participant.setattr(intern!(py, "stress"), py_max(0.0, other_stress - COOPERATION_STRESS))?;
+            agent.setattr(intern!(py, "trust"), py_min(1.0, trust + COOPERATION_TRUST))?;
+            participant.setattr(intern!(py, "trust"), py_min(1.0, other_trust + COOPERATION_TRUST))?;
+            Ok(())
+        }
+        _ => {
+            if !typed_fields(payload, &["interaction_type", "agent_id", "participant_agent_id", "zone_id", "message_id", "trigger_event_id", "action", "reason_short"])? {
+                return unsupported("the payload has other fields");
+            }
+            let participant_text = exact_str(&participant_id)?;
+            let participant = get(&agents, participant_text)?;
+            let trigger = payload.get_item("trigger_event_id")?;
+            if participant.is_none()
+                || participant_text == agent_text
+                || !payload.get_item("zone_id")?.eq(&zone)?
+                || !zone.eq(attribute(&participant, intern!(py, "zone_id"))?)?
+                || !attribute(event, intern!(py, "causation_id"))?.eq(&trigger)?
+                || !contact_matches(world, event, &trigger, &participant_id, &agent_id)?
+            {
+                return unsupported("the reaction is for the Python rule to judge");
+            }
+            let (config, state, mirror) = runtime_state(world)?;
+            let message_value = payload.get_item("message_id")?;
+            let message_id = exact_str(&message_value)?;
+            let pressure = NamespaceMirror::with_row::<InformationRow, _>(&mirror, |row| {
+                let (Some(message), Some(belief)) = (row.messages.get(message_id), row.beliefs.get(agent_text).and_then(|beliefs| beliefs.get(message_id))) else {
+                    return unsupported("the claim is no longer current");
+                };
+                if !message.parses() || !belief.parses() || &*message.truth_status != "false" || &*belief.belief != "heard" {
+                    return unsupported("the claim is for the Python rule to judge");
+                }
+                row.query_pressure.get(agent_text).copied().map_or_else(|| unsupported("the person has no record"), Ok)
+            })?;
+            if !text_is(&action, "seek_claim_verification") || !matches!(exact_str(&reason)?, "heard_through_contact" | "request_verification" | "rule_fallback") {
+                return unsupported("the reaction is for the Python rule to judge");
+            }
+            let gain = number(&config.getattr(intern!(py, "query_pressure_per_claim"))?)?;
+            state.get_item("query_pressure")?.set_item(agent_text, py_min(1.0, pressure + gain))?;
+            Ok(())
+        }
+    }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

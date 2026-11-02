@@ -25,6 +25,8 @@ SEGMENTS: dict[str, tuple[str, str]] = {
     "_observed_state": ("decisions", "observed_row"),
     "_record_outcome": ("decisions", "record_outcome"),
     "_apply_effect": ("proposals", "apply_effect"),
+    "_assign_staff_support": ("support", "assign_staff_support"),
+    "_consider_due_complaints": ("staff", "consider_due_complaints"),
     "_route": ("travel", "route"),
     "_schedule_travel": ("travel", "schedule_travel"),
     "_psychology_update": ("psychology", "update_psychology"),

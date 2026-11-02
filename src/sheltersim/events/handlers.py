@@ -231,6 +231,7 @@ class EventDispatcher:
 class ProximityContactHandler:
     """Accept a sampled physical encounter without asserting a conversation."""
 
+    @kernel_first("handlers", "proximity")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         import math
 
@@ -333,6 +334,7 @@ class ProximityContactHandler:
 class InformationRumorHandler:
     """Seed one local Agent with a typed, provenance-linked claim."""
 
+    @kernel_first("information_events", "rumor")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         state = _information_runtime_state(world)
         from sheltersim.contracts.policies import selected_models
@@ -397,6 +399,7 @@ class InformationRumorHandler:
 class InformationCorrectionHandler:
     """Publish a zone-scoped, source-linked correction to one existing claim."""
 
+    @kernel_first("information_events", "correction")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         state = _information_runtime_state(world)
         from sheltersim.contracts.policies import selected_models
@@ -542,6 +545,7 @@ class InformationCorrectionHandler:
 class InformationContactHandler:
     """Apply one sampled, still-local contact at the next tick boundary."""
 
+    @kernel_first("information_events", "contact")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         state = _information_runtime_state(world)
         expected = {
@@ -831,6 +835,7 @@ class ResourceLedgerHandler:
 
     operation: str
 
+    @kernel_first("handlers", "resource_ledger")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         ledger_event = event
         if self.operation == "delivery" and "shipment_id" in event.payload:
@@ -888,6 +893,7 @@ class ResourceLedgerHandler:
 class FacilityOutageHandler:
     """Reduce a facility's working capacity after validating the full change."""
 
+    @kernel_first("handlers", "facility_outage")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         if set(event.payload) != {"facility_id", "units_out"}:
             raise EventApplicationError("facility outage payload fields do not match")
@@ -938,6 +944,7 @@ class FacilityOutageHandler:
 class FacilityRecoveryHandler:
     """Restore operational units without exceeding installed capacity."""
 
+    @kernel_first("handlers", "facility_recovery")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         if set(event.payload) != {"facility_id", "units_restored"}:
             raise EventApplicationError("facility recovery payload fields do not match")
@@ -986,6 +993,7 @@ class FacilityRecoveryHandler:
 class InfrastructureEventHandler:
     """Apply versioned outages, time-bounded environment stress, and route disruptions."""
 
+    @kernel_first("handlers", "infrastructure")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         previous_units = {
             facility_id: facility.working_units
@@ -1724,6 +1732,7 @@ class SocialInteractionHandler:
 class EffectProgramPopulationHandler:
     """Apply typed population primitives through the approved EffectProgram record."""
 
+    @kernel_first("handlers", "population")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.core.world import WorldState as MutableWorldState
         from sheltersim.domain.population import (
@@ -2304,6 +2313,7 @@ class AgentTravelCompletionHandler:
             )
         return True
 
+    @kernel_first("travel_completion", "reject_room_approach")
     def _reject_room_approach(
         self,
         world: WorldState,
@@ -2356,6 +2366,7 @@ class ResourceServiceCancellationHandler:
 
     service: ResourceServiceManager
 
+    @kernel_first("handlers", "service_cancellation")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         if world.schema_version != 6:
             raise EventApplicationError("resource service cancellation requires WorldState v6")
@@ -2366,6 +2377,7 @@ class ResourceServiceCancellationHandler:
 class DeliveryDelayHandler:
     """Reschedule one pending shipment without changing its stable identity."""
 
+    @kernel_first("handlers", "delivery_delay")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         def apply(candidate: WorldState) -> None:
             if set(event.payload) != {"shipment_id", "to_minute"} or event.source_id is None:
@@ -2434,6 +2446,7 @@ class DeliveryDelayHandler:
 class WaterOutageHandler:
     """Block new staffed water service at an explicitly named target."""
 
+    @kernel_first("handlers", "water_outage")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         def apply(candidate: WorldState) -> None:
             if event.source_id is None or set(event.payload) not in (
@@ -2471,6 +2484,7 @@ class WaterOutageHandler:
 class WaterRestorationHandler:
     """Restore new water service starts for one correlated outage."""
 
+    @kernel_first("handlers", "water_restoration")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         def apply(candidate: WorldState) -> None:
             if event.source_id is None or set(event.payload) != {"outage_id"}:
@@ -2493,6 +2507,7 @@ class WaterRestorationHandler:
 class StaffUnavailabilityHandler:
     """Remove one staff member from assignment and safely interrupt active work."""
 
+    @kernel_first("handlers", "staff_unavailable")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...]:
         def apply(candidate: WorldState) -> tuple[EventLogRecord, ...]:
             additional_records: list[EventLogRecord] = []
@@ -2605,6 +2620,7 @@ class StaffUnavailabilityHandler:
 class StaffRestorationHandler:
     """Restore staff only when the event still matches the latest absence token."""
 
+    @kernel_first("handlers", "staff_restoration")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         def apply(candidate: WorldState) -> None:
             if event.source_id is None or set(event.payload) != {
@@ -3126,6 +3142,7 @@ class StaffSupportCompletionHandler:
 class StaffOperationArrivalHandler:
     """Move a staff member to the assigned task after its actual route time."""
 
+    @kernel_first("staff_operation_events", "arrive")
     def apply(self, world: WorldState, event: ScheduledEvent) -> None:
         from sheltersim.domain.staff_operations import arrive_staff_operation
 
@@ -3138,6 +3155,7 @@ class StaffOperationArrivalHandler:
 class StaffOperationReliefHandler:
     """Transfer an in-flight staff operation at an applied relief boundary."""
 
+    @kernel_first("staff_operation_events", "relief")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         from sheltersim.domain.staff_operations import handoff_staff_operation
 
@@ -3149,6 +3167,7 @@ class StaffOperationReliefHandler:
 class StaffOperationCompletionHandler:
     """Apply routed cleaning, repair, intake, outreach or patrol work."""
 
+    @kernel_first("staff_operation_events", "complete")
     def apply(self, world: WorldState, event: ScheduledEvent) -> tuple[EventLogRecord, ...] | None:
         task_kind = event.payload.get("task_kind")
         target_id = event.payload.get("target_id")
@@ -3292,6 +3311,29 @@ if native.available():
         (ResourceServiceCompletionHandler, ResourceServiceCompletionHandler.apply),
         (SupportRequestTimeoutHandler, SupportRequestTimeoutHandler.apply),
         (StaffSupportCompletionHandler, StaffSupportCompletionHandler.apply),
+        [
+            (handler, handler.apply)
+            for handler in (
+                ProximityContactHandler,
+                InformationRumorHandler,
+                InformationCorrectionHandler,
+                InformationContactHandler,
+                ResourceLedgerHandler,
+                FacilityOutageHandler,
+                FacilityRecoveryHandler,
+                InfrastructureEventHandler,
+                ResourceServiceCancellationHandler,
+                EffectProgramPopulationHandler,
+                DeliveryDelayHandler,
+                WaterOutageHandler,
+                WaterRestorationHandler,
+                StaffUnavailabilityHandler,
+                StaffRestorationHandler,
+                StaffOperationArrivalHandler,
+                StaffOperationReliefHandler,
+                StaffOperationCompletionHandler,
+            )
+        ],
         AgentTravelCompletionHandler._after_arrival,
         EventDispatcher,
     )

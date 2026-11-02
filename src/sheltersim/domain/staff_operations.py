@@ -1349,6 +1349,7 @@ def interrupt_staff_trips_on_closed_routes(
     return tuple(interrupted)
 
 
+@kernel_first("staff_operation_events", "interrupt")
 def interrupt_staff_operation(
     world: WorldState,
     staff_id: str,

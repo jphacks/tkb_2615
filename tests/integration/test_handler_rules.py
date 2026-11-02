@@ -610,16 +610,6 @@ def test_the_end_of_support_is_python_s(generated_scenario: Any, kind: str) -> N
         assert payload["outcome_observation"] == "observed_change"
 
 
-def test_a_kind_a_selected_formula_decides_is_python_s(generated_scenario: Any) -> None:
-    world, _ = _run(generated_scenario, 5)
-    event, _ = _assigned(world, "hygiene_support")
-    before = _bytes(world)
-    handler = StaffSupportCompletionHandler(cooldown_minutes=30, require_colocated=True)
-    with pytest.raises(native.Unsupported, match="care formula"):
-        native.rules("support").complete_support(handler, world, event)
-    assert _bytes(world) == before
-
-
 def test_the_end_of_support_that_does_not_fit_is_python_s(generated_scenario: Any) -> None:
     world, _ = _run(generated_scenario, 5)
     event, agent_id = _assigned(world, "emotional_support")
@@ -682,6 +672,7 @@ def test_a_patched_handler_of_the_table_goes_to_python(
 
 def test_a_manager_s_own_request_is_what_an_arrival_calls(generated_scenario: Any) -> None:
     world, controller = _run(generated_scenario, 5)
+    world.model_configs.pop("facility_geometry", None)
     handler = AgentTravelCompletionHandler(controller.toilet_service, validate_request_state=False)
     controller.toilet_service.request = lambda *_args, **_options: None  # type: ignore[method-assign]
     with pytest.raises(native.Unsupported):

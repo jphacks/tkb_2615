@@ -18,7 +18,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-use pyo3::types::{PyDict, PyList, PyString, PyType};
+use pyo3::types::{PyDict, PyList, PyString, PyTuple, PyType};
 
 use crate::core::row::{attribute, exact_int};
 use crate::core::world_core::{mirror_of, raw_dict_get, NamespaceMirror};
@@ -55,6 +55,9 @@ struct Table {
     resource: (Py<PyType>, Py<PyAny>),
     timeout: (Py<PyType>, Py<PyAny>),
     support: (Py<PyType>, Py<PyAny>),
+    /// The handlers whose `apply` is a kernel, which the loop calls with the Python dispatcher's steps
+    /// around it: the classes, each with its `apply` as defined.
+    others: Vec<(Py<PyType>, Py<PyAny>)>,
     /// `AgentTravelCompletionHandler._after_arrival` as defined.
     after_arrival: Py<PyAny>,
     dispatcher: Py<PyType>,
@@ -111,6 +114,9 @@ counters!(
     timeout_refused,
     support_ran,
     support_refused,
+    others_applied,
+    others_suppressed,
+    others_failed,
     finished_direct,
     finished_python,
     interrupted_ran,
@@ -452,6 +458,87 @@ impl<'py> Phase<'_, 'py> {
         }
     }
 
+    /// A handler of `others`: this event's handler if it is that class with that `apply`.
+    fn other_handler(&self, event_type: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = self.py();
+        let handlers = attribute(&self.dispatcher, intern!(py, "handlers"))?;
+        let Some(handler) = raw_dict_get(&handlers, PyString::new(py, event_type).as_any())? else {
+            return Ok(None);
+        };
+        for entry in &self.table.others {
+            let class = entry.0.bind(py);
+            if handler.get_type().is(class) {
+                return Ok(class.getattr(intern!(py, "apply"))?.is(entry.1.bind(py)).then_some(handler));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `dispatch_one` for a handler of `others`: its `apply` runs its kernel, or the Python rule if the
+    /// kernel refuses, so the event's text is the Python rule's.
+    fn other_event(
+        &self,
+        due: &DueEvent,
+        event_type: Arc<str>,
+        handler: &Bound<'py, PyAny>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+        outcomes: &mut Vec<Outcome<'py>>,
+    ) -> PyResult<()> {
+        let py = self.py();
+        let event = object()?;
+        let mut additional = Vec::new();
+        let (status, detail) = match handler.call_method1(intern!(py, "apply"), (self.world, &event)) {
+            Ok(records) => {
+                if records.is_truthy()? {
+                    additional = records.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+                }
+                if matches!(&*event_type, "information_contact_update" | "information_correction" | "proximity_contact_update") {
+                    self.social_records(&event)?;
+                }
+                count(&COUNTS.others_applied);
+                (EventStatus::Applied, None)
+            }
+            Err(error) => {
+                let done = self.expected_outcome(error)?;
+                count(if done.0 == EventStatus::Suppressed { &COUNTS.others_suppressed } else { &COUNTS.others_failed });
+                done
+            }
+        };
+        count(&COUNTS.events_rust);
+        self.settle(due, object, status, detail.as_deref())?;
+        // A record the handler wrote itself: `settle` found it there and compared it.
+        outcomes.push(Outcome { event_type, applied: status == EventStatus::Applied, row: None, event: Some(event) });
+        if additional.is_empty() {
+            return Ok(());
+        }
+        let log = attribute(self.world, intern!(py, "event_log"))?;
+        for record in &additional {
+            let recorded = attribute(record, intern!(py, "event"))?;
+            let existing = log.call_method1(intern!(py, "find"), (attribute(&recorded, intern!(py, "event_id"))?,))?;
+            let kept = if existing.is_none() {
+                log.call_method1(intern!(py, "append"), (record,))?;
+                record.clone()
+            } else {
+                let same_event = attribute(&existing, intern!(py, "event"))?.call_method0(intern!(py, "to_dict"))?.eq(recorded.call_method0(intern!(py, "to_dict"))?)?;
+                if !same_event || !attribute(&existing, intern!(py, "status"))?.is(&attribute(record, intern!(py, "status"))?) {
+                    return Err(pyo3::exceptions::PyValueError::new_err("transactional follow-up record disagrees with dispatch result"));
+                }
+                existing
+            };
+            let recorded = attribute(&kept, intern!(py, "event"))?;
+            let event_type = attribute(&recorded, intern!(py, "event_type"))?;
+            outcomes.push(Outcome {
+                event_type: Arc::from(event_type.downcast::<PyString>()?.to_str()?),
+                applied: attribute(&kept, intern!(py, "status"))?.is(self.table.statuses[0].bind(py)),
+                row: None,
+                event: Some(recorded),
+            });
+        }
+        let records = PyTuple::new(py, &additional)?;
+        self.module.getattr(intern!(py, "ingest_applied_shared_operation_records"))?.call1((self.world, records))?;
+        Ok(())
+    }
+
     /// The Python dispatcher for one event; its outcomes.
     fn dispatch_in_python(&self, event: &Bound<'py, PyAny>, outcomes: &mut Vec<Outcome<'py>>) -> PyResult<()> {
         let py = self.py();
@@ -577,9 +664,21 @@ impl<'py> Phase<'_, 'py> {
         };
         drop(writer);
         // A marker of an EffectProgram may hold a guard, which is `effect_event_guard_or_suppress`'s.
+        if reference.has_provenance("effect_program_v1")? {
+            return self.dispatch_in_python(&object()?, outcomes);
+        }
         let handler = match handler {
-            Some(handler) if !reference.has_provenance("effect_program_v1")? => handler,
-            _ => return self.dispatch_in_python(&object()?, outcomes),
+            Some(handler) => handler,
+            None => {
+                let is_listed = matches!(
+                    &*event_type,
+                    SOCIAL_INTERACTION | AGENT_TRAVEL_COMPLETE | TOILET_COMPLETE | RESOURCE_COMPLETE | SUPPORT_TIMEOUT | SUPPORT_COMPLETE
+                );
+                return match if is_listed { None } else { self.other_handler(&event_type)? } {
+                    Some(handler) => self.other_event(&due, event_type, &handler, &object, outcomes),
+                    None => self.dispatch_in_python(&object()?, outcomes),
+                };
+            }
         };
         let mut receipt = None;
         let done = match &*event_type {
@@ -798,18 +897,66 @@ impl<'py> Phase<'_, 'py> {
         Ok(())
     }
 
-    /// `_finish_stopped_journey`. A bed's position is read from the overlay in Python.
+    /// `_reserved_bed_of`: the bed point `_finish_stopped_journey` reads from the overlay.
+    fn bed_point_of(&self, key: &Bound<'py, PyString>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = self.py();
+        let table = attribute(self.world, intern!(py, "model_state"))?;
+        let empty = PyDict::new(py);
+        let overlay = table.call_method1(intern!(py, "get"), ("geometry_overlay_v1", &empty))?;
+        let reservation = overlay.call_method1(intern!(py, "get"), ("bed_reservations", &empty))?.call_method1(intern!(py, "get"), (key, &empty))?;
+        let room = overlay
+            .call_method1(intern!(py, "get"), ("temporary_rooms", &empty))?
+            .call_method1(intern!(py, "get"), (reservation.call_method1(intern!(py, "get"), ("room_id",))?, &empty))?;
+        let beds = room.call_method1(intern!(py, "get"), ("bed_points_m", PyList::empty(py)))?;
+        let index = reservation.call_method1(intern!(py, "get"), ("bed_index",))?;
+        if !index.is_exact_instance_of::<pyo3::types::PyInt>() {
+            return Ok(None);
+        }
+        let index = exact_int(&index)?;
+        if index < 0 || index as usize >= beds.len()? {
+            return Ok(None);
+        }
+        Ok(Some(beds.get_item(index as usize)?))
+    }
+
+    /// `_finish_stopped_journey`.
     fn finish_journey(&self, id: &Arc<str>, purpose: Option<&str>) -> PyResult<()> {
         let py = self.py();
         let key = PyString::new(py, id);
-        if self.direct && purpose != Some("sleep_bed") {
-            match finish_movement(self.world, key.as_any()) {
-                Ok(()) => {
-                    count(&COUNTS.finished_direct);
-                    return Ok(());
+        if self.direct {
+            let bed = if purpose == Some("sleep_bed") {
+                match self.bed_point_of(&key) {
+                    Ok(bed) => Ok(bed),
+                    Err(error) => Err(error),
                 }
-                Err(error) if error.is_instance_of::<Unsupported>(py) => {}
-                Err(error) => return Err(error),
+            } else {
+                Ok(None)
+            };
+            if let Ok(bed) = bed {
+                match finish_movement(self.world, key.as_any()) {
+                    Ok(()) => {
+                        count(&COUNTS.finished_direct);
+                        if let Some(bed) = bed {
+                            let agent = raw_dict_get(&attribute(self.world, intern!(py, "agents"))?, key.as_any())?;
+                            if let Some(agent) = agent {
+                                let update = PyDict::new(py);
+                                update.set_item("zone_id", attribute(&agent, intern!(py, "zone_id"))?)?;
+                                update.set_item("point", bed)?;
+                                update.set_item("edge_id", py.None())?;
+                                update.set_item("progress", 1.0)?;
+                                update.set_item("position_kind", "physical")?;
+                                attribute(self.world, intern!(py, "model_state"))?
+                                    .get_item(MOVEMENT)?
+                                    .get_item("positions")?
+                                    .get_item(key.as_any())?
+                                    .call_method1(intern!(py, "update"), (update,))?;
+                            }
+                        }
+                        return Ok(());
+                    }
+                    Err(error) if error.is_instance_of::<Unsupported>(py) => {}
+                    Err(error) => return Err(error),
+                }
             }
         }
         count(&COUNTS.finished_python);
@@ -968,6 +1115,7 @@ fn install_table<'py>(
     resource: (Bound<'py, PyType>, Bound<'py, PyAny>),
     timeout: (Bound<'py, PyType>, Bound<'py, PyAny>),
     support: (Bound<'py, PyType>, Bound<'py, PyAny>),
+    others: Vec<(Bound<'py, PyType>, Bound<'py, PyAny>)>,
     after_arrival: Bound<'py, PyAny>,
     dispatcher: Bound<'py, PyType>,
 ) -> PyResult<()> {
@@ -980,6 +1128,7 @@ fn install_table<'py>(
         resource: (resource.0.unbind(), resource.1.unbind()),
         timeout: (timeout.0.unbind(), timeout.1.unbind()),
         support: (support.0.unbind(), support.1.unbind()),
+        others: others.into_iter().map(|(class, apply)| (class.unbind(), apply.unbind())).collect(),
         after_arrival: after_arrival.unbind(),
         dispatcher: dispatcher.unbind(),
         suppressed: models.getattr("EventSuppressed")?.downcast_into::<PyType>()?.unbind(),
