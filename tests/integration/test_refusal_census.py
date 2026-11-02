@@ -93,8 +93,8 @@ def test_the_static_list_finds_sites_and_skips_definitions(tmp_path) -> None:
     assert sites["src/a.rs", 6]["fn"] == "kernel"
 
 
-def test_a_run_of_the_driver_shows_its_fallbacks(tmp_path) -> None:
-    """The first tick of a generated Run falls back in the driver, and so counts as or_rule."""
+def test_a_generated_run_on_the_driver_counts_its_ticks_and_falls_back_nowhere(tmp_path) -> None:
+    """The census sees a generated Run's ticks, and since L4 no kernel of that Run refuses."""
     census = tmp_path / "census"
     environment = {
         **os.environ,
@@ -129,6 +129,4 @@ def test_a_run_of_the_driver_shows_its_fallbacks(tmp_path) -> None:
             else:
                 rows.append(row)
     assert ticks > 0
-    fallbacks = {row[6] for row in rows if row[0] == "caught"}
-    assert any(by.startswith("or_rule ") for by in fallbacks)
-    assert any(row[0] == "raised" and row[2] == "tick_ok" for row in rows)
+    assert [row for row in rows if row[0] == "caught"] == []

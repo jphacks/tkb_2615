@@ -159,7 +159,9 @@ def _whole_run(
         if (
             event == "call"
             and code.co_name in {"arbitrate", "_arbitrate_independent_facility"}
-            and code.co_filename.endswith(("domain/facilities.py", "domain/resource_service.py"))
+            and Path(code.co_filename)
+            .as_posix()
+            .endswith(("domain/facilities.py", "domain/resource_service.py"))
         ):
             loops.add(code.co_name)
 
