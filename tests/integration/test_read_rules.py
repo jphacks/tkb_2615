@@ -805,6 +805,24 @@ def test_the_pairs_of_a_sample_are_the_python_rules_from_the_row(
     assert found > 100
 
 
+def test_a_pair_at_nearly_the_radius_across_two_cells_is_found(
+    generated_scenario_with: Any,
+) -> None:
+    """The size of a cell decides who is looked at, so a smaller one would lose this pair."""
+    world = _proximity_world(generated_scenario_with)
+    positions = world.model_state["movement_v1"]["positions"]
+    placed = [record for record in positions.values() if record["point"] is not None]
+    zone = placed[0]["zone_id"]
+    for number, record in enumerate(placed):
+        record["zone_id"] = zone
+        record["point"]["x"], record["point"]["y"] = 1000.0 * number, 1000.0 * number
+    radius = 1.5
+    placed[0]["point"]["x"], placed[0]["point"]["y"] = 0.985 * radius, 0.0
+    placed[1]["point"]["x"], placed[1]["point"]["y"] = 1.984 * radius, 0.0
+    pairs = _assert_sample_same(world, {"max_distance_m": radius, "max_pairs_per_sample": 10})
+    assert len(pairs) == 1
+
+
 @pytest.mark.parametrize(
     "change",
     [
