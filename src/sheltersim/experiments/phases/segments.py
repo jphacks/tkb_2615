@@ -15,6 +15,7 @@ from functools import wraps
 from typing import Any
 
 from sheltersim import native
+from sheltersim.core import kernels
 
 # Name of a step's method -> (the module of native/src/rules/, the name of its kernel).
 SEGMENTS: dict[str, tuple[str, str]] = {
@@ -60,10 +61,30 @@ def _with_kernel(controller: type, step: str, kernel: Callable[..., Any]) -> Cal
 
     @wraps(python_step)
     def run(self: Any, *arguments: Any, **options: Any) -> Any:
+        other = kernels._error_check
+        seen = kernels._fell_back
+        if other is None and seen is None:
+            try:
+                return kernel(self, *arguments, **options)
+            except native.Unsupported:
+                # Found on the bases at each call, so a test's patch of the Python step applies.
+                return getattr(super(controller, self), step)(*arguments, **options)
+        # The checks of core/kernels.py, on the Python step.
+        rule = getattr(super(controller, self), step)
+        mine = None if other is None else other.before(rule, arguments, options)
         try:
             return kernel(self, *arguments, **options)
-        except native.Unsupported:
-            # Found on the bases at each call, so a test's patch of the Python step applies.
-            return getattr(super(controller, self), step)(*arguments, **options)
+        except native.Unsupported as refusal:
+            if seen is None:
+                return rule(*arguments, **options)
+            try:
+                return rule(*arguments, **options)
+            except Exception as error:
+                seen.fell_back(f"segment {step}", refusal, error)
+                raise
+        except Exception as error:
+            if other is not None:
+                other.after(rule, arguments, options, error, mine)
+            raise
 
     return run
