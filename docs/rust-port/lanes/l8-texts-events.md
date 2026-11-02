@@ -65,7 +65,7 @@
 
 ## 残したもの（手順4で要るもの）
 
-`raise EventSuppressed/EventApplicationError` は `src` に 366 か所（AST）。Rust が文を出すのは 155、**残りは 211** です。どれも今は kernel が断り、Python の規則が文を出します。手順4ではこれも Rust が要ります。
+**この表の多くは L8c（`l8-texts-saved.md`）で Rust に移りました。** `raise EventSuppressed/EventApplicationError` は `src` に 366 か所（AST）。Rust が文を出すのは 155、**残りは 211** です。どれも今は kernel が断り、Python の規則が文を出します。手順4ではこれも Rust が要ります。
 
 | 残り | か所 | 理由 |
 |---|--:|---|

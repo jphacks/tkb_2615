@@ -71,19 +71,19 @@ Python のイベントの処理を包んで数えました（`98f10f1`、ゲー�
 ## Python に残した規則（手順4で Rust が要るもの）
 
 - **`events/effects.py`：** `schedule_effect_program`（分岐のコマンド、承認の境界）、`validate_effect_program`、`available_primitives`、`_projected_facility_units`、`_toilet_placement_issues`。pydantic の契約（設計で Python に残すもの）。
-- **抑止と失敗の文：** 5つのハンドラーとガードのすべての文。今は `Unsupported` のあと Python の規則が出します。
+- ~~抑止と失敗の文~~：L8c（`l8-texts-saved.md`）で Rust に移りました。
 - **写して差し替える流れの部品：** `to_dict`、`from_dict`、`validate`。手順3の後で `core.fork()` に置き換える予定のものです。
 - **名前で呼ぶ、ほかのモジュールの規則：**
   - `domain/geometry_overlay.py`：`apply_geometry_change`、`installed_facility_placement_enabled`、`place_installed_facility`（M6 population レーンの範囲）
   - `domain/temporary_spaces.py`：`register_temporary_space`、`expire_temporary_space`（同）
   - `domain/care_receipts.py`：`make_staff_handoff_record`、`make_facility_recovery_record`（M6 handlers レーンの範囲）
-  - `domain/staff_operations.py`：`order_staff_operation`（作業のイベントの規則。M4 職員レーンの残り）
+  - ~~`domain/staff_operations.py`：`order_staff_operation`~~：L8c で `rules/staff_order.rs` に移りました
   - `domain/movement.py`：`staff_position_snapshots`
   - `domain/staff_dynamics.py`：`staff_dynamics_is_available`
   - `domain/agent_dynamics.py`：`announce_installed_facility`
   - `domain/environment.py`：`ScenarioZoneEnvironmentConfig.model_validate`
   - `events/queue.py`：`EventsById`、`pending()`（完全検証と環境の期限のイベント探し）
-- **入口：** `rules/dispatch.rs` は印のあるイベントを `dispatch_one` に渡します。ハンドラーの kernel はそこから `kernel_first` で動きます。Rust の表に載せていません。
+- **入口：** L8c から、`rules/dispatch.rs` は印のあるイベントのガードを Rust で確かめ、ハンドラーを `other_event` で呼びます（`l8-texts-saved.md`）。
 - **`events/handlers.py` の印のあるイベント：** `EffectProgramPopulationHandler`、`resource_delivery`、`delivery_delayed`、`staff_unavailable`、`staff_restored`、`water_outage`、`water_restored`（M6 handlers レーン）。
 
 ## モデルの担当の方に見ていただくコード

@@ -131,7 +131,7 @@ kernel の断りの理由（ゲート）：情報の接触 `no longer in a conta
 
 ## Python に残した規則（手順4で Rust が要るもの）
 
-- **文：** すべてのハンドラーの抑止と失敗の文。今は `Unsupported` のあと Python の規則が出します。
+- ~~文~~：L8a、L8c（`l8-texts-events.md`、`l8-texts-saved.md`）で Rust に移りました。
 - **`EventDispatcher.dispatch_one`：** EffectProgram の印のあるイベント（ガードが `effect_event_guard_or_suppress` です）、差し替えられた handler、列で置き換わったイベント。
 - **契約と設定（名前で呼びます）：** `InformationSpreadConfig.from_mapping`、`canonical_proximity_contact_config`、`ScenarioInfrastructureSpec.model_validate`、`selected_models`、`create_care_outcome_formula`、`create_staff_operations_formula`、`_operation_record_adapter`、`StaffSupportContinuityReceipt`。
 - **ケアでない受領記録の `record_shared_operation`：** `ingest` と写しの流れから名前で呼びます。

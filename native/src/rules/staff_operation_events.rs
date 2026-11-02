@@ -2,10 +2,11 @@
 //! completion and interruption, with `StaffOperationCompletionHandler`'s receipts.
 //!
 //! Each plans with nothing changed and then writes, on the same Python containers as the rule:
-//! `staff_operations_v1` is Rust's row, kept by single-item forwarded writes. Anything but a success
-//! says Unsupported before the first write, and the Python rule says it in its own words: a stale relief,
-//! a person who became unavailable (which interrupts and suppresses), a value not of the row's types
-//! (docs/rust-port/lanes/m6-handlers-rest.md).
+//! `staff_operations_v1` is Rust's row, kept by single-item forwarded writes. Unsupported comes only
+//! before the first write, and the Python rule then says it in its own words (a value not of the row's
+//! types). The outcomes are the rules' texts, through `core/errors.rs`: each before any change, except
+//! a worker who became unavailable on arrival or completion, whose operation stops first, as the
+//! Python rule stops it (docs/rust-port/lanes/m6-handlers-rest.md, l8-texts-events.md).
 
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -206,13 +207,30 @@ fn interrupt<'py>(world: &Bound<'py, PyAny>, staff_id: &Bound<'py, PyAny>, event
     counted(world.py(), "interrupt", interrupt_operation(world, exact_str(staff_id)?, event, current_event_id))
 }
 
+/// What a plan found: go on, or the worker became unavailable (by ID), which stops the operation and
+/// then suppresses the event.
+enum Planned<P> {
+    Go(P),
+    Unavailable(String),
+}
+
+/// `interrupt_staff_operation(world, staff_id, event, current_event_id=event.event_id)` and then
+/// `raise EventSuppressed(text)`: the stop stays in the world, as the dispatcher keeps it.
+fn stop_and_suppress<T>(world: &Bound<'_, PyAny>, staff_id: &str, event: &Bound<'_, PyAny>, text: &'static str) -> PyResult<T> {
+    let py = world.py();
+    let event_id = exact_str(&attribute(event, intern!(py, "event_id"))?)?.to_owned();
+    // Its reads refuse before its first write, so Unsupported still finds the world as it was.
+    interrupt_operation(world, staff_id, event, Some(&event_id))?;
+    errors::suppressed(py, text)
+}
+
 // ---- Arrival -----------------------------------------------------------------------------------------
 
-/// `arrive_staff_operation`, of a person still available.
+/// `arrive_staff_operation`.
 #[pyfunction]
 fn arrive<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = world.py();
-    let plan = (|| -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+    let plan = (|| -> PyResult<Planned<(Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
         if attribute(event, intern!(py, "event_type"))?.ne("staff_operation_arrive")? {
             return errors::failed(py, "staff operation arrival handler received another event");
         }
@@ -243,12 +261,16 @@ fn arrive<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event: &
             return not_active();
         }
         if !available(world, id)? {
-            // The Python rule interrupts the operation, then suppresses.
-            return unsupported("the arrival is for the Python rule to judge");
+            return Ok(Planned::Unavailable(id.to_owned()));
         }
-        Ok((record.clone(), staff, record.get_item("target_zone_id")?, due))
+        Ok(Planned::Go((record.clone(), staff, record.get_item("target_zone_id")?, due)))
     })();
-    let (record, staff, zone, due) = counted(py, "arrive", refused_by_python(py, plan))?;
+    let (record, staff, zone, due) = match counted(py, "arrive", refused_by_python(py, plan))? {
+        Planned::Go(plan) => plan,
+        Planned::Unavailable(id) => {
+            return stop_and_suppress(world, &id, event, "staff became unavailable before reaching the assigned task");
+        }
+    };
     staff.setattr(intern!(py, "zone_id"), zone)?;
     record.set_item("phase", "working")?;
     record.set_item("travel_due_minute", py.None())?;
@@ -611,7 +633,7 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
         previous_units: Option<(Bound<'py, PyAny>, i64)>,
         payload_task: Bound<'py, PyAny>,
     }
-    let plan = (|| -> PyResult<Plan<'py>> {
+    let plan = (|| -> PyResult<Planned<Plan<'py>>> {
         let payload = attribute(event, intern!(py, "payload"))?;
         let payload_kind = get(&payload, "task_kind")?;
         let payload_target = get(&payload, "target_id")?;
@@ -658,8 +680,7 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
             return not_active();
         }
         if !available(world, id)? {
-            // The Python rule interrupts the operation, then suppresses.
-            return unsupported("the completion is for the Python rule to judge");
+            return Ok(Planned::Unavailable(id.to_owned()));
         }
         let kind = record.get_item("task_kind")?;
         let zone_id = record.get_item("target_zone_id")?;
@@ -720,7 +741,7 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
         let started = record.get_item("started_minute")?;
         let arrival = record.get_item("arrival_minute")?;
         let arrival = if arrival.is_none() { started.clone() } else { arrival };
-        Ok(Plan {
+        Ok(Planned::Go(Plan {
             reason: record.get_item("reason")?,
             travel: record.get_item("travel_minutes")?,
             state,
@@ -737,9 +758,14 @@ fn complete<'py>(_handler: &Bound<'py, PyAny>, world: &Bound<'py, PyAny>, event:
             work,
             before,
             previous_units,
-        })
+        }))
     })();
-    let plan = counted(py, "complete", refused_by_python(py, plan))?;
+    let plan = match counted(py, "complete", refused_by_python(py, plan))? {
+        Planned::Go(plan) => plan,
+        Planned::Unavailable(id) => {
+            return stop_and_suppress(world, &id, event, "staff became unavailable before completing the assigned task");
+        }
+    };
     let Plan { state, staff, staff_id, task_id, kind, target_id, zone_id, reason, started, arrival, travel, causation, work, before, previous_units, payload_task } = plan;
     let now = attribute(world, intern!(py, "minute_index"))?;
     let due = attribute(event, intern!(py, "due_minute"))?;

@@ -14,6 +14,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBool, PyList, PySlice, PyString, PyTuple};
 
+use crate::core::errors;
 use crate::core::mathx::py_max;
 use crate::core::row::{attribute, exact_dict, exact_float, exact_int, exact_str, map_set, unsupported, Field};
 use crate::core::value::V;
@@ -897,98 +898,188 @@ fn complete<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyRe
     complete_event(manager, EventRef::Object(event))
 }
 
-/// `complete` of an event's row or object.
+/// The fields of a completion's payload, as `_assert_service_event_matches_task` wants them.
+const COMPLETION_FIELDS: [&str; 7] = ["facility_id", "agent_id", "task_id", "resource_id", "reservation_id", "quantity", "staff_id"];
+
+/// `payload.get(key)` of an event, as a value: Null when it is missing, as `get` says None.
+fn payload_get(event: &EventRef<'_, '_>, key: &str) -> PyResult<V> {
+    match event {
+        EventRef::Row(row) => Ok(match &row.payload {
+            V::Map(payload) => payload.get(key).cloned().unwrap_or(V::Null),
+            _ => V::Null,
+        }),
+        EventRef::Object(event) => {
+            let py = event.py();
+            let payload = attribute(event, intern!(py, "payload"))?;
+            V::from_py(&payload.call_method1(intern!(py, "get"), (PyString::intern(py, key),))?)
+        }
+    }
+}
+
+/// `set(payload) == set(names)` of an event; Unsupported for a key that is not a plain str.
+fn payload_fields_are(event: &EventRef<'_, '_>, names: &[&str]) -> PyResult<bool> {
+    if event.payload_len()? != names.len() {
+        return Ok(false);
+    }
+    match event {
+        EventRef::Row(row) => Ok(match &row.payload {
+            V::Map(payload) => payload.len() == names.len() && payload.keys().all(|key| names.contains(&&**key)),
+            _ => names.is_empty(),
+        }),
+        EventRef::Object(event) => {
+            let py = event.py();
+            let payload = attribute(event, intern!(py, "payload"))?;
+            for key in payload.try_iter()? {
+                if !names.contains(&exact_str(&key?)?) {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// `value == text` in Python, of a payload's value and an optional str.
+fn same_text(value: &V, text: Option<&str>) -> bool {
+    match (value, text) {
+        (V::Str(value), Some(text)) => &**value == text,
+        (V::Null, None) => true,
+        _ => false,
+    }
+}
+
+/// `value == number` in Python, of a payload's value and an int.
+fn same_int(value: &V, number: i64) -> PyResult<bool> {
+    Ok(match value {
+        V::Int(value) => *value == number,
+        V::Bool(flag) => i64::from(*flag) == number,
+        V::Float(value) => {
+            if !(-(1 << 53)..=1 << 53).contains(&number) {
+                return unsupported("an int a float can't hold exactly");
+            }
+            *value == number as f64
+        }
+        _ => false,
+    })
+}
+
+/// `complete` of an event's row or object. Its checks are the Python rule's, in its order, with its
+/// texts; what Rust can't decide as Python would goes to the Python rule.
 pub(crate) fn complete_event<'py>(manager: &Bound<'py, PyAny>, event: EventRef<'_, 'py>) -> PyResult<()> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
     let world = &manager.world;
-    // `_assert_service_event_matches_task`. Anything it would refuse goes to it.
-    if event.payload_len()? != 7 {
-        return unsupported("the payload has other fields");
+    let Some(task_arc) = event.text("task_id")? else {
+        return errors::failed(py, "resource completion requires a task_id");
+    };
+    let task_id = &*task_arc;
+    let store = entities_of(world)?;
+    let mirror = held_mirror(world)?;
+    let Some(task) = EntityStore::with_rows(&store, |rows| Ok(rows.active_tasks.get(task_id).cloned()))? else {
+        let cancelled = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| Ok(row.cancelled_task_ids.iter().any(|id| &**id == task_id)))?;
+        if cancelled {
+            return errors::suppressed(py, format!("resource service task {} was cancelled", errors::repr_str(py, task_id)?));
+        }
+        return errors::failed(py, "resource completion does not match an active task");
+    };
+
+    // `_assert_service_event_matches_task`.
+    if !event.is_completion()? || &*event.event_type()? != "resource_service_complete" || !payload_fields_are(&event, &COMPLETION_FIELDS)? {
+        return errors::failed(py, "resource completion payload or event kind is invalid");
     }
-    let lacks = || Unsupported::new_err("the payload lacks a field");
-    let facility_arc = event.text("facility_id")?.ok_or_else(lacks)?;
-    let agent_arc = event.text("agent_id")?.ok_or_else(lacks)?;
-    let task_arc = event.text("task_id")?.ok_or_else(lacks)?;
-    let resource_given = event.text("resource_id")?.ok_or_else(lacks)?;
-    let reservation = event.text("reservation_id")?.ok_or_else(lacks)?;
-    let staff_arc = event.text("staff_id")?.ok_or_else(lacks)?;
-    let quantity = event.int("quantity")?.ok_or_else(lacks)?;
-    let (facility_id, agent_id, task_id, resource_id, staff_id) = (&*facility_arc, &*agent_arc, &*task_arc, &*resource_given, &*staff_arc);
-    if !event.is_completion()? || &*event.event_type()? != "resource_service_complete" || *reservation != *task_id {
-        return unsupported("the event does not match");
+    let given_resource = payload_get(&event, "resource_id")?;
+    let due = event.due_minute()?;
+    let mut matches = matches!(&*task.kind, "resource_service_water" | "resource_service_food")
+        && task.due_minute == due
+        && same_text(&payload_get(&event, "agent_id")?, task.agent_id.as_deref())
+        && same_text(&payload_get(&event, "staff_id")?, task.staff_id.as_deref())
+        && same_text(&payload_get(&event, "facility_id")?, task.resource_id.as_deref())
+        && same_text(&payload_get(&event, "reservation_id")?, Some(&task.id));
+    // `facilities[task.resource_id or ""]`, read only when all of the above match.
+    let mut facility_view = None;
+    if matches {
+        let found = EntityStore::with_rows(&store, |rows| {
+            Ok(rows.facilities.get(task.resource_id.as_deref().unwrap_or("")).map(|facility| (facility.kind.clone(), facility.resource_active_agent_ids.clone())))
+        })?;
+        let Some((kind, active)) = found else {
+            return unsupported("no such facility");
+        };
+        matches = same_text(&given_resource, resource_of(&kind));
+        facility_view = Some((kind, active));
     }
+    if !matches {
+        return errors::failed(py, "resource completion does not match its active task");
+    }
+    let Some((kind, active_ids)) = facility_view else {
+        return unsupported("no facility was read");
+    };
+    // The resource is the facility's: `accounts[None]` would be a KeyError.
+    let Some(resource_id) = resource_of(&kind) else {
+        return unsupported("not a resource facility");
+    };
     let Some(index) = resource_index(resource_id) else {
         return unsupported("an unknown resource");
     };
     let is_water = resource_id == WATER;
-    if !is_stable_id(task_id) || !is_stable_id(agent_id) {
+    let expected = manager.quantity(resource_id)?;
+    let given_quantity = payload_get(&event, "quantity")?;
+    let staff_view = EntityStore::with_rows(&store, |rows| {
+        Ok(rows.staff.get(task.staff_id.as_deref().unwrap_or("")).map(|staff| (staff.active_task_id.clone(), staff.busy_until)))
+    })?;
+    let ledger = ledger_mirror(world)?;
+    let (reserved, warehouse) = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
+        let reserved = row.accounts.of(index).reservations.get(&*task.id).is_some_and(|found| {
+            found.reservation_id == task.id
+                && &*found.resource_id == resource_id
+                && Some(&found.agent_id) == task.agent_id.as_ref()
+                && found.quantity == expected
+        });
+        Ok((reserved, row.warehouse_id.clone()))
+    })?;
+    let owned = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| Ok(row.active_reservation_ids.iter().any(|id| *id == task.id)))?;
+    let full = task.agent_id.as_ref().is_some_and(|agent| active_ids.contains(agent))
+        && staff_view.as_ref().is_some_and(|(active, busy)| active.as_deref() == Some(&*task.id) && *busy == task.due_minute)
+        && same_int(&given_quantity, expected)?
+        && matches!(given_quantity, V::Int(_) | V::Big(_))
+        && reserved
+        && owned;
+    if !full {
+        return errors::failed(py, "resource service completion does not match its full reservation, slot, or staff");
+    }
+
+    // What the writes below read, which the checks above have matched.
+    let (Some(agent_arc), Some(staff_arc), Some(facility_arc)) = (task.agent_id.clone(), task.staff_id.clone(), task.resource_id.clone()) else {
+        return unsupported("the task's ownership is incomplete");
+    };
+    let (facility_id, agent_id, staff_id) = (&*facility_arc, &*agent_arc, &*staff_arc);
+    // `payload["quantity"]`, which consumes: the service's quantity, as the checks above say.
+    let Some(quantity) = event.int("quantity")?.filter(|given| *given == expected) else {
+        return unsupported("not the service's quantity");
+    };
+    if *task.id != *task_id || !is_stable_id(task_id) || !is_stable_id(agent_id) {
         return unsupported("an ID is for the Python rule to judge");
     }
-    let due = event.due_minute()?;
     let event_id = event.event_id()?;
     if !is_stable_id(&event_id) {
         return unsupported("an ID is for the Python rule to judge");
     }
-    if quantity != manager.quantity(resource_id)? || quantity <= 0 {
-        return unsupported("not the service's quantity");
+    if quantity <= 0 {
+        return unsupported("not a positive quantity");
     }
     let relief = manager.float(if is_water { intern!(py, "hydration_relief") } else { intern!(py, "hunger_relief") })?;
-    let store = entities_of(world)?;
-    let mirror = held_mirror(world)?;
-    let ledger = ledger_mirror(world)?;
     let metrics = metrics_of(world)?;
     let writer = EventWriter::of(world)?;
     let minute = manager.minute()?;
     let need = EntityStore::with_rows(&store, |rows| {
-        let Some(task) = rows.active_tasks.get(task_id) else {
-            return unsupported("no active task");
-        };
-        let is_kind = matches!(&*task.kind, "resource_service_water" | "resource_service_food");
-        if !is_kind
-            || task.due_minute != due
-            || task.agent_id.as_deref() != Some(agent_id)
-            || task.staff_id.as_deref() != Some(staff_id)
-            || task.resource_id.as_deref() != Some(facility_id)
-            || &*task.id != task_id
-        {
-            return unsupported("the task does not match");
-        }
-        let Some(facility) = rows.facilities.get(facility_id) else {
-            return unsupported("no such facility");
-        };
-        let Some(staff) = rows.staff.get(staff_id) else {
-            return unsupported("no such staff");
-        };
         let Some(agent) = rows.agents.get(agent_id) else {
             return unsupported("no such agent");
         };
-        if resource_of(&facility.kind) != Some(if is_water { WATER } else { FOOD })
-            || facility.resource_active_agent_ids.iter().filter(|id| &***id == agent_id).count() == 0
-            || staff.active_task_id.as_deref() != Some(task_id)
-            || staff.busy_until != due
-        {
-            return unsupported("the service's state does not match");
-        }
         let need = if is_water { agent.needs.hydration_need } else { agent.needs.hunger };
         if !need.is_finite() || !relief.is_finite() {
             return unsupported("a need is not finite");
         }
         Ok(need)
     })?;
-    let (matches, warehouse) = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
-        let matches = row.accounts.of(index).reservations.get(task_id).is_some_and(|found| {
-            &*found.reservation_id == task_id
-                && &*found.resource_id == resource_id
-                && &*found.agent_id == agent_id
-                && found.quantity == quantity
-        });
-        Ok((matches, row.warehouse_id.clone()))
-    })?;
-    let owned = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| Ok(row.active_reservation_ids.iter().any(|id| &**id == task_id)))?;
-    if !matches || !owned {
-        return unsupported("the reservation does not match");
-    }
 
     let source = Source::of(&manager)?;
     let resource_arc = if is_water { NAMES.water.clone() } else { NAMES.food.clone() };
@@ -1155,14 +1246,30 @@ fn record_request_outcome<'py>(
     append_outcome(py, &mirror, record)
 }
 
-/// `ResourceServiceManager.request`, without the world's whole validation.
+/// `ResourceServiceManager.request`, without the world's whole validation. A request the queue turns
+/// down is Unsupported, with nothing written.
 pub(crate) fn queue_up<'py>(
     manager: &Bound<'py, PyAny>,
     agent_id: &Bound<'py, PyAny>,
     facility_id: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = manager.py();
-    request(manager, agent_id, facility_id, None, Some(PyBool::new(py, false).as_any()), None)
+    match request_with(manager, agent_id, facility_id, None, Some(PyBool::new(py, false).as_any()), None, false)? {
+        Ok(receipt) => Ok(receipt),
+        Err(_) => unsupported("the queue turns the request down"),
+    }
+}
+
+/// `ResourceServiceManager.request`, without the world's whole validation: the receipt, or the text
+/// of the `ValueError` the Python rule raises when the queue turns the request down, having written
+/// what it writes before that (the task counter, when no independent queue takes the person).
+pub(crate) fn queue_up_or_refusal<'py>(
+    manager: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+) -> PyResult<Result<Bound<'py, PyAny>, String>> {
+    let py = manager.py();
+    request_with(manager, agent_id, facility_id, None, Some(PyBool::new(py, false).as_any()), None, true)
 }
 
 /// `ResourceServiceManager.request`.
@@ -1177,13 +1284,43 @@ fn request<'py>(
     queue_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = manager.py();
+    match request_with(manager, agent_id, facility_id, minute, validate_state, queue_id, true)? {
+        Ok(receipt) => Ok(receipt),
+        Err(text) => Err(errors::marked_value_error(py, &text)),
+    }
+}
+
+/// `request`'s rule. `refusals`: a request the queue turns down gives the Python rule's text, after
+/// the writes the Python rule makes before it; else it is Unsupported, with nothing written.
+#[allow(clippy::too_many_arguments)]
+fn request_with<'py>(
+    manager: &Bound<'py, PyAny>,
+    agent_id: &Bound<'py, PyAny>,
+    facility_id: &Bound<'py, PyAny>,
+    minute: Option<&Bound<'py, PyAny>>,
+    validate_state: Option<&Bound<'py, PyAny>>,
+    queue_id: Option<&Bound<'py, PyAny>>,
+    refusals: bool,
+) -> PyResult<Result<Bound<'py, PyAny>, String>> {
+    let py = manager.py();
+    let refuse = |text: String, reason: &'static str| -> PyResult<Result<Bound<'py, PyAny>, String>> {
+        if refusals {
+            Ok(Err(text))
+        } else {
+            unsupported(reason)
+        }
+    };
     let validates = !validate_state.is_some_and(|validate| validate.downcast_exact::<PyBool>().is_ok_and(|validate| !validate.is_true()));
     let manager = Manager::of(manager)?;
     let world = &manager.world;
     let world_minute = manager.minute()?;
     if let Some(minute) = minute {
-        if !minute.is_none() && exact_int(minute)? != world_minute {
-            return unsupported("another minute");
+        if !minute.is_none() {
+            match errors::int_not_bool(minute)? {
+                None => return refuse("resource request minute must be an integer".to_owned(), "another minute"),
+                Some(given) if given != world_minute => return refuse("resource request minute must match WorldState".to_owned(), "another minute"),
+                Some(_) => {}
+            }
         }
     }
     let (agent_name, facility_name) = (exact_str(agent_id)?, exact_str(facility_id)?);
@@ -1202,6 +1339,50 @@ fn request<'py>(
     if validates {
         world.call_method0(intern!(py, "validate"))?;
     }
+    // The Python rule's checks of the person and the facility, in its order.
+    enum Turned {
+        UnknownAgent,
+        NotAFacility,
+        Elsewhere,
+        Active,
+        Exclusive,
+    }
+    let checked = EntityStore::with_rows(&store, |rows| {
+        let Some(agent) = rows.agents.get(agent_name) else {
+            return Ok(Err(Turned::UnknownAgent));
+        };
+        let Some((facility, resource)) = rows.facilities.get(facility_name).and_then(|facility| resource_of(&facility.kind).map(|resource| (facility, resource))) else {
+            return Ok(Err(Turned::NotAFacility));
+        };
+        if agent.zone_id != facility.zone_id {
+            return Ok(Err(Turned::Elsewhere));
+        }
+        if !matches!(agent.activity, Activity::Idle | Activity::Resting | Activity::Sleeping) {
+            return Ok(Err(Turned::Active));
+        }
+        if rows.active_tasks.iter().any(|(_, task)| task.agent_id.as_deref() == Some(agent_name) && EXCLUSIVE_TASKS.contains(&&*task.kind)) {
+            return Ok(Err(Turned::Exclusive));
+        }
+        for (_, other) in rows.facilities.iter() {
+            let lists = [&other.queue_agent_ids, &other.active_agent_ids, &other.resource_queue_agent_ids, &other.resource_active_agent_ids];
+            if lists.iter().any(|list| list.iter().any(|id| &**id == agent_name)) {
+                return Ok(Err(Turned::Exclusive));
+            }
+        }
+        Ok(Ok((agent.zone_id.clone(), resource, facility.resource_queue_agent_ids.len() as i64 + 1)))
+    })?;
+    let (zone, resource, shared_tail) = match checked {
+        Ok(found) => found,
+        Err(Turned::UnknownAgent) => return refuse(format!("unknown Agent {}", errors::repr_str(py, agent_name)?), "no such agent"),
+        Err(Turned::NotAFacility) => {
+            return refuse(format!("{} is not a resource service facility", errors::repr_str(py, facility_name)?), "not a resource service facility")
+        }
+        Err(Turned::Elsewhere) => return refuse("Agent must arrive at the resource service facility before queueing".to_owned(), "the person cannot queue now"),
+        Err(Turned::Active) => {
+            return refuse(format!("Agent {} cannot request resource service while active", errors::repr_str(py, agent_name)?), "the person cannot queue now")
+        }
+        Err(Turned::Exclusive) => return refuse(format!("Agent {} already has an exclusive task", errors::repr_str(py, agent_name)?), "the person has an exclusive task"),
+    };
     let given_queue = queue_id.filter(|queue| !queue.is_none()).map(exact_str).transpose()?;
     let independent = has_independent(world, facility_name)?;
     if given_queue.is_some() && !independent {
@@ -1212,46 +1393,30 @@ fn request<'py>(
         (true, Some(queue)) if !queue.is_empty() => Some(queue.to_owned()),
         (true, _) => choose_queue_id(world, facility_id, agent_id)?,
     };
-    if independent && chosen_queue.is_none() {
-        return unsupported("no accessible independent queue");
-    }
     let geo = Geo::of(world)?;
     let point = match &chosen_queue {
-        Some(queue) => match point_of(&geo, queue) {
-            Some(point) if &*point.facility_id == facility_name => Some(point),
-            _ => return unsupported("no accessible independent queue"),
-        },
+        Some(queue) => point_of(&geo, queue).filter(|point| &*point.facility_id == facility_name),
         None => None,
     };
-    let queue_tail = match &chosen_queue {
-        Some(queue) => with_queues(world, |row| match row.queues.get(&**queue) {
+    let task_id = next_queue_task_id(&store, &ledger, &writer, &mut counter)?;
+    if independent && point.is_none() {
+        // The Python rule takes the task's ID first, then finds no queue for the person.
+        if !refusals {
+            return unsupported("no accessible independent queue");
+        }
+        counters.set_item(intern!(py, "resource_task"), counter)?;
+        return Ok(Err("no accessible independent resource service queue is available".to_owned()));
+    }
+    let queue_position = match &chosen_queue {
+        Some(queue) => match with_queues(world, |row| match row.queues.get(&**queue) {
             Some(queue) => Ok(queue.queued_request_ids.len() as i64 + 1),
             None => unsupported("no such queue"),
-        })?,
-        None => None,
+        })? {
+            Some(position) => position,
+            None => return unsupported("no queue state"),
+        },
+        None => shared_tail,
     };
-    let (zone, resource, queue_position) = EntityStore::with_rows(&store, |rows| {
-        let (Some(agent), Some(facility)) = (rows.agents.get(agent_name), rows.facilities.get(facility_name)) else {
-            return unsupported("no such agent or facility");
-        };
-        let Some(resource) = resource_of(&facility.kind) else {
-            return unsupported("not a resource service facility");
-        };
-        if agent.zone_id != facility.zone_id || !matches!(agent.activity, Activity::Idle | Activity::Resting | Activity::Sleeping) {
-            return unsupported("the person cannot queue now");
-        }
-        if rows.active_tasks.iter().any(|(_, task)| task.agent_id.as_deref() == Some(agent_name) && EXCLUSIVE_TASKS.contains(&&*task.kind)) {
-            return unsupported("the person has an exclusive task");
-        }
-        for (_, other) in rows.facilities.iter() {
-            let lists = [&other.queue_agent_ids, &other.active_agent_ids, &other.resource_queue_agent_ids, &other.resource_active_agent_ids];
-            if lists.iter().any(|list| list.iter().any(|id| &**id == agent_name)) {
-                return unsupported("the person is at a facility");
-            }
-        }
-        Ok((agent.zone_id.clone(), resource, queue_tail.unwrap_or(facility.resource_queue_agent_ids.len() as i64 + 1)))
-    })?;
-    let task_id = next_queue_task_id(&store, &ledger, &writer, &mut counter)?;
     let facilities = attribute(world, intern!(py, "facilities"))?;
     let Some(facility) = raw_dict_get(&facilities, facility_id)? else {
         return unsupported("a row has no object");
@@ -1314,7 +1479,7 @@ fn request<'py>(
     if validates {
         world.call_method0(intern!(py, "validate"))?;
     }
-    receipt_class(py)?.call1((agent_id, facility_id, resource, world_minute, &task_text, queue_position))
+    receipt_class(py)?.call1((agent_id, facility_id, resource, world_minute, &task_text, queue_position)).map(Ok)
 }
 
 /// `_next_queue_task_id`: the ID, with `counter` left after it.
@@ -1360,52 +1525,86 @@ fn plan_cancel(manager: &Manager<'_>, event_id: &Arc<str>, task_id: &str, interr
     let ledger = ledger_mirror(world)?;
     metrics_of(world)?;
     let minute = manager.minute()?;
-    let (cancelled, owned) = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| {
-        Ok((row.cancelled_task_ids.iter().any(|id| &**id == task_id), row.active_reservation_ids.iter().any(|id| &**id == task_id)))
-    })?;
+    // The Python rule's checks, in its order, with its texts.
+    let cancelled = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| Ok(row.cancelled_task_ids.iter().any(|id| &**id == task_id)))?;
     if cancelled {
-        return unsupported("the task was already cancelled");
+        return errors::suppressed(py, format!("resource service task {} was already cancelled", errors::repr_str(py, task_id)?));
+    }
+    enum Turned {
+        NoTask,
+        NoQueueEntry,
+        NotAResourceFacility,
+        NoSlot,
     }
     let store = entities_of(world)?;
-    let (agent_id, facility_id, active) = EntityStore::with_rows(&store, |rows| {
-        let Some(task) = rows.active_tasks.get(task_id) else {
-            return unsupported("no active task");
+    let checked = EntityStore::with_rows(&store, |rows| {
+        let Some(task) = rows.active_tasks.get(task_id).filter(|task| matches!(&*task.kind, "resource_service_queue" | "resource_service_water" | "resource_service_food")) else {
+            return Ok(Err(Turned::NoTask));
         };
-        let queued = &*task.kind == "resource_service_queue";
-        if !queued && !matches!(&*task.kind, "resource_service_water" | "resource_service_food") {
-            return unsupported("the task is another kind");
-        }
-        let (Some(agent_id), Some(facility_id)) = (&task.agent_id, &task.resource_id) else {
-            return unsupported("the task has incomplete ownership");
-        };
-        let (Some(agent), Some(facility)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id)) else {
+        // `agents[task.agent_id or ""]` and `facilities[task.resource_id or ""]`: a KeyError is the
+        // Python rule's.
+        let (Some(agent), Some(facility)) = (rows.agents.get(task.agent_id.as_deref().unwrap_or("")), rows.facilities.get(task.resource_id.as_deref().unwrap_or(""))) else {
             return unsupported("the task's person or facility is gone");
         };
-        let active = if queued {
-            if !facility.resource_queue_agent_ids.contains(&agent.profile.id) {
-                return unsupported("the queue has no such person");
+        let agent_id = agent.profile.id.clone();
+        if &*task.kind == "resource_service_queue" {
+            if !facility.resource_queue_agent_ids.contains(&agent_id) {
+                return Ok(Err(Turned::NoQueueEntry));
             }
-            None
-        } else {
-            let Some(resource) = resource_of(&facility.kind) else {
-                return unsupported("not a resource facility");
+            return Ok(Ok((task.clone(), agent_id, None)));
+        }
+        let Some(resource) = resource_of(&facility.kind) else {
+            return Ok(Err(Turned::NotAResourceFacility));
+        };
+        if !facility.resource_active_agent_ids.contains(&agent_id) {
+            return Ok(Err(Turned::NoSlot));
+        }
+        let staff_matches = rows
+            .staff
+            .get(task.staff_id.as_deref().unwrap_or(""))
+            .is_some_and(|staff| staff.active_task_id.as_deref() == Some(&*task.id) && staff.work_queue.len() == 1 && staff.work_queue[0] == task.id);
+        Ok(Ok((task.clone(), agent_id, Some((resource, staff_matches)))))
+    })?;
+    let (task, agent_id, active) = match checked {
+        Ok(found) => found,
+        Err(turned) => {
+            return errors::failed(
+                py,
+                match turned {
+                    Turned::NoTask => "resource cancellation does not match an active task",
+                    Turned::NoQueueEntry => "queued resource Agent has no matching queue entry",
+                    Turned::NotAResourceFacility => "resource service task references a non-resource facility",
+                    Turned::NoSlot => "active resource Agent has no matching facility slot",
+                },
+            )
+        }
+    };
+    let active = match active {
+        None => None,
+        Some((resource, staff_matches)) => {
+            let Some(index) = resource_index(resource) else {
+                return unsupported("an unknown resource");
             };
-            if !facility.resource_active_agent_ids.contains(&agent.profile.id) {
-                return unsupported("the facility has no such slot");
+            let reserved = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
+                Ok(row.accounts.of(index).reservations.get(&*task.id).is_some_and(|found| found.agent_id == agent_id && &*found.resource_id == resource))
+            })?;
+            let owned = NamespaceMirror::with_row::<ServiceRow, _>(&mirror, |row| Ok(row.active_reservation_ids.iter().any(|id| *id == task.id)))?;
+            if !staff_matches || !reserved || !owned {
+                return errors::failed(py, "active resource cancellation does not match reservation, slot, and staff");
             }
-            let Some(staff_id) = &task.staff_id else {
+            let Some(staff_id) = task.staff_id.clone() else {
                 return unsupported("the service has no staff");
             };
-            let Some(staff) = rows.staff.get(staff_id) else {
-                return unsupported("the service's staff is gone");
-            };
-            if staff.active_task_id.as_deref() != Some(task_id) || staff.work_queue.len() != 1 || &*staff.work_queue[0] != task_id {
-                return unsupported("the cancellation does not match its staff");
-            }
-            Some((resource, staff_id.clone()))
-        };
-        Ok((agent.profile.id.clone(), facility_id.clone(), active))
-    })?;
+            Some((resource, staff_id))
+        }
+    };
+    // What the writes read: the task's own ID, its person's, and its facility's.
+    let Some(facility_id) = task.resource_id.clone() else {
+        return unsupported("the task has incomplete ownership");
+    };
+    if *task.id != *task_id || task.agent_id.as_ref() != Some(&agent_id) {
+        return unsupported("the task's IDs are for the Python rule to judge");
+    }
     let task_arc: Arc<str> = Arc::from(task_id);
     let mut next = sequence;
     let releasing = match active {
@@ -1414,13 +1613,7 @@ fn plan_cancel(manager: &Manager<'_>, event_id: &Arc<str>, task_id: &str, interr
             let Some(index) = resource_index(resource_id) else {
                 return unsupported("an unknown resource");
             };
-            let (matches, warehouse) = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| {
-                let matches = row.accounts.of(index).reservations.get(task_id).is_some_and(|found| &*found.agent_id == &*agent_id && &*found.resource_id == resource_id);
-                Ok((matches, row.warehouse_id.clone()))
-            })?;
-            if !matches || !owned {
-                return unsupported("the cancellation does not match its reservation");
-            }
+            let warehouse = NamespaceMirror::with_row::<LedgerRow, _>(&ledger, |row| Ok(row.warehouse_id.clone()))?;
             let source = Source::of(manager)?;
             let resource_arc = if resource_id == WATER { NAMES.water.clone() } else { NAMES.food.clone() };
             let mut payload = IndexMap::with_capacity(4);
@@ -1541,20 +1734,26 @@ fn release_staff<'py>(world: &Bound<'py, PyAny>, store: &Bound<'py, EntityStore>
 pub(crate) fn cancel_service<'py>(manager: &Bound<'py, PyAny>, event: &Bound<'py, PyAny>) -> PyResult<()> {
     let py = manager.py();
     let manager = Manager::of(manager)?;
-    let payload = attribute(event, intern!(py, "payload"))?;
-    if payload.len()? != 2 || !payload.contains("task_id")? || !payload.contains("reason")? {
-        return unsupported("the cancellation is for the Python rule to judge");
+    let reference = EventRef::Object(event);
+    let Some(task_id) = reference.text("task_id")?.filter(|task_id| !task_id.is_empty()) else {
+        return errors::failed(py, "resource cancellation requires a task_id");
+    };
+    let task_id = &*task_id;
+    let typed = payload_fields_are(&reference, &["task_id", "reason"])?
+        && match payload_get(&reference, "reason")? {
+            V::Str(reason) => matches!(&*reason, "operator_cancelled" | "facility_stopped" | "staff_unavailable"),
+            // `in` a set hashes the value: a list or an object is a TypeError.
+            V::List(_) | V::Map(_) => return unsupported("the reason is not hashable"),
+            _ => false,
+        };
+    if !typed {
+        return errors::failed(py, "resource cancellation payload is not a typed cancellation");
     }
-    let task_object = payload.get_item("task_id")?;
-    let task_id = exact_str(&task_object)?;
-    let reason = payload.get_item("reason")?;
-    let reason = exact_str(&reason)?;
-    if task_id.is_empty() || !matches!(reason, "operator_cancelled" | "facility_stopped" | "staff_unavailable") {
-        return unsupported("the cancellation is for the Python rule to judge");
-    }
+    let reason = payload_get(&reference, "reason")?;
+    let interrupted = matches!(&reason, V::Str(reason) if &**reason == "staff_unavailable");
     let event_id: Arc<str> = Arc::from(exact_str(&attribute(event, intern!(py, "event_id"))?)?);
     let sequence = EventWriter::of(&manager.world)?.next_sequence()?;
-    let plan = plan_cancel(&manager, &event_id, task_id, reason == "staff_unavailable", sequence)?;
+    let plan = plan_cancel(&manager, &event_id, task_id, interrupted, sequence)?;
     apply_release(&manager, &plan)?;
     write_cancel(&manager, &plan)
 }
@@ -1574,6 +1773,13 @@ fn interrupt_with<'py>(manager: &Manager<'py>, staff_id: &Bound<'py, PyAny>, cau
     let py = world.py();
     let staff_name = exact_str(staff_id)?;
     let store = entities_of(world)?;
+    // The Python rule's checks, in its order, with its texts.
+    enum Turned {
+        Several,
+        Incomplete,
+        Inconsistent,
+        InvalidFacility,
+    }
     let found = EntityStore::with_rows(&store, |rows| {
         let mut tasks = rows
             .active_tasks
@@ -1581,16 +1787,16 @@ fn interrupt_with<'py>(manager: &Manager<'py>, staff_id: &Bound<'py, PyAny>, cau
             .filter(|(_, task)| task.staff_id.as_deref() == Some(staff_name) && matches!(&*task.kind, "resource_service_water" | "resource_service_food"))
             .map(|(_, task)| task);
         let Some(task) = tasks.next() else {
-            return Ok(None);
+            return Ok(Ok(None));
         };
         if tasks.next().is_some() {
-            return unsupported("the staff member owns several services");
+            return Ok(Err(Turned::Several));
         }
         let (Some(agent_id), Some(facility_id)) = (&task.agent_id, &task.resource_id) else {
-            return unsupported("the service has incomplete ownership");
+            return Ok(Err(Turned::Incomplete));
         };
         let (Some(agent), Some(facility), Some(staff)) = (rows.agents.get(agent_id), rows.facilities.get(facility_id), rows.staff.get(staff_name)) else {
-            return unsupported("the service has inconsistent state");
+            return Ok(Err(Turned::Inconsistent));
         };
         if agent.zone_id != facility.zone_id
             || agent.activity != Activity::InService
@@ -1600,16 +1806,45 @@ fn interrupt_with<'py>(manager: &Manager<'py>, staff_id: &Bound<'py, PyAny>, cau
             || staff.busy_until != task.due_minute
             || !facility.resource_active_agent_ids.contains(&agent.profile.id)
         {
-            return unsupported("the service has inconsistent state");
+            return Ok(Err(Turned::Inconsistent));
         }
         let Some(resource) = resource_of(&facility.kind) else {
-            return unsupported("not a resource facility");
+            return Ok(Err(Turned::InvalidFacility));
         };
-        Ok(Some((task.id.clone(), agent.profile.id.clone(), facility_id.clone(), agent.zone_id.clone(), resource)))
+        // The keys the rule goes on with must be the IDs it reads from the rows.
+        if agent.profile.id != *agent_id || facility.id != *facility_id {
+            return unsupported("a row's ID is not its key");
+        }
+        Ok(Ok(Some((task.id.clone(), agent.profile.id.clone(), facility_id.clone(), agent.zone_id.clone(), resource))))
     })?;
+    let found = match found {
+        Ok(found) => found,
+        Err(turned) => {
+            return errors::failed(
+                py,
+                match turned {
+                    Turned::Several => "unavailable staff owns multiple resource services",
+                    Turned::Incomplete => "interrupted resource service has incomplete ownership",
+                    Turned::Inconsistent => "interrupted resource task has inconsistent state",
+                    Turned::InvalidFacility => "interrupted resource service has an invalid facility",
+                },
+            )
+        }
+    };
     let Some((task_id, agent_id, facility_id, zone_id, resource)) = found else {
         return Ok(());
     };
+    // `accounts[resource_id]["reservations"].get(task.id)`, and the service's own list.
+    let Some(index) = resource_index(resource) else {
+        return unsupported("an unknown resource");
+    };
+    let reserved = NamespaceMirror::with_row::<LedgerRow, _>(&ledger_mirror(world)?, |row| {
+        Ok(row.accounts.of(index).reservations.get(&*task_id).is_some_and(|found| found.agent_id == agent_id && &*found.resource_id == resource))
+    })?;
+    let owned = NamespaceMirror::with_row::<ServiceRow, _>(&held_mirror(world)?, |row| Ok(row.active_reservation_ids.iter().any(|id| *id == task_id)))?;
+    if !reserved || !owned {
+        return errors::failed(py, "interrupted service reservation is inconsistent");
+    }
     let prior = with_queues(world, |row| Ok(request_of_task(row, &task_id).cloned()))?.flatten();
     let writer = EventWriter::of(world)?;
     let ledger = ledger_mirror(world)?;

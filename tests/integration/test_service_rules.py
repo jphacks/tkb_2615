@@ -24,6 +24,7 @@ from sheltersim.domain.models import ActiveTask, Activity
 from sheltersim.domain.movement import MOVEMENT_STATE_KEY
 from sheltersim.domain.resource_service import SERVICE_STATE_KEY as KEY
 from sheltersim.domain.resource_service import ResourceServiceManager
+from sheltersim.events.models import EventApplicationError
 from sheltersim.experiments.metrics import MetricsRecorder
 from sheltersim.experiments.phases.propose import ProposePhase
 from sheltersim.experiments.runner import OfflineSimulationController
@@ -670,10 +671,15 @@ def test_a_completion_that_does_not_match_is_python_s_error(
     world, _ = _run(generated_scenario, 5)
     event, agent_id, _ = _started(world, "water_station", "water_ml")
     change(world, event, agent_id)
+    twin = copy.deepcopy(world)
     before = _bytes(world)
-    with pytest.raises(native.Unsupported):
+    with pytest.raises(EventApplicationError) as ours:
         native.rules("service").complete(ResourceServiceManager(world), event)
     assert _bytes(world) == before
+    with pytest.raises(EventApplicationError) as theirs:
+        ResourceServiceManager.complete.__wrapped__(ResourceServiceManager(twin), event)
+    assert str(ours.value) == str(theirs.value)
+    assert "does not match its full reservation" in str(ours.value)
 
 
 # ---- request and its record ---------------------------------------------------------------------
@@ -725,12 +731,17 @@ def test_a_request_refused_has_python_s_text(
     if world.agents[agent_id].zone_id == facility.zone_id and "arrive" in text:
         pytest.skip("the scenario's facility is in that zone")
     manager = ResourceServiceManager(world)
+    twin = copy.deepcopy(world)
     before = _bytes(world)
-    with pytest.raises(native.Unsupported):
+    # The kernel raises the Python rule's ValueError itself, before it writes anything.
+    with pytest.raises(ValueError, match=text) as ours:
         native.rules("service").request(manager, agent_id, facility.id, validate_state=False)
     assert _bytes(world) == before
-    with pytest.raises(ValueError, match=text):
-        manager.request(agent_id, facility.id, validate_state=False)
+    with pytest.raises(ValueError, match=text) as theirs:
+        ResourceServiceManager.request.__wrapped__(
+            ResourceServiceManager(twin), agent_id, facility.id, validate_state=False
+        )
+    assert str(ours.value) == str(theirs.value)
 
 
 def test_a_request_validates_the_whole_world_when_asked_to(generated_scenario: Any) -> None:

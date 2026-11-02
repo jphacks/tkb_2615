@@ -33,7 +33,7 @@ use crate::rules::population_lifecycle::admit_pending_returns;
 use crate::rules::social_interaction::apply_event;
 use crate::rules::social_network::observe_event;
 use crate::rules::travel::schedule_return;
-use crate::rules::{service, support, toilet, travel_completion};
+use crate::rules::{effects, service, support, toilet, travel_completion};
 use crate::state::entities::{entities_of, Activity, EntityStore};
 use crate::state::events::{DueEvent, DueState, EventRef, EventRow, EventStatus, EventWriter};
 use crate::state::movement::MovementRow;
@@ -122,6 +122,10 @@ counters!(
     others_applied,
     others_suppressed,
     others_failed,
+    guard_passed,
+    guard_suppressed,
+    guard_failed,
+    guard_refused,
     finished_direct,
     finished_python,
     interrupted_ran,
@@ -260,10 +264,16 @@ impl<'py> Phase<'_, 'py> {
                 Ok(text) => {
                     count(&COUNTS.social_ran);
                     match text {
-                        Some(text) => {
-                            count(&COUNTS.social_suppressed);
+                        Some((outcome, text)) => {
+                            let status = match outcome {
+                                crate::core::errors::Outcome::Suppressed => {
+                                    count(&COUNTS.social_suppressed);
+                                    EventStatus::Suppressed
+                                }
+                                crate::core::errors::Outcome::Failed => EventStatus::Failed,
+                            };
                             let object = || Ok(event.clone());
-                            Some(self.checked(handler, &object, (EventStatus::Suppressed, Some(text.to_owned())))?)
+                            Some(self.checked(handler, &object, (status, Some(text.to_owned())))?)
                         }
                         None => None,
                     }
@@ -355,10 +365,15 @@ impl<'py> Phase<'_, 'py> {
                 Ok(None)
             }
             Err(error) => {
-                // From what the walk leads to, past the rule's own checks.
+                let checks = travel_completion::raised_before_writing(py, &error);
                 let done = self.expected_outcome(error)?;
                 count(&COUNTS.travel_failed);
-                // Not shown to text_check.py: the walk may have changed the world before this.
+                if checks {
+                    // The rule's own checks, which raise before any change.
+                    return Ok(Some(self.checked(handler, object, done)?));
+                }
+                // From what the walk leads to, past the rule's own checks. Not shown to
+                // text_check.py: the walk changed the world before this.
                 Ok(Some(done))
             }
         }
@@ -427,8 +442,11 @@ impl<'py> Phase<'_, 'py> {
                 Err(error) => self.expected_outcome(error).map(Some),
             };
         }
-        if exact_int(&attribute(self.world, intern!(py, "schema_version"))?).ok() != Some(6) {
-            return Ok(None);
+        // `ResourceServiceCompletionHandler.apply`'s check, before its manager's `complete`.
+        if attribute(self.world, intern!(py, "schema_version"))?.ne(6)? {
+            let error = errors::error(py, errors::Outcome::Failed, "resource service completion requires WorldState v6");
+            let done = self.expected_outcome(error)?;
+            return Ok(Some(self.checked(handler, object, done)?));
         }
         match service::complete_event(&attribute(handler, intern!(py, "service"))?, event) {
             Ok(()) => {
@@ -438,6 +456,12 @@ impl<'py> Phase<'_, 'py> {
             Err(error) if error.is_instance_of::<Unsupported>(py) => {
                 refused(py, RESOURCE_COMPLETE, &COUNTS.resource_refused, &error);
                 Ok(None)
+            }
+            // Its checks raise before any change.
+            Err(error) if errors::made_here(py, &error) => {
+                count(&COUNTS.resource_ran);
+                let done = self.expected_outcome(error)?;
+                Ok(Some(self.checked(handler, object, done)?))
             }
             Err(error) => Err(error),
         }
@@ -590,6 +614,58 @@ impl<'py> Phase<'_, 'py> {
         Ok(())
     }
 
+    /// `dispatch_one` of an event with an EffectProgram's marker: `effect_event_guard_or_suppress`,
+    /// then the handler. A false guard or one that can't be read is the event's outcome, with the
+    /// Python rule's text; a guard that holds goes on to the handler as an unmarked event of `others`
+    /// does. The table's event types, a guard Rust can't decide, and a handler of no Rust route go to
+    /// the Python dispatcher, which asks the guard again (read only, so the same answer).
+    fn marked_event(
+        &self,
+        due: &DueEvent,
+        event_type: Arc<str>,
+        reference: EventRef<'_, 'py>,
+        object: &dyn Fn() -> PyResult<Bound<'py, PyAny>>,
+        outcomes: &mut Vec<Outcome<'py>>,
+    ) -> PyResult<()> {
+        let py = self.py();
+        let listed = matches!(
+            &*event_type,
+            SOCIAL_INTERACTION | AGENT_TRAVEL_COMPLETE | TOILET_COMPLETE | RESOURCE_COMPLETE | SUPPORT_TIMEOUT | SUPPORT_COMPLETE
+        );
+        if listed {
+            return self.dispatch_in_python(&object()?, outcomes);
+        }
+        // Without a handler the record says so, and no guard is asked.
+        let handlers = attribute(&self.dispatcher, intern!(py, "handlers"))?;
+        let registered = raw_dict_get(&handlers, PyString::new(py, &event_type).as_any())?;
+        if registered.is_none_or(|handler| handler.is_none()) {
+            return self.dispatch_in_python(&object()?, outcomes);
+        }
+        match effects::guard_or_suppress(self.world, reference, object) {
+            Ok(()) => count(&COUNTS.guard_passed),
+            Err(error) if errors::made_here(py, &error) => {
+                let done = self.expected_outcome(error)?;
+                count(if done.0 == EventStatus::Suppressed { &COUNTS.guard_suppressed } else { &COUNTS.guard_failed });
+                // text_check.py compares a guard's outcome with `effect_event_guard_or_suppress`'s.
+                let done = self.checked(&py.None().into_bound(py), object, done)?;
+                count(&COUNTS.events_rust);
+                let event = due.object.as_ref().map(|object| object.bind(py).clone());
+                self.settle(due, object, done.0, done.1.as_deref())?;
+                outcomes.push(Outcome { event_type, applied: false, row: due.row.clone(), event });
+                return Ok(());
+            }
+            // The guard reads and never writes: the Python dispatcher asks it from the start.
+            Err(error) => {
+                refused(py, "effect_program_v1 guard", &COUNTS.guard_refused, &error);
+                return self.dispatch_in_python(&object()?, outcomes);
+            }
+        }
+        match self.other_handler(&event_type)? {
+            Some(handler) => self.other_event(due, event_type, &handler, object, outcomes),
+            None => self.dispatch_in_python(&object()?, outcomes),
+        }
+    }
+
     /// The Python dispatcher for one event; its outcomes.
     fn dispatch_in_python(&self, event: &Bound<'py, PyAny>, outcomes: &mut Vec<Outcome<'py>>) -> PyResult<()> {
         let py = self.py();
@@ -714,9 +790,9 @@ impl<'py> Phase<'_, 'py> {
             _ => None,
         };
         drop(writer);
-        // A marker of an EffectProgram may hold a guard, which is `effect_event_guard_or_suppress`'s.
+        // A marker of an EffectProgram may hold a guard, which `dispatch_one` asks before the handler.
         if reference.has_provenance("effect_program_v1")? {
-            return self.dispatch_in_python(&object()?, outcomes);
+            return self.marked_event(&due, event_type, reference, &object, outcomes);
         }
         let handler = match handler {
             Some(handler) => handler,
